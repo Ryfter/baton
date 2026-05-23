@@ -1,0 +1,2 @@
+{"timestamp":"2026-05-22T14:32:15.123Z","severity":"INFO","body":"claude_code.api_request","attributes":{"model":"claude-sonnet-4-6","input_tokens":3214,"output_tokens":892,"cache_read_tokens":0,"cache_creation_tokens":0,"cost_usd":0.0231,"request_id":"req_abc","session.id":"sess_xyz"}}
+{"timestamp":"2026-05-22T14:35:01.789Z","severity":"INFO","body":"claude_code.api_request","attributes":{"model":"claude-haiku-4-5","input_tokens":512,"output_tokens":128,"cost_usd":0.0011,"request_id":"req_def","session.id":"sess_xyz"}}
