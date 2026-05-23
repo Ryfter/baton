@@ -9,6 +9,9 @@
   invocations of model CLIs (ollama, gemini, codex, lms, copilot, gh copilot) and
   Agent tool dispatches. Skips everything else.
 
+  Note: `copilot` and `gh copilot` are distinct CLIs (separate products from
+  GitHub) — both patterns are intentional.
+
   Errors are written to ~/.claude/hooks/log-tool-call.err.log so a buggy hook
   never breaks Claude Code itself.
 
@@ -38,7 +41,7 @@ $dispatchPatterns = @(
     '^\s*claude\s+-p\b'   # nested Claude Code call
 )
 
-function Log-Error($msg) {
+function Write-ErrorLog($msg) {
     try {
         $dir = Split-Path -Parent $ErrorPath
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
@@ -47,6 +50,11 @@ function Log-Error($msg) {
     } catch {
         # Last resort: swallow. Never crash the hook.
     }
+}
+
+function Sanitize-JournalField($s) {
+    if (-not $s) { return $s }
+    return ($s -replace '\|', '¦' -replace "`r?`n", ' ' -replace '"', '''')
 }
 
 function Get-DispatchTarget($command) {
@@ -64,15 +72,15 @@ function Get-DispatchTarget($command) {
 try {
     $raw = [Console]::In.ReadToEnd()
     if (-not $raw) {
-        Log-Error "empty stdin"
+        Write-ErrorLog "empty stdin"
         exit 0
     }
 
-    $event = $raw | ConvertFrom-Json -ErrorAction Stop
+    $evt = $raw | ConvertFrom-Json -ErrorAction Stop
 
-    $toolName = $event.tool_name
-    $exit     = if ($event.tool_response.exit_code -ne $null) { $event.tool_response.exit_code } else { 0 }
-    $elapsed  = if ($event.tool_response.duration_ms) { [int]($event.tool_response.duration_ms / 1000) } else { 0 }
+    $toolName = $evt.tool_name
+    $exit     = if ($null -ne $evt.tool_response.exit_code) { $evt.tool_response.exit_code } else { 0 }
+    $elapsed  = if ($null -ne $evt.tool_response.duration_ms) { [int]($evt.tool_response.duration_ms / 1000) } else { 0 }
     $ts       = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
 
     $target = $null
@@ -80,15 +88,15 @@ try {
 
     switch ($toolName) {
         'Bash' {
-            $cmd = $event.tool_input.command
+            $cmd = $evt.tool_input.command
             $target = Get-DispatchTarget $cmd
             if ($target) {
                 $target = "bash:$target"
             }
         }
         'Agent' {
-            $sub = $event.tool_input.subagent_type
-            $desc = $event.tool_input.description
+            $sub = $evt.tool_input.subagent_type
+            $desc = $evt.tool_input.description
             if ($sub) {
                 $target = "agent:$sub"
                 $brief = $desc
@@ -102,6 +110,11 @@ try {
     if (-not $target) {
         exit 0  # not a dispatch, nothing to log
     }
+
+    # Sanitize before assembling — pipe chars in the user payload must not break
+    # the pipe-delimited journal format.
+    $target = Sanitize-JournalField $target
+    $brief  = Sanitize-JournalField $brief
 
     # Build the journal line. Quote the brief if present.
     $line = "$ts | hook | $target | ${elapsed}s | exit:$exit"
@@ -122,6 +135,6 @@ try {
     exit 0
 
 } catch {
-    Log-Error "hook crashed: $($_.Exception.Message); input was: $raw"
+    Write-ErrorLog "hook crashed: $($_.Exception.Message); input was: $raw"
     exit 0  # never propagate failure
 }
