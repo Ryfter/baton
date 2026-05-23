@@ -1,0 +1,20 @@
+# Python
+dashboard/.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Local state (deployed to ~/.claude, not source)
+*.local.*
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs / scratch
+*.log
+scratch/
