@@ -1,6 +1,7 @@
 #!/usr/bin/env pwsh
-# Smoke test: run bootstrap in dry-run mode against a temp HOME, assert no crash
-# and that the dry-run output mentions each expected component.
+# Smoke test: run bootstrap in dry-run mode against the real $HOME -- the dry-run
+# gate prevents writes, so this is safe. Asserts no crash and that dry-run output
+# mentions each expected component.
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -21,5 +22,9 @@ Assert "mentions slash commands"         ($out -match 'slash commands')
 Assert "mentions catalog deployment"     ($out -match 'catalog')
 Assert "mentions backend verification"   ($out -match 'Verifying backends')
 Assert "does not exit non-zero"          ($LASTEXITCODE -eq 0 -or $out -match 'Bootstrap complete')
+
+# Static check: bootstrap must back up settings.json before overwriting it.
+$bootstrapContent = Get-Content (Join-Path $here 'bootstrap.ps1') -Raw
+Assert "bootstrap backs up settings.json before overwriting" ($bootstrapContent -match 'Copy-Item.*settings\.json.*\.bak|settingsPath\.bak')
 
 if ($failures -gt 0) { exit 1 } else { exit 0 }
