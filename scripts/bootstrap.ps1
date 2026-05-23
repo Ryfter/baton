@@ -133,12 +133,21 @@ if (-not (Test-Path $otelEnvSrc)) {
     if (-not $DryRun) {
         @'
 # Source this file in your PowerShell profile to enable Claude Code OTel export.
-# Adjust env var names per docs/superpowers/notes/otel-findings.md if needed.
-$env:OTEL_LOGS_EXPORTER = 'otlp'   # or 'console' / 'file' depending on findings
-$env:OTEL_EXPORTER_OTLP_ENDPOINT = 'http://localhost:4318'  # local collector
-$env:OTEL_SERVICE_NAME = 'claude-code'
-# Telemetry write target (where the collector or exporter dumps JSONL):
+# Values verified against docs/superpowers/notes/otel-findings.md.
+#
+# To actually capture events to disk, run Claude Code with stdout/stderr redirected:
+#   claude 2>&1 | Tee-Object -FilePath $env:CCO_TELEMETRY_PATH -Append
+# (Or use a wrapper script that does the redirection -- see README.)
+
+$env:CLAUDE_CODE_ENABLE_TELEMETRY = '1'
+$env:OTEL_LOGS_EXPORTER = 'console'
+$env:OTEL_LOG_TOOL_DETAILS = '1'
+
+# Where the user redirects Claude Code's stdout (the console exporter target):
 $env:CCO_TELEMETRY_PATH = (Join-Path $HOME '.claude/telemetry/events.jsonl')
+
+# Optional: stricter export interval (default is generous; tighten for live dashboards)
+# $env:OTEL_LOGS_EXPORT_INTERVAL = '5000'
 '@ | Set-Content $otelEnvSrc
     }
 }
