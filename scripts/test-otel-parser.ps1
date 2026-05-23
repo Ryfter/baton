@@ -33,6 +33,8 @@ Assert "two otel lines produced from 2-event fixture" ($otelLines.Count -eq 2)
 Assert "first line model is sonnet" ($otelLines[0] -match 'claude-sonnet-4-6')
 Assert "first line tokens" ($otelLines[0] -match 'in:3214 out:892')
 Assert "first line cost present" ($otelLines[0] -match '\| \$\d+\.\d+ \|')
+# ISO-8601 timestamp with offset (locale-independent shape).
+Assert "first line timestamp is ISO-8601 with offset" ($otelLines[0] -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}')
 # Native cost_usd from the fixture (0.0231) — NOT what catalog pricing would compute.
 # Catalog would compute: 3214/1e6 * 3 + 892/1e6 * 15 = 0.009642 + 0.01338 = 0.023022 -> rounds to 0.0230
 # The fixture explicitly carries 0.0231, so this distinguishes "read native" from "compute from table".
@@ -62,6 +64,21 @@ Add-Content $tmpEvents -Value '{"timestamp":"2026-05-22T14:40:00.000Z","severity
 $linesFinal = Get-Content $tmpJournal
 $otelLinesFinal = @($linesFinal | Where-Object { $_ -match '\| otel \|' })
 Assert "picks up newly appended event" ($otelLinesFinal.Count -eq 3)
+
+# Test: fallback to pricing-table when cost_usd is missing
+$noNativeCost = '{"timestamp":"2026-05-22T15:00:00.000Z","body":"claude_code.api_request","attributes":{"model":"claude-sonnet-4-6","input_tokens":1000,"output_tokens":1000}}'
+Add-Content $tmpEvents -Value $noNativeCost
+
+& pwsh -NoProfile -File $parser `
+    -EventsPath $tmpEvents `
+    -JournalPath $tmpJournal `
+    -MarkerPath $tmpMarker `
+    -CatalogPath $catalog | Out-Null
+
+$linesAfter2 = Get-Content $tmpJournal
+$otelLinesAfter2 = @($linesAfter2 | Where-Object { $_ -match '\| otel \|' })
+Assert "fallback computes from pricing table" ($otelLinesAfter2[-1] -match '\| \$0\.0180 \|')
+# 1000 in @ $3/M + 1000 out @ $15/M = $0.003 + $0.015 = $0.018
 
 Remove-Item $tmpEvents, $tmpJournal, $tmpMarker -ErrorAction SilentlyContinue
 

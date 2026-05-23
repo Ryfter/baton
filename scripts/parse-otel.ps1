@@ -42,13 +42,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Parse-PricingTable($catalogPath) {
+function Read-PricingTable($catalogPath) {
     # Reads the catalog's "## Pricing table" markdown table; returns
     # @{ 'model-name' = @{ input = <decimal>; output = <decimal> } } in $/M tokens.
     $prices = @{}
     if (-not (Test-Path $catalogPath)) { return $prices }
     $content = Get-Content $catalogPath -Raw
-    if ($content -notmatch '(?ms)## Pricing table.*?\n(\|.*?)(?:\n##|\z)') {
+    if ($content -notmatch '(?ms)## Pricing table(?:\s*\([^)]*\))?\s*\n.*?\n(\| Model \|.*?)(?:\n##|\z)') {
         return $prices
     }
     $tableText = $Matches[1]
@@ -65,7 +65,7 @@ function Parse-PricingTable($catalogPath) {
     return $prices
 }
 
-function Compute-Cost($model, $inTokens, $outTokens, $prices) {
+function Get-Cost($model, $inTokens, $outTokens, $prices) {
     if (-not $prices.ContainsKey($model)) {
         return @{ cost = 0.0; warning = "no price for model '$model' in catalog" }
     }
@@ -91,7 +91,7 @@ if ($skipCount -ge $allLines.Count) {
     exit 0  # nothing new
 }
 
-$prices = Parse-PricingTable $CatalogPath
+$prices = Read-PricingTable $CatalogPath
 
 # Ensure journal exists.
 $journalDir = Split-Path -Parent $JournalPath
@@ -121,7 +121,13 @@ for ($i = $skipCount; $i -lt $allLines.Count; $i++) {
     $outTok = if ($null -ne $attrs.output_tokens) { [int]$attrs.output_tokens } else { 0 }
     if (-not $model -or ($inTok -eq 0 -and $outTok -eq 0)) { continue }
 
-    $ts = if ($evt.timestamp) { $evt.timestamp } else { (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz') }
+    # Force ISO-8601 with offset regardless of how ConvertFrom-Json deserialized the value.
+    # Preserve the event's original instant — let zzz produce the right offset string.
+    $ts = if ($evt.timestamp) {
+        ([datetime]$evt.timestamp).ToString('yyyy-MM-ddTHH:mm:sszzz')
+    } else {
+        (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
+    }
 
     # Cost: prefer the native cost_usd from the event; fall back to catalog table.
     $nativeCost = $null
@@ -135,7 +141,7 @@ for ($i = $skipCount; $i -lt $allLines.Count; $i++) {
     if ($null -ne $nativeCost) {
         $costValue = [math]::Round($nativeCost, 4)
     } else {
-        $costResult = Compute-Cost $model $inTok $outTok $prices
+        $costResult = Get-Cost $model $inTok $outTok $prices
         if ($costResult.warning) { $warnings += $costResult.warning }
         $costValue = $costResult.cost
     }
