@@ -87,40 +87,47 @@ Write-Step "Registering hook in settings.json"
 $settingsPath = Join-Path $claudeDir 'settings.json'
 if (-not (Test-Path $settingsPath)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $settingsPath" }
-    else { Set-Content $settingsPath '{}'; Write-Ok "created empty settings.json" }
+    else { Set-Content $settingsPath '{}' -Encoding utf8; Write-Ok "created empty settings.json" }
 }
-if (-not $DryRun -or (Test-Path $settingsPath)) {
-    if (Test-Path $settingsPath) {
-        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
-        if (-not $settings.hooks) { $settings | Add-Member -NotePropertyName hooks -NotePropertyValue (New-Object PSObject) -Force }
-        if (-not $settings.hooks.PostToolUse) { $settings.hooks | Add-Member -NotePropertyName PostToolUse -NotePropertyValue @() -Force }
 
-        $hookEntry = @{
-            matcher = '*'
-            hooks = @(@{
-                type = 'command'
-                command = "pwsh -NoProfile -File `"$hookDst`""
-            })
-        }
+if ($DryRun -and -not (Test-Path $settingsPath)) {
+    # File doesn't exist and we're in dry-run; still surface the would-add message
+    # so the user gets full visibility into what a real run would do.
+    Write-Ok "[dry-run] would add PostToolUse entry pointing to $hookDst"
+} else {
+    # Tolerate zero-byte / whitespace-only settings.json (otherwise ConvertFrom-Json throws)
+    $raw = Get-Content $settingsPath -Raw
+    if ([string]::IsNullOrWhiteSpace($raw)) { $raw = '{}' }
+    $settings = $raw | ConvertFrom-Json
+    if (-not $settings.hooks) { $settings | Add-Member -NotePropertyName hooks -NotePropertyValue (New-Object PSObject) -Force }
+    if (-not $settings.hooks.PostToolUse) { $settings.hooks | Add-Member -NotePropertyName PostToolUse -NotePropertyValue @() -Force }
 
-        # Check for existing entry pointing to our hook
-        $exists = $false
-        foreach ($e in $settings.hooks.PostToolUse) {
-            foreach ($h in $e.hooks) {
-                if ($h.command -like "*log-tool-call.ps1*") { $exists = $true }
-            }
+    $hookEntry = @{
+        matcher = '*'
+        hooks = @(@{
+            type = 'command'
+            command = "pwsh -NoProfile -File `"$hookDst`""
+        })
+    }
+
+    # Check for existing entry pointing to our hook
+    $exists = $false
+    foreach ($e in $settings.hooks.PostToolUse) {
+        foreach ($h in $e.hooks) {
+            if ($h.command -like "*log-tool-call.ps1*") { $exists = $true }
         }
-        if ($exists) {
-            Write-Skip "hook already registered in settings.json"
-        } elseif ($DryRun) {
-            Write-Ok "[dry-run] would add PostToolUse entry pointing to $hookDst"
-        } else {
-            $settings.hooks.PostToolUse += $hookEntry
-            $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath
-            Write-Ok "added PostToolUse entry to settings.json"
-        }
-    } else {
+    }
+    if ($exists) {
+        Write-Skip "hook already registered in settings.json"
+    } elseif ($DryRun) {
         Write-Ok "[dry-run] would add PostToolUse entry pointing to $hookDst"
+    } else {
+        # Backup before mutating: if write is interrupted, user can recover .bak
+        $backupPath = "$settingsPath.bak"
+        Copy-Item $settingsPath $backupPath -Force
+        $settings.hooks.PostToolUse += $hookEntry
+        $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding utf8
+        Write-Ok "added PostToolUse entry to settings.json (backup: $backupPath)"
     }
 }
 
@@ -196,7 +203,11 @@ $backends = @(
 foreach ($b in $backends) {
     try {
         $out = & $b.test 2>&1
-        if ($LASTEXITCODE -eq 0 -or $out -match 'ok|version|v\d') { Write-Ok "$($b.name): reachable" }
+        # Rely on output-regex match only: $LASTEXITCODE is sticky across iterations
+        # (the LM Studio HTTP probe doesn't invoke a native exe, so it would inherit
+        # the prior backend's exit code). Regex covers all current probes ("ok" for
+        # the HTTP one, "version" / "vN" for the version-flag ones).
+        if ($out -match 'ok|version|v\d') { Write-Ok "$($b.name): reachable" }
         else { Write-Warn "$($b.name): $out" }
     } catch { Write-Warn "$($b.name): $($_.Exception.Message)" }
 }
