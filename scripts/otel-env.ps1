@@ -13,8 +13,9 @@ $env:CLAUDE_CODE_ENABLE_TELEMETRY = '1'
 $env:OTEL_LOGS_EXPORTER = 'console'
 $env:OTEL_LOG_TOOL_DETAILS = '1'
 
-# Where the user redirects Claude Code's stdout (the console exporter target):
+# Where Claude Code's stderr is redirected:
 $env:CCO_TELEMETRY_PATH = (Join-Path $HOME '.claude/telemetry/events.jsonl')
 
-# Optional: stricter export interval (default is generous; tighten for live dashboards)
-# $env:OTEL_LOGS_EXPORT_INTERVAL = '5000'
+# Flush OTel events every 1 second so api_request events are written before exit.
+# Default is 5000ms which causes events to be lost in short sessions.
+$env:OTEL_LOGS_EXPORT_INTERVAL = '1000'
