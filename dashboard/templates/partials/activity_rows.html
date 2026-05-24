@@ -1,0 +1,17 @@
+<h2>Live Activity</h2>
+{% if stats.recent_hooks %}
+<div class="activity-scroll">
+  {% for h in stats.recent_hooks | reverse %}
+  <div class="activity-row">
+    <span class="ts">{{ h.timestamp.strftime('%m-%d %H:%M:%S') }}</span>
+    <span class="src">hook</span>
+    <span class="cmd" title="{{ h.target }}">{{ h.target }}</span>
+    <span class="{{ 'ok' if h.exit_code == 0 else 'err' }}">
+      {{ h.duration_s }}s / {{ h.exit_code }}
+    </span>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty">No hook events yet. Run an Ollama, Codex, or Gemini command inside Claude.</p>
+{% endif %}

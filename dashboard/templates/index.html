@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+
+<!-- Spend Today — polls every 30s -->
+<div class="card"
+     hx-get="/partials/spend"
+     hx-trigger="every 30s"
+     hx-swap="innerHTML">
+  {% include "partials/spend_today.html" %}
+</div>
+
+<!-- Model Leaderboard — polls every 30s -->
+<div class="card"
+     hx-get="/partials/leaderboard"
+     hx-trigger="every 30s"
+     hx-swap="innerHTML">
+  {% include "partials/leaderboard.html" %}
+</div>
+
+<!-- Cost Doughnut Chart -->
+<div class="card">
+  <h2>Cost Breakdown</h2>
+  <div class="chart-wrap">
+    <canvas id="costChart"></canvas>
+  </div>
+</div>
+
+<!-- Ollama Controls -->
+<div class="card">
+  <h2>Controls</h2>
+  <div class="controls">
+    <button class="danger"
+            hx-post="/controls/ollama/stop-all"
+            hx-confirm="Stop all running Ollama models?"
+            hx-swap="none">
+      ⛔ Stop All Ollama
+    </button>
+  </div>
+  {% if stats.ollama_models %}
+  <p style="margin: 0.75rem 0 0.25rem; color:#8b949e; font-size:0.8rem">Running:</p>
+  <ul style="margin:0; padding-left:1.25rem; font-family:monospace; font-size:0.8rem">
+    {% for m in stats.ollama_models %}
+    <li>{{ m.name }} — {{ m.size }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+
+<!-- Live Activity — polls every 5s -->
+<div class="card activity-feed"
+     hx-get="/partials/activity"
+     hx-trigger="every 5s"
+     hx-swap="innerHTML">
+  {% include "partials/activity_rows.html" %}
+</div>
+
+<!-- Inject chart data for app.js -->
+<script>
+  const chartLabels = {{ stats.models | map(attribute='name') | list | tojson }};
+  const chartData   = {{ stats.models | map(attribute='cost_usd') | list | tojson }};
+</script>
+<script src="/static/app.js"></script>
+{% endblock %}

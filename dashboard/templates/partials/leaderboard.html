@@ -1,0 +1,27 @@
+<h2>Model Leaderboard</h2>
+{% if stats.models %}
+<table>
+  <thead>
+    <tr>
+      <th>Model</th>
+      <th>Calls</th>
+      <th>Cost</th>
+      <th>Tokens In</th>
+      <th>Tokens Out</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for m in stats.models %}
+    <tr>
+      <td class="model-name" title="{{ m.name }}">{{ m.name }}</td>
+      <td>{{ m.calls }}</td>
+      <td class="cost">${{ "%.4f" | format(m.cost_usd) }}</td>
+      <td>{{ m.tokens_in }}</td>
+      <td>{{ m.tokens_out }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No OTel events yet. Run <code>scripts\parse-otel.ps1</code> to populate.</p>
+{% endif %}
