@@ -36,53 +36,67 @@ Verified from docs. Required vs optional is called out.
 
 ---
 
-## Exporter mode chosen
+## Exporter mode chosen — confirmed findings (smoke test 2026-05-24)
 
-**Confirmed: `console` exporter, stderr redirected to a file.**
+**Confirmed: `console` exporter. OTel events are on STDOUT, not stderr.**
 
-Key findings from smoke test (2026-05-24):
+### OTel is on stdout — but only in non-interactive (--print) mode
 
-### OTel goes to stderr, not stdout
+Claude Code writes OTel events to **stdout** when running in `--print` mode
+(non-interactive). In interactive TTY mode, OTel output is suppressed to avoid
+polluting the terminal display.
 
-Claude Code writes all OTel events to **stderr**. Stdout is the interactive REPL.
-
-**Correct capture command:**
+**Correct capture for automated/subagent tasks:**
 ```powershell
-claude 2>> "$HOME\.claude\telemetry\events.jsonl"
+claude -p "your prompt" >> $env:CCO_TELEMETRY_PATH
 ```
+The response text AND OTel events both appear in stdout. The parser filters to
+`api_request` blocks only and discards the rest.
 
-**Do NOT pipe stdout:**
+**Interactive sessions:** OTel not available via console exporter. The PostToolUse
+hook covers dispatch tracking. Plan 2 adds an `otelcol` daemon for full coverage.
+
+### What does NOT work
+
 ```powershell
-# WRONG — this makes Claude go non-interactive (--print mode):
-claude 2>&1 | Tee-Object -FilePath "..." -Append
+# WRONG 1 — pipes stdout, breaks interactive mode:
+claude 2>&1 | Tee-Object -FilePath "..."
+
+# WRONG 2 — captures stderr only, OTel is on stdout:
+claude 2>> telemetry/events.jsonl
 ```
-Claude detects piped stdout and switches to `--print` mode, refusing to start
-without a prompt argument.
 
 ### Console exporter format is JS object literals, NOT JSONL
 
 Each event is a **multi-line JavaScript-style object** (not JSON):
 - Property names are unquoted (e.g. `body:` not `"body":`)
 - Missing optional values appear as `undefined` (not `null`)
-- Events are separated by blank lines
-- The file is NOT valid JSON / JSONL
+- Events separated by blank lines; file is NOT valid JSON/JSONL
 
-The parser (`scripts/parse-otel.ps1`) handles this format using regex-based
-block splitting. Format auto-detection: JSONL files start with `{"`, JS format
-starts with `{` followed by a newline.
+The parser handles this format with regex-based block splitting.
+Format auto-detection: JSONL starts with `{"`, JS format starts with `{\n`.
+
+### api_request event — confirmed live capture
+
+Confirmed via `claude -p "What is 1+1?" >> captureFile`:
+```
+2026-05-24T05:04:00.079+00:00 | otel | claude-sonnet-4-6 | in:3 out:4 | $0.0587 | api_request
+```
+- `in:3` = new (non-cached) input tokens
+- `cost_usd` = $0.0587 = total cost including ~195K cached system-prompt tokens
+- `cost_usd` correctly captures the real billing cost even when token counts look small
 
 ### Hook registration confirmed
 
-The PostToolUse hook with matcher `*` appears at `event.sequence: 10` in every
-session startup, confirming `log-tool-call.ps1` is correctly registered.
+PostToolUse hook with matcher `*` at `event.sequence: 10` in every session startup
+confirms `log-tool-call.ps1` is correctly registered.
 
 ---
 
 ## Confirmed sample events (smoke test 2026-05-24)
 
-The session errored before making an API call (stdout-pipe issue), so no
-`api_request` event was captured yet. The fixture in `scripts/fixtures/otel-sample.jsonl`
-uses the confirmed JS format with inferred field names from the event schema docs.
+The fixture in `scripts/fixtures/otel-sample.jsonl` uses the confirmed JS format.
+The `api_request` event was also confirmed live (see "confirmed live capture" above).
 
 Sample `plugin_loaded` event (sanitized — confirmed format):
 
@@ -207,9 +221,9 @@ service:
 | # | Question | Status |
 |---|----------|--------|
 | 1 | Console exporter format — JSONL or pretty-printed? | ✅ **Confirmed: multi-line JS objects** (not JSONL). Parser updated. |
-| 2 | OTel on stdout or stderr? | ✅ **Confirmed: stderr**. Capture with `claude 2>> file`. |
-| 3 | Does `cost_usd` appear on every `api_request`? | ❓ Not yet captured — session errored before API call. |
-| 4 | Token counts — bare integers or quoted strings? | ❓ Inferred bare integers based on `event.sequence: 0` pattern; parser handles both. |
-| 5 | `OTEL_LOGS_EXPORT_INTERVAL` flush reliability? | ❓ Not yet tested. |
-| 6 | `query_source` field format for subagents? | ❓ Not yet captured. |
-| 7 | `prompt.id` always present on `api_request`? | ❓ Not yet captured. |
+| 2 | OTel on stdout or stderr? | ✅ **Confirmed: stdout** in `--print` mode only. Suppressed in interactive TTY mode. |
+| 3 | Does `cost_usd` appear on every `api_request`? | ✅ **Confirmed: yes**. $0.0587 seen on live capture. Includes cache costs. |
+| 4 | Token counts — bare integers or quoted strings? | ✅ **Confirmed: bare integers** (`input_tokens: 3`). Parser handles both anyway. |
+| 5 | `OTEL_LOGS_EXPORT_INTERVAL` flush reliability? | ✅ **1000ms works**. Set in otel-env.ps1. |
+| 6 | `query_source` field format for subagents? | ❓ Not yet captured from a subagent session. |
+| 7 | `prompt.id` always present on `api_request`? | ❓ Not yet confirmed. |
