@@ -1,0 +1,54 @@
+<h2>Controls</h2>
+
+<!-- Ollama -->
+<p class="section-label">Ollama</p>
+<div class="controls">
+  <button class="danger"
+          hx-post="/controls/ollama/stop-all"
+          hx-confirm="Stop all running Ollama models?"
+          hx-swap="none">
+    ⛔ Stop All
+  </button>
+</div>
+{% if stats.ollama_models %}
+<ul class="model-list">
+  {% for m in stats.ollama_models %}
+  <li>
+    {{ m.name }} — {{ m.size }}
+    <button class="inline-btn danger"
+            hx-post="/controls/ollama/stop-all"
+            hx-swap="none"
+            title="Stop {{ m.name }}">✕</button>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No models running</p>
+{% endif %}
+
+<!-- LM Studio -->
+<p class="section-label" style="margin-top:1rem">LM Studio <span class="lms-port">:1234</span></p>
+{% if stats.lms_models %}
+<ul class="model-list">
+  {% for m in stats.lms_models %}
+  <li>
+    <span class="lms-id" title="{{ m.id }}">{{ m.id.split('/')[-1] }}</span>
+    <button class="inline-btn danger"
+            hx-post="/controls/lmstudio/unload?model={{ m.id | urlencode }}"
+            hx-confirm="Unload {{ m.id.split('/')[-1] }}?"
+            hx-swap="none"
+            title="Unload">✕</button>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No models loaded — use <code>lms load &lt;model&gt;</code></p>
+{% endif %}
+<div class="controls" style="margin-top:0.5rem">
+  <button class="danger"
+          hx-post="/controls/lmstudio/server/stop"
+          hx-confirm="Stop LM Studio server?"
+          hx-swap="none">
+    ⛔ Stop Server
+  </button>
+</div>

@@ -58,6 +58,11 @@ async def partial_activity(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "partials/activity_rows.html", _ctx(request))
 
 
+@app.get("/partials/controls", response_class=HTMLResponse)
+async def partial_controls(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "partials/controls.html", _ctx(request))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("dashboard.main:app", host="127.0.0.1", port=8765, reload=True)

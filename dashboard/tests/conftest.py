@@ -1,5 +1,6 @@
 import pytest
 from pathlib import Path
+from unittest.mock import patch
 
 SAMPLE_JOURNAL = """\
 # Model Routing Log
@@ -13,6 +14,13 @@ SAMPLE_JOURNAL = """\
 2026-05-23T10:20:00-06:00 | hook | bash:ollama run llava 'describe image' | 5s | exit:0
 2026-05-23T10:25:00-06:00 | hook | agent:claude-subagent | 0s | exit:0 | "spec review task"
 """
+
+
+@pytest.fixture(autouse=True)
+def no_lms_network():
+    """Prevent any test from hitting localhost:1234 — keeps the suite fast."""
+    with patch("dashboard.readers.stats._get_lms_models", return_value=[]):
+        yield
 
 
 @pytest.fixture

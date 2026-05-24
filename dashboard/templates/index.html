@@ -25,25 +25,12 @@
   </div>
 </div>
 
-<!-- Ollama Controls -->
-<div class="card">
-  <h2>Controls</h2>
-  <div class="controls">
-    <button class="danger"
-            hx-post="/controls/ollama/stop-all"
-            hx-confirm="Stop all running Ollama models?"
-            hx-swap="none">
-      ⛔ Stop All Ollama
-    </button>
-  </div>
-  {% if stats.ollama_models %}
-  <p style="margin: 0.75rem 0 0.25rem; color:#8b949e; font-size:0.8rem">Running:</p>
-  <ul style="margin:0; padding-left:1.25rem; font-family:monospace; font-size:0.8rem">
-    {% for m in stats.ollama_models %}
-    <li>{{ m.name }} — {{ m.size }}</li>
-    {% endfor %}
-  </ul>
-  {% endif %}
+<!-- Controls — polls every 15s so model lists stay fresh -->
+<div class="card"
+     hx-get="/partials/controls"
+     hx-trigger="every 15s"
+     hx-swap="innerHTML">
+  {% include "partials/controls.html" %}
 </div>
 
 <!-- Live Activity — polls every 5s -->
