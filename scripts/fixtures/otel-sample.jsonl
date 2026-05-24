@@ -1,0 +1,62 @@
+{
+  resource: {
+    attributes: {
+      "service.name": "claude-code",
+      "service.version": "2.1.150",
+    },
+  },
+  instrumentationScope: {
+    name: "com.anthropic.claude_code.events",
+    version: "2.1.150",
+    schemaUrl: undefined,
+  },
+  timestamp: 1748001135123000,
+  traceId: undefined,
+  spanId: undefined,
+  traceFlags: undefined,
+  severityText: undefined,
+  severityNumber: undefined,
+  body: "claude_code.api_request",
+  attributes: {
+    "session.id": "sess_xyz",
+    "event.timestamp": "2026-05-22T14:32:15.123Z",
+    "event.sequence": 0,
+    model: "claude-sonnet-4-6",
+    input_tokens: 3214,
+    output_tokens: 892,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+    cost_usd: 0.0231,
+    request_id: "req_abc",
+  },
+}
+{
+  resource: {
+    attributes: {
+      "service.name": "claude-code",
+      "service.version": "2.1.150",
+    },
+  },
+  instrumentationScope: {
+    name: "com.anthropic.claude_code.events",
+    version: "2.1.150",
+    schemaUrl: undefined,
+  },
+  timestamp: 1748001301789000,
+  traceId: undefined,
+  spanId: undefined,
+  traceFlags: undefined,
+  severityText: undefined,
+  severityNumber: undefined,
+  body: "claude_code.api_request",
+  attributes: {
+    "session.id": "sess_xyz",
+    "event.timestamp": "2026-05-22T14:35:01.789Z",
+    "event.sequence": 1,
+    model: "claude-haiku-4-5",
+    input_tokens: 512,
+    output_tokens: 128,
+    cost_usd: 0.0011,
+    request_id: "req_def",
+  },
+}
