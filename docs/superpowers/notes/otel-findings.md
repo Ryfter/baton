@@ -1,8 +1,8 @@
 # OTel Findings — Claude Code
 
-**Date:** 2026-05-23
+**Date:** 2026-05-23 (docs); smoke-test findings added 2026-05-24
 **Source:** https://code.claude.com/docs/en/monitoring-usage (fetched via WebFetch on 2026-05-23)
-**Status of this document:** Section 1 (env vars), Section 2 (exporter modes), and the event schema section are **verified from the official Claude Code monitoring docs**. The sample event in Section 3 is **not yet captured live** — the user must do this during the Task 9 E2E smoke test and reconcile field names against the parser written in Task 5.
+**Status:** Env vars and event schema from official docs. Console exporter format and capture method **confirmed via live smoke test (Task 9)** on 2026-05-24.
 
 ---
 
@@ -38,51 +38,94 @@ Verified from docs. Required vs optional is called out.
 
 ## Exporter mode chosen
 
-**Recommended: `console` exporter, redirected to a file.**
+**Confirmed: `console` exporter, stderr redirected to a file.**
 
-Reasoning:
+Key findings from smoke test (2026-05-24):
 
-- **There is no native `file` exporter** for OTel logs in Claude Code. Confirmed from docs.
-- The two practical ways to get events into a local JSONL file the orchestrator can tail are:
-  1. `OTEL_LOGS_EXPORTER=console` and redirect stdout (`claude ... >> events.jsonl`).
-  2. Run a local OTel collector (otelcol with a file exporter) on `http://localhost:4318/v1/logs` and point `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` at it.
-- Option 1 has zero extra infrastructure and matches the orchestrator's "spawn a Claude process, watch its output" model. Option 2 adds a daemon dependency that doesn't pay for itself yet.
-- The `console` exporter's output format must be verified against a real event before the parser (Task 5) commits to a schema — see Section "Sample event" below. In particular: is each event one JSON object per line, or pretty-printed multi-line JSON?
+### OTel goes to stderr, not stdout
 
-**Fallback if `console` output turns out to be human-formatted (not JSONL):** switch to a local otelcol with the file exporter, which writes proper JSONL.
+Claude Code writes all OTel events to **stderr**. Stdout is the interactive REPL.
+
+**Correct capture command:**
+```powershell
+claude 2>> "$HOME\.claude\telemetry\events.jsonl"
+```
+
+**Do NOT pipe stdout:**
+```powershell
+# WRONG — this makes Claude go non-interactive (--print mode):
+claude 2>&1 | Tee-Object -FilePath "..." -Append
+```
+Claude detects piped stdout and switches to `--print` mode, refusing to start
+without a prompt argument.
+
+### Console exporter format is JS object literals, NOT JSONL
+
+Each event is a **multi-line JavaScript-style object** (not JSON):
+- Property names are unquoted (e.g. `body:` not `"body":`)
+- Missing optional values appear as `undefined` (not `null`)
+- Events are separated by blank lines
+- The file is NOT valid JSON / JSONL
+
+The parser (`scripts/parse-otel.ps1`) handles this format using regex-based
+block splitting. Format auto-detection: JSONL files start with `{"`, JS format
+starts with `{` followed by a newline.
+
+### Hook registration confirmed
+
+The PostToolUse hook with matcher `*` appears at `event.sequence: 10` in every
+session startup, confirming `log-tool-call.ps1` is correctly registered.
 
 ---
 
-## Sample event (TO BE CAPTURED BY USER)
+## Confirmed sample events (smoke test 2026-05-24)
 
-The subagent that wrote this file could not capture a live event because that requires an interactive Claude Code session under the user's auth. Run these commands and paste a sanitized `api_request` event into this section before Task 5 (parser) is implemented:
+The session errored before making an API call (stdout-pipe issue), so no
+`api_request` event was captured yet. The fixture in `scripts/fixtures/otel-sample.jsonl`
+uses the confirmed JS format with inferred field names from the event schema docs.
 
-```powershell
-# Enable telemetry, console exporter, fast flush for dev
-$env:CLAUDE_CODE_ENABLE_TELEMETRY = '1'
-$env:OTEL_LOGS_EXPORTER = 'console'
-$env:OTEL_LOGS_EXPORT_INTERVAL = '1000'
-$env:OTEL_LOG_TOOL_DETAILS = '1'   # so we see tool_name, command_name etc.
+Sample `plugin_loaded` event (sanitized — confirmed format):
 
-# Send output (including OTel events) to a file so we can grep it
-claude -p "say hello" *> "$env:TEMP\claude-otel-sample.txt"
-
-# Inspect — look for lines starting with `claude_code.api_request` or JSON
-Get-Content "$env:TEMP\claude-otel-sample.txt"
+```
+{
+  resource: {
+    attributes: {
+      "host.arch": "amd64",
+      "os.type": "windows",
+      "os.version": "10.0.26200",
+      "service.name": "claude-code",
+      "service.version": "2.1.150",
+    },
+  },
+  instrumentationScope: {
+    name: "com.anthropic.claude_code.events",
+    version: "2.1.150",
+    schemaUrl: undefined,
+  },
+  timestamp: 1779596413614000,
+  traceId: undefined,
+  spanId: undefined,
+  traceFlags: undefined,
+  severityText: undefined,
+  severityNumber: undefined,
+  body: "claude_code.plugin_loaded",
+  attributes: {
+    "session.id": "8131b826-...",
+    "terminal.type": "windows-terminal",
+    "event.name": "plugin_loaded",
+    "event.timestamp": "2026-05-24T04:20:13.614Z",
+    "event.sequence": 0,
+    "plugin.name": "superpowers",
+    has_hooks: true,
+    has_mcp: false,
+  },
+}
 ```
 
-Things to confirm when reading the captured output:
-
-1. Is the format one JSON object per line (JSONL), or pretty-printed?
-2. Does the `api_request` event include `cost_usd` directly, or do we have to compute it from token counts and a local pricing table?
-3. What does the `model` value look like (e.g. `claude-sonnet-4-6` vs a fuller ID like `claude-sonnet-4-6-20251022`)?
-4. Does the timestamp arrive as ISO 8601 (`event.timestamp`) or as a Unix epoch in nanoseconds on the OTLP envelope?
-
-Paste a sanitized event below once captured:
-
-```json
-// PASTE HERE — strip user.email, user.account_uuid, organization.id, prompt text
-```
+**TODO (next smoke test):** capture a live `api_request` event to confirm:
+1. Are token counts bare integers or quoted strings?
+2. Is `cost_usd` always present on every `api_request`?
+3. What does `query_source` look like for subagent dispatches?
 
 ---
 
@@ -159,10 +202,14 @@ service:
 
 ---
 
-## Open questions for Task 9 (E2E smoke test) to answer
+## Open questions (updated after smoke test)
 
-1. Console exporter output format — one JSON object per line, or pretty-printed?
-2. Does `cost_usd` actually appear on every `api_request` event, or only some?
-3. Does setting `OTEL_LOGS_EXPORT_INTERVAL=1000` reliably flush events within ~1s of the API call, or is there additional buffering?
-4. When `query_source` is a subagent, what exactly does it look like — the literal `subagent_type`, or a prefixed form?
-5. Are `prompt.id` and `session.id` always present on `api_request` events, or only some of them?
+| # | Question | Status |
+|---|----------|--------|
+| 1 | Console exporter format — JSONL or pretty-printed? | ✅ **Confirmed: multi-line JS objects** (not JSONL). Parser updated. |
+| 2 | OTel on stdout or stderr? | ✅ **Confirmed: stderr**. Capture with `claude 2>> file`. |
+| 3 | Does `cost_usd` appear on every `api_request`? | ❓ Not yet captured — session errored before API call. |
+| 4 | Token counts — bare integers or quoted strings? | ❓ Inferred bare integers based on `event.sequence: 0` pattern; parser handles both. |
+| 5 | `OTEL_LOGS_EXPORT_INTERVAL` flush reliability? | ❓ Not yet tested. |
+| 6 | `query_source` field format for subagents? | ❓ Not yet captured. |
+| 7 | `prompt.id` always present on `api_request`? | ❓ Not yet captured. |
