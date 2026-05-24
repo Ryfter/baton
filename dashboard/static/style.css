@@ -100,3 +100,12 @@ button.danger:hover { background: #f851491a; }
 
 /* Empty state */
 .empty { color: #8b949e; font-size: 0.8rem; font-style: italic; margin: 0.5rem 0; }
+
+/* Controls card extras */
+.section-label { margin: 0 0 0.4rem; color: #8b949e; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.model-list { list-style: none; margin: 0.25rem 0 0; padding: 0; font-family: monospace; font-size: 0.8rem; }
+.model-list li { display: flex; align-items: center; gap: 0.5rem; padding: 0.2rem 0; border-bottom: 1px solid #21262d; }
+.model-list li:last-child { border-bottom: none; }
+.inline-btn { padding: 0.1rem 0.4rem; font-size: 0.7rem; border-radius: 4px; }
+.lms-port { color: #58a6ff; font-family: monospace; font-size: 0.8rem; }
+.lms-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }

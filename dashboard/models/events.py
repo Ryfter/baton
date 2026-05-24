@@ -34,6 +34,11 @@ class OllamaModel(BaseModel):
     size: str
 
 
+class LmStudioModel(BaseModel):
+    id: str           # e.g. "lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF"
+    loaded: bool = True
+
+
 class ModelStats(BaseModel):
     name: str
     calls: int
@@ -48,4 +53,5 @@ class DashboardStats(BaseModel):
     models: list[ModelStats]
     recent_hooks: list[HookEntry]
     ollama_models: list[OllamaModel]
+    lms_models: list[LmStudioModel] = []
     last_updated: datetime

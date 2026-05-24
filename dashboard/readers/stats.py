@@ -4,8 +4,32 @@ from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 
-from dashboard.models.events import DashboardStats, HookEntry, ModelStats, OtelEntry
+try:
+    import httpx as _httpx
+    _HTTPX_AVAILABLE = True
+except ImportError:
+    _HTTPX_AVAILABLE = False
+
+from dashboard.models.events import DashboardStats, HookEntry, LmStudioModel, ModelStats, OtelEntry
 from dashboard.readers.journal import read_journal
+
+LMS_API = "http://localhost:1234/v1/models"
+
+
+def _get_lms_models() -> list[LmStudioModel]:
+    """Query LM Studio OpenAI-compat API for loaded models. Returns [] if unreachable."""
+    if not _HTTPX_AVAILABLE:
+        return []
+    try:
+        resp = _httpx.get(LMS_API, timeout=1.5)
+        if resp.status_code == 200:
+            return [
+                LmStudioModel(id=m["id"])
+                for m in resp.json().get("data", [])
+            ]
+    except Exception:
+        pass
+    return []
 
 
 def compute_stats(journal_path: Path) -> DashboardStats:
@@ -47,5 +71,6 @@ def compute_stats(journal_path: Path) -> DashboardStats:
         models=models,
         recent_hooks=hook_entries[-20:],
         ollama_models=[],
+        lms_models=_get_lms_models(),
         last_updated=datetime.now().astimezone(),
     )
