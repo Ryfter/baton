@@ -171,10 +171,87 @@ Write-Warn "Manual step: dot-source $otelEnvDst from your PowerShell profile, or
 
 # --- Step 5: Deploy slash commands ---
 Write-Step "Deploying slash commands"
-foreach ($cmd in @('log-routing.md', 'consolidate-routing.md')) {
+foreach ($cmd in @(
+    'log-routing.md','consolidate-routing.md',
+    'job-start.md','job-status.md','job-list.md','job-phase.md',
+    'job-resume.md','job-lesson.md','consolidate-lessons.md'
+)) {
     $src = Join-Path $repoRoot "commands\$cmd"
     $dst = Join-Path $claudeDir "commands\$cmd"
     Copy-WithPrompt $src $dst "command: $cmd"
+}
+
+# --- Step 5b: Deploy Plan 3 library scripts ---
+Write-Step "Deploying Plan 3 scripts"
+$scriptsDst = Join-Path $claudeDir 'scripts'
+if (-not (Test-Path $scriptsDst)) {
+    if ($DryRun) { Write-Ok "[dry-run] would create $scriptsDst" }
+    else { New-Item -ItemType Directory -Force -Path $scriptsDst | Out-Null; Write-Ok "created $scriptsDst" }
+}
+foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1')) {
+    $src = Join-Path $repoRoot "scripts\$script"
+    $dst = Join-Path $scriptsDst $script
+    Copy-WithPrompt $src $dst "lib script: $script"
+}
+
+# --- Step 5c: Create jobs + knowledge dirs ---
+Write-Step "Creating jobs + knowledge directories"
+$dirsToCreate = @(
+    (Join-Path $claudeDir 'jobs'),
+    (Join-Path $claudeDir 'knowledge/universal'),
+    (Join-Path $claudeDir 'knowledge/universal/topics'),
+    (Join-Path $claudeDir 'knowledge/projects')
+)
+foreach ($d in $dirsToCreate) {
+    if (Test-Path $d) {
+        Write-Skip "$d already exists"
+    } elseif ($DryRun) {
+        Write-Ok "[dry-run] would create $d"
+    } else {
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        Write-Ok "created $d"
+    }
+}
+
+# Seed empty KB headers
+$kbSeeds = @{
+    'knowledge/universal/routing.md'     = "# Routing (universal)`n`nWhich model for what — populated by /consolidate-lessons.`n"
+    'knowledge/universal/user-prefs.md'  = "# User Preferences (universal)`n"
+    'knowledge/universal/reasoning.md'   = "# Reasoning Patterns (universal)`n"
+    'knowledge/universal/mistakes.md'    = "# Mistake Patterns (universal — cross-project)`n"
+    'knowledge/universal/winners.md'     = "# Winners (universal — cross-project)`n"
+}
+foreach ($rel in $kbSeeds.Keys) {
+    $dst = Join-Path $claudeDir $rel
+    if (Test-Path $dst) { Write-Skip "$rel already seeded"; continue }
+    if ($DryRun) { Write-Ok "[dry-run] would seed $rel"; continue }
+    Set-Content -Path $dst -Value $kbSeeds[$rel] -Encoding utf8NoBOM
+    Write-Ok "seeded $rel"
+}
+
+# --- Step 5d: Migrate Plan 1 model-routing.md → knowledge/universal/routing.md ---
+Write-Step "Migrating model-routing.md → knowledge/universal/routing.md"
+$oldRouting = Join-Path $claudeDir 'model-routing.md'
+$newRouting = Join-Path $claudeDir 'knowledge/universal/routing.md'
+if ((Test-Path $oldRouting) -and -not (Test-Path "$oldRouting.migrated")) {
+    if ($DryRun) {
+        Write-Ok "[dry-run] would migrate $oldRouting → $newRouting"
+    } else {
+        # If the new file is the empty seed, replace it with the old content.
+        # Otherwise append the old content to preserve any updates already in the new file.
+        $existing = Get-Content $newRouting -Raw -ErrorAction SilentlyContinue
+        if ($existing -match 'populated by /consolidate-lessons') {
+            Copy-Item $oldRouting $newRouting -Force
+        } else {
+            Add-Content -Path $newRouting -Value "`n# --- Migrated from model-routing.md ---`n"
+            Add-Content -Path $newRouting -Value (Get-Content $oldRouting -Raw)
+        }
+        # Rename the source so re-running bootstrap is a no-op
+        Rename-Item -Path $oldRouting -NewName 'model-routing.md.migrated'
+        Write-Ok "migrated; original kept at $oldRouting.migrated"
+    }
+} else {
+    Write-Skip "migration already done or no source file"
 }
 
 # --- Step 6: Deploy catalog and journal seeds ---
@@ -213,7 +290,7 @@ foreach ($b in $backends) {
 }
 
 # --- Summary ---
-Write-Step "Bootstrap complete (Plan 1 scope)"
+Write-Step "Bootstrap complete (Plan 3 scope)"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Source the OTel env helper in your PowerShell profile or before each session:"
@@ -221,5 +298,6 @@ Write-Host "       . $otelEnvDst"
 Write-Host "  2. Run a real Claude Code task to populate the journal."
 Write-Host "  3. Inspect $logDst to see hook + otel lines."
 Write-Host "  4. After a week of use, run /consolidate-routing to tune the catalog."
+Write-Host "  5. Use /job-start, /job-status, /job-list to track work in ~/.claude/jobs/."
+Write-Host "  6. Use /job-lesson + /consolidate-lessons to build the knowledge base."
 Write-Host ""
-Write-Host "Plan 2 (dashboard) will extend this script with Python venv + FastAPI app setup."
