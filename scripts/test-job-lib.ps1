@@ -109,4 +109,14 @@ if ($log -notmatch 'transition\s+\|\s+research → design') { throw "FAIL: phase
 
 Remove-Item $manifestTmp -Recurse -Force
 
+# --- Lesson categories + scope ---
+Write-Host "=== Lesson categories ===" -ForegroundColor Cyan
+Assert-Equal 'universal' (Get-LessonDefaultScope 'user-pref') 'user-pref defaults to universal'
+Assert-Equal 'universal' (Get-LessonDefaultScope 'routing')   'routing defaults to universal'
+Assert-Equal 'project'   (Get-LessonDefaultScope 'mistake')   'mistake defaults to project'
+Assert-Equal 'project'   (Get-LessonDefaultScope 'convention') 'convention defaults to project'
+Assert-Equal 'project'   (Get-LessonDefaultScope 'knowledge')  'knowledge defaults to project'
+if ((Test-LessonCategory 'bogus')) { throw "FAIL: bogus should not validate as a category" }
+if (-not (Test-LessonCategory 'mistake')) { throw "FAIL: mistake should validate" }
+
 Write-Host "All tests passed." -ForegroundColor Green

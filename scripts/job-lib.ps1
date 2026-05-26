@@ -184,3 +184,53 @@ function Append-PhaseLog {
     if ($Note) { $line += " note: `"$Note`"" }
     Add-Content -Path $path -Value $line -Encoding utf8NoBOM
 }
+
+# Lesson taxonomy — keep in lock-step with the spec.
+$script:LessonCategories = @{
+    'routing'      = 'universal'
+    'user-pref'    = 'universal'
+    'reasoning'    = 'universal'
+    'mistake'      = 'project'
+    'winner'       = 'project'
+    'convention'   = 'project'
+    'decision'     = 'project'
+    'architecture' = 'project'
+    'knowledge'    = 'project'
+}
+
+function Test-LessonCategory {
+    param([Parameter(Mandatory)][string]$Category)
+    return $script:LessonCategories.ContainsKey($Category)
+}
+
+function Get-LessonDefaultScope {
+    param([Parameter(Mandatory)][string]$Category)
+    return $script:LessonCategories[$Category]
+}
+
+function Get-LessonCategories {
+    return $script:LessonCategories.Keys | Sort-Object
+}
+
+function Append-LessonToJob {
+    param(
+        [Parameter(Mandatory)][string]$JobDir,
+        [Parameter(Mandatory)][string]$Phase,
+        [Parameter(Mandatory)][string]$Category,
+        [Parameter(Mandatory)][string]$Text
+    )
+    $path = Join-Path $JobDir 'lessons.md'
+    if (-not (Test-Path $path)) {
+        Set-Content -Path $path -Value "# Lessons`n" -Encoding utf8NoBOM
+    }
+    # Find or create the `## <phase>` section
+    $content = Get-Content $path -Raw
+    $sectionHeader = "## $Phase"
+    if ($content -notmatch [regex]::Escape($sectionHeader)) {
+        Add-Content -Path $path -Value "`n$sectionHeader" -Encoding utf8NoBOM
+    }
+    $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
+    # Sanitize text: collapse newlines + escape pipes
+    $safeText = ($Text -replace '\|', '¦' -replace "`r?`n", ' ').Trim()
+    Add-Content -Path $path -Value "$ts | $Category | `"$safeText`"" -Encoding utf8NoBOM
+}
