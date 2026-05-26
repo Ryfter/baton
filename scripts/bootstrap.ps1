@@ -258,7 +258,13 @@ if ((Test-Path $oldRouting) -and -not (Test-Path "$oldRouting.migrated")) {
 Write-Step "Deploying catalog and journal"
 $catSrc = Join-Path $repoRoot 'references\model-routing.md'
 $catDst = Join-Path $claudeDir 'model-routing.md'
-Copy-WithPrompt $catSrc $catDst 'routing catalog'
+# Skip re-seeding the catalog if Step 5d already migrated it (migration renames to .migrated);
+# re-deploying would resurrect the legacy file that was intentionally retired.
+if (Test-Path "$catDst.migrated") {
+    Write-Skip "Plan 1 catalog migrated to knowledge/universal/routing.md; skipping legacy catalog seed"
+} else {
+    Copy-WithPrompt $catSrc $catDst 'routing catalog'
+}
 
 $logSrc = Join-Path $repoRoot 'references\model-routing-log.md'
 $logDst = Join-Path $claudeDir 'model-routing-log.md'

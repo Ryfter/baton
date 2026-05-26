@@ -20,7 +20,7 @@ _PHASE_LOG_RE = re.compile(
     r'^(?P<ts>\d{4}-\d{2}-\d{2}T[\d:+-]+)\s*\|\s*(?P<kind>[a-z-]+)\s*\|\s*(?P<detail>[^|]+?)(?:\s*note:\s*"(?P<note>[^"]*)")?\s*$'
 )
 _LESSON_LINE_RE = re.compile(
-    r'^(?P<ts>\d{4}-\d{2}-\d{2}T[\d:+-]+)\s*\|\s*(?P<cat>[a-z-]+)\s*\|\s*"(?P<text>.+?)"\s*(✓ consolidated [\d-]+)?$'
+    r'^(?P<ts>\d{4}-\d{2}-\d{2}T[\d:+-]+)\s*\|\s*(?P<cat>[a-z-]+)\s*\|\s*(?:(?:universal|project)\s*\|\s*)?"(?P<text>.+?)"\s*(✓ consolidated [\d-]+)?$'
 )
 
 

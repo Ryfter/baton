@@ -217,6 +217,7 @@ function Append-LessonToJob {
         [Parameter(Mandatory)][string]$JobDir,
         [Parameter(Mandatory)][string]$Phase,
         [Parameter(Mandatory)][string]$Category,
+        [Parameter(Mandatory)][string]$Scope,
         [Parameter(Mandatory)][string]$Text
     )
     $path = Join-Path $JobDir 'lessons.md'
@@ -232,5 +233,5 @@ function Append-LessonToJob {
     $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
     # Sanitize text: collapse newlines + escape pipes
     $safeText = ($Text -replace '\|', '¦' -replace "`r?`n", ' ').Trim()
-    Add-Content -Path $path -Value "$ts | $Category | `"$safeText`"" -Encoding utf8NoBOM
+    Add-Content -Path $path -Value "$ts | $Category | $Scope | `"$safeText`"" -Encoding utf8NoBOM
 }
