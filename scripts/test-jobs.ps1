@@ -61,6 +61,59 @@ $state = Read-CurrentJob -StatePath $statePath
 Assert-Equal $jobId     $state.job_id 'state file job_id'
 Assert-Equal 'research' $state.phase  'state file phase'
 
+Write-Host "=== /job-phase next ===" -ForegroundColor Cyan
+
+# Already have an active job from /job-start test above.
+$mani = Read-Manifest -JobDir $jobDir
+Assert-Equal 'research' $mani.current_phase 'precondition: phase = research'
+
+# Replicate /job-phase next logic
+$newPhase = Get-NextPhase -Current $mani.current_phase -SprintCount $mani.sprint_count
+$now = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
+$mani.current_phase = $newPhase
+$mani.phase_started_at = $now
+$mani.last_updated = $now
+Write-Manifest -JobDir $jobDir -Manifest $mani
+Append-PhaseLog -JobDir $jobDir -Kind 'transition' -Detail "research → $newPhase"
+Write-CurrentJob -StatePath $statePath -JobId $jobId -Phase $newPhase
+
+$mani = Read-Manifest -JobDir $jobDir
+Assert-Equal 'design' $mani.current_phase 'after next: phase = design'
+
+# next again → code.sprint-1
+$newPhase = Get-NextPhase -Current $mani.current_phase -SprintCount $mani.sprint_count
+$mani.current_phase = $newPhase
+if ($newPhase -match '^code\.sprint-(\d+)$') { $mani.sprint_count = [int]$matches[1] }
+Write-Manifest -JobDir $jobDir -Manifest $mani
+Append-PhaseLog -JobDir $jobDir -Kind 'transition' -Detail "design → $newPhase"
+Write-CurrentJob -StatePath $statePath -JobId $jobId -Phase $newPhase
+
+$mani = Read-Manifest -JobDir $jobDir
+Assert-Equal 'code.sprint-1' $mani.current_phase 'after next: phase = code.sprint-1'
+Assert-Equal 1               $mani.sprint_count  'sprint_count = 1'
+
+Write-Host "=== /job-phase back ===" -ForegroundColor Cyan
+$prev = Get-PrevPhase -Current $mani.current_phase -SprintCount $mani.sprint_count
+$mani.current_phase = $prev
+# Don't decrement sprint_count on back — we only count entries, not net state
+Write-Manifest -JobDir $jobDir -Manifest $mani
+Append-PhaseLog -JobDir $jobDir -Kind 'transition' -Detail "code.sprint-1 → $prev (back)"
+Write-CurrentJob -StatePath $statePath -JobId $jobId -Phase $prev
+
+$mani = Read-Manifest -JobDir $jobDir
+Assert-Equal 'design' $mani.current_phase 'after back: phase = design'
+
+Write-Host "=== /job-phase done ===" -ForegroundColor Cyan
+$mani.status = 'done'
+$mani.current_phase = 'done'
+Write-Manifest -JobDir $jobDir -Manifest $mani
+Append-PhaseLog -JobDir $jobDir -Kind 'transition' -Detail "$($mani.current_phase) → done"
+Clear-CurrentJob -StatePath $statePath
+
+$mani = Read-Manifest -JobDir $jobDir
+Assert-Equal 'done' $mani.status 'after done: status = done'
+Assert-FileMissing $statePath 'after done: state file deleted'
+
 # Cleanup
 Remove-Item $root -Recurse -Force
 Write-Host "All tests passed." -ForegroundColor Green
