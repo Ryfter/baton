@@ -39,10 +39,27 @@ param(
     [string]$EventsPath  = (Join-Path $HOME '.claude/telemetry/events.jsonl'),
     [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md'),
     [string]$MarkerPath  = (Join-Path $HOME '.claude/telemetry/.parse-marker'),
-    [string]$CatalogPath = (Join-Path $HOME '.claude/model-routing.md')
+    [string]$CatalogPath = (Join-Path $HOME '.claude/model-routing.md'),
+    [string]$StatePath   = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } else { Join-Path $HOME '.claude/current-job.json' })
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Plan 3: read current job/phase from state file once (parser is one-shot)
+$script:JobTag = ''
+try {
+    if (Test-Path $StatePath) {
+        $raw = Get-Content $StatePath -Raw -ErrorAction Stop
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            $state = $raw | ConvertFrom-Json -ErrorAction Stop
+            if ($state.job_id -and $state.phase) {
+                $script:JobTag = " | job:$($state.job_id) | phase:$($state.phase)"
+            }
+        }
+    }
+} catch {
+    # Corrupted state — fall back to untagged
+}
 
 function Read-PricingTable($catalogPath) {
     # Reads the catalog's "## Pricing table" markdown table; returns
@@ -196,7 +213,7 @@ for ($i = $skipCount; $i -lt $allBlocks.Count; $i++) {
     }
     $costStr = "{0:F4}" -f $costValue
 
-    $newJournalLines += "$ts | otel | $model | in:$inTok out:$outTok | `$$costStr | api_request"
+    $newJournalLines += "$ts | otel | $model | in:$inTok out:$outTok | `$$costStr | api_request$($script:JobTag)"
 }
 
 if ($newJournalLines.Count -gt 0) {

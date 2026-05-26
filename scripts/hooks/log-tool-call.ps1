@@ -24,7 +24,8 @@
 
 param(
     [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md'),
-    [string]$ErrorPath   = (Join-Path $HOME '.claude/hooks/log-tool-call.err.log')
+    [string]$ErrorPath   = (Join-Path $HOME '.claude/hooks/log-tool-call.err.log'),
+    [string]$StatePath   = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } else { Join-Path $HOME '.claude/current-job.json' })
 )
 
 $ErrorActionPreference = 'Continue'  # never crash Claude Code; log and move on
@@ -120,6 +121,22 @@ try {
     $line = "$ts | hook | $target | ${elapsed}s | exit:$exit"
     if ($brief) {
         $line += " | `"$brief`""
+    }
+
+    # Plan 3: trailing job: + phase: tags from state file
+    try {
+        if (Test-Path $StatePath) {
+            $raw = Get-Content $StatePath -Raw -ErrorAction Stop
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $state = $raw | ConvertFrom-Json -ErrorAction Stop
+                if ($state.job_id -and $state.phase) {
+                    $line += " | job:$($state.job_id) | phase:$($state.phase)"
+                }
+            }
+        }
+    } catch {
+        # Corrupted state file — log and skip tags. Never crash the hook.
+        Write-ErrorLog "state file read failed: $($_.Exception.Message)"
     }
 
     # Ensure journal dir exists
