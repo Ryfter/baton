@@ -39,7 +39,12 @@ param(
     [string]$EventsPath  = (Join-Path $HOME '.claude/telemetry/events.jsonl'),
     [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md'),
     [string]$MarkerPath  = (Join-Path $HOME '.claude/telemetry/.parse-marker'),
-    [string]$CatalogPath = (Join-Path $HOME '.claude/model-routing.md'),
+    # Plan 3 migrated the catalog into the KB; fall back to the legacy path if the new one isn't there yet (e.g. pre-bootstrap).
+    [string]$CatalogPath = $(
+        $new = Join-Path $HOME '.claude/knowledge/universal/routing.md'
+        $old = Join-Path $HOME '.claude/model-routing.md'
+        if (Test-Path $new) { $new } else { $old }
+    ),
     [string]$StatePath   = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } else { Join-Path $HOME '.claude/current-job.json' })
 )
 

@@ -47,4 +47,16 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
             'detail': detail,
         })
 
+    @router.get('/partials/jobs/{job_id}', response_class=HTMLResponse)
+    async def partial_job_detail(job_id: str, request: Request) -> HTMLResponse:
+        """htmx polling target for the drill-in view's live region."""
+        try:
+            detail = read_job_detail(_jobs_root(request), _journal_path(request), job_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f'no such job: {job_id}')
+        return templates.TemplateResponse('partials/job_detail_live.html', {
+            'request': request,
+            'detail': detail,
+        })
+
     return router

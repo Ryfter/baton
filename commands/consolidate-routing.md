@@ -1,5 +1,5 @@
 ---
-description: Review recent model-routing journal entries, propose updates to the catalog (`model-routing.md`), and on approval archive the consolidated entries. Run periodically (weekly to monthly) or when you suspect routing defaults need tuning.
+description: Review recent model-routing journal entries, propose updates to the catalog (`knowledge/universal/routing.md`), and on approval archive the consolidated entries. Run periodically (weekly to monthly) or when you suspect routing defaults need tuning.
 argument-hint: (no arguments)
 ---
 
@@ -21,7 +21,7 @@ You are running the routing consolidation flow. Your job is to:
 - Find the most recent archive marker line (a line of the form
   `<!-- archived through: YYYY-MM-DDTHH:MM:SS -->`). Entries below it are
   "since-last-consolidation." If no marker exists, treat all entries as new.
-- Read `~/.claude/model-routing.md` (the catalog).
+- Read `~/.claude/knowledge/universal/routing.md` (the catalog — migrated from `~/.claude/model-routing.md` in Plan 3). If the new path is missing, fall back to the legacy path and surface a warning.
 - Read `~/.claude-octopus/results/` (if it exists) — list the most recent run
   directories to cross-reference patterns.
 
@@ -45,7 +45,7 @@ Identify:
 
 ### 3. Propose catalog updates
 
-Present a numbered list of proposed edits to `~/.claude/model-routing.md`.
+Present a numbered list of proposed edits to `~/.claude/knowledge/universal/routing.md`.
 Each proposal must be specific:
 
 > 1. In `## Routing heuristics`, change "Single-file refactor in a known
