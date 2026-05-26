@@ -2,97 +2,16 @@
 {% block title %}Job {{ detail.summary.id }}{% endblock %}
 {% block content %}
 
-<div class="card" style="grid-column: 1 / -1;">
-  <h2>{{ detail.summary.title }}</h2>
-  <div class="job-meta">
-    <span><strong>ID:</strong> <code>{{ detail.summary.id }}</code></span>
-    <span><strong>Phase:</strong> <code>{{ detail.summary.current_phase }}</code></span>
-    <span><strong>Status:</strong> {{ detail.summary.status }}</span>
-    <span><strong>Project:</strong> {{ detail.summary.project or '—' }}</span>
-    <span><strong>Cost:</strong> ${{ '%.4f' | format(detail.summary.cost_usd) }}</span>
-  </div>
-</div>
-
-<div class="card">
-  <h2>Brief</h2>
-  <pre class="brief-text">{{ detail.brief }}</pre>
-</div>
-
-<div class="card">
-  <h2>Phase Timeline</h2>
-  {% if detail.phase_log %}
-  <ul class="phase-log">
-    {% for p in detail.phase_log %}
-    <li class="phase-{{ p.kind }}">
-      <span class="ts">{{ p.timestamp.strftime('%m-%d %H:%M') }}</span>
-      <span class="kind">{{ p.kind }}</span>
-      <span class="detail">{{ p.detail }}</span>
-      {% if p.note %}<span class="note">— {{ p.note }}</span>{% endif %}
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="empty">No transitions yet.</p>
-  {% endif %}
-</div>
-
-<div class="card">
-  <h2>Cost by Phase</h2>
-  {% if detail.cost_by_phase %}
-  <table class="phase-cost">
-    {% for phase, cost in detail.cost_by_phase.items() %}
-    <tr><td><code>{{ phase }}</code></td><td class="cost">${{ '%.4f' | format(cost) }}</td></tr>
-    {% endfor %}
-  </table>
-  {% else %}
-  <p class="empty">No OTel costs recorded for this job yet.</p>
-  {% endif %}
-</div>
-
-<div class="card" style="grid-column: 1 / -1;">
-  <h2>Lessons</h2>
-  {% if detail.lessons %}
-  <ul class="lessons-list">
-    {% for l in detail.lessons %}
-    <li>
-      <span class="ts">{{ l.timestamp.strftime('%m-%d %H:%M') }}</span>
-      <span class="cat">{{ l.category }}</span>
-      {% if l.phase %}<span class="phase">[{{ l.phase }}]</span>{% endif %}
-      <span class="text">{{ l.text }}</span>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="empty">No lessons captured yet. Use <code>/job-lesson</code>.</p>
-  {% endif %}
-</div>
-
-<div class="card" style="grid-column: 1 / -1;">
-  <h2>Journal (this job)</h2>
-  {% if detail.journal %}
-  <div class="activity-scroll">
-    {% for e in detail.journal %}
-    <div class="activity-row">
-      <span class="ts">{{ e.timestamp.strftime('%m-%d %H:%M:%S') }}</span>
-      <span class="src">{{ e.__class__.__name__ | replace('Entry', '') | lower }}</span>
-      <span class="cmd">
-        {% if e.__class__.__name__ == 'HookEntry' %}{{ e.target }}{% if e.brief %} — "{{ e.brief }}"{% endif %}
-        {% elif e.__class__.__name__ == 'OtelEntry' %}{{ e.model }} in:{{ e.input_tokens }} out:{{ e.output_tokens }} ${{ '%.4f' | format(e.cost_usd) }}
-        {% elif e.__class__.__name__ == 'LessonEntry' %}{{ e.category }}: {{ e.text }}
-        {% elif e.__class__.__name__ == 'NoteEntry' %}{{ e.target }}: {{ e.text }}{% endif %}
-      </span>
-      {% if e.phase %}<span class="phase-tag">{{ e.phase }}</span>{% endif %}
-    </div>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p class="empty">No journal entries tagged with this job yet.</p>
-  {% endif %}
+<div id="job-live"
+     hx-get="/partials/jobs/{{ detail.summary.id }}"
+     hx-trigger="every 5s"
+     hx-swap="innerHTML"
+     style="display: contents;">
+  {% include "partials/job_detail_live.html" %}
 </div>
 
 <p style="grid-column: 1 / -1; text-align: center; margin-top: 1rem;">
   <a href="/">← Back to dashboard</a>
 </p>
 
-<script>setTimeout(() => location.reload(), 30000);</script>
 {% endblock %}
