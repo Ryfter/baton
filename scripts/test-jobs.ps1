@@ -104,10 +104,11 @@ $mani = Read-Manifest -JobDir $jobDir
 Assert-Equal 'design' $mani.current_phase 'after back: phase = design'
 
 Write-Host "=== /job-phase done ===" -ForegroundColor Cyan
+$oldPhase = $mani.current_phase     # capture BEFORE mutating, matching the production /job-phase command
 $mani.status = 'done'
 $mani.current_phase = 'done'
 Write-Manifest -JobDir $jobDir -Manifest $mani
-Append-PhaseLog -JobDir $jobDir -Kind 'transition' -Detail "$($mani.current_phase) → done"
+Append-PhaseLog -JobDir $jobDir -Kind 'transition' -Detail "$oldPhase → done"
 Clear-CurrentJob -StatePath $statePath
 
 $mani = Read-Manifest -JobDir $jobDir
