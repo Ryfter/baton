@@ -71,4 +71,42 @@ try {
     Remove-Item $projTmp -Recurse -Force
 }
 
+# --- Phase sequence ---
+Write-Host "=== Phase sequence ===" -ForegroundColor Cyan
+Assert-Equal 'design'        (Get-NextPhase 'research'      0) 'research → design'
+Assert-Equal 'code.sprint-1' (Get-NextPhase 'design'        0) 'design → code.sprint-1'
+Assert-Equal 'review'        (Get-NextPhase 'code.sprint-1' 1) 'code.sprint-1 → review'
+Assert-Equal 'code.sprint-2' (Get-NextPhase 'review'        1) 'review → code.sprint-2 (sprint_count=1)'
+Assert-Equal 'design'        (Get-PrevPhase 'code.sprint-1' 1) 'code.sprint-1 → design (back)'
+Assert-Equal 'research'      (Get-PrevPhase 'design'        0) 'design → research (back)'
+Assert-Null  (Get-PrevPhase 'research' 0) 'no back from research'
+
+# --- Manifest R/W ---
+Write-Host "=== Manifest R/W ===" -ForegroundColor Cyan
+$manifestTmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "cao-mani-$(Get-Random)") -Force
+$jobDir = Join-Path $manifestTmp 'j-test-123'
+New-Item -ItemType Directory -Path $jobDir | Out-Null
+
+$now = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
+Write-Manifest -JobDir $jobDir -Manifest @{
+    id = 'j-test-123'; title = 'test job'; created_at = $now
+    status = 'active'; project = 'test-project'
+    current_phase = 'research'; phase_started_at = $now
+    sprint_count = 0; last_updated = $now
+}
+$mani = Read-Manifest -JobDir $jobDir
+Assert-Equal 'j-test-123'   $mani.id            'manifest id'
+Assert-Equal 'research'     $mani.current_phase 'manifest current_phase'
+Assert-Equal 0              $mani.sprint_count  'manifest sprint_count'
+
+# --- Phase log append ---
+Write-Host "=== Phase log ===" -ForegroundColor Cyan
+Append-PhaseLog -JobDir $jobDir -Kind 'created'    -Detail 'research'
+Append-PhaseLog -JobDir $jobDir -Kind 'transition' -Detail 'research → design'
+$log = Get-Content (Join-Path $jobDir 'phase-log.md') -Raw
+if ($log -notmatch 'created\s+\|\s+research')      { throw "FAIL: phase-log missing created line" }
+if ($log -notmatch 'transition\s+\|\s+research → design') { throw "FAIL: phase-log missing transition" }
+
+Remove-Item $manifestTmp -Recurse -Force
+
 Write-Host "All tests passed." -ForegroundColor Green
