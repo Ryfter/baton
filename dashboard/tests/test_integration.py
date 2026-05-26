@@ -66,3 +66,32 @@ def test_activity_shows_newest_first(client):
     pos_20 = text.find("10:20")
     pos_00 = text.find("10:00")
     assert pos_25 < pos_20 < pos_00
+
+
+@pytest.fixture
+def client_with_jobs(journal_file, tagged_journal_file, jobs_root, monkeypatch):
+    import dashboard.main as main_module
+    from dashboard.main import app
+    monkeypatch.setattr(main_module, 'JOURNAL_PATH', tagged_journal_file)
+    monkeypatch.setattr(main_module, 'JOBS_ROOT', jobs_root)
+    app.state.journal_path = tagged_journal_file
+    app.state.jobs_root = jobs_root
+    return TestClient(app)
+
+
+def test_jobs_partial_via_main_app(client_with_jobs):
+    resp = client_with_jobs.get('/partials/jobs')
+    assert resp.status_code == 200
+    assert 'j-2026-05-26-feature-flags' in resp.text
+
+
+def test_jobs_detail_via_main_app(client_with_jobs):
+    resp = client_with_jobs.get('/jobs/j-2026-05-26-feature-flags')
+    assert resp.status_code == 200
+    assert 'feature flag system' in resp.text
+
+
+def test_index_includes_jobs_card(client_with_jobs):
+    resp = client_with_jobs.get('/')
+    assert resp.status_code == 200
+    assert 'partials/jobs' in resp.text   # the hx-get URL of the jobs card
