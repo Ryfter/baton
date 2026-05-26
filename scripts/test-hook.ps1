@@ -118,6 +118,59 @@ try {
     Remove-Item $tmpLog, $tmpErr -ErrorAction SilentlyContinue
 }
 
+# --- Plan 3: tagging tests ---
+Write-Host ""
+Write-Host "=== Plan 3: state-file-driven job/phase tagging ===" -ForegroundColor Cyan
+
+$tagTmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "cao-hook-tag-$(Get-Random)") -Force
+$tagJournal = Join-Path $tagTmp 'journal.md'
+$tagErr     = Join-Path $tagTmp 'err.log'
+$tagState   = Join-Path $tagTmp 'current-job.json'
+
+# Helper to run the hook with a specific state path
+function Invoke-HookWithState($json, $statePath) {
+    $env:CAO_STATE_PATH = $statePath
+    try {
+        return $json | pwsh -NoProfile -File scripts/hooks/log-tool-call.ps1 `
+            -JournalPath $tagJournal -ErrorPath $tagErr 2>&1
+    } finally {
+        Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue
+    }
+}
+
+$sampleEvent = @{
+    tool_name = 'Bash'
+    tool_input = @{ command = 'ollama run devstral:24b "hello"' }
+    tool_response = @{ exit_code = 0; duration_ms = 2000 }
+} | ConvertTo-Json -Depth 5 -Compress
+
+# Case A: no state file → line has NO job: / phase: trailing tags
+Remove-Item $tagJournal -ErrorAction SilentlyContinue
+Invoke-HookWithState $sampleEvent $tagState | Out-Null
+$line = @(Get-Content $tagJournal | Where-Object { $_ -match '\| hook \|' })[-1]
+if ($line -match 'job:') { throw "FAIL: no-state case should not have job: tag, got: $line" }
+if ($line -match 'phase:') { throw "FAIL: no-state case should not have phase: tag, got: $line" }
+Write-Host "  ok: no state file → no tags" -ForegroundColor Green
+
+# Case B: state file present → line has both tags
+Set-Content -Path $tagState -Value (@{ job_id = 'j-2026-05-26-test'; phase = 'research' } | ConvertTo-Json) -Encoding utf8NoBOM
+Remove-Item $tagJournal -ErrorAction SilentlyContinue
+Invoke-HookWithState $sampleEvent $tagState | Out-Null
+$line = @(Get-Content $tagJournal | Where-Object { $_ -match '\| hook \|' })[-1]
+if ($line -notmatch 'job:j-2026-05-26-test') { throw "FAIL: should contain job tag, got: $line" }
+if ($line -notmatch 'phase:research')        { throw "FAIL: should contain phase tag, got: $line" }
+Write-Host "  ok: state file set → trailing tags appended" -ForegroundColor Green
+
+# Case C: corrupted state file → graceful fallback (no tags, no crash)
+Set-Content -Path $tagState -Value '{ broken json' -Encoding utf8NoBOM
+Remove-Item $tagJournal -ErrorAction SilentlyContinue
+Invoke-HookWithState $sampleEvent $tagState | Out-Null
+$line = @(Get-Content $tagJournal | Where-Object { $_ -match '\| hook \|' })[-1]
+if ($line -match 'job:') { throw "FAIL: corrupted state should yield no tags, got: $line" }
+Write-Host "  ok: corrupted state → graceful fallback, no tags" -ForegroundColor Green
+
+Remove-Item $tagTmp -Recurse -Force
+
 if ($failures -gt 0) {
     Write-Host "`n$failures test(s) failed" -ForegroundColor Red
     exit 1
