@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<html><body>
+<h1>{{ detail.summary.title }}</h1>
+<pre>{{ detail.brief }}</pre>
+{% for p in detail.phase_log %}<div>{{ p.detail }}</div>{% endfor %}
+{% for l in detail.lessons %}<div>{{ l.text }}</div>{% endfor %}
+</body></html>
