@@ -114,6 +114,30 @@ $mani = Read-Manifest -JobDir $jobDir
 Assert-Equal 'done' $mani.status 'after done: status = done'
 Assert-FileMissing $statePath 'after done: state file deleted'
 
+Write-Host "=== /job-resume ===" -ForegroundColor Cyan
+
+# Set up a "previously-active" job by writing manifest then clearing state.
+$resumeId = 'j-test-resume-job'
+$resumeDir = Join-Path $jobsRoot $resumeId
+New-Item -ItemType Directory -Path $resumeDir | Out-Null
+$rNow = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
+Write-Manifest -JobDir $resumeDir -Manifest @{
+    id = $resumeId; title = 'resume test'; created_at = $rNow
+    status = 'active'; project = 'test'
+    current_phase = 'code.sprint-2'; phase_started_at = $rNow
+    sprint_count = 2; last_updated = $rNow
+}
+Set-Content -Path (Join-Path $resumeDir 'brief.md') -Value "# Brief`n`nresume test" -Encoding utf8NoBOM
+Clear-CurrentJob -StatePath $statePath
+
+# Now resume — should restore state file from manifest
+$mani = Read-Manifest -JobDir $resumeDir
+Write-CurrentJob -StatePath $statePath -JobId $mani.id -Phase $mani.current_phase
+
+$state = Read-CurrentJob -StatePath $statePath
+Assert-Equal $resumeId       $state.job_id 'resume: job_id restored'
+Assert-Equal 'code.sprint-2' $state.phase  'resume: phase restored from manifest'
+
 # Cleanup
 Remove-Item $root -Recurse -Force
 Write-Host "All tests passed." -ForegroundColor Green
