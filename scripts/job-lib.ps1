@@ -25,7 +25,10 @@ function Read-CurrentJob {
         $result.job_id = $obj.job_id
         $result.phase  = $obj.phase
     } catch {
-        # Corrupted or unreadable → treat as no active job
+        # Corrupted or unreadable → treat as no active job.
+        # Contract: this function must never throw. Bare catch is intentional;
+        # surface details to debug stream for callers who set $DebugPreference.
+        Write-Debug "Read-CurrentJob: $($_.Exception.Message)"
     }
     return $result
 }
@@ -38,7 +41,7 @@ function Write-CurrentJob {
     )
     $dir = Split-Path -Parent $StatePath
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-    @{ job_id = $JobId; phase = $Phase } | ConvertTo-Json | Set-Content -Path $StatePath -Encoding utf8
+    @{ job_id = $JobId; phase = $Phase } | ConvertTo-Json | Set-Content -Path $StatePath -Encoding utf8NoBOM
 }
 
 function Clear-CurrentJob {
