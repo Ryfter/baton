@@ -119,6 +119,53 @@ Assert "fallback computes from pricing table" ($otelLinesAfter2[-1] -match '\| \
 
 Remove-Item $tmpEvents, $tmpJournal, $tmpMarker -ErrorAction SilentlyContinue
 
+# --- Plan 3: OTel tagging from state file ---
+Write-Host ""
+Write-Host "=== Plan 3: OTel events tagged with current job/phase ===" -ForegroundColor Cyan
+
+$otelTmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "cao-otel-tag-$(Get-Random)") -Force
+$otelEvents  = Join-Path $otelTmp 'events.jsonl'
+$otelJournal = Join-Path $otelTmp 'log.md'
+$otelMarker  = Join-Path $otelTmp '.parse-marker'
+$otelState   = Join-Path $otelTmp 'current-job.json'
+
+# Minimal api_request event
+$evt = '{"body":"claude_code.api_request","event.timestamp":"2026-05-26T11:05:00+00:00","model":"claude-sonnet-4-6","input_tokens":100,"output_tokens":50,"cost_usd":0.001}'
+Set-Content -Path $otelEvents -Value $evt -Encoding utf8NoBOM
+
+# Case A: no state → untagged otel line (Plan 1 format)
+$env:CAO_STATE_PATH = $otelState
+try {
+    & pwsh -NoProfile -File scripts/parse-otel.ps1 `
+        -EventsPath $otelEvents -JournalPath $otelJournal `
+        -MarkerPath $otelMarker -CatalogPath (Join-Path $otelTmp 'no-catalog.md') | Out-Null
+} finally {
+    Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue
+}
+$line = @(Get-Content $otelJournal | Where-Object { $_ -match '\| otel \|' })[-1]
+if (-not $line) { throw "FAIL: no otel line written" }
+if ($line -match 'job:') { throw "FAIL: untagged case should not have job:, got: $line" }
+Write-Host "  ok: no state → untagged otel line" -ForegroundColor Green
+
+# Case B: state present → tagged
+Set-Content -Path $otelState -Value (@{ job_id = 'j-test-otel'; phase = 'research' } | ConvertTo-Json) -Encoding utf8NoBOM
+Remove-Item $otelJournal -ErrorAction SilentlyContinue
+Remove-Item $otelMarker  -ErrorAction SilentlyContinue
+$env:CAO_STATE_PATH = $otelState
+try {
+    & pwsh -NoProfile -File scripts/parse-otel.ps1 `
+        -EventsPath $otelEvents -JournalPath $otelJournal `
+        -MarkerPath $otelMarker -CatalogPath (Join-Path $otelTmp 'no-catalog.md') | Out-Null
+} finally {
+    Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue
+}
+$line = @(Get-Content $otelJournal | Where-Object { $_ -match '\| otel \|' })[-1]
+if ($line -notmatch 'job:j-test-otel') { throw "FAIL: should have job: tag, got: $line" }
+if ($line -notmatch 'phase:research')   { throw "FAIL: should have phase: tag, got: $line" }
+Write-Host "  ok: state present → tagged otel line" -ForegroundColor Green
+
+Remove-Item $otelTmp -Recurse -Force
+
 if ($failures -gt 0) {
     Write-Host "`n$failures test(s) failed" -ForegroundColor Red
     exit 1
