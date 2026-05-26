@@ -48,3 +48,43 @@ function Clear-CurrentJob {
     param([string]$StatePath = $script:DefaultStatePath)
     if (Test-Path $StatePath) { Remove-Item $StatePath -Force }
 }
+
+$script:StopWords = @('a','an','the','for','to','of','and','build','make','create','add','my','this','that')
+
+function ConvertTo-JobSlug {
+    param([Parameter(Mandatory)][string]$Brief)
+    $lower = $Brief.ToLowerInvariant()
+    # Replace any non-alphanumeric with space, then split on whitespace
+    $cleaned = ($lower -replace '[^a-z0-9]+', ' ').Trim()
+    $tokens = $cleaned -split '\s+' | Where-Object { $_ -and ($script:StopWords -notcontains $_) }
+    $slugTokens = @($tokens | Select-Object -First 5)
+    $slug = ($slugTokens -join '-')
+    if ($slug.Length -gt 40) { $slug = $slug.Substring(0, 40).TrimEnd('-') }
+    if (-not $slug) { $slug = 'untitled' }
+    return $slug
+}
+
+function Resolve-ProjectId {
+    param([string]$Override)
+    if ($Override) { return $Override }
+
+    # Try git remote
+    try {
+        $remote = (& git remote get-url origin 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $remote) {
+            # Strip protocol, .git suffix; take host/repo
+            $clean = $remote -replace '^(https?://|git@)', '' `
+                              -replace ':', '/' `
+                              -replace '\.git$', ''
+            $parts = $clean -split '/' | Where-Object { $_ }
+            if ($parts.Count -ge 2) {
+                $repo = $parts[-1]
+                return ($repo.ToLowerInvariant() -replace '[^a-z0-9-]+', '-').Trim('-')
+            }
+        }
+    } catch { }
+
+    # Fallback: cwd folder name (slugified)
+    $folder = Split-Path -Leaf (Get-Location).Path
+    return ($folder.ToLowerInvariant() -replace '[^a-z0-9-]+', '-').Trim('-')
+}
