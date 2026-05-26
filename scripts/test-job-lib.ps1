@@ -45,4 +45,30 @@ Assert-Null $state.job_id 'corrupted file: job_id is null'
 
 Remove-Item $tmpDir -Recurse -Force
 
+# --- Slugify ---
+Write-Host "=== Slugify ===" -ForegroundColor Cyan
+Assert-Equal 'feature-flag-system-orchestrator' (ConvertTo-JobSlug "build a feature flag system for the orchestrator") 'normal brief'
+Assert-Equal 'rewrite-auth-middleware' (ConvertTo-JobSlug "Rewrite the auth middleware") 'simple brief'
+Assert-Equal 'fix-bug' (ConvertTo-JobSlug "fix bug") 'short brief, single token after stops'
+Assert-Equal 'fix-bug-in-login-flow' (ConvertTo-JobSlug "fix a bug in the login flow") 'stop-word filtering'
+
+# Length cap (40)
+$long = ConvertTo-JobSlug "implement comprehensive multi-tenant role-based access control"
+if ($long.Length -gt 40) { throw "FAIL: slug length exceeded 40: $long ($($long.Length) chars)" }
+
+# --- Project detection ---
+Write-Host "=== Project detection ===" -ForegroundColor Cyan
+$projTmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "cao-proj-$(Get-Random)") -Force
+Push-Location $projTmp
+try {
+    # cwd-folder fallback (no git remote)
+    Assert-Equal (Split-Path -Leaf $projTmp) (Resolve-ProjectId) 'cwd folder fallback'
+
+    # Explicit override always wins
+    Assert-Equal 'custom-project' (Resolve-ProjectId -Override 'custom-project') 'explicit override'
+} finally {
+    Pop-Location
+    Remove-Item $projTmp -Recurse -Force
+}
+
 Write-Host "All tests passed." -ForegroundColor Green
