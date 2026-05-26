@@ -3,8 +3,7 @@
 # Each section dot-sources the lib and runs assertions; throws on failure.
 
 $ErrorActionPreference = 'Stop'
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
-. (Join-Path $here 'job-lib.ps1')
+. (Join-Path $PSScriptRoot 'job-lib.ps1')
 
 function Assert-Equal($expected, $actual, $msg) {
     if ($expected -ne $actual) {
