@@ -1,0 +1,38 @@
+<h2>Jobs</h2>
+{% if active_jobs %}
+<table class="jobs-table">
+  <thead>
+    <tr><th>Job</th><th>Phase</th><th>Project</th><th>Cost</th><th>Started</th></tr>
+  </thead>
+  <tbody>
+    {% for j in active_jobs %}
+    <tr>
+      <td><a href="/jobs/{{ j.id }}" class="job-link">🟢 {{ j.id }}</a></td>
+      <td><code>{{ j.current_phase }}</code></td>
+      <td>{{ j.project or '—' }}</td>
+      <td class="cost">${{ '%.4f' | format(j.cost_usd) }}</td>
+      <td>{{ j.created_at.strftime('%m-%d %H:%M') }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No active jobs. Use <code>/job-start</code> in Claude Code to begin.</p>
+{% endif %}
+
+{% if done_jobs %}
+<h3 class="recent-done">Recently completed</h3>
+<table class="jobs-table dim">
+  <tbody>
+    {% for j in done_jobs %}
+    <tr>
+      <td><a href="/jobs/{{ j.id }}" class="job-link">⚫ {{ j.id }}</a></td>
+      <td><code>{{ j.current_phase }}</code></td>
+      <td>{{ j.project or '—' }}</td>
+      <td class="cost">${{ '%.4f' | format(j.cost_usd) }}</td>
+      <td>{{ j.created_at.strftime('%m-%d') }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

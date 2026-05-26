@@ -41,11 +41,45 @@ notepad $PROFILE
 - `scripts/parse-otel.ps1` — converts Claude Code's OTel JSONL events into
   journal `otel` lines with cost computation.
 
-## Coming in Plan 2
+## What you get (Plan 2)
 
-Local web dashboard at `http://localhost:8765` with live activity, today's
-spend, recent journal, model leaderboard, and controls
-(load/unload LM Studio models, stop Ollama models, kill stuck PIDs).
+A live web **dashboard** at `http://localhost:8765`.
+
+- Real-time activity feed, today's spend, and a model leaderboard drawn from
+  the journal.
+- Ollama controls — stop a running model from the UI.
+- LM Studio integration — live model list, load/unload controls.
+- Dark-mode CSS (GitHub palette), Chart.js spend sparklines.
+- `dashboard/` Python package (FastAPI + Jinja2); 33 integration tests.
+
+## What you get (Plan 3)
+
+A persistent **job** model with phase tracking, lesson capture, and a knowledge
+base — all surfacing in the dashboard.
+
+- `~/.claude/jobs/<id>/` — per-job folders with manifest, brief, phase-log,
+  lessons.
+- `~/.claude/knowledge/` — two-layer KB (`universal/` + `projects/<id>/`)
+  populated by `/job-lesson` capture and `/consolidate-lessons` rollup.
+- Slash commands:
+  - `/job-start "<brief>"` — open a new job, start phase tracking
+  - `/job-status`, `/job-list` — see what's active / past
+  - `/job-phase next|back|done|<name>` — advance, step back, or close
+  - `/job-resume <id>` — continue a job after restarting Claude Code
+  - `/job-lesson <category> "<text>"` — capture a lesson while you work
+  - `/consolidate-lessons` — promote lessons into the KB
+- Hook + `parse-otel.ps1` now tag every journal line with `job:` + `phase:`
+  whenever a job is active.
+- Dashboard adds a **Jobs panel** + drill-in route at `/jobs/<id>` with
+  per-phase cost breakdown.
+
+See [`docs/superpowers/specs/2026-05-26-plan3-job-scaffold-design.md`](docs/superpowers/specs/2026-05-26-plan3-job-scaffold-design.md).
+
+## Coming in Plan 4
+
+Fleet config (`~/.claude/fleet.yaml`) listing CLI providers and remote Ollama
+hosts. Multi-machine local model access. Foundation for the research / code /
+review phases (Plans 5-7) to actually dispatch work.
 
 ## Architecture
 

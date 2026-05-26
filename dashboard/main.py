@@ -18,16 +18,25 @@ JOURNAL_PATH = Path(
     or Path.home() / ".claude" / "model-routing-log.md"
 )
 
+JOBS_ROOT = Path(
+    os.environ.get('ROUTING_JOBS_ROOT', '')
+    or Path.home() / '.claude' / 'jobs'
+)
+
 _HERE = Path(__file__).parent
 
 app = FastAPI(title="Routing Dashboard", version="2.0.0")
 app.state.journal_path = JOURNAL_PATH
+app.state.jobs_root = JOBS_ROOT
 
 app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 templates = Jinja2Templates(directory=str(_HERE / "templates"))
 
 app.include_router(api_router)
 app.include_router(controls_router)
+
+from dashboard.routers.jobs import build_router as build_jobs_router
+app.include_router(build_jobs_router(templates))
 
 
 def _ctx(request: Request) -> dict:

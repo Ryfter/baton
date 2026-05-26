@@ -75,3 +75,58 @@ def test_read_journal_counts(journal_file: Path):
 def test_read_journal_missing_file():
     entries = read_journal(Path("/nonexistent/path.md"))
     assert entries == []
+
+
+def test_parse_tagged_hook_line():
+    from dashboard.readers.journal import parse_journal_line
+    from dashboard.models.events import HookEntry
+    line = '2026-05-26T11:00:00-06:00 | hook | bash:ollama list | 1s | exit:0 | job:j-foo | phase:research'
+    e = parse_journal_line(line)
+    assert isinstance(e, HookEntry)
+    assert e.target == 'bash:ollama list'
+    assert e.job_id == 'j-foo'
+    assert e.phase == 'research'
+    assert e.brief is None
+
+
+def test_parse_tagged_hook_with_brief():
+    from dashboard.readers.journal import parse_journal_line
+    from dashboard.models.events import HookEntry
+    line = '2026-05-26T11:00:00-06:00 | hook | agent:Explore | 12s | exit:0 | "find patterns" | job:j-foo | phase:research'
+    e = parse_journal_line(line)
+    assert isinstance(e, HookEntry)
+    assert e.brief == 'find patterns'
+    assert e.job_id == 'j-foo'
+    assert e.phase == 'research'
+
+
+def test_parse_tagged_otel_line():
+    from dashboard.readers.journal import parse_journal_line
+    from dashboard.models.events import OtelEntry
+    line = '2026-05-26T11:05:00-06:00 | otel | claude-sonnet-4-6 | in:100 out:50 | $0.0011 | api_request | job:j-foo | phase:research'
+    e = parse_journal_line(line)
+    assert isinstance(e, OtelEntry)
+    assert e.job_id == 'j-foo'
+    assert e.phase == 'research'
+
+
+def test_parse_lesson_line():
+    from dashboard.readers.journal import parse_journal_line
+    from dashboard.models.events import LessonEntry
+    line = '2026-05-26T11:20:00-06:00 | lesson | knowledge | "Feature flags split into release vs ops" | job:j-foo | phase:research'
+    e = parse_journal_line(line)
+    assert isinstance(e, LessonEntry)
+    assert e.category == 'knowledge'
+    assert 'release vs ops' in e.text
+    assert e.job_id == 'j-foo'
+
+
+def test_untagged_lines_still_parse():
+    # Plan 1/2 format with no trailing tags must still work
+    from dashboard.readers.journal import parse_journal_line
+    from dashboard.models.events import HookEntry
+    line = '2026-05-23T10:00:00-06:00 | hook | bash:ollama list | 2s | exit:0'
+    e = parse_journal_line(line)
+    assert isinstance(e, HookEntry)
+    assert e.job_id is None
+    assert e.phase is None
