@@ -39,7 +39,7 @@ journal so the dashboard can show it.
    $jobDir = Join-Path $HOME ".claude/jobs/$($state.job_id)"
 
    # Append to job lessons.md
-   Append-LessonToJob -JobDir $jobDir -Phase $state.phase -Category $category -Text $text
+   Append-LessonToJob -JobDir $jobDir -Phase $state.phase -Category $category -Scope $scope -Text $text
 
    # Append a `lesson` line to the journal
    $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'

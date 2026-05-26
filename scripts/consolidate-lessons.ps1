@@ -50,7 +50,10 @@ function Get-KbPath {
 }
 
 $consolidatedDate = Get-Date -Format 'yyyy-MM-dd'
-$lessonLineRe = '^(?<ts>\d{4}-\d{2}-\d{2}T[\d:+-]+)\s*\|\s*(?<cat>[a-z-]+)\s*\|\s*"(?<text>.+?)"\s*$'
+# Supports both old format: ts | cat | "text"
+# and new format:           ts | cat | scope | "text"
+# The scope group is optional; if absent, Get-LessonDefaultScope is used.
+$lessonLineRe = '^(?<ts>\d{4}-\d{2}-\d{2}T[\d:+-]+)\s*\|\s*(?<cat>[a-z-]+)\s*\|\s*(?:(?<scope>universal|project)\s*\|\s*)?"(?<text>.+?)"\s*(?<consolidated>✓ consolidated [\d-]+)?\s*$'
 $alreadyDoneRe = '✓ consolidated'
 
 foreach ($jobDir in Get-ChildItem -Path $JobsRoot -Directory) {
@@ -81,7 +84,12 @@ foreach ($jobDir in Get-ChildItem -Path $JobsRoot -Directory) {
             continue
         }
         $text = $m.Groups['text'].Value
-        $scope = Get-LessonDefaultScope $cat
+        # Prefer explicit scope field (new format); fall back to category default (old format).
+        $scope = if ($m.Groups['scope'].Success -and $m.Groups['scope'].Value) {
+            $m.Groups['scope'].Value
+        } else {
+            Get-LessonDefaultScope $cat
+        }
         # For project-scoped categories, skip if no project on this job
         if ($scope -eq 'project' -and -not $project) {
             $newLines += $line

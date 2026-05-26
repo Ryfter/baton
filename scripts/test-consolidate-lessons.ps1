@@ -28,15 +28,16 @@ status: active
 current_phase: review
 "@ -Encoding utf8NoBOM
 
-# lessons.md with three entries — two scopes, three categories
+# lessons.md with entries in both old format (no scope) and new format (with scope).
+# The `mistake` entry has an explicit universal override to test scope persistence.
 @"
 # Lessons — $jobId
 
 ## research
-2026-05-26T11:20:00-06:00 | knowledge | "Feature flags split into release vs ops toggles"
+2026-05-26T11:20:00-06:00 | knowledge | project | "Feature flags split into release vs ops toggles"
 
 ## code.sprint-1
-2026-05-26T12:55:00-06:00 | mistake | "devstral generated flag write without locking"
+2026-05-26T12:55:00-06:00 | mistake | universal | "devstral generated flag write without locking"
 2026-05-26T13:05:00-06:00 | user-pref | "Kevin prefers single-file TOML config"
 "@ | Set-Content (Join-Path $jobDir 'lessons.md') -Encoding utf8NoBOM
 
@@ -45,15 +46,23 @@ current_phase: review
     -JobsRoot $jobsRoot -KbRoot $kbRoot | Out-Null
 
 # Assertions: routing by category
-$mistakes = Get-Content "$kbRoot/projects/testproj/mistakes.md" -Raw
-Assert-Match 'devstral generated flag write' $mistakes 'mistake → projects/testproj/mistakes.md'
-Assert-Match "\[$jobId\]" $mistakes 'mistake line carries source job tag'
 
+# mistake with explicit 'universal' scope override → universal/mistakes.md (NOT projects/testproj/mistakes.md)
+$universalMistakes = Get-Content "$kbRoot/universal/mistakes.md" -Raw
+Assert-Match 'devstral generated flag write' $universalMistakes 'mistake (universal override) → universal/mistakes.md'
+Assert-Match "\[$jobId\]" $universalMistakes 'universal mistake line carries source job tag'
+Assert-NotMatch 'devstral generated flag write' (
+    (Test-Path "$kbRoot/projects/testproj/mistakes.md") ?
+    (Get-Content "$kbRoot/projects/testproj/mistakes.md" -Raw) : ''
+) 'mistake with universal scope must NOT appear in projects/testproj/mistakes.md'
+
+# user-pref has no scope field (old format) → defaults to universal
 $userPrefs = Get-Content "$kbRoot/universal/user-prefs.md" -Raw
-Assert-Match 'single-file TOML' $userPrefs 'user-pref → universal/user-prefs.md'
+Assert-Match 'single-file TOML' $userPrefs 'user-pref (old format) → universal/user-prefs.md'
 
+# knowledge with explicit 'project' scope → projects/testproj/topics/general.md
 $topic = Get-Content "$kbRoot/projects/testproj/topics/general.md" -Raw
-Assert-Match 'release vs ops toggles' $topic 'knowledge → projects/testproj/topics/general.md'
+Assert-Match 'release vs ops toggles' $topic 'knowledge (project scope) → projects/testproj/topics/general.md'
 
 # Source lessons.md should be marked consolidated
 $lessons = Get-Content (Join-Path $jobDir 'lessons.md') -Raw
@@ -63,9 +72,9 @@ Assert-Match '✓ consolidated' $lessons 'source entries marked consolidated'
 & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'consolidate-lessons.ps1') `
     -JobsRoot $jobsRoot -KbRoot $kbRoot | Out-Null
 
-$mistakesAfter = Get-Content "$kbRoot/projects/testproj/mistakes.md" -Raw
-$count1 = ([regex]::Matches($mistakes,      'devstral generated flag write')).Count
-$count2 = ([regex]::Matches($mistakesAfter, 'devstral generated flag write')).Count
+$universalMistakesAfter = Get-Content "$kbRoot/universal/mistakes.md" -Raw
+$count1 = ([regex]::Matches($universalMistakes,      'devstral generated flag write')).Count
+$count2 = ([regex]::Matches($universalMistakesAfter, 'devstral generated flag write')).Count
 if ($count1 -ne $count2) { throw "FAIL: second run duplicated entries ($count1 → $count2)" }
 
 Remove-Item $root -Recurse -Force
