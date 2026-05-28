@@ -50,5 +50,18 @@ try { Invoke-Fleet -Name 'does-not-exist' -Prompt 'x' -Path $fixture -JournalPat
 Assert "unknown provider refused" ($threw2)
 
 Remove-Item $tmpJournal -ErrorAction SilentlyContinue
+
+# --- http dispatch via stub escape hatch ---
+$tmpJournal2 = Join-Path $env:TEMP "fleet-http-journal-$(Get-Random).md"
+$noState2    = Join-Path $env:TEMP "fleet-http-nostate-$(Get-Random).json"
+$env:CAO_STATE_PATH = $noState2
+try {
+    $rh = Invoke-Fleet -Name 'stub-http' -Prompt 'ping' -Path $fixture -JournalPath $tmpJournal2
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+Assert "http dispatch calls Invoke-StubHttp" ($rh.stdout -eq 'stub-http-response:ping')
+Assert "http dispatch exit 0" ($rh.exit_code -eq 0)
+Assert "http dispatch journaled" (@(Get-Content $tmpJournal2 | Where-Object { $_ -match '\| fleet \| stub-http \|' }).Count -ge 1)
+Remove-Item $tmpJournal2 -ErrorAction SilentlyContinue
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green
