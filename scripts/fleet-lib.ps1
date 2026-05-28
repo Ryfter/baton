@@ -104,7 +104,10 @@ function Resolve-FleetCommand {
         throw "Provider '$($Provider.name)' command_template lacks the required {{prompt}} placeholder."
     }
     $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
-    $cmd = $template -replace '\{\{prompt\}\}', $Prompt
-    $cmd = $cmd -replace '\{\{model\}\}', $resolvedModel
+    # Literal .Replace() — NOT -replace — so $-sequences in the prompt (e.g. "$PATH",
+    # "$1") are not interpreted as regex backreferences. Shell-escaping of quotes is
+    # still a known limitation; Plan 5 hardens prompt passing via stdin.
+    $cmd = $template.Replace('{{prompt}}', $Prompt)
+    if ($null -ne $resolvedModel) { $cmd = $cmd.Replace('{{model}}', [string]$resolvedModel) }
     return $cmd
 }
