@@ -205,12 +205,11 @@ function Invoke-Fleet {
         $result = Invoke-Fleet-Cli -Provider $provider -Prompt $Prompt -Model $Model
     } elseif ($provider.kind -eq 'http') {
         # Dot-source the per-provider escape hatch + call Invoke-<PascalName>.
-        $scriptPath = Join-Path (Split-Path $Path -Parent) "fleet/$Name.ps1"
+        # Escape hatches live next to this library (scripts/fleet/), NOT next to
+        # fleet.yaml — they're tied to the code location, not the config location.
+        $scriptPath = Join-Path $PSScriptRoot "fleet/$Name.ps1"
         if (-not (Test-Path $scriptPath)) {
-            $scriptPath = Join-Path $PSScriptRoot "fleet/$Name.ps1"
-        }
-        if (-not (Test-Path $scriptPath)) {
-            throw "Provider '$Name' requires $scriptPath (with Invoke-* function)."
+            throw "Provider '$Name' (kind: http) requires $scriptPath defining Invoke-<PascalName>."
         }
         . $scriptPath
         $fnName = 'Invoke-' + (($Name -split '-' | ForEach-Object { $_.Substring(0,1).ToUpper() + $_.Substring(1) }) -join '')
