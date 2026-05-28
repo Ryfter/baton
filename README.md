@@ -75,11 +75,35 @@ base — all surfacing in the dashboard.
 
 See [`docs/superpowers/specs/2026-05-26-plan3-job-scaffold-design.md`](docs/superpowers/specs/2026-05-26-plan3-job-scaffold-design.md).
 
-## Coming in Plan 4
+## What you get (Plan 4)
 
-Fleet config (`~/.claude/fleet.yaml`) listing CLI providers and remote Ollama
-hosts. Multi-machine local model access. Foundation for the research / code /
-review phases (Plans 5-7) to actually dispatch work.
+A **fleet** of dispatchable LLM providers — paid CLIs, free CLIs, and local
+models across machines — all invokable from one command.
+
+- `~/.claude/fleet.yaml` — lean registry: name, kind (cli|http), how to invoke,
+  cost tier, optional env (the multi-machine / Tailscale / SSH-tunnel knob).
+- `/fleet doctor` — health-check every enabled provider (binary on PATH? remote
+  host reachable? HTTP endpoint alive?).
+- `/fleet test <name> "<prompt>" [--model <m>]` — dispatch a prompt to any fleet
+  member and see the response. Journaled with `fleet | <name> | …`, picking up
+  the active job's `job:`/`phase:` tags.
+- `/fleet list` — quick registry summary.
+- Hybrid dispatcher: `kind: cli` providers run a `command_template`; `kind: http`
+  providers (LM Studio) use a per-provider script under `~/.claude/scripts/fleet/`.
+
+Adding a standard CLI provider is a 5-line `fleet.yaml` edit. Adding an HTTP
+provider is one new `scripts/fleet/<name>.ps1` + one `fleet.yaml` entry.
+
+**Known limitation:** prompts are substituted into the command template; prompts
+containing double-quotes may break CLI invocation (Plan 5 hardens this via stdin).
+
+See [`docs/superpowers/specs/2026-05-26-plan4-fleet-design.md`](docs/superpowers/specs/2026-05-26-plan4-fleet-design.md).
+
+## Coming in Plan 5
+
+Research phase: fan a prompt across multiple fleet members concurrently
+(ensemble), vote/synthesize, and run 6-Hats / LLM Council sanity checks — the
+first phase that actually uses the fleet for real multi-model work.
 
 ## Architecture
 
