@@ -18,7 +18,7 @@ providers:
     cost_tier: local
     env:
       FLEET_TEST_VAR: 'box2-value'
-    command_template: 'pwsh -NoProfile -Command "Write-Output env"'
+    command_template: 'pwsh -NoProfile -Command "Write-Output env-{{prompt}}"'
 
   - name: stub-disabled
     kind: cli

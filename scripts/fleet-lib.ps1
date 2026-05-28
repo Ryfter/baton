@@ -151,3 +151,77 @@ function Write-FleetJournalLine {
     }
     Add-Content -Path $JournalPath -Value $line -Encoding utf8NoBOM
 }
+
+function Invoke-Fleet-Cli {
+    <# Run a kind: cli provider's resolved command, applying+restoring env vars. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [Parameter(Mandatory)][string]$Prompt,
+        [string]$Model,
+        [int]$TimeoutS = 120
+    )
+    $cmd = Resolve-FleetCommand -Provider $Provider -Prompt $Prompt -Model $Model
+
+    $saved = @{}
+    if ($Provider.env) {
+        foreach ($k in $Provider.env.Keys) {
+            $saved[$k] = [Environment]::GetEnvironmentVariable($k)
+            Set-Item "env:$k" $Provider.env[$k]
+        }
+    }
+    $start = Get-Date
+    try {
+        # NOTE: prompt is naively substituted; embedded double-quotes may break
+        # invocation. Plan 5 hardens this via stdin. Single-quote-safe prompts only.
+        $out = Invoke-Expression $cmd 2>&1 | Out-String
+        $exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+        $duration = [int]((Get-Date) - $start).TotalSeconds
+        return @{ stdout = $out; stderr = ''; exit_code = $exit; duration_s = $duration }
+    } catch {
+        $duration = [int]((Get-Date) - $start).TotalSeconds
+        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = -1; duration_s = $duration }
+    } finally {
+        foreach ($k in $saved.Keys) {
+            if ($null -eq $saved[$k]) { Remove-Item "env:$k" -ErrorAction SilentlyContinue }
+            else { Set-Item "env:$k" $saved[$k] }
+        }
+    }
+}
+
+function Invoke-Fleet {
+    <# Main entry. Dispatches to cli or http; journals the invocation. #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Prompt,
+        [string]$Model,
+        [string]$Path = $script:DefaultFleetPath,
+        [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md')
+    )
+    $provider = Get-FleetProvider -Name $Name -Path $Path
+    if (-not $provider) { throw "Unknown fleet provider '$Name'. Run /fleet list to see valid names." }
+    if ($provider.enabled -ne $true) { throw "Provider '$Name' is disabled in fleet.yaml. Set enabled: true to use." }
+
+    if ($provider.kind -eq 'cli') {
+        $result = Invoke-Fleet-Cli -Provider $provider -Prompt $Prompt -Model $Model
+    } elseif ($provider.kind -eq 'http') {
+        # Dot-source the per-provider escape hatch + call Invoke-<PascalName>.
+        $scriptPath = Join-Path (Split-Path $Path -Parent) "fleet/$Name.ps1"
+        if (-not (Test-Path $scriptPath)) {
+            $scriptPath = Join-Path $PSScriptRoot "fleet/$Name.ps1"
+        }
+        if (-not (Test-Path $scriptPath)) {
+            throw "Provider '$Name' requires $scriptPath (with Invoke-* function)."
+        }
+        . $scriptPath
+        $fnName = 'Invoke-' + (($Name -split '-' | ForEach-Object { $_.Substring(0,1).ToUpper() + $_.Substring(1) }) -join '')
+        $fn = Get-Command $fnName -ErrorAction SilentlyContinue
+        if (-not $fn) { throw "$scriptPath must define $fnName." }
+        $result = & $fn $provider $Prompt $Model
+    } else {
+        throw "Provider '$Name' has unknown kind '$($provider.kind)'."
+    }
+
+    Write-FleetJournalLine -Provider $Name -DurationS $result.duration_s `
+        -ExitCode $result.exit_code -Prompt $Prompt -JournalPath $JournalPath
+    return $result
+}
