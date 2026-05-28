@@ -111,3 +111,43 @@ function Resolve-FleetCommand {
     if ($null -ne $resolvedModel) { $cmd = $cmd.Replace('{{model}}', [string]$resolvedModel) }
     return $cmd
 }
+
+function Write-FleetJournalLine {
+    <# Append a `fleet` line to the journal, picking up Plan 3 job/phase tags
+       by reading the state file directly (honors $env:CAO_STATE_PATH). #>
+    param(
+        [Parameter(Mandatory)][string]$Provider,
+        [Parameter(Mandatory)][int]$DurationS,
+        [Parameter(Mandatory)][int]$ExitCode,
+        [Parameter(Mandatory)][string]$Prompt,
+        [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md'),
+        [string]$StatePath = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } else { Join-Path $HOME '.claude/current-job.json' })
+    )
+    # Summarise + sanitise the prompt (max 100 chars, pipes -> ¦, newlines -> space)
+    $summary = ($Prompt -replace '\|', '¦' -replace "`r?`n", ' ').Trim()
+    if ($summary.Length -gt 100) { $summary = $summary.Substring(0, 100) + '…' }
+
+    $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
+    $line = "$ts | fleet | $Provider | ${DurationS}s | exit:$ExitCode | `"$summary`""
+
+    # Pick up active-job tags straight from the state file. Self-contained:
+    # no dependency on job-lib.ps1 being dot-sourced. Never throws.
+    try {
+        if (Test-Path $StatePath) {
+            $raw = Get-Content $StatePath -Raw -ErrorAction Stop
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $state = $raw | ConvertFrom-Json -ErrorAction Stop
+                if ($state.job_id -and $state.phase) {
+                    $line += " | job:$($state.job_id) | phase:$($state.phase)"
+                }
+            }
+        }
+    } catch { }
+
+    $dir = Split-Path -Parent $JournalPath
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    if (-not (Test-Path $JournalPath)) {
+        Set-Content -Path $JournalPath -Value "# Model Routing Log`n# --- entries below this line ---" -Encoding utf8NoBOM
+    }
+    Add-Content -Path $JournalPath -Value $line -Encoding utf8NoBOM
+}
