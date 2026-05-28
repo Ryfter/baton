@@ -1,0 +1,68 @@
+# Fleet registry — which providers the orchestrator can dispatch to.
+# Lean by design: only what's needed to INVOKE a provider lives here.
+# Qualitative "which model for what" notes live in
+# ~/.claude/knowledge/universal/routing.md and evolve via /consolidate-routing.
+#
+# Fields:
+#   name              unique key, [a-z0-9-]+, used as /fleet test <name>
+#   kind              cli | http
+#   enabled           true | false (disabled providers are skipped, not invoked)
+#   cost_tier         paid | free | local
+#   command_template  (cli only) {{prompt}} required, {{model}} optional
+#   model_default     (optional) fallback when --model not given
+#   env               (optional) env vars set before invoking, restored after
+#   base_url          (http only) read by scripts/fleet/<name>.ps1
+
+providers:
+  - name: claude-cli
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    command_template: 'claude -p "{{prompt}}"'
+
+  - name: codex
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    command_template: 'codex exec "{{prompt}}"'
+
+  - name: gemini-antigravity
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    command_template: 'antigravity --prompt "{{prompt}}"'
+
+  - name: gh-copilot
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    command_template: 'gh copilot suggest "{{prompt}}"'
+
+  - name: opencode
+    kind: cli
+    enabled: false
+    cost_tier: free
+    command_template: 'opencode -p "{{prompt}}"'
+
+  - name: ollama-local
+    kind: cli
+    enabled: true
+    cost_tier: local
+    model_default: 'devstral:24b'
+    command_template: 'ollama run {{model}} "{{prompt}}"'
+
+  - name: ollama-box2
+    kind: cli
+    enabled: false
+    cost_tier: local
+    model_default: 'qwen3:30b'
+    env:
+      OLLAMA_HOST: 'http://CHANGE-ME-HOSTNAME:11434'
+    command_template: 'ollama run {{model}} "{{prompt}}"'
+
+  - name: lm-studio
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://localhost:1234'
+    model_default: 'auto'

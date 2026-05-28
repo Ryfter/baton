@@ -1,0 +1,34 @@
+providers:
+  - name: stub-cli
+    kind: cli
+    enabled: true
+    cost_tier: free
+    command_template: 'pwsh -NoProfile -Command "Write-Output hello-{{prompt}}"'
+
+  - name: stub-with-model
+    kind: cli
+    enabled: true
+    cost_tier: local
+    model_default: 'default-model'
+    command_template: 'pwsh -NoProfile -Command "Write-Output {{model}}:{{prompt}}"'
+
+  - name: stub-with-env
+    kind: cli
+    enabled: true
+    cost_tier: local
+    env:
+      FLEET_TEST_VAR: 'box2-value'
+    command_template: 'pwsh -NoProfile -Command "Write-Output env-{{prompt}}"'
+
+  - name: stub-disabled
+    kind: cli
+    enabled: false
+    cost_tier: free
+    command_template: 'pwsh -NoProfile -Command "Write-Output nope"'
+
+  - name: stub-http
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://localhost:9999'
+    model_default: 'auto'
