@@ -174,7 +174,8 @@ Write-Step "Deploying slash commands"
 foreach ($cmd in @(
     'log-routing.md','consolidate-routing.md',
     'job-start.md','job-status.md','job-list.md','job-phase.md',
-    'job-resume.md','job-lesson.md','consolidate-lessons.md'
+    'job-resume.md','job-lesson.md','consolidate-lessons.md',
+    'fleet.md'
 )) {
     $src = Join-Path $repoRoot "commands\$cmd"
     $dst = Join-Path $claudeDir "commands\$cmd"
@@ -188,11 +189,31 @@ if (-not (Test-Path $scriptsDst)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $scriptsDst" }
     else { New-Item -ItemType Directory -Force -Path $scriptsDst | Out-Null; Write-Ok "created $scriptsDst" }
 }
-foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1')) {
+foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1')) {
     $src = Join-Path $repoRoot "scripts\$script"
     $dst = Join-Path $scriptsDst $script
     Copy-WithPrompt $src $dst "lib script: $script"
 }
+
+# --- Step 5b2: Deploy fleet escape-hatch scripts ---
+Write-Step "Deploying fleet escape-hatch scripts"
+$fleetScriptsDst = Join-Path $claudeDir 'scripts/fleet'
+if (-not (Test-Path $fleetScriptsDst)) {
+    if ($DryRun) { Write-Ok "[dry-run] would create $fleetScriptsDst" }
+    else { New-Item -ItemType Directory -Force -Path $fleetScriptsDst | Out-Null; Write-Ok "created $fleetScriptsDst" }
+}
+# Deploy only real provider hatches — NOT the test stub (stub-http.ps1).
+foreach ($hatch in @('lm-studio.ps1')) {
+    $src = Join-Path $repoRoot "scripts\fleet\$hatch"
+    $dst = Join-Path $fleetScriptsDst $hatch
+    Copy-WithPrompt $src $dst "fleet hatch: $hatch"
+}
+
+# --- Step 5b3: Deploy fleet.yaml seed ---
+Write-Step "Deploying fleet.yaml seed"
+$fleetSrc = Join-Path $repoRoot 'references\fleet.yaml'
+$fleetDst = Join-Path $claudeDir 'fleet.yaml'
+Copy-WithPrompt $fleetSrc $fleetDst 'fleet registry'
 
 # --- Step 5c: Create jobs + knowledge dirs ---
 Write-Step "Creating jobs + knowledge directories"
@@ -295,8 +316,16 @@ foreach ($b in $backends) {
     } catch { Write-Warn "$($b.name): $($_.Exception.Message)" }
 }
 
+# Plan 4: run fleet doctor as part of verification
+Write-Step "Running fleet doctor"
+if (-not $DryRun) {
+    & pwsh -NoProfile -File (Join-Path $repoRoot 'scripts\fleet-doctor.ps1') -Path $fleetDst 2>&1 | Write-Host
+} else {
+    Write-Ok "[dry-run] would run fleet-doctor.ps1 against $fleetDst"
+}
+
 # --- Summary ---
-Write-Step "Bootstrap complete (Plan 3 scope)"
+Write-Step "Bootstrap complete (Plan 4 scope)"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Source the OTel env helper in your PowerShell profile or before each session:"
