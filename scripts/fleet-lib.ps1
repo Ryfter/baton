@@ -90,3 +90,21 @@ function Get-FleetProvider {
     )
     return (Read-Fleet -Path $Path | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
 }
+
+function Resolve-FleetCommand {
+    <# Substitute {{prompt}} and {{model}} into a cli provider's command_template. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [Parameter(Mandatory)][string]$Prompt,
+        [string]$Model
+    )
+    $template = $Provider.command_template
+    if (-not $template) { throw "Provider '$($Provider.name)' has no command_template." }
+    if ($template -notmatch '\{\{prompt\}\}') {
+        throw "Provider '$($Provider.name)' command_template lacks the required {{prompt}} placeholder."
+    }
+    $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
+    $cmd = $template -replace '\{\{prompt\}\}', $Prompt
+    $cmd = $cmd -replace '\{\{model\}\}', $resolvedModel
+    return $cmd
+}
