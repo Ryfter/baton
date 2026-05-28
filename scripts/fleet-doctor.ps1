@@ -10,7 +10,12 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'fleet-lib.ps1')
 
-$fleet = Read-Fleet -Path $Path
+try {
+    $fleet = Read-Fleet -Path $Path
+} catch {
+    Write-Host "fleet doctor: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
 $rows = @()
 $anyBad = $false
 
