@@ -27,5 +27,22 @@ Assert "Get-FleetProvider finds stub-cli" ($p.name -eq 'stub-cli')
 $missing = Get-FleetProvider -Name 'does-not-exist' -Path $fixture
 Assert "Get-FleetProvider returns null for missing" ($null -eq $missing)
 
+# --- Resolve-FleetCommand ---
+$cliP = Get-FleetProvider -Name 'stub-cli' -Path $fixture
+$cmd = Resolve-FleetCommand -Provider $cliP -Prompt 'foo'
+Assert "substitutes {{prompt}}" ($cmd -eq 'pwsh -NoProfile -Command "Write-Output hello-foo"')
+
+$modelP = Get-FleetProvider -Name 'stub-with-model' -Path $fixture
+$cmd2 = Resolve-FleetCommand -Provider $modelP -Prompt 'bar'
+Assert "uses model_default when no model given" ($cmd2 -eq 'pwsh -NoProfile -Command "Write-Output default-model:bar"')
+$cmd3 = Resolve-FleetCommand -Provider $modelP -Prompt 'bar' -Model 'override-model'
+Assert "explicit model overrides default" ($cmd3 -eq 'pwsh -NoProfile -Command "Write-Output override-model:bar"')
+
+# Missing {{prompt}} in template should throw
+$badProvider = @{ name = 'bad'; kind = 'cli'; command_template = 'echo no-placeholder' }
+$threw = $false
+try { Resolve-FleetCommand -Provider $badProvider -Prompt 'x' } catch { $threw = $true }
+Assert "rejects template lacking {{prompt}}" ($threw)
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green
