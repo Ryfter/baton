@@ -44,5 +44,44 @@ $threw = $false
 try { Resolve-FleetCommand -Provider $badProvider -Prompt 'x' } catch { $threw = $true }
 Assert "rejects template lacking {{prompt}}" ($threw)
 
+# --- Write-FleetJournalLine ---
+$tmpJournal = Join-Path $env:TEMP "fleet-journal-$(Get-Random).md"
+$tmpState   = Join-Path $env:TEMP "fleet-state-$(Get-Random).json"
+
+# No active job -> line has no job/phase tags
+Remove-Item $tmpState -ErrorAction SilentlyContinue
+$env:CAO_STATE_PATH = $tmpState
+try {
+    Write-FleetJournalLine -Provider 'stub-cli' -DurationS 2 -ExitCode 0 -Prompt 'hello world' -JournalPath $tmpJournal
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+$line = @(Get-Content $tmpJournal | Where-Object { $_ -match '\| fleet \|' })[-1]
+Assert "fleet line written" ($line -match '\| fleet \| stub-cli \|')
+Assert "fleet line has duration" ($line -match '\| 2s \|')
+Assert "fleet line has exit" ($line -match 'exit:0')
+Assert "fleet line has prompt summary" ($line -match '"hello world"')
+Assert "no-job line has no job tag" ($line -notmatch 'job:')
+
+# With active job -> tags appended. Use job-lib's Write-CurrentJob only to CREATE
+# the state file; Write-FleetJournalLine reads it directly via env var.
+. (Join-Path $PSScriptRoot 'job-lib.ps1')
+Write-CurrentJob -StatePath $tmpState -JobId 'j-fleet-test' -Phase 'research'
+$env:CAO_STATE_PATH = $tmpState
+try {
+    Write-FleetJournalLine -Provider 'stub-cli' -DurationS 1 -ExitCode 0 -Prompt 'tagged' -JournalPath $tmpJournal
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+$line2 = @(Get-Content $tmpJournal | Where-Object { $_ -match 'tagged' })[-1]
+Assert "active-job line has job tag" ($line2 -match 'job:j-fleet-test')
+Assert "active-job line has phase tag" ($line2 -match 'phase:research')
+
+# Pipe in prompt sanitized to ¦
+$env:CAO_STATE_PATH = (Join-Path $env:TEMP "nope-$(Get-Random).json")
+try {
+    Write-FleetJournalLine -Provider 'stub-cli' -DurationS 0 -ExitCode 0 -Prompt 'a | b' -JournalPath $tmpJournal
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+$line3 = @(Get-Content $tmpJournal)[-1]
+Assert "pipe in prompt sanitized" ($line3 -match 'a ¦ b')
+
+Remove-Item $tmpJournal, $tmpState -ErrorAction SilentlyContinue
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green
