@@ -94,5 +94,18 @@ Assert "NoJournal returns a result" (($njResult.stdout | Out-String).Trim() -eq 
 Assert "NoJournal writes NO journal file content" (-not (Test-Path $njJournal) -or (@(Get-Content $njJournal -ErrorAction SilentlyContinue | Where-Object { $_ -match '\| fleet \|' }).Count -eq 0))
 Remove-Item $njJournal -ErrorAction SilentlyContinue
 
+# --- Get-FleetResearchDefault ---
+$rd = Get-FleetResearchDefault -Path $fixture
+Assert "research_default returns 2 names" ($rd.Count -eq 2)
+Assert "research_default first is stub-cli" ($rd[0] -eq 'stub-cli')
+Assert "research_default second is stub-with-model" ($rd[1] -eq 'stub-with-model')
+
+# absent key → empty array
+$noRdFixture = Join-Path $env:TEMP "fleet-nord-$(Get-Random).yaml"
+Set-Content -Path $noRdFixture -Value "providers:`n  - name: x`n    kind: cli`n    enabled: true`n    cost_tier: free`n    command_template: 'echo {{prompt}}'" -Encoding utf8NoBOM
+$rdEmpty = Get-FleetResearchDefault -Path $noRdFixture
+Assert "absent research_default → empty array" ($rdEmpty.Count -eq 0)
+Remove-Item $noRdFixture -ErrorAction SilentlyContinue
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green

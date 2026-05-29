@@ -91,6 +91,21 @@ function Get-FleetProvider {
     return (Read-Fleet -Path $Path | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
 }
 
+function Get-FleetResearchDefault {
+    <# Read the top-level `research_default: [a, b, c]` key from fleet.yaml.
+       Returns a string[] of provider names (empty array if the key is absent). #>
+    param([string]$Path = $script:DefaultFleetPath)
+    if (-not (Test-Path $Path)) { return @() }
+    foreach ($line in (Get-Content $Path)) {
+        if ($line -match '^\s*research_default:\s*\[(.*)\]\s*$') {
+            $inner = $matches[1].Trim()
+            if (-not $inner) { return @() }
+            return @($inner -split ',' | ForEach-Object { $_.Trim().Trim('"', "'") } | Where-Object { $_ })
+        }
+    }
+    return @()
+}
+
 function Resolve-FleetCommand {
     <# Substitute {{prompt}} and {{model}} into a cli provider's command_template. #>
     param(
