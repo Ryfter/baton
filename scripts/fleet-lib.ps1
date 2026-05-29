@@ -195,7 +195,8 @@ function Invoke-Fleet {
         [Parameter(Mandatory)][string]$Prompt,
         [string]$Model,
         [string]$Path = $script:DefaultFleetPath,
-        [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md')
+        [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md'),
+        [switch]$NoJournal
     )
     $provider = Get-FleetProvider -Name $Name -Path $Path
     if (-not $provider) { throw "Unknown fleet provider '$Name'. Run /fleet list to see valid names." }
@@ -220,7 +221,9 @@ function Invoke-Fleet {
         throw "Provider '$Name' has unknown kind '$($provider.kind)'."
     }
 
-    Write-FleetJournalLine -Provider $Name -DurationS $result.duration_s `
-        -ExitCode $result.exit_code -Prompt $Prompt -JournalPath $JournalPath
+    if (-not $NoJournal) {
+        Write-FleetJournalLine -Provider $Name -DurationS $result.duration_s `
+            -ExitCode $result.exit_code -Prompt $Prompt -JournalPath $JournalPath
+    }
     return $result
 }
