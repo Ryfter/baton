@@ -1,3 +1,5 @@
+research_default: [stub-cli, stub-with-model]
+
 providers:
   - name: stub-cli
     kind: cli
@@ -32,3 +34,15 @@ providers:
     cost_tier: local
     base_url: 'http://localhost:9999'
     model_default: 'auto'
+
+  - name: stub-fail
+    kind: cli
+    enabled: true
+    cost_tier: free
+    command_template: 'pwsh -NoProfile -Command "exit 3"'
+
+  - name: stub-slow
+    kind: cli
+    enabled: true
+    cost_tier: free
+    command_template: 'pwsh -NoProfile -Command "Start-Sleep -Seconds 10; Write-Output slow-{{prompt}}"'

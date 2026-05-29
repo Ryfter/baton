@@ -91,6 +91,21 @@ function Get-FleetProvider {
     return (Read-Fleet -Path $Path | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
 }
 
+function Get-FleetResearchDefault {
+    <# Read the top-level `research_default: [a, b, c]` key from fleet.yaml.
+       Returns a string[] of provider names (empty array if the key is absent). #>
+    param([string]$Path = $script:DefaultFleetPath)
+    if (-not (Test-Path $Path)) { return @() }
+    foreach ($line in (Get-Content $Path)) {
+        if ($line -match '^\s*research_default:\s*\[(.*)\]\s*$') {
+            $inner = $matches[1].Trim()
+            if (-not $inner) { return @() }
+            return @($inner -split ',' | ForEach-Object { $_.Trim().Trim('"', "'") } | Where-Object { $_ })
+        }
+    }
+    return @()
+}
+
 function Resolve-FleetCommand {
     <# Substitute {{prompt}} and {{model}} into a cli provider's command_template. #>
     param(
@@ -195,7 +210,8 @@ function Invoke-Fleet {
         [Parameter(Mandatory)][string]$Prompt,
         [string]$Model,
         [string]$Path = $script:DefaultFleetPath,
-        [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md')
+        [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md'),
+        [switch]$NoJournal
     )
     $provider = Get-FleetProvider -Name $Name -Path $Path
     if (-not $provider) { throw "Unknown fleet provider '$Name'. Run /fleet list to see valid names." }
@@ -220,7 +236,9 @@ function Invoke-Fleet {
         throw "Provider '$Name' has unknown kind '$($provider.kind)'."
     }
 
-    Write-FleetJournalLine -Provider $Name -DurationS $result.duration_s `
-        -ExitCode $result.exit_code -Prompt $Prompt -JournalPath $JournalPath
+    if (-not $NoJournal) {
+        Write-FleetJournalLine -Provider $Name -DurationS $result.duration_s `
+            -ExitCode $result.exit_code -Prompt $Prompt -JournalPath $JournalPath
+    }
     return $result
 }

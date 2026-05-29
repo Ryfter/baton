@@ -175,7 +175,7 @@ foreach ($cmd in @(
     'log-routing.md','consolidate-routing.md',
     'job-start.md','job-status.md','job-list.md','job-phase.md',
     'job-resume.md','job-lesson.md','consolidate-lessons.md',
-    'fleet.md'
+    'fleet.md','ensemble.md','research.md'
 )) {
     $src = Join-Path $repoRoot "commands\$cmd"
     $dst = Join-Path $claudeDir "commands\$cmd"
@@ -189,7 +189,7 @@ if (-not (Test-Path $scriptsDst)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $scriptsDst" }
     else { New-Item -ItemType Directory -Force -Path $scriptsDst | Out-Null; Write-Ok "created $scriptsDst" }
 }
-foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1')) {
+foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1')) {
     $src = Join-Path $repoRoot "scripts\$script"
     $dst = Join-Path $scriptsDst $script
     Copy-WithPrompt $src $dst "lib script: $script"
@@ -325,7 +325,7 @@ if (-not $DryRun) {
 }
 
 # --- Summary ---
-Write-Step "Bootstrap complete (Plan 4 scope)"
+Write-Step "Bootstrap complete (Plan 5 scope)"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Source the OTel env helper in your PowerShell profile or before each session:"
