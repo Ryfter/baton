@@ -83,5 +83,16 @@ Assert "pipe in prompt sanitized" ($line3 -match 'a ¦ b')
 
 Remove-Item $tmpJournal, $tmpState -ErrorAction SilentlyContinue
 
+# --- Invoke-Fleet -NoJournal ---
+$njJournal = Join-Path $env:TEMP "fleet-nojournal-$(Get-Random).md"
+$njState   = Join-Path $env:TEMP "fleet-nojournal-state-$(Get-Random).json"
+$env:CAO_STATE_PATH = $njState   # no such file → no tags either way
+try {
+    $njResult = Invoke-Fleet -Name 'stub-cli' -Prompt 'x' -Path $fixture -JournalPath $njJournal -NoJournal
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+Assert "NoJournal returns a result" (($njResult.stdout | Out-String).Trim() -eq 'hello-x')
+Assert "NoJournal writes NO journal file content" (-not (Test-Path $njJournal) -or (@(Get-Content $njJournal -ErrorAction SilentlyContinue | Where-Object { $_ -match '\| fleet \|' }).Count -eq 0))
+Remove-Item $njJournal -ErrorAction SilentlyContinue
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green
