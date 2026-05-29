@@ -99,11 +99,32 @@ containing double-quotes may break CLI invocation (Plan 5 hardens this via stdin
 
 See [`docs/superpowers/specs/2026-05-26-plan4-fleet-design.md`](docs/superpowers/specs/2026-05-26-plan4-fleet-design.md).
 
-## Coming in Plan 5
+## What you get (Plan 5)
 
-Research phase: fan a prompt across multiple fleet members concurrently
-(ensemble), vote/synthesize, and run 6-Hats / LLM Council sanity checks — the
-first phase that actually uses the fleet for real multi-model work.
+Concurrent multi-model **research ensembles**. Fan one prompt out to several
+fleet members at once, then Claude synthesizes their responses.
+
+- `/ensemble "<prompt>" [--providers a,b,c | --tier free,local]` — job-optional.
+  Runs the roster concurrently (process-isolated `Start-Job`s), collects each
+  response as a file, Claude writes a synthesis. Standalone runs land in
+  `~/.claude/ensembles/<timestamp>/`.
+- `/research "<question>"` — job-bound wrapper: writes to the active job's
+  `phases/research/ensemble-<timestamp>/`, warns if you're not in the research
+  phase, and nudges you to capture a lesson afterward.
+- Roster precedence: `--providers` > `--tier` > `research_default` (a new
+  top-level key in `fleet.yaml`).
+- A failing or slow provider never sinks the ensemble — partial synthesis still
+  happens; stragglers are killed at the timeout (default 300s).
+- Per-provider `fleet | …` journal lines are written serially by the parent
+  (tagged with the active job's `job:`/`phase:`), so concurrent runs never
+  corrupt the journal.
+
+See [`docs/superpowers/specs/2026-05-29-plan5-research-ensemble-design.md`](docs/superpowers/specs/2026-05-29-plan5-research-ensemble-design.md).
+
+## Coming in Plan 5b / 5c
+
+6 Thinking Hats (each model wears a hat) and LLM Council (models critique each
+other's outputs) — thin presets built on the same ensemble primitive.
 
 ## Architecture
 
