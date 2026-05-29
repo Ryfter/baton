@@ -12,7 +12,7 @@ function Assert($label, $cond) {
 
 # --- Read-Fleet ---
 $fleet = Read-Fleet -Path $fixture
-Assert "Read-Fleet returns 5 providers" ($fleet.Count -eq 5)
+Assert "Read-Fleet returns 7 providers" ($fleet.Count -eq 7)
 Assert "first provider name is stub-cli" ($fleet[0].name -eq 'stub-cli')
 Assert "stub-cli kind is cli" ($fleet[0].kind -eq 'cli')
 Assert "stub-cli enabled is boolean true" ($fleet[0].enabled -eq $true)
@@ -82,6 +82,30 @@ $line3 = @(Get-Content $tmpJournal)[-1]
 Assert "pipe in prompt sanitized" ($line3 -match 'a ¦ b')
 
 Remove-Item $tmpJournal, $tmpState -ErrorAction SilentlyContinue
+
+# --- Invoke-Fleet -NoJournal ---
+$njJournal = Join-Path $env:TEMP "fleet-nojournal-$(Get-Random).md"
+$njState   = Join-Path $env:TEMP "fleet-nojournal-state-$(Get-Random).json"
+$env:CAO_STATE_PATH = $njState   # no such file → no tags either way
+try {
+    $njResult = Invoke-Fleet -Name 'stub-cli' -Prompt 'x' -Path $fixture -JournalPath $njJournal -NoJournal
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+Assert "NoJournal returns a result" (($njResult.stdout | Out-String).Trim() -eq 'hello-x')
+Assert "NoJournal writes NO journal file content" (-not (Test-Path $njJournal) -or (@(Get-Content $njJournal -ErrorAction SilentlyContinue | Where-Object { $_ -match '\| fleet \|' }).Count -eq 0))
+Remove-Item $njJournal -ErrorAction SilentlyContinue
+
+# --- Get-FleetResearchDefault ---
+$rd = Get-FleetResearchDefault -Path $fixture
+Assert "research_default returns 2 names" ($rd.Count -eq 2)
+Assert "research_default first is stub-cli" ($rd[0] -eq 'stub-cli')
+Assert "research_default second is stub-with-model" ($rd[1] -eq 'stub-with-model')
+
+# absent key → empty array
+$noRdFixture = Join-Path $env:TEMP "fleet-nord-$(Get-Random).yaml"
+Set-Content -Path $noRdFixture -Value "providers:`n  - name: x`n    kind: cli`n    enabled: true`n    cost_tier: free`n    command_template: 'echo {{prompt}}'" -Encoding utf8NoBOM
+$rdEmpty = Get-FleetResearchDefault -Path $noRdFixture
+Assert "absent research_default → empty array" ($rdEmpty.Count -eq 0)
+Remove-Item $noRdFixture -ErrorAction SilentlyContinue
 
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green
