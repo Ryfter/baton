@@ -133,7 +133,20 @@ See [`docs/superpowers/specs/2026-05-22-coding-agent-orchestrator-design.md`](do
 ## Tests
 
 ```powershell
+# Plan 1 / observation
 pwsh -NoProfile -File scripts\test-hook.ps1
 pwsh -NoProfile -File scripts\test-otel-parser.ps1
 pwsh -NoProfile -File scripts\test-bootstrap.ps1
+# Plan 3 / jobs + KB
+pwsh -NoProfile -File scripts\test-job-lib.ps1
+pwsh -NoProfile -File scripts\test-jobs.ps1
+pwsh -NoProfile -File scripts\test-consolidate-lessons.ps1
+# Plan 4 / fleet
+pwsh -NoProfile -File scripts\test-fleet-lib.ps1
+pwsh -NoProfile -File scripts\test-fleet-dispatch.ps1
+pwsh -NoProfile -File scripts\test-fleet-doctor.ps1
+# Plan 5 / research ensemble
+pwsh -NoProfile -File scripts\test-fleet-ensemble.ps1
+# Plan 2 / dashboard (Python)
+python -m pytest dashboard/tests/ -q
 ```
