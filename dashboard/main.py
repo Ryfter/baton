@@ -23,11 +23,17 @@ JOBS_ROOT = Path(
     or Path.home() / '.claude' / 'jobs'
 )
 
+KB_ROOT = Path(
+    os.environ.get('ROUTING_KB_ROOT', '')
+    or Path.home() / '.claude' / 'knowledge'
+)
+
 _HERE = Path(__file__).parent
 
 app = FastAPI(title="Routing Dashboard", version="2.0.0")
 app.state.journal_path = JOURNAL_PATH
 app.state.jobs_root = JOBS_ROOT
+app.state.kb_root = KB_ROOT
 
 app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 templates = Jinja2Templates(directory=str(_HERE / "templates"))
@@ -37,6 +43,9 @@ app.include_router(controls_router)
 
 from dashboard.routers.jobs import build_router as build_jobs_router
 app.include_router(build_jobs_router(templates))
+
+from dashboard.routers.projects import build_router as build_projects_router
+app.include_router(build_projects_router(templates))
 
 
 def _ctx(request: Request) -> dict:
@@ -70,6 +79,11 @@ async def partial_activity(request: Request) -> HTMLResponse:
 @app.get("/partials/controls", response_class=HTMLResponse)
 async def partial_controls(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "partials/controls.html", _ctx(request))
+
+
+# Plan 7 portfolio partial wrapped here so it picks up _ctx and renders even when
+# included on the home page; the dedicated router serves /projects and /partials/projects.
+# (Intentionally a thin alias — kept for parity with other partials.)
 
 
 if __name__ == "__main__":

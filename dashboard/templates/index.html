@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
 
+<!-- Portfolio panel — polls every 60s -->
+<div class="card" style="grid-column: 1 / -1;"
+     hx-get="/partials/projects"
+     hx-trigger="every 60s"
+     hx-swap="innerHTML">
+  {% include "partials/projects_list.html" %}
+</div>
+
 <!-- Jobs panel — polls every 30 s -->
 <div class="card" style="grid-column: 1 / -1;"
      hx-get="/partials/jobs"
