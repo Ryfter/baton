@@ -19,6 +19,17 @@ header {
 }
 header h1 { margin: 0; font-size: 1.4rem; }
 .server-time { color: #8b949e; font-size: 0.85rem; }
+.topnav { display: flex; gap: 1rem; }
+.topnav a { color: #c9d1d9; text-decoration: none; padding: 0.25rem 0.5rem; border-radius: 4px; }
+.topnav a:hover { background: #21262d; }
+
+.projects-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.projects-table th, .projects-table td { padding: 0.4rem 0.6rem; border-bottom: 1px solid #21262d; text-align: left; }
+.projects-table th.num, .projects-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.projects-table a { color: #58a6ff; text-decoration: none; }
+.projects-table a:hover { text-decoration: underline; }
+.muted { color: #8b949e; }
+.small { font-size: 0.8rem; }
 
 main {
   display: grid;
