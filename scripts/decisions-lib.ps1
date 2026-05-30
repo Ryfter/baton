@@ -81,8 +81,12 @@ function Add-DecisionRecord {
     $slug = if (Get-Command ConvertTo-JobSlug -ErrorAction SilentlyContinue) {
         ConvertTo-JobSlug $Title
     } else {
-        $trimLen = [Math]::Min(40, $Title.Length)
-        ($Title.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-').Substring(0, $trimLen)
+        # Fallback when job-lib isn't dot-sourced. Compute the slug first, then trim
+        # using the slug's own length (NOT $Title.Length — special-char-heavy titles
+        # produce shorter slugs and would crash Substring).
+        $s = ($Title.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+        if ([string]::IsNullOrEmpty($s)) { $s = 'untitled' }
+        $s.Substring(0, [Math]::Min(40, $s.Length))
     }
     $path = Join-Path $decDir "$id-$slug.md"
 
