@@ -175,7 +175,8 @@ foreach ($cmd in @(
     'log-routing.md','consolidate-routing.md',
     'job-start.md','job-status.md','job-list.md','job-phase.md',
     'job-resume.md','job-lesson.md','consolidate-lessons.md',
-    'fleet.md','ensemble.md','research.md'
+    'fleet.md','ensemble.md','research.md',
+    'decision-feedback.md','consolidate-decisions.md','project-init.md'
 )) {
     $src = Join-Path $repoRoot "commands\$cmd"
     $dst = Join-Path $claudeDir "commands\$cmd"
@@ -189,7 +190,7 @@ if (-not (Test-Path $scriptsDst)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $scriptsDst" }
     else { New-Item -ItemType Directory -Force -Path $scriptsDst | Out-Null; Write-Ok "created $scriptsDst" }
 }
-foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1')) {
+foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1')) {
     $src = Join-Path $repoRoot "scripts\$script"
     $dst = Join-Path $scriptsDst $script
     Copy-WithPrompt $src $dst "lib script: $script"
@@ -248,6 +249,55 @@ foreach ($rel in $kbSeeds.Keys) {
     if ($DryRun) { Write-Ok "[dry-run] would seed $rel"; continue }
     Set-Content -Path $dst -Value $kbSeeds[$rel] -Encoding utf8NoBOM
     Write-Ok "seeded $rel"
+}
+
+# --- Step 5e: Seed universal decision guidance ---
+Write-Step "Seeding universal decision guidance"
+$uniDecGuide = Join-Path $claudeDir 'knowledge/universal/decision-guidance.md'
+if (-not (Test-Path $uniDecGuide)) {
+    if ($DryRun) {
+        Write-Ok "[dry-run] would seed $uniDecGuide"
+    } else {
+        # Ensure parent dir exists (it should from Plan 3, but be defensive)
+        $uniDir = Split-Path -Parent $uniDecGuide
+        if (-not (Test-Path $uniDir)) { New-Item -ItemType Directory -Force -Path $uniDir | Out-Null }
+        Set-Content -Path $uniDecGuide -Value "# Universal Decision Guidance`n`n_Populated by /consolidate-decisions over time._`n" -Encoding utf8NoBOM
+        Write-Ok "seeded universal/decision-guidance.md"
+    }
+} else {
+    Write-Skip "universal decision guidance already present"
+}
+
+# --- Step 5f: Insert decision-capture rule into project root CLAUDE.md ---
+Write-Step "Wiring decision-capture rule into project CLAUDE.md"
+$claudeMd = Join-Path $repoRoot 'CLAUDE.md'
+$ruleSrc = Join-Path $repoRoot 'references\CLAUDE-decision-capture-rule.md'
+$ruleMarker = '<!-- decision-capture-rule:v1 -->'
+if (-not (Test-Path $ruleSrc)) {
+    Write-Warn "rule source $ruleSrc missing; skipping CLAUDE.md update"
+} elseif (-not (Test-Path $claudeMd)) {
+    if ($DryRun) {
+        Write-Ok "[dry-run] would create $claudeMd and insert capture rule"
+    } else {
+        $ans = Read-Host "    Project root has no CLAUDE.md. Create one with the decision-capture rule? [Y/n]"
+        if ($ans -ne 'n' -and $ans -ne 'N') {
+            Copy-Item $ruleSrc $claudeMd
+            Write-Ok "created CLAUDE.md with the capture rule"
+        } else {
+            Write-Skip "kept CLAUDE.md absent"
+        }
+    }
+} else {
+    $existing = Get-Content $claudeMd -Raw
+    if ($existing -match [regex]::Escape($ruleMarker)) {
+        Write-Skip "capture rule already present in CLAUDE.md"
+    } elseif ($DryRun) {
+        Write-Ok "[dry-run] would append capture rule to $claudeMd"
+    } else {
+        $ruleText = Get-Content $ruleSrc -Raw
+        Add-Content -Path $claudeMd -Value "`n`n$ruleText" -Encoding utf8NoBOM
+        Write-Ok "appended capture rule to CLAUDE.md"
+    }
 }
 
 # --- Step 5d: Migrate Plan 1 model-routing.md → knowledge/universal/routing.md ---
@@ -325,7 +375,7 @@ if (-not $DryRun) {
 }
 
 # --- Summary ---
-Write-Step "Bootstrap complete (Plan 5 scope)"
+Write-Step "Bootstrap complete (Plans 1-5 + Decision Loop)"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Source the OTel env helper in your PowerShell profile or before each session:"
