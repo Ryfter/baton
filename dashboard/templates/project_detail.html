@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ detail.summary.title }} — Routing Dashboard{% endblock %}
+{% block content %}
+
+<div class="card" style="grid-column: 1 / -1;">
+  <h2>{{ detail.summary.title }}</h2>
+  <p class="muted small">{{ detail.summary.id }} ·
+     ${{ '%.2f'|format(detail.summary.cost_total_usd) }} ·
+     {{ detail.summary.active_job_count }} active jobs ·
+     {{ detail.summary.decision_count }} decisions ·
+     {% if detail.summary.last_activity %}last activity {{ detail.summary.last_activity.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+  </p>
+</div>
+
+<div class="card" style="grid-column: 1 / -1;">
+  <h3>Cost ledger</h3>
+  {% if not detail.cost.entries %}
+    <p class="muted">No cost entries yet.</p>
+  {% else %}
+    <p>Current: <strong>${{ '%.2f'|format(detail.cost.current_usd) }}</strong>
+       {% if detail.cost.last_entry_date %}<span class="muted">as of {{ detail.cost.last_entry_date }}</span>{% endif %}
+    </p>
+    <table class="projects-table">
+      <thead><tr><th>Date</th><th class="num">Total</th><th class="num">Delta</th><th>Source</th><th>Note</th></tr></thead>
+      <tbody>
+        {% for e in detail.cost.entries[-10:]|reverse %}
+        <tr>
+          <td>{{ e.date }}</td>
+          <td class="num">${{ '%.2f'|format(e.total) }}</td>
+          <td class="num">{{ e.delta }}</td>
+          <td>{{ e.source }}</td>
+          <td>{{ e.note }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+
+<div class="card" style="grid-column: 1 / -1;">
+  <h3>Jobs ({{ detail.jobs|length }})</h3>
+  {% if not detail.jobs %}
+    <p class="muted">No jobs.</p>
+  {% else %}
+    <table class="projects-table">
+      <thead><tr><th>ID</th><th>Title</th><th>Phase</th><th>Status</th><th class="num">Sprints</th><th class="num">Cost</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for j in detail.jobs %}
+        <tr>
+          <td><a href="/jobs/{{ j.id }}">{{ j.id }}</a></td>
+          <td>{{ j.title }}</td>
+          <td>{{ j.current_phase }}</td>
+          <td>{{ j.status }}</td>
+          <td class="num">{{ j.sprint_count }}</td>
+          <td class="num">${{ '%.4f'|format(j.cost_usd) }}</td>
+          <td>{{ j.created_at.strftime('%Y-%m-%d') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+
+<div class="card" style="grid-column: 1 / -1;">
+  <h3>Decisions ({{ detail.decisions|length }})</h3>
+  {% if not detail.decisions %}
+    <p class="muted">No decisions yet.</p>
+  {% else %}
+    <table class="projects-table">
+      <thead><tr><th>ID</th><th>Title</th><th>Confidence</th><th>Flag</th><th>Job</th><th>Timestamp</th></tr></thead>
+      <tbody>
+        {% for d in detail.decisions %}
+        <tr>
+          <td>{{ d.id }}</td>
+          <td>{{ d.title }}</td>
+          <td>{{ d.confidence }}</td>
+          <td>{% if d.flag != 'null' %}<strong>{{ d.flag }}</strong>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td>{% if d.job %}<a href="/jobs/{{ d.job }}">{{ d.job }}</a>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td>{% if d.timestamp %}{{ d.timestamp.strftime('%Y-%m-%d %H:%M') }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+
+<div class="card" style="grid-column: 1 / -1;">
+  <h3>Ensembles ({{ detail.ensembles|length }})</h3>
+  {% if not detail.ensembles %}
+    <p class="muted">No ensemble runs yet.</p>
+  {% else %}
+    <table class="projects-table">
+      <thead><tr><th>Kind</th><th>When</th><th class="num">Providers</th><th>Job</th><th>Path</th></tr></thead>
+      <tbody>
+        {% for e in detail.ensembles[:30] %}
+        <tr>
+          <td>{{ e.kind }}</td>
+          <td>{{ e.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td class="num">{{ e.provider_count }}</td>
+          <td>{% if e.job_id %}<a href="/jobs/{{ e.job_id }}">{{ e.job_id }}</a>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="muted small">{{ e.path }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+
+{% endblock %}

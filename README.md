@@ -5,7 +5,7 @@ Adopts [claude-octopus](https://github.com/nyldn/claude-octopus) as the dispatch
 layer; builds observation (hooks, OpenTelemetry, slash commands, journal,
 catalog) and — in Plan 2 — a live web dashboard on top.
 
-**Status:** Plan 1 (observation foundation) shipped.
+**Status:** Plans 1, 2, 3, 4, 5, 5b, 5c, 6, 7 + Decision Loop + Cost Ledger shipped.
 
 ## Quick start
 
@@ -148,10 +148,75 @@ via `~/.claude/decisions-off` (global) or
 
 See [`docs/superpowers/specs/2026-05-29-decision-loop-design.md`](docs/superpowers/specs/2026-05-29-decision-loop-design.md).
 
-## Coming in Plan 5b / 5c
+## What you get (Plan 5b)
 
-6 Thinking Hats (each model wears a hat) and LLM Council (models critique each
-other's outputs) — thin presets built on the Plan 5 ensemble primitive.
+**Six Thinking Hats** preset on the ensemble primitive. Examines a question
+through six fixed lenses (White / Red / Black / Yellow / Green / Blue), each
+dispatched concurrently with its own role-prefixed prompt.
+
+- `/six-hats "<question>" [--providers a,b,c]` — job-optional. Builds six
+  role-prefixed prompts and dispatches them in parallel via the new
+  `Invoke-FleetEnsembleTasks` heterogeneous-task primitive.
+- Provider **rotation** across hats: 1-provider roster → all six hats use it;
+  6+ providers → each hat unique; anything in between rotates.
+- Claude (orchestrator) produces a Blue-Hat synthesis covering each hat's
+  contribution, tensions (Black vs Yellow), and a recommended next move.
+
+See [`docs/superpowers/specs/2026-05-30-plan5b-six-hats-design.md`](docs/superpowers/specs/2026-05-30-plan5b-six-hats-design.md).
+
+## What you get (Plan 5c)
+
+**LLM Council** — two-round deliberation where each member answers, then sees
+the *other* members' answers and refines. Claude chairs the synthesis.
+
+- `/council "<question>" [--providers a,b,c]` — job-optional. Council size
+  capped at 5; quorum floor 2 surviving R1 members.
+- **Round 1** = independent answers per member.
+- **Round 2** = each member reads the OTHER members' R1 answers and refines.
+- A failed-R1 member still runs R2 (with original question + surviving peers'
+  content). Below quorum → council aborts before R2.
+- Output layout: `<out>/round1/<member>.md`, `<out>/round2/<member>.md`,
+  `<out>/synthesis.md` (chair's recommended answer).
+
+See [`docs/superpowers/specs/2026-05-30-plan5c-council-design.md`](docs/superpowers/specs/2026-05-30-plan5c-council-design.md).
+
+## What you get (Plan 6)
+
+**Code phase** — turn a finalized spec into working code by decomposing it,
+dispatching parallel implementation in isolated git worktrees, then merging.
+
+- `/code-decompose [<spec-path>]` — Claude reads the spec, proposes N
+  subtasks (id, title, files_touched, depends_on), and on confirmation
+  writes `<job>/phases/<sprint>/subtasks.json`. Cycles rejected.
+- `/code-parallel [--only t1,t3]` — topo-sort + dispatch one Agent subagent
+  per task via Claude Code's `Agent(isolation: worktree, ...)`. Independent
+  tasks dispatched in parallel (one Agent batch); dependent tasks run after
+  their prereqs complete. Manifest records each worktree + branch + diff.
+- `/code-merge [--apply] [--from t3]` — surfaces likely conflicts via
+  `files_touched` overlap before applying; cherry-picks task branches in
+  dependency order; stops on first conflict (resume by re-running with
+  `--from <task-id>`).
+- Journal gets a new `code | parallel | <job> | sprint:… | tasks:N | ok:K | err:E`
+  aggregate line per dispatch batch.
+
+See [`docs/superpowers/specs/2026-05-30-plan6-code-phase-design.md`](docs/superpowers/specs/2026-05-30-plan6-code-phase-design.md).
+
+## What you get (Plan 7)
+
+**Multi-project command center** on top of the Plan 2 dashboard. Adds
+project-portfolio visibility across every project in `~/.claude/knowledge/projects/`.
+
+- `GET /projects` — portfolio list: per-project cost total, active jobs,
+  decisions, last activity. Sorted by activity.
+- `GET /projects/{id}` — drill-in: cost ledger (last 10 entries), all jobs
+  (filtered to project), every decision (with confidence + flags),
+  every ensemble / six-hats / council run.
+- Home page gains a top portfolio panel (top 5 projects, htmx 60s refresh).
+- Read-only. `ROUTING_KB_ROOT` env override mirrors `ROUTING_JOURNAL` /
+  `ROUTING_JOBS_ROOT` patterns. No new dependencies — hand-rolled YAML
+  front-matter parser matches the existing readers/jobs.py style.
+
+See [`docs/superpowers/specs/2026-05-30-plan7-command-center-design.md`](docs/superpowers/specs/2026-05-30-plan7-command-center-design.md).
 
 ## Architecture
 
@@ -174,6 +239,12 @@ pwsh -NoProfile -File scripts\test-fleet-dispatch.ps1
 pwsh -NoProfile -File scripts\test-fleet-doctor.ps1
 # Plan 5 / research ensemble
 pwsh -NoProfile -File scripts\test-fleet-ensemble.ps1
-# Plan 2 / dashboard (Python)
+# Plan 5b / Six Thinking Hats
+pwsh -NoProfile -File scripts\test-six-hats.ps1
+# Plan 5c / LLM Council
+pwsh -NoProfile -File scripts\test-council.ps1
+# Plan 6 / code phase
+pwsh -NoProfile -File scripts\test-code-lib.ps1
+# Plan 2 + Plan 7 / dashboard (Python)
 python -m pytest dashboard/tests/ -q
 ```

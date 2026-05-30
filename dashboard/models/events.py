@@ -99,3 +99,55 @@ class DashboardStats(BaseModel):
     ollama_models: list[OllamaModel]
     lms_models: list[LmStudioModel] = []
     last_updated: datetime
+
+
+# --- Plan 7: multi-project command center ---
+
+
+class CostEntry(BaseModel):
+    date: str
+    total: float
+    delta: str
+    source: str
+    note: str
+
+
+class ProjectCost(BaseModel):
+    current_usd: float = 0.0
+    last_entry_date: Optional[str] = None
+    entries: list[CostEntry] = []
+
+
+class DecisionRow(BaseModel):
+    id: str
+    title: str
+    confidence: str = "unknown"
+    flag: str = "null"
+    timestamp: Optional[datetime] = None
+    job: Optional[str] = None
+    path: str
+
+
+class EnsembleRow(BaseModel):
+    kind: str            # 'ensemble' | 'six-hats' | 'council' | 'research'
+    timestamp: datetime
+    path: str
+    provider_count: int
+    job_id: Optional[str] = None
+
+
+class ProjectSummary(BaseModel):
+    id: str
+    title: str
+    cost_total_usd: float = 0.0
+    decision_count: int = 0
+    active_job_count: int = 0
+    last_activity: Optional[datetime] = None
+
+
+class ProjectDetail(BaseModel):
+    summary: ProjectSummary
+    jobs: list[JobSummary] = []
+    decisions: list[DecisionRow] = []
+    cost: ProjectCost = ProjectCost()
+    ensembles: list[EnsembleRow] = []
