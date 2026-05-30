@@ -73,5 +73,59 @@ Assert "project opt-out suppresses capture" ($null -eq $rec3)
 Remove-Item $projOptOut
 
 Remove-Item $tmpKb -Recurse -Force
+
+# --- Append-DecisionFeedback + Read-Decisions ---
+$tmpKb2 = Join-Path $env:TEMP "dec-kb2-$(Get-Random)"
+New-Item -ItemType Directory -Force -Path $tmpKb2 | Out-Null
+
+$r1 = Add-DecisionRecord `
+    -Title "Pick storage at project level" `
+    -Chosen "Project-level decisions/ dir." `
+    -Alternatives @("Job-level — lost when job ends") `
+    -Rationale "Decisions outlive jobs." `
+    -Confidence 'high' -RevisitIf "Project structure changes" `
+    -Project 'p1' -Job 'j-aaa' -KbRoot $tmpKb2
+
+$r2 = Add-DecisionRecord `
+    -Title "Pick consolidation threshold" `
+    -Chosen "≥2 projects for universal promotion." `
+    -Alternatives @("Any project — pollutes universal") `
+    -Rationale "Prevent single-project quirks." `
+    -Confidence 'med' -RevisitIf "Universal grows noisy" `
+    -Project 'p1' -Job 'j-aaa' -KbRoot $tmpKb2
+
+# Positive feedback
+Append-DecisionFeedback -Id $r1.id -Project 'p1' -KbRoot $tmpKb2 `
+    -Text "worked well on first project" -Outcome 'worked' -Author 'kevin'
+$c1 = Get-Content $r1.path -Raw
+Assert "feedback section has the entry" ($c1 -match 'worked well on first project')
+Assert "feedback has author kevin" ($c1 -match '\| kevin \|')
+Assert "feedback has outcome:worked" ($c1 -match 'outcome:worked')
+Assert "front-matter flag unchanged on positive" ($c1 -match '(?m)^flag:\s+null')
+
+# Negative feedback sets flag
+Append-DecisionFeedback -Id $r2.id -Project 'p1' -KbRoot $tmpKb2 `
+    -Text "didn't scale past 10 providers" -Outcome 'didnt' -Author 'kevin'
+$c2 = Get-Content $r2.path -Raw
+Assert "front-matter flag = review-needed on negative" ($c2 -match '(?m)^flag:\s+review-needed')
+Assert "negative feedback recorded" ($c2 -match "didn't scale")
+
+# Read-Decisions filters by job
+$forJob = Read-Decisions -Project 'p1' -Job 'j-aaa' -KbRoot $tmpKb2
+Assert "Read-Decisions -Job returns 2 records" ($forJob.Count -eq 2)
+$noJob = Read-Decisions -Project 'p1' -Job 'j-other' -KbRoot $tmpKb2
+Assert "Read-Decisions -Job other returns 0" ($noJob.Count -eq 0)
+
+# Read-Decisions returns id/title/confidence/flag for retro listing
+Assert "first record has id field" ($forJob[0].id -match '^d\d{3}$')
+Assert "first record has title field" ($forJob[0].title.Length -gt 0)
+
+# Append-DecisionFeedback on unknown id throws
+$threw = $false
+try { Append-DecisionFeedback -Id 'd999' -Project 'p1' -KbRoot $tmpKb2 -Text 'x' -Outcome 'worked' -Author 'kevin' } catch { $threw = $true }
+Assert "Append on unknown id throws" $threw
+
+Remove-Item $tmpKb2 -Recurse -Force
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green

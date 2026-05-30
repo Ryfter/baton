@@ -123,3 +123,71 @@ $altLines
     Set-Content -Path $path -Value $content -Encoding utf8NoBOM
     return @{ id = $id; path = $path }
 }
+
+function Find-DecisionRecordPath {
+    <# Return the .md path for a given decision id within a project, or $null. #>
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter(Mandatory)][string]$Project,
+        [string]$KbRoot = $script:DefaultKbRoot
+    )
+    $decDir = Join-Path $KbRoot "projects/$Project/decisions"
+    if (-not (Test-Path $decDir)) { return $null }
+    $match = Get-ChildItem -Path $decDir -Filter "$Id-*.md" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($match) { return $match.FullName }
+    return $null
+}
+
+function Append-DecisionFeedback {
+    <# Append a feedback entry to a record's ## Feedback section, optionally setting flag. #>
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter(Mandatory)][string]$Project,
+        [Parameter(Mandatory)][string]$Text,
+        [ValidateSet('worked','didnt','mixed')][string]$Outcome = 'worked',
+        [Parameter(Mandatory)][string]$Author,
+        [string]$KbRoot = $script:DefaultKbRoot
+    )
+    $path = Find-DecisionRecordPath -Id $Id -Project $Project -KbRoot $KbRoot
+    if (-not $path) { throw "No decision record found for id '$Id' in project '$Project'." }
+
+    $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
+    # Sanitize text: collapse newlines + escape pipes (matches Plan 3 lesson conventions)
+    $safe = ($Text -replace '\|', '¦' -replace "`r?`n", ' ').Trim()
+    $entry = "$ts | $Author | outcome:$Outcome | $safe"
+    Add-Content -Path $path -Value $entry -Encoding utf8NoBOM
+
+    # On negative outcome, flip front-matter flag (line-by-line edit; YAML stays valid)
+    if ($Outcome -in @('didnt','mixed')) {
+        $lines = Get-Content $path
+        $updated = $lines | ForEach-Object {
+            if ($_ -match '^flag:\s+null\s*$') { 'flag: review-needed' } else { $_ }
+        }
+        Set-Content -Path $path -Value ($updated -join "`n") -Encoding utf8NoBOM
+    }
+}
+
+function Read-Decisions {
+    <# List decision records for a project, optionally filtered by -Job. Returns lightweight objects. #>
+    param(
+        [Parameter(Mandatory)][string]$Project,
+        [string]$Job,
+        [string]$KbRoot = $script:DefaultKbRoot
+    )
+    $decDir = Join-Path $KbRoot "projects/$Project/decisions"
+    if (-not (Test-Path $decDir)) { return @() }
+    $out = @()
+    foreach ($f in (Get-ChildItem -Path $decDir -Filter 'd*.md' -ErrorAction SilentlyContinue)) {
+        $raw = Get-Content $f.FullName -Raw
+        $id    = if ($raw -match '(?m)^id:\s+(d\d{3})')          { $matches[1] } else { $f.BaseName }
+        $title = if ($raw -match '(?m)^#\s+(.+)$')                { $matches[1].Trim() } else { '(no title)' }
+        $conf  = if ($raw -match '(?m)^confidence:\s+(\w+)')      { $matches[1] } else { 'unknown' }
+        $flag  = if ($raw -match '(?m)^flag:\s+(\S+)')            { $matches[1] } else { 'null' }
+        $rjob  = if ($raw -match '(?m)^job:\s+(\S+)')             { $matches[1] } else { 'null' }
+        if ($Job -and $rjob -ne $Job) { continue }
+        $out += [pscustomobject]@{
+            id = $id; title = $title; confidence = $conf; flag = $flag; job = $rjob; path = $f.FullName
+        }
+    }
+    return $out
+}
