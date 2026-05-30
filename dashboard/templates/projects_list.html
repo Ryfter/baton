@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Portfolio — Routing Dashboard{% endblock %}
+{% block content %}
+
+<div class="card" style="grid-column: 1 / -1;">
+  <h2>All Projects ({{ projects|length }})</h2>
+  {% if not projects %}
+    <p class="muted">No projects yet. Run /project-init in any repo to seed one.</p>
+  {% else %}
+    <table class="projects-table">
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th class="num">Cost (USD)</th>
+          <th class="num">Active jobs</th>
+          <th class="num">Decisions</th>
+          <th>Last activity</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in projects %}
+        <tr>
+          <td><a href="/projects/{{ p.id }}">{{ p.title }}</a><br><span class="muted small">{{ p.id }}</span></td>
+          <td class="num">${{ '%.2f'|format(p.cost_total_usd) }}</td>
+          <td class="num">{{ p.active_job_count }}</td>
+          <td class="num">{{ p.decision_count }}</td>
+          <td>{% if p.last_activity %}{{ p.last_activity.strftime('%Y-%m-%d %H:%M') }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+
+{% endblock %}
