@@ -75,6 +75,28 @@ Manage the active job's phase.
    *"Any lessons to record before moving on? (use `/job-lesson <category>
    \"<text>\"`)"*. Don't block — just remind.
 
+6. **Decision retro** (for `done` transitions only): list the decisions this job
+   touched and prompt for late feedback. Non-blocking. Capture the just-closed
+   job's id (`$state.job_id` BEFORE `Clear-CurrentJob`) for the lookup.
+
+   ```powershell
+   . "$HOME/.claude/scripts/job-lib.ps1"
+   . "$HOME/.claude/scripts/decisions-lib.ps1"
+   $jobId = '<JOB_ID>'    # captured before the state file was cleared
+   $proj = Resolve-ProjectId
+   $decs = Read-Decisions -Project $proj -Job $jobId
+   if ($decs.Count -gt 0) {
+       Write-Host ""
+       Write-Host "This job touched $($decs.Count) decision(s):" -ForegroundColor Cyan
+       foreach ($d in $decs) {
+           $flagNote = if ($d.flag -ne 'null') { " [$($d.flag)]" } else { '' }
+           Write-Host "  $($d.id) ($($d.confidence)) — $($d.title)$flagNote"
+       }
+       Write-Host "Any retro feedback? Use /decision-feedback <id> ""<text>"" --outcome worked|didnt|mixed." -ForegroundColor Yellow
+       Write-Host "(Silence = they worked.)" -ForegroundColor DarkGray
+   }
+   ```
+
 ## Arguments
 
 $ARGUMENTS
