@@ -176,7 +176,8 @@ foreach ($cmd in @(
     'job-start.md','job-status.md','job-list.md','job-phase.md',
     'job-resume.md','job-lesson.md','consolidate-lessons.md',
     'fleet.md','ensemble.md','research.md',
-    'decision-feedback.md','consolidate-decisions.md','project-init.md'
+    'decision-feedback.md','consolidate-decisions.md','project-init.md',
+    'cost.md'
 )) {
     $src = Join-Path $repoRoot "commands\$cmd"
     $dst = Join-Path $claudeDir "commands\$cmd"
@@ -190,7 +191,7 @@ if (-not (Test-Path $scriptsDst)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $scriptsDst" }
     else { New-Item -ItemType Directory -Force -Path $scriptsDst | Out-Null; Write-Ok "created $scriptsDst" }
 }
-foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1')) {
+foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1')) {
     $src = Join-Path $repoRoot "scripts\$script"
     $dst = Join-Path $scriptsDst $script
     Copy-WithPrompt $src $dst "lib script: $script"
