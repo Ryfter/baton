@@ -375,7 +375,7 @@ if (-not $DryRun) {
 }
 
 # --- Summary ---
-Write-Step "Bootstrap complete (Plan 5 scope)"
+Write-Step "Bootstrap complete (Plans 1-5 + Decision Loop)"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Source the OTel env helper in your PowerShell profile or before each session:"

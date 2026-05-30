@@ -18,10 +18,26 @@ Initialize (or re-calibrate) per-project decision guidance from the universal la
    $uniGuide  = Join-Path $HOME ".claude/knowledge/universal/decision-guidance.md"
    ```
 
-2. **Check state:**
-   - If `$projGuide` exists AND `--re-calibrate` is NOT in `$ARGUMENTS`:
-     stop with *"Project '<proj>' already initialised. Use --re-calibrate to redo."*
+2. **Check state:** the "already initialised" guard must check for the calibration
+   marker (`<!-- calibrated YYYY-MM-DD from universal -->`) — NOT just file
+   existence — because `/consolidate-decisions` also writes `$projGuide` and would
+   otherwise trip a false-positive "already initialised" message.
+   - If `$projGuide` exists AND contains the calibration marker AND `--re-calibrate`
+     is NOT in `$ARGUMENTS`: stop with
+     *"Project '<proj>' already initialised. Use --re-calibrate to redo."*
    - Else continue.
+
+   ```powershell
+   $alreadyInit = $false
+   if (Test-Path $projGuide) {
+       $existing = Get-Content $projGuide -Raw -ErrorAction SilentlyContinue
+       if ($existing -match '<!-- calibrated [\d-]+ from universal -->') { $alreadyInit = $true }
+   }
+   if ($alreadyInit -and -not ($ARGUMENTS -match '--re-calibrate')) {
+       Write-Host "Project '$proj' already initialised. Use --re-calibrate to redo." -ForegroundColor Yellow
+       return
+   }
+   ```
 
 3. **Read the universal guidance** and present it to the user verbatim:
 
