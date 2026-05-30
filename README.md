@@ -121,10 +121,37 @@ fleet members at once, then Claude synthesizes their responses.
 
 See [`docs/superpowers/specs/2026-05-29-plan5-research-ensemble-design.md`](docs/superpowers/specs/2026-05-29-plan5-research-ensemble-design.md).
 
+## What you get (Decision Loop)
+
+A self-improvement loop on top of Plan 3's KB. Every significant decision I make
+is auto-captured as a structured record (decision · alternatives · rationale ·
+my confidence · revisit-if). Two layers consolidate over time:
+
+- **Per-project guidance** — `~/.claude/knowledge/projects/<id>/decision-guidance.md`
+- **Universal guidance** — `~/.claude/knowledge/universal/decision-guidance.md`
+  (a pattern only promotes here once it has positive feedback in ≥2 projects)
+
+Commands:
+- `/decision-feedback <id> "<text>" [--outcome worked|didnt|mixed] [--urgent]` —
+  attach human feedback. Silence = approval; negative outcome flags the record.
+- `/consolidate-decisions` — distill records + feedback into the guidance docs,
+  recording deviations + their reasons.
+- `/project-init [--re-calibrate]` — on a new project, surface universal
+  guidance and capture per-project overrides.
+- `/job-phase done` now lists the just-closed job's decisions and prompts for
+  retro feedback (non-blocking).
+
+Capture is **discipline-enforced**, not magical — the rule lives in this
+project's `CLAUDE.md` and is always loaded into context. Opt-out at any time
+via `~/.claude/decisions-off` (global) or
+`~/.claude/knowledge/projects/<id>/decisions-off` (per-project).
+
+See [`docs/superpowers/specs/2026-05-29-decision-loop-design.md`](docs/superpowers/specs/2026-05-29-decision-loop-design.md).
+
 ## Coming in Plan 5b / 5c
 
 6 Thinking Hats (each model wears a hat) and LLM Council (models critique each
-other's outputs) — thin presets built on the same ensemble primitive.
+other's outputs) — thin presets built on the Plan 5 ensemble primitive.
 
 ## Architecture
 
