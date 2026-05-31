@@ -47,6 +47,9 @@ app.include_router(build_jobs_router(templates))
 from dashboard.routers.projects import build_router as build_projects_router
 app.include_router(build_projects_router(templates))
 
+from dashboard.routers.kb import build_router as build_kb_router
+app.include_router(build_kb_router(templates))
+
 
 def _ctx(request: Request) -> dict:
     stats = compute_stats(JOURNAL_PATH)
