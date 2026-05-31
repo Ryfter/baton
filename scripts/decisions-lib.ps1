@@ -128,6 +128,144 @@ $altLines
     return @{ id = $id; path = $path }
 }
 
+function Add-DecisionRecordFromFile {
+    <#
+    .SYNOPSIS
+      File-based intake for decision records. Avoids the 965-byte command-line
+      ceiling that Add-DecisionRecord hits when prose fields are long.
+
+    .DESCRIPTION
+      Reads a draft markdown file containing YAML front-matter with required
+      keys: title, confidence, revisit-if. Optional: project, job, phase.
+      Body must contain the **Chosen:**, **Alternatives:**, **Rationale:**
+      sections verbatim (helper preserves them as-is).
+
+      The helper:
+        1. Validates required front-matter + body sections
+        2. Computes next id + slug from title
+        3. Writes the canonical d<NNN>-<slug>.md with full front-matter
+        4. Deletes the draft on success (unless -KeepDraft)
+
+      Returns @{ id; path } or $null if opted-out.
+
+    .PARAMETER Path
+      Path to the draft markdown file. Required.
+
+    .PARAMETER KeepDraft
+      If set, the draft is not deleted after a successful finalize.
+
+    .EXAMPLE
+      # 1. Author the draft with the Write tool (no length limit):
+      #    scratch/decision-draft.md
+      # 2. Finalize:
+      Add-DecisionRecordFromFile -Path scratch/decision-draft.md
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$KeepDraft,
+        [string]$KbRoot = $script:DefaultKbRoot,
+        [string]$OptOutPath = $script:DefaultOptOut
+    )
+    if (-not (Test-Path $Path)) { throw "Draft not found at $Path." }
+    $raw = Get-Content $Path -Raw
+
+    # Parse YAML front-matter (flat key: value lines between leading --- fences)
+    if ($raw -notmatch '(?s)^---\s*\r?\n(.*?)\r?\n---\s*\r?\n(.*)$') {
+        throw "Draft '$Path' is missing a YAML front-matter block (--- ... ---)."
+    }
+    $fmBlock = $matches[1]
+    $body    = $matches[2].Trim()
+
+    $fm = @{}
+    foreach ($line in ($fmBlock -split "`r?`n")) {
+        if ($line -match '^\s*([a-zA-Z_-]+):\s*"?(.*?)"?\s*$') {
+            $fm[$matches[1]] = $matches[2].Trim()
+        }
+    }
+
+    # Required front-matter
+    foreach ($k in @('title','confidence','revisit-if')) {
+        if (-not $fm.ContainsKey($k) -or -not $fm[$k]) {
+            throw "Draft '$Path' missing required front-matter key: $k"
+        }
+    }
+    if ($fm['confidence'] -notin @('high','med','low')) {
+        throw "confidence must be high|med|low (got: $($fm['confidence']))."
+    }
+
+    # Required body sections
+    foreach ($section in @('\*\*Chosen:\*\*','\*\*Alternatives:\*\*','\*\*Rationale:\*\*')) {
+        if ($body -notmatch $section) {
+            $clean = $section -replace '\\', ''
+            throw "Draft '$Path' missing required body section: $clean"
+        }
+    }
+
+    # Project resolution (front-matter wins; else Resolve-ProjectId; else _uncategorized)
+    $project = $fm['project']
+    if (-not $project) {
+        if (Get-Command Resolve-ProjectId -ErrorAction SilentlyContinue) {
+            $project = Resolve-ProjectId
+        }
+        if (-not $project) { $project = '_uncategorized' }
+    }
+    $projDir = Join-Path $KbRoot "projects/$project"
+    $projOptOut = Join-Path $projDir 'decisions-off'
+    if (Test-DecisionsOptOut -OptOutPath $OptOutPath -ProjectOptOutPath $projOptOut) {
+        return $null
+    }
+
+    $decDir = Join-Path $projDir 'decisions'
+    if (-not (Test-Path $decDir)) { New-Item -ItemType Directory -Force -Path $decDir | Out-Null }
+
+    $id = Get-NextDecisionId -ProjectDecisionsDir $decDir
+    $title = $fm['title']
+    $slug = if (Get-Command ConvertTo-JobSlug -ErrorAction SilentlyContinue) {
+        ConvertTo-JobSlug $title
+    } else {
+        $s = ($title.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+        if ([string]::IsNullOrEmpty($s)) { $s = 'untitled' }
+        $s.Substring(0, [Math]::Min(40, $s.Length))
+    }
+    $finalPath = Join-Path $decDir "$id-$slug.md"
+
+    $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
+    $jobVal   = if ($fm['job'])   { $fm['job'] }   else { 'null' }
+    $phaseVal = if ($fm['phase']) { $fm['phase'] } else { 'null' }
+    $revisitEscaped = ($fm['revisit-if']) -replace '"', '\"'
+
+    # Body already contains **Chosen:**, **Alternatives:**, **Rationale:** sections —
+    # preserve verbatim. Append ## Feedback if not present.
+    $finalBody = $body
+    if ($finalBody -notmatch '(?m)^##\s+Feedback') {
+        $finalBody += "`n`n## Feedback"
+    }
+
+    $content = @"
+---
+id: $id
+timestamp: $ts
+project: $project
+job: $jobVal
+phase: $phaseVal
+status: active
+confidence: $($fm['confidence'])
+revisit-if: "$revisitEscaped"
+flag: null
+---
+
+# $title
+
+$finalBody
+"@
+    Set-Content -Path $finalPath -Value $content -Encoding utf8NoBOM
+
+    if (-not $KeepDraft) {
+        Remove-Item $Path -Force -ErrorAction SilentlyContinue
+    }
+    return @{ id = $id; path = $finalPath }
+}
+
 function Find-DecisionRecordPath {
     <# Return the .md path for a given decision id within a project, or $null. #>
     param(
