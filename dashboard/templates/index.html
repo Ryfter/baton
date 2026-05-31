@@ -9,6 +9,11 @@
   {% include "partials/projects_list.html" %}
 </div>
 
+<!-- KB Search panel (Plan 8) — user-driven, no polling -->
+<div class="card" style="grid-column: 1 / -1;">
+  {% include "partials/kb_search.html" %}
+</div>
+
 <!-- Jobs panel — polls every 30 s -->
 <div class="card" style="grid-column: 1 / -1;"
      hx-get="/partials/jobs"

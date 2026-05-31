@@ -177,6 +177,7 @@ foreach ($cmd in @(
     'job-resume.md','job-lesson.md','consolidate-lessons.md',
     'fleet.md','ensemble.md','research.md','six-hats.md','council.md',
     'code-decompose.md','code-parallel.md','code-merge.md',
+    'kb-index.md','kb-search.md',
     'decision-feedback.md','consolidate-decisions.md','project-init.md',
     'cost.md'
 )) {
@@ -192,7 +193,7 @@ if (-not (Test-Path $scriptsDst)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $scriptsDst" }
     else { New-Item -ItemType Directory -Force -Path $scriptsDst | Out-Null; Write-Ok "created $scriptsDst" }
 }
-foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'six-hats-lib.ps1', 'council-lib.ps1', 'code-lib.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1')) {
+foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'six-hats-lib.ps1', 'council-lib.ps1', 'code-lib.ps1', 'kb-lib.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1')) {
     $src = Join-Path $repoRoot "scripts\$script"
     $dst = Join-Path $scriptsDst $script
     Copy-WithPrompt $src $dst "lib script: $script"
@@ -224,7 +225,8 @@ $dirsToCreate = @(
     (Join-Path $claudeDir 'jobs'),
     (Join-Path $claudeDir 'knowledge/universal'),
     (Join-Path $claudeDir 'knowledge/universal/topics'),
-    (Join-Path $claudeDir 'knowledge/projects')
+    (Join-Path $claudeDir 'knowledge/projects'),
+    (Join-Path $claudeDir 'knowledge/.index')  # Plan 8 vector index lives here
 )
 foreach ($d in $dirsToCreate) {
     if (Test-Path $d) {
@@ -377,7 +379,19 @@ if (-not $DryRun) {
 }
 
 # --- Summary ---
-Write-Step "Bootstrap complete (Plans 1-7 + Decision Loop + Cost Ledger)"
+Write-Step "Bootstrap complete (Plans 1-8 + Decision Loop + Cost Ledger)"
+# Plan 8 first-run hint
+$nomicPresent = $false
+try {
+    $tagsOut = ollama list 2>&1 | Out-String
+    if ($tagsOut -match 'nomic-embed-text') { $nomicPresent = $true }
+} catch { }
+if (-not $nomicPresent) {
+    Write-Host ""
+    Write-Warn "Plan 8 needs an embedding model. Run once:"
+    Write-Host "       ollama pull nomic-embed-text"
+    Write-Host "  Then build the KB index:  /kb-index --full"
+}
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Source the OTel env helper in your PowerShell profile or before each session:"
