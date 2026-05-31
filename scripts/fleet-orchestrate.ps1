@@ -149,6 +149,7 @@ function Merge-ItemToIntegration {
         [string[]]$AllowedPathPatterns = @('*'),
         [int]$MaxChangedFiles = 20,
         [string]$TestCommand,
+        [string]$WorktreeRoot,
         [switch]$AutoCommit
     )
     $gate = Invoke-MergeGate -WorktreePath $WorktreePath -Branch $Branch -Base $Integration `
@@ -157,20 +158,30 @@ function Merge-ItemToIntegration {
 
     if (-not $gate.pass) { return @{ merged = $false; gate = $gate } }
 
-    # Merge happens in the MAIN repo checkout (not the worktree), into integration only.
+    # Merge happens in a DEDICATED integration worktree — NEVER the user's main
+    # checkout (which may be dirty/on another branch). This is the only merge site.
+    if (-not $WorktreeRoot) { $WorktreeRoot = Join-Path (Split-Path $RepoRoot -Parent) 'cao-worktrees' }
+    # Dedicated merge worktree named after the target branch (so merging to 'master'
+    # and to 'integration/backlog' use distinct, non-colliding worktrees).
+    $intWt = Join-Path $WorktreeRoot ('_merge-' + ($Integration -replace '[\\/]', '-'))
     Push-Location $RepoRoot
     try {
-        $cur = (git rev-parse --abbrev-ref HEAD).Trim()
+        if (-not (Test-Path (Join-Path $intWt '.git'))) {
+            if (Test-Path $intWt) { git worktree remove --force $intWt 2>&1 | Out-Null }
+            git worktree add $intWt $Integration 2>&1 | Out-Null
+        }
+    } finally { Pop-Location }
+
+    Push-Location $intWt
+    try {
         git checkout $Integration 2>&1 | Out-Null
         git merge --no-ff -m "merge $Branch into $Integration (gate passed)" $Branch 2>&1 | Out-Null
         $mergeExit = $LASTEXITCODE
         if ($mergeExit -ne 0) {
             git merge --abort 2>&1 | Out-Null
-            git checkout $cur 2>&1 | Out-Null
             $gate.reasons += "merge-conflict: aborted"
             return @{ merged = $false; gate = $gate }
         }
-        git checkout $cur 2>&1 | Out-Null
         return @{ merged = $true; gate = $gate }
     } finally { Pop-Location }
 }
