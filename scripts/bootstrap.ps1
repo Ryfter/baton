@@ -276,7 +276,9 @@ if (-not (Test-Path $uniDecGuide)) {
 Write-Step "Wiring decision-capture rule into project CLAUDE.md"
 $claudeMd = Join-Path $repoRoot 'CLAUDE.md'
 $ruleSrc = Join-Path $repoRoot 'references\CLAUDE-decision-capture-rule.md'
-$ruleMarker = '<!-- decision-capture-rule:v1 -->'
+# Match ANY version of the marker, not just the version we currently ship.
+# (Bug: hardcoding "v1" caused a duplicate v2 block to be appended on top of an existing v2.)
+$ruleMarkerPattern = '<!--\s*decision-capture-rule:v\d+\s*-->'
 if (-not (Test-Path $ruleSrc)) {
     Write-Warn "rule source $ruleSrc missing; skipping CLAUDE.md update"
 } elseif (-not (Test-Path $claudeMd)) {
@@ -293,7 +295,7 @@ if (-not (Test-Path $ruleSrc)) {
     }
 } else {
     $existing = Get-Content $claudeMd -Raw
-    if ($existing -match [regex]::Escape($ruleMarker)) {
+    if ($existing -match $ruleMarkerPattern) {
         Write-Skip "capture rule already present in CLAUDE.md"
     } elseif ($DryRun) {
         Write-Ok "[dry-run] would append capture rule to $claudeMd"
