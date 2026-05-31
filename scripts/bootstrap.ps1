@@ -38,7 +38,7 @@ function Copy-IfMissing($src, $dst, $label) {
     return $true
 }
 
-function Copy-WithPrompt($src, $dst, $label) {
+function Copy-WithPrompt($src, $dst, $label, [switch]$Force) {
     if (Test-Path $dst) {
         if ($Force) {
             if ($DryRun) { Write-Ok "[dry-run] would overwrite $label at $dst (--Force)"; return }
@@ -183,7 +183,7 @@ foreach ($cmd in @(
 )) {
     $src = Join-Path $repoRoot "commands\$cmd"
     $dst = Join-Path $claudeDir "commands\$cmd"
-    Copy-WithPrompt $src $dst "command: $cmd"
+    Copy-WithPrompt $src $dst "command: $cmd" -Force
 }
 
 # --- Step 5b: Deploy Plan 3 library scripts ---
@@ -196,7 +196,7 @@ if (-not (Test-Path $scriptsDst)) {
 foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'six-hats-lib.ps1', 'council-lib.ps1', 'code-lib.ps1', 'kb-lib.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1')) {
     $src = Join-Path $repoRoot "scripts\$script"
     $dst = Join-Path $scriptsDst $script
-    Copy-WithPrompt $src $dst "lib script: $script"
+    Copy-WithPrompt $src $dst "lib script: $script" -Force
 }
 
 # --- Step 5b2: Deploy fleet escape-hatch scripts ---
@@ -210,7 +210,7 @@ if (-not (Test-Path $fleetScriptsDst)) {
 foreach ($hatch in @('lm-studio.ps1')) {
     $src = Join-Path $repoRoot "scripts\fleet\$hatch"
     $dst = Join-Path $fleetScriptsDst $hatch
-    Copy-WithPrompt $src $dst "fleet hatch: $hatch"
+    Copy-WithPrompt $src $dst "fleet hatch: $hatch" -Force
 }
 
 # --- Step 5b3: Deploy fleet.yaml seed ---
@@ -340,7 +340,7 @@ $catDst = Join-Path $claudeDir 'model-routing.md'
 if (Test-Path "$catDst.migrated") {
     Write-Skip "Plan 1 catalog migrated to knowledge/universal/routing.md; skipping legacy catalog seed"
 } else {
-    Copy-WithPrompt $catSrc $catDst 'routing catalog'
+    Copy-WithPrompt $catSrc $catDst 'routing catalog' -Force:$Force
 }
 
 $logSrc = Join-Path $repoRoot 'references\model-routing-log.md'
