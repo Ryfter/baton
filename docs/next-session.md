@@ -1,0 +1,148 @@
+# Next-session playbook
+
+How to pick the orchestrator back up and use it on its own backlog.
+
+## A. Re-opening the project (every session)
+
+1. **Open Claude Code in the repo:**
+   ```powershell
+   cd D:\Dev\coding-agent-orchestrator
+   claude
+   ```
+   Memory auto-loads (user profile, project state, brainstorming defaults). The project's `CLAUDE.md` loads automatically — Claude will follow the decision-capture rule.
+
+2. **(Optional, one-time per shell)** Enable OTel telemetry capture:
+   ```powershell
+   . $HOME\.claude\otel-env.ps1
+   ```
+
+3. **Health check** (run these in chat):
+   - `/fleet doctor` — confirm 5+ providers are reachable
+   - `/kb-search "ensemble"` — confirm the index has hits
+   - In a second terminal: `python -m dashboard.main` → open `http://localhost:8765` for the portfolio + KB search panel
+
+4. **If anything is off:**
+   - `pwsh scripts\bootstrap.ps1 -Force` — re-deploy everything; idempotent
+   - `ollama pull nomic-embed-text` — if `/kb-search` says the model is missing
+   - `/kb-index --full` — rebuild the vector index from scratch
+
+## B. Pick the next plan from the backlog
+
+5. **Open the Project board:** https://github.com/users/Ryfter/projects/5 (11 issues parked).
+
+6. **Recommended order:**
+   1. **#19** — default `--Force` for lib script deployment (one-liner; removes a real foot-gun)
+   2. **#22** — run `/consolidate-decisions` over d001–d006 (uses the orchestrator on itself; validates the consolidation flow)
+   3. **#16** — Plan 8.1 auto-index hook (completes the Plan 8 story)
+   4. **#17** — Plan 8.2 extend KB pre-fetch to `/ensemble` + `/six-hats` (tiny)
+   5. **#18** — Plan 8.3 `--decisions-only` filter + dashboard click-through
+   6. Tier 2 (Plans 9/10/11, embedding A/B) when you have appetite
+   7. Tier 3 (auto-decision-capture, streaming, cross-project consolidation) — biggest
+
+7. **Read the issue body.** Each carries a Tier label, scope, and any noted risks/mitigations. `docs/roadmap.md` has the same content.
+
+## C. Working a single plan with the orchestrator (the loop)
+
+Pick issue **#N** — let's say **#16** (Plan 8.1 auto-index hook). Work it like this:
+
+8. **Open a job:**
+   ```
+   /job-start "Plan 8.1 — auto-index hook for KB writes (closes #16)"
+   ```
+   Creates `~/.claude/jobs/<id>/` and starts in the `research` phase.
+
+9. **Research with the fleet + KB pre-fetch** (Plan 8 RAG fires automatically):
+   ```
+   /research "best pattern for a debounced PostToolUse hook in PowerShell that re-runs python -m kb.index --scope ... on touched files only"
+   ```
+   Synthesis lands at `<job>/phases/research/ensemble-<ts>/synthesis.md`.
+
+10. **For architectural decisions, run a council or hats:**
+    ```
+    /six-hats "should the auto-index hook be synchronous or async/debounced?"
+    /council "should we debounce by file-path or by time-window?" --providers claude-cli,codex
+    ```
+
+11. **Capture lessons as you go:**
+    ```
+    /job-lesson knowledge "PostToolUse hooks fire after every Write/Edit; KB-scoped path filter is essential"
+    ```
+
+12. **Advance to design** (write the spec by hand or via `/six-hats` synthesis):
+    ```
+    /job-phase next
+    ```
+    Author `docs/superpowers/specs/2026-MM-DD-plan8.1-design.md`. Capture any architectural decision via the file-based intake (see `CLAUDE.md`).
+
+13. **Advance to code phase:**
+    ```
+    /job-phase next     # design → code.sprint-1
+    /code-decompose docs/superpowers/specs/2026-MM-DD-plan8.1-design.md
+    ```
+    Claude reads the spec, proposes N subtasks (`files_touched`, `depends_on`), confirms, writes `<job>/phases/code.sprint-1/subtasks.json`.
+
+14. **Dispatch parallel implementations:**
+    ```
+    /code-parallel
+    ```
+    One Agent subagent per task in `isolation: worktree`. Independents fire concurrently; dependents wait.
+
+15. **Review the merge plan, then apply:**
+    ```
+    /code-merge              # see plan + likely conflicts
+    /code-merge --apply      # cherry-pick in dep order; stops on first conflict
+    ```
+
+16. **Push + PR + merge** (deliberate manual gate):
+    ```bash
+    git push -u origin <branch>
+    gh pr create --title "Plan 8.1: auto-index hook (closes #16)" --body "..."
+    # review the PR
+    gh pr merge <N> --merge --delete-branch
+    git checkout master
+    git pull --ff-only origin master
+    ```
+    The `closes #16` syntax auto-closes the issue and moves it to Done on Project #5.
+
+17. **Wrap the job:**
+    ```
+    /job-phase done
+    ```
+    Closes the job, prompts for retro feedback on decisions captured during it.
+
+18. **Update cost** (when your Anthropic billing dashboard refreshes):
+    ```
+    /cost <new-total>
+    ```
+
+19. **Re-index the KB** to absorb the new spec + lessons + decisions:
+    ```
+    /kb-index               # incremental — milliseconds if nothing changed
+    ```
+
+## D. Repeat
+
+Steps 8–19 are the loop. Each backlog issue → one job → one PR → one closed issue. The orchestrator gets better at advising you on its own design as the KB grows (Plan 8 RAG kicks in on every `/research`).
+
+## E. Bootstrap a new project (someday)
+
+When you bring the orchestrator to a different repo:
+
+1. `cd path\to\other\repo` and `claude` (memory auto-loads, project gets its own KB layer at `~/.claude/knowledge/projects/<id>/`)
+2. `/project-init` — surfaces universal decision guidance and prompts for per-project overrides
+3. Skip to step 8 above (`/job-start "..."`)
+
+Every project gets its own row in the dashboard's Portfolio panel.
+
+## Quick reference — the 17 slash commands
+
+**Routing/observability:** `/log-routing`, `/consolidate-routing`
+**Jobs:** `/job-start`, `/job-status`, `/job-list`, `/job-phase`, `/job-resume`, `/job-lesson`, `/consolidate-lessons`
+**Fleet:** `/fleet` (doctor/test/list)
+**Research:** `/ensemble`, `/research`, `/six-hats`, `/council`
+**Code phase:** `/code-decompose`, `/code-parallel`, `/code-merge`
+**KB:** `/kb-index`, `/kb-search`
+**Decision loop:** (rule in `CLAUDE.md`), `/decision-feedback`, `/consolidate-decisions`, `/project-init`
+**Cost:** `/cost`
+
+All deployed to `~/.claude/commands/`. Re-deploy with `pwsh scripts\bootstrap.ps1 -Force`.
