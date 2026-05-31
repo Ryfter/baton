@@ -5,7 +5,7 @@ Adopts [claude-octopus](https://github.com/nyldn/claude-octopus) as the dispatch
 layer; builds observation (hooks, OpenTelemetry, slash commands, journal,
 catalog) and — in Plan 2 — a live web dashboard on top.
 
-**Status:** Plans 1, 2, 3, 4, 5, 5b, 5c, 6, 7 + Decision Loop + Cost Ledger shipped.
+**Status:** Plans 1, 2, 3, 4, 5, 5b, 5c, 6, 7, 8 + Decision Loop + Cost Ledger shipped.
 
 ## Quick start
 
@@ -218,6 +218,31 @@ project-portfolio visibility across every project in `~/.claude/knowledge/projec
 
 See [`docs/superpowers/specs/2026-05-30-plan7-command-center-design.md`](docs/superpowers/specs/2026-05-30-plan7-command-center-design.md).
 
+## What you get (Plan 8)
+
+**Embedding-based semantic search** over the knowledge base. Local-only:
+Ollama `nomic-embed-text` for embeddings (274 MB one-time pull), numpy flat
+cosine search — no binary deps, sub-millisecond per query at this scale.
+
+- `kb/` Python package — `chunker.py` (markdown-aware), `embedder.py`
+  (Ollama HTTP client, L2-normalised vectors), `store.py` (numpy `.npz`
+  flat store with scope filters), `index.py` (mtime-incremental walker),
+  `search.py` (top-k cosine).
+- `/kb-index [--full] [--scope universal|<project-id>|all]` — build/update
+  the index. Default: incremental by mtime. Unchanged corpus → 0 embed calls.
+- `/kb-search "<query>" [--k N] [--scope ...]` — top-k semantic search,
+  scope-filterable to universal-only or a single project.
+- `/research` now **pre-fetches** top-3 KB chunks before fanout and prepends
+  them as "Relevant prior knowledge" on each provider's prompt — small
+  built-in RAG for the research phase.
+- Dashboard adds a **KB Search panel** on the home page + `GET /kb/search`
+  JSON endpoint for external integration.
+- Index lives at `~/.claude/knowledge/.index/` (vectors.npz + metadata.json
+  + manifest.json with per-source mtime tracking).
+- Bootstrap nudges `ollama pull nomic-embed-text` if missing.
+
+See [`docs/superpowers/specs/2026-05-30-plan8-kb-embeddings-design.md`](docs/superpowers/specs/2026-05-30-plan8-kb-embeddings-design.md).
+
 ## Architecture
 
 See [`docs/superpowers/specs/2026-05-22-coding-agent-orchestrator-design.md`](docs/superpowers/specs/2026-05-22-coding-agent-orchestrator-design.md).
@@ -245,6 +270,6 @@ pwsh -NoProfile -File scripts\test-six-hats.ps1
 pwsh -NoProfile -File scripts\test-council.ps1
 # Plan 6 / code phase
 pwsh -NoProfile -File scripts\test-code-lib.ps1
-# Plan 2 + Plan 7 / dashboard (Python)
-python -m pytest dashboard/tests/ -q
+# Plan 2 + Plan 7 + Plan 8 / dashboard + kb (Python)
+python -m pytest dashboard/tests/ kb/tests/ -q
 ```

@@ -46,11 +46,34 @@ Run a research ensemble within the active job's research phase.
    $outDir
    ```
 
-5. **Run the ensemble + synthesize** exactly as `/ensemble` steps 4-6 (call
-   `Invoke-FleetEnsemble` from `~/.claude/scripts/fleet-ensemble.ps1`, write
-   `synthesis.md`, present it, report successes/failures).
+5. **KB pre-fanout retrieval (Plan 8).** Before dispatching to the fleet,
+   query the embedded KB for top-3 relevant chunks and prepend them as a
+   "Relevant prior knowledge" section on each provider's prompt. Graceful
+   no-op if the index is empty or kb-search errors.
 
-6. **Prompt for a lesson** (non-blocking): *"Capture a lesson from this
+   ```powershell
+   . "$HOME/.claude/scripts/kb-lib.ps1"
+   $kbHits = Invoke-KbSearch -Query '<question>' -K 3 -SnippetChars 600 2>$null
+   if ($kbHits -and $kbHits.Count -gt 0) {
+       $kbBlock = "Relevant prior knowledge (from this project's KB):`n`n"
+       foreach ($h in $kbHits) {
+           $snippet = ($h.text -replace "`r?`n", ' ').Trim()
+           if ($snippet.Length -gt 600) { $snippet = $snippet.Substring(0, 600) + '…' }
+           $kbBlock += "- $($h.source) [score $('{0:F2}' -f $h.score)]: $snippet`n"
+       }
+       $augmented = "$kbBlock`n---`n`n<question>"
+   } else {
+       $augmented = '<question>'
+   }
+   ```
+
+6. **Run the ensemble + synthesize** exactly as `/ensemble` steps 4-6 (call
+   `Invoke-FleetEnsemble` from `~/.claude/scripts/fleet-ensemble.ps1` with the
+   `$augmented` prompt, write `synthesis.md`, present it, report
+   successes/failures). When KB hits were prepended, mention which sources
+   were used in the synthesis preamble.
+
+7. **Prompt for a lesson** (non-blocking): *"Capture a lesson from this
    research? e.g. `/job-lesson knowledge \"<takeaway>\"`."*
 
 ## Arguments
