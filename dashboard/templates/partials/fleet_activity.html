@@ -1,0 +1,66 @@
+<style>
+  .fleet-cockpit h2 { margin: 0 0 .5rem; }
+  .fleet-run { border:1px solid var(--border,#2a2a3a); border-radius:8px; padding:.6rem .8rem; margin:.5rem 0; }
+  .fleet-run.active { border-color:#3b82f6; box-shadow:0 0 0 1px #3b82f633; }
+  .fleet-run-head { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; font-size:.85rem; }
+  .fleet-kind { font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:#93c5fd; }
+  .fleet-prompt { font-size:.8rem; opacity:.75; margin:.35rem 0; max-height:2.6em; overflow:hidden; }
+  .fleet-provs { display:flex; gap:.45rem; flex-wrap:wrap; margin-top:.4rem; }
+  .prov { display:inline-flex; align-items:center; gap:.4rem; padding:.25rem .55rem; border-radius:999px;
+          font-size:.78rem; border:1px solid #333; background:#1b1b27; }
+  .prov-running { border-color:#3b82f6; color:#bfdbfe; }
+  .prov-done    { border-color:#22c55e; color:#bbf7d0; }
+  .prov-error,.prov-timeout { border-color:#ef4444; color:#fecaca; }
+  .prov-queued  { opacity:.55; }
+  .prov-dur { opacity:.6; font-variant-numeric:tabular-nums; }
+  .pulse { width:.5rem; height:.5rem; border-radius:50%; background:#3b82f6; animation:fleetpulse 1s infinite; }
+  @keyframes fleetpulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.35;transform:scale(.6);} }
+  .fleet-muted { opacity:.6; font-size:.8rem; }
+  .fleet-recent { display:flex; gap:.6rem; align-items:center; font-size:.8rem; opacity:.8; margin:.2rem 0; }
+</style>
+
+{% set f = fleet | default(None) %}
+<div class="fleet-cockpit">
+  <h2>🚀 Fleet Activity <span class="fleet-muted">— live, every model running concurrently</span></h2>
+
+  {% if f is none %}
+    <p class="fleet-muted">loading…</p>
+  {% else %}
+    {% if f.active %}
+      {% for run in f.active %}
+        <div class="fleet-run active">
+          <div class="fleet-run-head">
+            <span class="fleet-kind">{{ run.kind }}</span>
+            <span class="fleet-muted">{{ run.run_id }}</span>
+            <span class="fleet-muted">⏱ {{ run.elapsed_s }}s</span>
+            <span class="fleet-muted">{{ run.counts.running }} running · {{ run.counts.done }} done{% if run.counts.error %} · {{ run.counts.error }} err{% endif %}</span>
+          </div>
+          {% if run.prompt %}<div class="fleet-prompt">{{ run.prompt }}</div>{% endif %}
+          <div class="fleet-provs">
+            {% for p in run.providers %}
+              <span class="prov prov-{{ p.state }}">
+                {% if p.live %}<span class="pulse"></span>{% endif %}
+                {{ p.provider }}{% if p.label and p.label != p.provider %} · {{ p.label }}{% endif %}
+                <span class="prov-dur">{{ p.duration_s }}s</span>
+              </span>
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="fleet-muted">No fleet runs in flight. Dispatch <code>/ensemble</code>, <code>/six-hats</code>, <code>/council</code>, or a fleet task batch and every model lights up here at once.</p>
+    {% endif %}
+
+    {% if f.recent %}
+      <h3 class="fleet-muted" style="margin:.8rem 0 .2rem;">Recent runs</h3>
+      {% for run in f.recent %}
+        <div class="fleet-recent">
+          <span class="fleet-kind">{{ run.kind }}</span>
+          <span>{{ run.started_human }}</span>
+          <span>{{ run.providers|length }} models</span>
+          <span>{{ run.counts.done }} ok{% if run.counts.error %} · {{ run.counts.error }} err{% endif %}</span>
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endif %}
+</div>
