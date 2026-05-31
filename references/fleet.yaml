@@ -33,7 +33,7 @@ providers:
     kind: cli
     enabled: true
     cost_tier: paid
-    command_template: 'antigravity --prompt "{{prompt}}"'
+    command_template: 'agy --print "{{prompt}}"'
 
   - name: gh-copilot
     kind: cli
