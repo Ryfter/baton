@@ -47,17 +47,38 @@ Run Edward de Bono's Six Thinking Hats across the fleet.
    }
    ```
 
-4. **Build the six hat tasks + dispatch concurrently:**
+4. **KB pre-fanout retrieval (Plan 8).** Before dispatching to the fleet,
+   query the embedded KB for top-3 relevant chunks and prepend them as a
+   "Relevant prior knowledge" section on each provider's prompt. Graceful
+   no-op if the index is empty or kb-search errors.
+
+   ```powershell
+   . "$HOME/.claude/scripts/kb-lib.ps1"
+   $kbHits = Invoke-KbSearch -Query '<question>' -K 3 -SnippetChars 600 2>$null
+   if ($kbHits -and $kbHits.Count -gt 0) {
+       $kbBlock = "Relevant prior knowledge (from this project's KB):`n`n"
+       foreach ($h in $kbHits) {
+           $snippet = ($h.text -replace "`r?`n", ' ').Trim()
+           if ($snippet.Length -gt 600) { $snippet = $snippet.Substring(0, 600) + '…' }
+           $kbBlock += "- $($h.source) [score $('{0:F2}' -f $h.score)]: $snippet`n"
+       }
+       $augmented = "$kbBlock`n---`n`n<question>"
+   } else {
+       $augmented = '<question>'
+   }
+   ```
+
+5. **Build the six hat tasks + dispatch concurrently:**
 
    ```powershell
    . "$HOME/.claude/scripts/six-hats-lib.ps1"
    . "$HOME/.claude/scripts/fleet-ensemble.ps1"
-   $tasks = Build-SixHatsTasks -Question '<question>' -Providers @(<roster>)
+   $tasks = Build-SixHatsTasks -Question $augmented -Providers @(<roster>)
    $manifest = Invoke-FleetEnsembleTasks -Tasks $tasks -OutputDir '<outDir>'
    $manifest | Format-Table label, provider, status, duration_s -AutoSize
    ```
 
-5. **Blue-Hat synthesis.** Read each `<outDir>/<hat>.md`. Write a synthesis to
+6. **Blue-Hat synthesis.** Read each `<outDir>/<hat>.md`. Write a synthesis to
    `<outDir>/synthesis.md` structured as:
    - One short paragraph per hat (summarising the contribution)
    - **Tensions** — where Black and Yellow disagree, where Red diverges from White
@@ -65,8 +86,10 @@ Run Edward de Bono's Six Thinking Hats across the fleet.
    - **Recommended next move** — your Blue Hat conclusion
    Skip any hat whose file starts with `[ENSEMBLE ERROR]` or `[ENSEMBLE TIMEOUT]`,
    but note the gap. If ALL hats failed, skip synthesis and suggest `/fleet doctor`.
+   When KB hits were prepended, mention which sources were used in the synthesis
+   preamble.
 
-6. **Present** the synthesis. Report which hats succeeded/failed.
+7. **Present** the synthesis. Report which hats succeeded/failed.
 
 ## Arguments
 
