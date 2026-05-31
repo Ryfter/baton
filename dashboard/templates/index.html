@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
 
+<!-- Fleet Activity cockpit (Plan 10) — polls every 2s so concurrent runs animate live -->
+<div class="card fleet-cockpit-card" style="grid-column: 1 / -1;"
+     hx-get="/partials/fleet"
+     hx-trigger="load, every 2s"
+     hx-swap="innerHTML">
+  {% include "partials/fleet_activity.html" %}
+</div>
+
 <!-- Portfolio panel — polls every 60s -->
 <div class="card" style="grid-column: 1 / -1;"
      hx-get="/partials/projects"
