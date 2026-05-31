@@ -115,7 +115,9 @@ function Resolve-FleetCommand {
     )
     $template = $Provider.command_template
     if (-not $template) { throw "Provider '$($Provider.name)' has no command_template." }
-    if ($template -notmatch '\{\{prompt\}\}') {
+    # stdin providers pipe the prompt in rather than interpolating it, so they
+    # legitimately omit {{prompt}} from the template (e.g. 'codex exec -').
+    if ($template -notmatch '\{\{prompt\}\}' -and $Provider.stdin -ne $true) {
         throw "Provider '$($Provider.name)' command_template lacks the required {{prompt}} placeholder."
     }
     $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
@@ -186,9 +188,26 @@ function Invoke-Fleet-Cli {
     }
     $start = Get-Date
     try {
-        # NOTE: prompt is naively substituted; embedded double-quotes may break
-        # invocation. Plan 5 hardens this via stdin. Single-quote-safe prompts only.
-        $out = Invoke-Expression $cmd 2>&1 | Out-String
+        if ($Provider.stdin -eq $true) {
+            # Robust path: pass the prompt via stdin instead of interpolating it
+            # into the command string — immune to embedded quotes/backticks/$.
+            # The template is a clean token list (e.g. 'codex exec -') with no
+            # {{prompt}}; we split on whitespace and invoke via the call operator.
+            $tmp = [System.IO.Path]::GetTempFileName()
+            try {
+                Set-Content -LiteralPath $tmp -Value $Prompt -Encoding utf8NoBOM
+                $tokens = $cmd -split '\s+' | Where-Object { $_ -ne '' }
+                $exe = $tokens[0]
+                $rest = @($tokens | Select-Object -Skip 1)
+                $out = (Get-Content -LiteralPath $tmp -Raw | & $exe @rest 2>&1 | Out-String)
+            } finally {
+                Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+            }
+        } else {
+            # Legacy path: naive substitution. Embedded double-quotes may break
+            # invocation — keep prompts single-quote-safe, or set `stdin: true`.
+            $out = Invoke-Expression $cmd 2>&1 | Out-String
+        }
         $exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
         $duration = [int]((Get-Date) - $start).TotalSeconds
         return @{ stdout = $out; stderr = ''; exit_code = $exit; duration_s = $duration }
