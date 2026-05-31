@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from dashboard.readers.stats import compute_stats
+from dashboard.readers.ensembles import read_ensembles
 from dashboard.routers.api import router as api_router
 from dashboard.routers.controls import router as controls_router
 
@@ -28,12 +29,18 @@ KB_ROOT = Path(
     or Path.home() / '.claude' / 'knowledge'
 )
 
+ENSEMBLES_ROOT = Path(
+    os.environ.get('ROUTING_ENSEMBLES_ROOT', '')
+    or Path.home() / '.claude' / 'ensembles'
+)
+
 _HERE = Path(__file__).parent
 
 app = FastAPI(title="Routing Dashboard", version="2.0.0")
 app.state.journal_path = JOURNAL_PATH
 app.state.jobs_root = JOBS_ROOT
 app.state.kb_root = KB_ROOT
+app.state.ensembles_root = ENSEMBLES_ROOT
 
 app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 templates = Jinja2Templates(directory=str(_HERE / "templates"))
@@ -82,6 +89,13 @@ async def partial_activity(request: Request) -> HTMLResponse:
 @app.get("/partials/controls", response_class=HTMLResponse)
 async def partial_controls(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "partials/controls.html", _ctx(request))
+
+
+@app.get("/partials/fleet", response_class=HTMLResponse)
+async def partial_fleet(request: Request) -> HTMLResponse:
+    ctx = _ctx(request)
+    ctx["fleet"] = read_ensembles(ENSEMBLES_ROOT)
+    return templates.TemplateResponse(request, "partials/fleet_activity.html", ctx)
 
 
 # Plan 7 portfolio partial wrapped here so it picks up _ctx and renders even when
