@@ -1,0 +1,39 @@
+<h2>KB Search</h2>
+
+<form hx-get="/partials/kb-search"
+      hx-target="#kb-search-results"
+      hx-swap="innerHTML"
+      hx-trigger="submit, keyup changed delay:600ms from:input[name=q]"
+      style="display:flex;gap:0.5rem;margin-bottom:0.75rem;">
+  <input type="text" name="q" value="{{ query }}" placeholder="ask the KB..."
+         style="flex:1;padding:0.4rem 0.6rem;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;" />
+  <input type="hidden" name="k" value="5" />
+  <button type="submit"
+          style="padding:0.4rem 0.8rem;background:#238636;color:#fff;border:none;border-radius:4px;cursor:pointer;">
+    Search
+  </button>
+</form>
+
+<div id="kb-search-results">
+  {% if error %}
+    <p class="muted">Search error: {{ error }}</p>
+  {% elif query and not hits %}
+    <p class="muted">No hits for "{{ query }}". Try /kb-index --full if you haven't built the index yet.</p>
+  {% elif hits %}
+    <table class="projects-table">
+      <thead><tr><th class="num">Score</th><th>Source</th><th>Section</th><th>Snippet</th></tr></thead>
+      <tbody>
+        {% for h in hits %}
+        <tr>
+          <td class="num">{{ '%.3f'|format(h.score) }}</td>
+          <td class="small">{{ h.source.split('\\')[-1] if '\\' in h.source else h.source.split('/')[-1] }}</td>
+          <td class="small muted">{{ h.section or '—' }}</td>
+          <td class="small">{{ (h.text or '')[:200] }}{% if (h.text or '')|length > 200 %}…{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">Type a query above to search the KB.</p>
+  {% endif %}
+</div>
