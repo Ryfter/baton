@@ -5,7 +5,10 @@ Adopts [claude-octopus](https://github.com/nyldn/claude-octopus) as the dispatch
 layer; builds observation (hooks, OpenTelemetry, slash commands, journal,
 catalog) and — in Plan 2 — a live web dashboard on top.
 
-**Status:** Plans 1, 2, 3, 4, 5, 5b, 5c, 6, 7, 8 + Decision Loop + Cost Ledger shipped.
+**Status:** v1.0 — Plans 1, 2, 3, 4, 5, 5b, 5c, 6, 7, 8 + Decision Loop + Cost Ledger shipped.
+
+→ **Start using it:** [`docs/getting-started.md`](docs/getting-started.md)
+→ **What's next:** [`docs/roadmap.md`](docs/roadmap.md) (tracked on [Project #5](https://github.com/users/Ryfter/projects/5))
 
 ## Quick start
 
