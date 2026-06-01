@@ -168,7 +168,9 @@ function Merge-ItemToIntegration {
     try {
         if (-not (Test-Path (Join-Path $intWt '.git'))) {
             if (Test-Path $intWt) { git worktree remove --force $intWt 2>&1 | Out-Null }
-            git worktree add $intWt $Integration 2>&1 | Out-Null
+            # --force permits checking out the target branch here even when it is also
+            # checked out in the user's main working tree (common when target == master).
+            git worktree add --force $intWt $Integration 2>&1 | Out-Null
         }
     } finally { Pop-Location }
 
