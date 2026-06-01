@@ -57,7 +57,8 @@ function Invoke-KbSearch {
         [Parameter(Mandatory)][string]$Query,
         [int]$K = 5,
         [string]$Scope,
-        [int]$SnippetChars = 200
+        [int]$SnippetChars = 200,
+        [switch]$DecisionsOnly
     )
     $repo = Get-CaoRepoRoot
     $argList = @('-m', 'kb.search', $Query, '--k', "$K", '--json', '--snippet-chars', "$SnippetChars")
@@ -70,7 +71,14 @@ function Invoke-KbSearch {
             return @()
         }
         try {
-            return ($out | ConvertFrom-Json)
+            $hits = ($out | ConvertFrom-Json)
+            if ($DecisionsOnly) {
+                return @($hits | Where-Object {
+                    $hitPath = ([string]$_.path) -replace '/', '\'
+                    $hitPath -match '\\decisions\\d[^\\]*\.md$'
+                })
+            }
+            return $hits
         } catch {
             Write-Warning "kb.search returned non-JSON: $out"
             return @()
