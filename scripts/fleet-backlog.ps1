@@ -52,8 +52,7 @@ function Write-ItemLive {
     param([string]$OutputDir, [string]$Id, [string]$Model, [string]$State, [hashtable]$Extra)
     $rec = @{ label = $Id; provider = $Model; state = $State }
     if ($Extra) { foreach ($k in $Extra.Keys) { $rec[$k] = $Extra[$k] } }
-    $rec | ConvertTo-Json -Compress -Depth 5 |
-        Set-Content -Path (Join-Path $OutputDir "$Id.live.json") -Encoding utf8NoBOM
+    Set-JsonFileAtomic -Path (Join-Path $OutputDir "$Id.live.json") -Json ($rec | ConvertTo-Json -Compress -Depth 5)
 }
 
 function New-CodexImplementer {
@@ -178,9 +177,10 @@ function Invoke-Backlog {
 $script:BacklogJobWorker = {
     param($wtPath, $promptFile, $id, $outDir, $model, $exe, $argsJson)
     $live = Join-Path $outDir "$id.live.json"
+    # Inline atomic write (this runs in a child job with no dot-sourced helpers).
+    $writeLive = { param($obj) $j = $obj | ConvertTo-Json -Compress; Set-Content -LiteralPath "$live.tmp" -Value $j -Encoding utf8NoBOM; Move-Item -LiteralPath "$live.tmp" -Destination $live -Force }
     $started = (Get-Date).ToString('o')
-    @{ label = $id; provider = $model; state = 'running'; started = $started } |
-        ConvertTo-Json -Compress | Set-Content -Path $live -Encoding utf8NoBOM
+    & $writeLive @{ label = $id; provider = $model; state = 'running'; started = $started }
     Set-Location $wtPath
     $exit = 0
     try {
@@ -188,9 +188,8 @@ $script:BacklogJobWorker = {
         Get-Content -LiteralPath $promptFile -Raw | & $exe @argList 2>&1 | Out-Null
         $exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
     } catch { $exit = -1 }
-    @{ label = $id; provider = $model; state = 'implemented'; started = $started;
-       ended = (Get-Date).ToString('o'); exit = $exit } |
-        ConvertTo-Json -Compress | Set-Content -Path $live -Encoding utf8NoBOM
+    & $writeLive @{ label = $id; provider = $model; state = 'implemented'; started = $started;
+       ended = (Get-Date).ToString('o'); exit = $exit }
 }
 
 function Invoke-BacklogConcurrent {
