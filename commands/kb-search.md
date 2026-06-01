@@ -1,6 +1,6 @@
 ---
 description: Semantic top-k search over the embedded KB. Scope = universal | <project-id> | all (default all). Use --k to change result count.
-argument-hint: "<query>" [--k N] [--scope universal|<project-id>|all]
+argument-hint: "<query>" [--k N] [--scope universal|<project-id>|all] [--decisions-only]
 ---
 
 # /kb-search
@@ -10,13 +10,14 @@ Query the embedded KB. Returns top-k chunks with scores + source paths + snippet
 ## Steps
 
 1. **Parse `$ARGUMENTS`:** the quoted string is the query; optional
-   `--k N` (default 5) and `--scope <value>` (default `all`).
+   `--k N` (default 5), `--scope <value>` (default `all`), and
+   `--decisions-only` (default false).
 
 2. **Run search.**
 
    ```powershell
    . "$HOME/.claude/scripts/kb-lib.ps1"
-   $hits = Invoke-KbSearch -Query '<query>' -K <k> -Scope '<scope-or-empty>'
+   $hits = Invoke-KbSearch -Query '<query>' -K <k> -Scope '<scope-or-empty>' -DecisionsOnly:<$decisionsOnly>
    Format-KbHits -Hits $hits
    ```
 
