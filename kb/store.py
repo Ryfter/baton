@@ -149,6 +149,8 @@ class VectorStore:
         k: int = 5,
         *,
         scope_filter: Optional[str] = None,
+        active_project: Optional[str] = None,
+        active_project_score_boost: float = 0.0,
     ) -> list[Hit]:
         """Return top-k Hit by cosine similarity. `query_vec` shape (D,) or (1, D)."""
         if self.vectors.size == 0:
@@ -160,6 +162,10 @@ class VectorStore:
             )
         # Vectors and query are L2-normalised → cosine == dot product
         scores = self.vectors @ q
+        if active_project and active_project_score_boost > 0:
+            for i, row in enumerate(self.metadata):
+                if _project_matches(row["source"], active_project):
+                    scores[i] += active_project_score_boost
         # Apply scope filter
         if scope_filter:
             allowed = [
@@ -199,3 +205,11 @@ def _scope_matches(source: str, scope: str) -> bool:
     if scope_l == "universal":
         return "/knowledge/universal/" in s
     return f"/knowledge/projects/{scope_l}/" in s
+
+
+def _project_matches(source: str, project_id: str) -> bool:
+    if not project_id:
+        return False
+    s = source.replace("\\", "/").lower()
+    project_l = project_id.lower()
+    return f"/knowledge/projects/{project_l}/" in s
