@@ -24,15 +24,28 @@
       <thead><tr><th class="num">Score</th><th>Source</th><th>Section</th><th>Snippet</th></tr></thead>
       <tbody>
         {% for h in hits %}
+        {% set fname = h.source.split('\\')[-1] if '\\' in h.source else h.source.split('/')[-1] %}
+        {% set is_decision = ('decisions' in h.source.lower()) and fname.lower().startswith('d') and fname.lower().endswith('.md') %}
         <tr>
           <td class="num">{{ '%.3f'|format(h.score) }}</td>
-          <td class="small">{{ h.source.split('\\')[-1] if '\\' in h.source else h.source.split('/')[-1] }}</td>
+          <td class="small">
+            {% if is_decision %}
+            <a href="#" class="decision-link" role="button"
+               hx-get="/partials/decision?path={{ h.source | urlencode }}"
+               hx-target="#kb-decision-detail" hx-swap="innerHTML"
+               title="Open this decision record">
+              <span class="decision-badge"
+                    style="display:inline-block;padding:0 .35rem;margin-right:.35rem;border-radius:3px;background:#1f6feb;color:#fff;font-size:.7rem;">decision</span>{{ fname }}
+            </a>
+            {% else %}{{ fname }}{% endif %}
+          </td>
           <td class="small muted">{{ h.section or '—' }}</td>
           <td class="small">{{ (h.text or '')[:200] }}{% if (h.text or '')|length > 200 %}…{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
+    <div id="kb-decision-detail" class="decision-detail" style="margin-top:0.75rem;"></div>
   {% else %}
     <p class="muted">Type a query above to search the KB.</p>
   {% endif %}

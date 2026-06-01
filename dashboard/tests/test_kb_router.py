@@ -84,3 +84,47 @@ def test_home_page_renders_with_kb_panel(tmp_path: Path) -> None:
     r = client.get("/")
     assert r.status_code == 200
     assert "KB Search" in r.text
+
+
+# --- Plan 8.3 (#18): decision click-through ---
+
+from dashboard.routers.kb import is_decision_path
+
+
+def test_is_decision_path() -> None:
+    assert is_decision_path("/k/p/x/decisions/d001-foo.md")
+    assert is_decision_path("C:\\k\\p\\x\\decisions\\d007.md")
+    assert not is_decision_path("/k/universal/routing.md")
+    assert not is_decision_path("/k/p/x/decisions/notes.md")  # not d*.md
+    assert not is_decision_path("")
+
+
+def _write_decision(kb_root: Path) -> Path:
+    d = kb_root / "projects" / "x" / "decisions"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "d001-cost-ledger.md"
+    f.write_text("# Decision d001\n\n**Chosen:** per-project cost.md\n", encoding="utf-8")
+    return f
+
+
+def test_decision_detail_renders_valid(tmp_path: Path) -> None:
+    app.state.kb_root = tmp_path
+    f = _write_decision(tmp_path)
+    client = TestClient(app)
+    r = client.get("/partials/decision", params={"path": str(f)})
+    assert r.status_code == 200
+    assert "d001-cost-ledger.md" in r.text
+    assert "per-project cost.md" in r.text
+
+
+def test_decision_detail_rejects_out_of_scope(tmp_path: Path) -> None:
+    app.state.kb_root = tmp_path / "kb_root"
+    (tmp_path / "kb_root").mkdir()
+    # A real file that is OUTSIDE the kb_root and not a decision record.
+    outside = tmp_path / "secret.md"
+    outside.write_text("top secret", encoding="utf-8")
+    client = TestClient(app)
+    r = client.get("/partials/decision", params={"path": str(outside)})
+    assert r.status_code == 200
+    assert "Not a valid decision record" in r.text
+    assert "top secret" not in r.text
