@@ -81,6 +81,32 @@ def test_search_returns_topk_sorted(tmp_path: Path) -> None:
     assert hits[0].score > hits[1].score > hits[2].score
 
 
+def test_search_active_project_boost_applies_before_sorting(tmp_path: Path) -> None:
+    st = VectorStore(tmp_path)
+    vecs = _norm(np.array([
+        [1.0, 0.0],
+        [0.99, 0.1],
+    ], dtype=np.float32))
+    rows = [
+        {"source": "/home/u/.claude/knowledge/universal/routing.md", "span": [0, 1], "text": "universal", "section": None},
+        {"source": "/home/u/.claude/knowledge/projects/alpha/decisions/d001.md", "span": [0, 1], "text": "active", "section": None},
+    ]
+    st.upsert(rows, vecs)
+    q = np.array([1.0, 0.0], dtype=np.float32)
+
+    unboosted = st.search(q, k=2)
+    assert [h.text for h in unboosted] == ["universal", "active"]
+
+    boosted = st.search(
+        q,
+        k=2,
+        active_project="alpha",
+        active_project_score_boost=0.05,
+    )
+    assert [h.text for h in boosted] == ["active", "universal"]
+    assert boosted[0].score > boosted[1].score
+
+
 def test_search_scope_filter_universal_vs_project(tmp_path: Path) -> None:
     st = VectorStore(tmp_path)
     rows = [
