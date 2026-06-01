@@ -30,13 +30,14 @@ function New-TempRepo {
 function Run-Case($name, $mutate, $allowed, $testCmd, $expectMerged, $expectReasonLike) {
     Write-Host "`n[$name]" -ForegroundColor Cyan
     $repo = New-TempRepo
+    $wtRoot = Join-Path $env:TEMP ("cao-gatewt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
     try {
         Initialize-IntegrationBranch -RepoRoot $repo -Base master | Out-Null
-        $wt = New-ItemWorktree -RepoRoot $repo -ItemId 'issue-x' -Model 'codex' -Base 'integration/backlog'
+        $wt = New-ItemWorktree -RepoRoot $repo -ItemId 'issue-x' -Model 'codex' -Base 'integration/backlog' -WorktreeRoot $wtRoot
         & $mutate $wt.path
         $res = Merge-ItemToIntegration -RepoRoot $repo -WorktreePath $wt.path -Branch $wt.branch `
             -Integration 'integration/backlog' -AllowedPathPatterns $allowed -MaxChangedFiles 5 `
-            -TestCommand $testCmd -AutoCommit
+            -TestCommand $testCmd -WorktreeRoot $wtRoot -AutoCommit
         Assert ($res.merged -eq $expectMerged) "merged == $expectMerged (got $($res.merged); reasons: $($res.gate.reasons -join '; '))"
         if ($expectReasonLike) {
             $hit = @($res.gate.reasons | Where-Object { $_ -like $expectReasonLike }).Count -gt 0
@@ -53,9 +54,7 @@ function Run-Case($name, $mutate, $allowed, $testCmd, $expectMerged, $expectReas
         }
     } finally {
         Push-Location $repo; try { git worktree prune 2>&1 | Out-Null } finally { Pop-Location }
-        Remove-Item -Recurse -Force $repo -ErrorAction SilentlyContinue
-        $wtdir = Join-Path (Split-Path $repo -Parent) 'cao-worktrees'
-        Remove-Item -Recurse -Force (Join-Path $wtdir 'issue-x-codex') -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force $repo, $wtRoot -ErrorAction SilentlyContinue
     }
 }
 
