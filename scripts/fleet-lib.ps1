@@ -12,6 +12,15 @@
 
 $script:DefaultFleetPath = (Join-Path $HOME '.claude/fleet.yaml')
 
+function Set-JsonFileAtomic {
+    # Write JSON to a temp sibling then Move-Item -Force, so a concurrent reader
+    # (the dashboard cockpit polling every 2s) never sees a half-written file.
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Json)
+    $tmp = "$Path.tmp"
+    Set-Content -LiteralPath $tmp -Value $Json -Encoding utf8NoBOM
+    Move-Item -LiteralPath $tmp -Destination $Path -Force
+}
+
 function ConvertFrom-FleetValue {
     # Strip surrounding quotes; coerce true/false to bool.
     param([string]$Raw)

@@ -30,8 +30,7 @@ $script:EnsembleWorker = {
     $liveFile = Join-Path $outDir "$label.live.json"
     $started  = (Get-Date).ToString('o')
     # Heartbeat: mark running the instant this process is alive.
-    @{ label = $label; provider = $provider; state = 'running'; started = $started } |
-        ConvertTo-Json -Compress | Set-Content -Path $liveFile -Encoding utf8NoBOM
+    Set-JsonFileAtomic -Path $liveFile -Json (@{ label = $label; provider = $provider; state = 'running'; started = $started } | ConvertTo-Json -Compress)
     try {
         $r = Invoke-Fleet -Name $provider -Prompt $prompt -Path $fleetPath -NoJournal
         if ($r.exit_code -eq 0) {
@@ -41,15 +40,13 @@ $script:EnsembleWorker = {
             Set-Content -Path $outFile -Value "[ENSEMBLE ERROR] exit:$($r.exit_code) $($r.stderr)" -Encoding utf8NoBOM
             $state = 'error'
         }
-        @{ label = $label; provider = $provider; state = $state; started = $started;
-           ended = (Get-Date).ToString('o'); duration_s = [int]$r.duration_s; exit = [int]$r.exit_code } |
-            ConvertTo-Json -Compress | Set-Content -Path $liveFile -Encoding utf8NoBOM
+        Set-JsonFileAtomic -Path $liveFile -Json (@{ label = $label; provider = $provider; state = $state; started = $started;
+           ended = (Get-Date).ToString('o'); duration_s = [int]$r.duration_s; exit = [int]$r.exit_code } | ConvertTo-Json -Compress)
         [pscustomobject]@{ exit_code = $r.exit_code; duration_s = $r.duration_s }
     } catch {
         Set-Content -Path $outFile -Value "[ENSEMBLE ERROR] $($_.Exception.Message)" -Encoding utf8NoBOM
-        @{ label = $label; provider = $provider; state = 'error'; started = $started;
-           ended = (Get-Date).ToString('o'); duration_s = 0; exit = -1 } |
-            ConvertTo-Json -Compress | Set-Content -Path $liveFile -Encoding utf8NoBOM
+        Set-JsonFileAtomic -Path $liveFile -Json (@{ label = $label; provider = $provider; state = 'error'; started = $started;
+           ended = (Get-Date).ToString('o'); duration_s = 0; exit = -1 } | ConvertTo-Json -Compress)
         [pscustomobject]@{ exit_code = -1; duration_s = 0 }
     }
 }
@@ -78,7 +75,7 @@ function Write-EnsembleRunMeta {
     }
     if ($State -eq 'done') { $meta['ended'] = (Get-Date).ToString('o') }
     if ($Manifest)         { $meta['manifest'] = $Manifest }
-    $meta | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $OutputDir '_ensemble.json') -Encoding utf8NoBOM
+    Set-JsonFileAtomic -Path (Join-Path $OutputDir '_ensemble.json') -Json ($meta | ConvertTo-Json -Depth 6)
 }
 
 function Invoke-FleetEnsemble {
@@ -119,8 +116,7 @@ function Invoke-FleetEnsemble {
         if ($job.State -eq 'Running') {
             Stop-Job -Job $job
             Set-Content -Path $outFile -Value "[ENSEMBLE TIMEOUT] exceeded ${TimeoutS}s" -Encoding utf8NoBOM
-            @{ label = $prov; provider = $prov; state = 'timeout'; duration_s = $TimeoutS } |
-                ConvertTo-Json -Compress | Set-Content -Path $liveFile -Encoding utf8NoBOM
+            Set-JsonFileAtomic -Path $liveFile -Json (@{ label = $prov; provider = $prov; state = 'timeout'; duration_s = $TimeoutS } | ConvertTo-Json -Compress)
             $manifest += [pscustomobject]@{ provider = $prov; status = 'timeout'; file = $outFile; duration_s = $TimeoutS }
         } else {
             $ret = Receive-Job -Job $job
@@ -208,8 +204,7 @@ function Invoke-FleetEnsembleTasks {
         if ($job.State -eq 'Running') {
             Stop-Job -Job $job
             Set-Content -Path $outFile -Value "[ENSEMBLE TIMEOUT] exceeded ${TimeoutS}s" -Encoding utf8NoBOM
-            @{ label = $lbl; provider = $prv; state = 'timeout'; duration_s = $TimeoutS } |
-                ConvertTo-Json -Compress | Set-Content -Path $liveFile -Encoding utf8NoBOM
+            Set-JsonFileAtomic -Path $liveFile -Json (@{ label = $lbl; provider = $prv; state = 'timeout'; duration_s = $TimeoutS } | ConvertTo-Json -Compress)
             $manifest += [pscustomobject]@{ label = $lbl; provider = $prv; status = 'timeout'; file = $outFile; duration_s = $TimeoutS; prompt = $entry.prompt }
         } else {
             $ret = Receive-Job -Job $job
