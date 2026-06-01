@@ -96,7 +96,7 @@ function Invoke-BacklogItem {
 
     $res = Merge-ItemToIntegration -RepoRoot $RepoRoot -WorktreePath $wt.path -Branch $wt.branch `
         -Integration $Integration -AllowedPathPatterns $allowed -MaxChangedFiles $maxFiles `
-        -TestCommand $testCmd -AutoCommit
+        -TestCommand $testCmd -WorktreeRoot $WorktreeRoot -AutoCommit
 
     $reasons = @($res.gate.reasons)
     if ($implErr) { $reasons = @("implementer-error: $implErr") + $reasons }
@@ -168,6 +168,129 @@ function Invoke-Backlog {
         $manifest = @($results | ForEach-Object { @{ label = $_.id; provider = $_.model; status = ($_.merged ? 'ok' : 'error'); duration_s = 0 } })
         $metaTasks = @($Tasks | ForEach-Object { @{ label = $_.id; provider = $_.model } })
         Write-EnsembleRunMeta -OutputDir $OutputDir -Kind 'backlog' -Prompt 'autonomous backlog run' `
+            -Tasks $metaTasks -State 'done' -Started ((Get-Date).ToString('o')) -Manifest $manifest
+    }
+    return $results
+}
+
+# Job body run in each child process: write a 'running' heartbeat, pipe the prompt
+# file into the model CLI (cwd = the item's worktree), then a terminal heartbeat.
+$script:BacklogJobWorker = {
+    param($wtPath, $promptFile, $id, $outDir, $model, $exe, $argsJson)
+    $live = Join-Path $outDir "$id.live.json"
+    $started = (Get-Date).ToString('o')
+    @{ label = $id; provider = $model; state = 'running'; started = $started } |
+        ConvertTo-Json -Compress | Set-Content -Path $live -Encoding utf8NoBOM
+    Set-Location $wtPath
+    $exit = 0
+    try {
+        $argList = @($argsJson | ConvertFrom-Json)
+        Get-Content -LiteralPath $promptFile -Raw | & $exe @argList 2>&1 | Out-Null
+        $exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+    } catch { $exit = -1 }
+    @{ label = $id; provider = $model; state = 'implemented'; started = $started;
+       ended = (Get-Date).ToString('o'); exit = $exit } |
+        ConvertTo-Json -Compress | Set-Content -Path $live -Encoding utf8NoBOM
+}
+
+function Invoke-BacklogConcurrent {
+    <#
+    .SYNOPSIS  Wave-based CONCURRENT backlog driver: independent items implement in
+               parallel (one process per item, isolated worktree); merges serialize.
+    .PARAMETER ModelSpecs  @{ '<model>' = @{ exe='codex'; args=@('exec','-') } }
+                           The prompt is piped to `<exe> <args...>` in the worktree.
+    .DESCRIPTION
+      Each wave: launch every READY item (all deps already merged) concurrently as a
+      Start-Job; wait for the wave; then gate + merge each finished item SERIALLY in
+      topo order (only the orchestrator merges, into the target branch). Newly-unblocked
+      dependents run in the next wave. A blocked item dep-blocks its dependents.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][array]$Tasks,
+        [Parameter(Mandatory)][hashtable]$ModelSpecs,
+        [string]$Integration = 'master',
+        [string]$IntegrationBase = 'master',
+        [string]$OutputDir,
+        [string]$WorktreeRoot,
+        [int]$TimeoutS = 900
+    )
+    if ($OutputDir -and -not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null }
+    if (-not $WorktreeRoot) { $WorktreeRoot = Join-Path (Split-Path $RepoRoot -Parent) 'cao-worktrees' }
+    Initialize-IntegrationBranch -RepoRoot $RepoRoot -Base $IntegrationBase -Name $Integration | Out-Null
+
+    $byId = @{}; foreach ($t in $Tasks) { $byId[$t.id] = $t }
+    $null = Get-TopoOrder -Tasks $Tasks   # validate DAG (throws on cycle/unknown dep)
+    $orderIndex = @{}; $i = 0; foreach ($id in (Get-TopoOrder -Tasks $Tasks)) { $orderIndex[$id] = $i++ }
+
+    if ($OutputDir) {
+        $metaTasks = @($Tasks | ForEach-Object { @{ label = $_.id; provider = $_.model } })
+        Write-EnsembleRunMeta -OutputDir $OutputDir -Kind 'backlog-concurrent' -Prompt 'autonomous concurrent backlog run' `
+            -Tasks $metaTasks -State 'running' -Started ((Get-Date).ToString('o')) -TimeoutS $TimeoutS
+        foreach ($t in $Tasks) { Write-ItemLive -OutputDir $OutputDir -Id $t.id -Model $t.model -State 'queued' }
+    }
+
+    $proc = @{}   # id -> result object (merged bool)
+    while ($proc.Count -lt $Tasks.Count) {
+        # 1. dep-block items whose dependency already failed.
+        foreach ($id in $byId.Keys) {
+            if ($proc.ContainsKey($id)) { continue }
+            $deadDep = @(@($byId[$id].depends_on) | Where-Object { $_ -and $proc.ContainsKey($_) -and -not $proc[$_].merged })
+            if ($deadDep.Count -gt 0) {
+                if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $byId[$id].model -State 'blocked' -Extra @{ reasons = @("dep-blocked: $($deadDep -join ', ')") } }
+                $proc[$id] = [pscustomobject]@{ id = $id; model = $byId[$id].model; merged = $false; reasons = @("dep-blocked: $($deadDep -join ', ')"); changed = @() }
+            }
+        }
+        # 2. ready = unprocessed, every dependency processed AND merged.
+        $ready = @($byId.Keys | Where-Object {
+            -not $proc.ContainsKey($_) -and
+            (@(@($byId[$_].depends_on) | Where-Object { $_ -and -not ($proc.ContainsKey($_) -and $proc[$_].merged) }).Count -eq 0)
+        })
+        if ($ready.Count -eq 0) { break }
+
+        # 3. launch ready items concurrently (worktrees created serially first).
+        $jobs = @{}
+        foreach ($id in $ready) {
+            $item = $byId[$id]; $model = [string]$item.model
+            if (-not $ModelSpecs[$model]) {
+                if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State 'blocked' -Extra @{ reasons = @("no-implementer: '$model'") } }
+                $proc[$id] = [pscustomobject]@{ id = $id; model = $model; merged = $false; reasons = @("no-implementer: '$model'"); changed = @() }
+                continue
+            }
+            $wt = New-ItemWorktree -RepoRoot $RepoRoot -ItemId $id -Model $model -Base $Integration -WorktreeRoot $WorktreeRoot
+            $pf = Join-Path ([System.IO.Path]::GetTempPath()) "cao-prompt-$id-$($model -replace '[^\w]','_').txt"
+            Set-Content -LiteralPath $pf -Value $item.prompt -Encoding utf8NoBOM
+            $spec = $ModelSpecs[$model]
+            $argsJson = (@($spec.args) | ConvertTo-Json -Compress)
+            if (-not $argsJson) { $argsJson = '[]' }
+            $job = Start-Job -ScriptBlock $script:BacklogJobWorker -ArgumentList $wt.path, $pf, $id, $OutputDir, $model, $spec.exe, $argsJson
+            $jobs[$id] = @{ job = $job; wt = $wt; pf = $pf; item = $item }
+        }
+        if ($jobs.Count -eq 0) { continue }
+
+        # 4. wait for the whole wave, then gate + merge SERIALLY in topo order.
+        $null = Wait-Job -Job (@($jobs.Values | ForEach-Object { $_.job })) -Timeout $TimeoutS
+        foreach ($id in ($jobs.Keys | Sort-Object { $orderIndex[$_] })) {
+            $info = $jobs[$id]; $item = $info.item
+            if ($info.job.State -eq 'Running') { Stop-Job -Job $info.job -ErrorAction SilentlyContinue }
+            Remove-Job -Job $info.job -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $info.pf -ErrorAction SilentlyContinue
+            $allowed  = if ($item.allowed_paths) { @($item.allowed_paths) } else { @('*') }
+            $maxFiles = if ($item.max_files) { [int]$item.max_files } else { 20 }
+            $res = Merge-ItemToIntegration -RepoRoot $RepoRoot -WorktreePath $info.wt.path -Branch $info.wt.branch `
+                -Integration $Integration -AllowedPathPatterns $allowed -MaxChangedFiles $maxFiles `
+                -TestCommand $item.test_command -WorktreeRoot $WorktreeRoot -AutoCommit
+            $state = if ($res.merged) { 'done' } else { 'blocked' }
+            if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $item.model -State $state -Extra @{ merged = $res.merged; reasons = @($res.gate.reasons); changed = @($res.gate.changed); branch = $info.wt.branch } }
+            $proc[$id] = [pscustomobject]@{ id = $id; model = $item.model; merged = $res.merged; reasons = @($res.gate.reasons); changed = @($res.gate.changed); branch = $info.wt.branch }
+        }
+    }
+
+    $results = @($Tasks | ForEach-Object { $proc[$_.id] })
+    if ($OutputDir) {
+        $manifest = @($results | ForEach-Object { @{ label = $_.id; provider = $_.model; status = ($_.merged ? 'ok' : 'error'); duration_s = 0 } })
+        $metaTasks = @($Tasks | ForEach-Object { @{ label = $_.id; provider = $_.model } })
+        Write-EnsembleRunMeta -OutputDir $OutputDir -Kind 'backlog-concurrent' -Prompt 'autonomous concurrent backlog run' `
             -Tasks $metaTasks -State 'done' -Started ((Get-Date).ToString('o')) -Manifest $manifest
     }
     return $results
