@@ -81,6 +81,17 @@ try {
 $line3 = @(Get-Content $tmpJournal)[-1]
 Assert "pipe in prompt sanitized" ($line3 -match 'a ¦ b')
 
+# Origin host tag (Plan 9 / issue #20) — always present so merged cross-machine
+# journals are attributable per node; honors the CAO_FLEET_HOST override.
+Assert "line has origin-host tag" ($line3 -match 'host:\S')
+$env:CAO_STATE_PATH = (Join-Path $env:TEMP "nope-$(Get-Random).json")
+$env:CAO_FLEET_HOST = 'testbox-9'
+try {
+    Write-FleetJournalLine -Provider 'stub-cli' -DurationS 0 -ExitCode 0 -Prompt 'host probe' -JournalPath $tmpJournal
+} finally { Remove-Item env:CAO_STATE_PATH, env:CAO_FLEET_HOST -ErrorAction SilentlyContinue }
+$line4 = @(Get-Content $tmpJournal | Where-Object { $_ -match 'host probe' })[-1]
+Assert "origin-host override honored" ($line4 -match 'host:testbox-9')
+
 Remove-Item $tmpJournal, $tmpState -ErrorAction SilentlyContinue
 
 # --- Invoke-Fleet -NoJournal ---

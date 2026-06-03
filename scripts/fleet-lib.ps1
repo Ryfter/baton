@@ -147,14 +147,18 @@ function Write-FleetJournalLine {
         [Parameter(Mandatory)][int]$ExitCode,
         [Parameter(Mandatory)][string]$Prompt,
         [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md'),
-        [string]$StatePath = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } else { Join-Path $HOME '.claude/current-job.json' })
+        [string]$StatePath = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } else { Join-Path $HOME '.claude/current-job.json' }),
+        # Origin host (Plan 9): the machine that DISPATCHED this invocation, so a
+        # journal merged across the Tailscale fleet stays attributable per node.
+        # Override via CAO_FLEET_HOST; falls back to the OS hostname.
+        [string]$OriginHost = $(if ($env:CAO_FLEET_HOST) { $env:CAO_FLEET_HOST } elseif ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [System.Net.Dns]::GetHostName() })
     )
     # Summarise + sanitise the prompt (max 100 chars, pipes -> ¦, newlines -> space)
     $summary = ($Prompt -replace '\|', '¦' -replace "`r?`n", ' ').Trim()
     if ($summary.Length -gt 100) { $summary = $summary.Substring(0, 100) + '…' }
 
     $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
-    $line = "$ts | fleet | $Provider | ${DurationS}s | exit:$ExitCode | `"$summary`""
+    $line = "$ts | fleet | $Provider | ${DurationS}s | exit:$ExitCode | `"$summary`" | host:$OriginHost"
 
     # Pick up active-job tags straight from the state file. Self-contained:
     # no dependency on job-lib.ps1 being dot-sourced. Never throws.
