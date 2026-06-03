@@ -5,9 +5,8 @@
 
 .DESCRIPTION
   Reads the PostToolUse JSON payload from stdin. When Write/Edit touches a file
-  under ~/.claude/knowledge/, starts `python -m kb.index --scope <derived>` in
-  the background. Incremental indexing is the default, so unchanged files in the
-  same scope are skipped by the Python indexer.
+  under ~/.claude/knowledge/, starts `python -m kb.index --file <path>` in the
+  background, re-indexing only the touched file rather than rescanning a scope.
 #>
 
 $ErrorActionPreference = 'Continue'
@@ -30,15 +29,6 @@ try {
         exit 0
     }
 
-    $relative = $touchedPath.Substring($knowledgeRoot.Length).TrimStart('\', '/') -replace '/', '\'
-    $parts = $relative -split '\\'
-    $scope = 'all'
-    if ($parts.Count -ge 1 -and $parts[0] -ieq 'universal') {
-        $scope = 'universal'
-    } elseif ($parts.Count -ge 2 -and $parts[0] -ieq 'projects') {
-        $scope = $parts[1]
-    }
-
     $repoRoot = $null
     if ($env:CAO_REPO_ROOT -and (Test-Path (Join-Path $env:CAO_REPO_ROOT 'kb'))) {
         $repoRoot = (Resolve-Path $env:CAO_REPO_ROOT).Path
@@ -49,7 +39,7 @@ try {
 
     $startArgs = @{
         FilePath     = 'python'
-        ArgumentList = @('-m', 'kb.index', '--scope', $scope)
+        ArgumentList = @('-m', 'kb.index', '--file', $touchedPath)
         WindowStyle  = 'Hidden'
     }
     if ($repoRoot) { $startArgs.WorkingDirectory = $repoRoot }

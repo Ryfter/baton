@@ -4,22 +4,19 @@
 the embedding index current after knowledge-base edits.
 
 When a `Write` or `Edit` tool call touches a file under `~/.claude/knowledge/`,
-the hook derives the smallest supported index scope and starts the incremental
-indexer in the background:
+the hook starts the incremental indexer in the background, re-indexing only the
+touched file:
 
 ```powershell
-python -m kb.index --scope <derived>
+python -m kb.index --file <touched-path>
 ```
 
-Derived scopes:
-
-- `~/.claude/knowledge/universal/...` -> `universal`
-- `~/.claude/knowledge/projects/<project-id>/...` -> `<project-id>`
-- any other path under `~/.claude/knowledge/` -> `all`
+The `--file` path indexes exactly one file (validated to be under the corpus or
+jobs root) instead of rescanning a whole scope, so the cost per edit is a single
+chunk-and-embed rather than an mtime walk of the entire scope.
 
 Paths outside `~/.claude/knowledge/` are ignored. The hook does not wait for the
-indexer process, so editor writes are not blocked. Incremental indexing is the
-default behavior in `kb.index`; unchanged files in the selected scope are skipped.
+indexer process, so editor writes are not blocked.
 
 ## Claude Code settings
 
