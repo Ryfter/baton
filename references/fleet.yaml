@@ -54,14 +54,16 @@ providers:
     model_default: 'devstral:24b'
     command_template: 'ollama run {{model}} "{{prompt}}"'
 
+  # Remote Ollama box over Tailscale (Plan 9 / issue #20). Uses the native
+  # /api/generate HTTP endpoint via scripts/fleet/ollama-box2.ps1 — the local
+  # `ollama run` CLI hangs against a remote host. Set base_url to the box's
+  # Tailscale address (per-host: edit your deployed ~/.claude/fleet.yaml).
   - name: ollama-box2
-    kind: cli
-    enabled: false
+    kind: http
+    enabled: true
     cost_tier: local
-    model_default: 'qwen3:30b'
-    env:
-      OLLAMA_HOST: 'http://CHANGE-ME-HOSTNAME:11434'
-    command_template: 'ollama run {{model}} "{{prompt}}"'
+    model_default: 'dolphin3:8b'
+    base_url: 'http://100.115.71.9:11434'   # wraith2 over Tailscale
 
   - name: lm-studio
     kind: http
