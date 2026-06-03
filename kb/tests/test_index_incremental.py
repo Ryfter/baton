@@ -96,3 +96,30 @@ def test_scope_filter_universal_excludes_projects(tmp_path: Path) -> None:
     st = VectorStore(idx); st.load()
     sources = {r["source"] for r in st.metadata}
     assert all("/universal/" in s.replace("\\", "/") for s in sources)
+
+
+def test_single_file_incremental_indexes_only_target(tmp_path: Path) -> None:
+    paths = _setup_corpus(tmp_path)
+    idx = tmp_path / "index"
+    run_index(corpus_root=paths["kb"], jobs_root=paths["jobs"], index_dir=idx,
+              full=True, print_progress=False)
+
+    target = paths["kb"] / "universal" / "routing.md"
+    other = paths["kb"] / "projects" / "alpha" / "decision-guidance.md"
+    target.write_text("# Routing\n\nTarget changed.", encoding="utf-8")
+    other.write_text("# Alpha\n\nOther changed but should not be indexed.", encoding="utf-8")
+    future = time.time() + 5
+    os.utime(target, (future, future))
+    os.utime(other, (future, future))
+
+    summary = run_index(
+        corpus_root=paths["kb"],
+        jobs_root=paths["jobs"],
+        index_dir=idx,
+        single_file=target,
+        print_progress=False,
+    )
+
+    assert summary["files_seen"] == 1
+    assert summary["files_indexed"] == 1
+    assert summary["files_skipped"] == 0

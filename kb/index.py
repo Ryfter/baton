@@ -1,4 +1,4 @@
-"""CLI entry: python -m kb.index [--full] [--scope ...] [--corpus-root ...] [--index-dir ...]
+"""CLI entry: python -m kb.index [--full] [--scope ...] [--file ...] [--corpus-root ...] [--index-dir ...]
 
 Walks the corpus, chunks files, embeds chunks, upserts into the vector store.
 Default mode is incremental (mtime-based); --full rebuilds from scratch.
@@ -57,6 +57,14 @@ def _filter_by_scope(files: list[Path], scope: str | None) -> list[Path]:
     return out
 
 
+def _is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def _mtime_iso(p: Path) -> str:
     return datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc).astimezone().isoformat()
 
@@ -68,6 +76,7 @@ def run_index(
     index_dir: Path,
     full: bool = False,
     scope: str | None = None,
+    single_file: Path | None = None,
     model: str = DEFAULT_MODEL,
     host: str | None = None,
     print_progress: bool = True,
@@ -86,13 +95,23 @@ def run_index(
         if model:
             store.manifest["model"] = model
 
-    all_files = _default_corpus_paths(corpus_root, jobs_root)
-    all_files = _filter_by_scope(all_files, scope)
+    if single_file is not None:
+        target = single_file.resolve()
+        if not (_is_under(target, corpus_root) or _is_under(target, jobs_root)):
+            raise ValueError(f"--file must be under {corpus_root} or {jobs_root}: {target}")
+        all_files = [target] if target.exists() and target.is_file() else []
+    else:
+        all_files = _default_corpus_paths(corpus_root, jobs_root)
+        all_files = _filter_by_scope(all_files, scope)
     current_paths = {str(p.resolve()) for p in all_files}
     tracked_paths = set(store.manifest.get("source_mtimes", {}).keys())
 
     # 1. Remove sources that no longer exist
-    removed_sources = tracked_paths - current_paths
+    if single_file is not None:
+        target_src = str(single_file.resolve())
+        removed_sources = {target_src} if target_src in tracked_paths and target_src not in current_paths else set()
+    else:
+        removed_sources = tracked_paths - current_paths
     rows_removed = 0
     for src in removed_sources:
         rows_removed += store.remove_source(src)
@@ -180,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m kb.index")
     p.add_argument("--full", action="store_true", help="Rebuild from scratch (default: incremental)")
     p.add_argument("--scope", default=None, help="all | universal | <project-id>")
+    p.add_argument("--file", default=None, help="Index exactly one changed file")
     p.add_argument("--corpus-root", default=str(Path.home() / ".claude" / "knowledge"))
     p.add_argument("--jobs-root", default=str(Path.home() / ".claude" / "jobs"))
     p.add_argument("--index-dir", default=str(Path.home() / ".claude" / "knowledge" / ".index"))
@@ -187,12 +207,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--host", default=None)
     p.add_argument("--quiet", action="store_true")
     args = p.parse_args(argv)
+    if args.full and args.file:
+        p.error("--file cannot be combined with --full")
+    if args.scope and args.file:
+        p.error("--file cannot be combined with --scope")
     summary = run_index(
         corpus_root=Path(args.corpus_root),
         jobs_root=Path(args.jobs_root),
         index_dir=Path(args.index_dir),
         full=args.full,
         scope=args.scope,
+        single_file=Path(args.file) if args.file else None,
         model=args.model,
         host=args.host,
         print_progress=not args.quiet,
