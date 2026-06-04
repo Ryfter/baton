@@ -1,7 +1,7 @@
 # Roadmap
 
-**Last updated:** 2026-05-30
-**Status:** Plans 1-8 shipped + Decision Loop + Cost Ledger. This document parks every post-Plan-8 idea so it has a recorded home and isn't carried in conversation memory.
+**Last updated:** 2026-06-04
+**Status:** Plans 1–11 shipped + Decision Loop + Cost Ledger. The entire post–Plan-8 backlog is cleared (issues #16–#26). See [`releases/2026-06-04-backlog-clearance.md`](releases/2026-06-04-backlog-clearance.md) for the full batch writeup and reasoning. This document parks remaining ideas so they have a recorded home and aren't carried in conversation memory.
 
 Tracked as GitHub issues on **[Project #5: coding-agent-orchestrator](https://github.com/users/Ryfter/projects/5)**.
 
@@ -21,6 +21,14 @@ Tracked as GitHub issues on **[Project #5: coding-agent-orchestrator](https://gi
 | 6 | Code phase | `/code-decompose`, `/code-parallel`, `/code-merge` with Agent worktree isolation | `plan6-shipped` |
 | 7 | Command center | multi-project portfolio + per-project drill-in (`/projects`, `/projects/{id}`) | `plan7-shipped` |
 | 8 | KB embeddings | `kb/` Python package, `/kb-index`, `/kb-search`, `/research` RAG pre-fetch, dashboard search panel | `plan8-shipped` |
+| 8.1 | KB auto-index hook | `kb.index --file` + `kb-autoindex.ps1` PostToolUse hook (re-indexes only touched files) | — |
+| 8.2 | KB pre-fetch everywhere | top-3 RAG pre-fanout added to `/ensemble` + `/six-hats` | — |
+| 8.3 | Decisions filter + click-through | `/kb-search --decisions-only` + dashboard source render | — |
+| 9 | Cross-machine fleet sync | `ollama-box2` over Tailscale (HTTP handler), per-host config, origin-host journal tag | `plan9-shipped` |
+| 10 | Ensemble cockpit + streaming | live per-provider state/duration + partial-content + synthesis previews | `plan10-shipped` |
+| 11 | Job-aware retrieval boost | `/kb-search` weights hits from the active job's project | `plan11-shipped` |
+| — | Embedding A/B | `kb/ab_eval.py` harness; decision: keep `nomic-embed-text` (d011) | — |
+| — | Auto-decision-capture | `decision-detect.ps1` heuristic (impl shipped; Stop-hook wiring is opt-in) | — |
 | — | Decision Loop | auto-captured decision records + two-layer self-improvement consolidation | — |
 | — | Cost Ledger | per-project `cost.md` + `/cost` command | — |
 
@@ -28,30 +36,14 @@ Specs for every plan live under [`docs/superpowers/specs/`](superpowers/specs/).
 
 ---
 
-## Parked (in the GitHub Project backlog)
+## Parked
 
-Ordered by estimated size. Promote to "in progress" by picking up the corresponding issue.
+The Tier 1–3 backlog (issues #16–#26) is **cleared** — see the Shipped table and
+[`releases/2026-06-04-backlog-clearance.md`](releases/2026-06-04-backlog-clearance.md).
+What remains:
 
-### Tier 1 — small (1-3 hours)
-
-- **Plan 8.1 — Auto-index hook.** PostToolUse hook on `Write`/`Edit` of files under `~/.claude/knowledge/`; re-index only touched files via the existing `kb.index` incremental path. Makes `/kb-index` a fallback rather than required. Risk: hook latency on every file edit; mitigation: enqueue + debounce, only index when the edited path matches the KB scope.
-- **Plan 8.2 — Extend KB pre-fetch to `/ensemble` and `/six-hats`.** `/research` already prepends top-3 KB chunks; the same one-liner generalizes to the other ensemble entry points. Each becomes a tiny RAG.
-- **Plan 8.3 — `/kb-search --decisions-only` filter + dashboard click-through.** Filter results to `decisions/d*.md` paths; in the dashboard search panel, clicking a hit opens the source file rendered.
-- **Bootstrap default-overwrite for lib scripts.** The interactive `Read-Host` prompts in `Copy-WithPrompt` have silently hung the bootstrap twice this session when run in a background context. Default `--Force` for lib scripts (which are repo-owned and never user-edited) would prevent this.
-- **Run `/consolidate-decisions` once.** d001–d006 (this session's records) haven't been consolidated into per-project / universal guidance yet. One-time sweep, then natural cadence after.
-
-### Tier 2 — medium (3-8 hours)
-
-- **Plan 9 — Cross-machine fleet sync over Tailscale.** Make the currently-disabled `ollama-box2` real: secure tunnel, per-host fleet config, journal entries tagged with origin host. Unblocks distributed inference across the home LAN.
-- **Plan 10 — Ensemble cockpit view in the dashboard.** Real-time view of in-flight `/ensemble` / `/six-hats` / `/council` runs: per-provider durations, partial results streaming, synthesis preview. Reads from `ensembles/` + per-job `phases/research/`.
-- **Plan 11 — Job-aware retrieval boost.** `/kb-search` weights hits from the current active job's project higher than other projects. Tunable boost factor; default conservative.
-- **Embedding A/B test.** Re-index the corpus with `bge-large` (Ollama) and one cloud option (e.g. Voyage); evaluate retrieval quality on a fixed 20-query test set. Decide whether to swap the default model.
-
-### Tier 3 — larger (half-day+)
-
-- **Auto-decision-capture via Stop hook + heuristic.** Detect "I'll go with X over Y" patterns in Claude's turn output, draft a `d###` record automatically, surface for one-tap confirmation. Reduces the discipline burden of the current manual rule.
-- **Cross-project consolidation sweep.** Walk every project's decision history; promote patterns appearing in ≥2 projects to `universal/decision-guidance.md`. Already wired (`/consolidate-decisions`) but never executed end-to-end across many projects.
-- **Streaming ensemble UI.** Show partial provider responses as they arrive instead of waiting for all to complete. Requires moving from `Wait-Job` to a `Receive-Job -Keep` loop with a callback to write partial output files.
+- **Cross-project consolidation sweep.** Walk every project's decision history; promote patterns appearing in ≥2 projects to `universal/decision-guidance.md`. Wired (`/consolidate-decisions`) but **blocked** until a second project exists — universal guidance stays empty with a single project. No issue tracked.
+- **Wire `decision-detect` as a `Stop` hook.** The heuristic (`scripts/hooks/decision-detect.ps1`) shipped with #25 but isn't registered in `~/.claude/settings.json`, so auto-capture isn't live. One-line opt-in when desired.
 
 ### Housekeeping ideas (no issue tracked yet)
 
@@ -72,3 +64,10 @@ Every architectural choice this session is captured under `~/.claude/knowledge/p
 | d004 | Plan 6 code phase — three commands, Agent worktree isolation, cherry-pick default |
 | d005 | Plan 7 — read-only multi-project command center, hand-rolled YAML parsing |
 | d006 | Plan 8 — local Ollama embeddings + numpy flat search; Python core with PS wrappers |
+| d007 | Backlog execution as a fleet model-performance bench, tracked on Project #5 |
+| d008 | Unattended dispatch = worktree-per-item + hard merge gate (orchestrator owns the merge) |
+| d009 | Only agentic file-editing CLIs (codex, claude) implement; text-only models do research/review |
+| d010 | Gated items merge per-item-branch → master; Gemini is the design/interface reviewer |
+| d011 | Keep `nomic-embed-text` as the default KB embedding model (A/B vs `mxbai-embed-large`) |
+| d012 | Fleet journal tags origin host as the dispatching machine (trailing field) |
+| d013 | Ensemble cockpit surfaces partials by reading per-provider `.md` + `synthesis.md` |

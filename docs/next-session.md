@@ -28,16 +28,15 @@ How to pick the orchestrator back up and use it on its own backlog.
 
 ## B. Pick the next plan from the backlog
 
-5. **Open the Project board:** https://github.com/users/Ryfter/projects/5 (11 issues parked).
+5. **Open the Project board:** https://github.com/users/Ryfter/projects/5.
+   As of 2026-06-04 the post–Plan-8 backlog (#16–#26) is **cleared** — see
+   `docs/releases/2026-06-04-backlog-clearance.md`. The board is empty.
 
-6. **Recommended order:**
-   1. **#19** — default `--Force` for lib script deployment (one-liner; removes a real foot-gun)
-   2. **#22** — run `/consolidate-decisions` over d001–d006 (uses the orchestrator on itself; validates the consolidation flow)
-   3. **#16** — Plan 8.1 auto-index hook (completes the Plan 8 story)
-   4. **#17** — Plan 8.2 extend KB pre-fetch to `/ensemble` + `/six-hats` (tiny)
-   5. **#18** — Plan 8.3 `--decisions-only` filter + dashboard click-through
-   6. Tier 2 (Plans 9/10/11, embedding A/B) when you have appetite
-   7. Tier 3 (auto-decision-capture, streaming, cross-project consolidation) — biggest
+6. **What's left (no open issues — file one when you pick these up):**
+   - **Wire `decision-detect` as a `Stop` hook** — make auto-decision-capture live (the heuristic shipped with #25 but isn't registered in `~/.claude/settings.json`). One-line opt-in.
+   - **Cross-project consolidation sweep** — blocked until a second project exists (universal guidance stays empty with one project).
+   - **Attach decision feedback** — `/decision-feedback <id> worked|didnt|mixed` over d001–d013 to graduate "Open / under-feedback" entries into "Established patterns".
+   - **New capability** — brainstorm the next plan; capture the decision, open an issue, run the loop below.
 
 7. **Read the issue body.** Each carries a Tier label, scope, and any noted risks/mitigations. `docs/roadmap.md` has the same content.
 
