@@ -121,7 +121,7 @@ foreach ($projName in $projectData.Keys) {
     $body = @"
 # Decision guidance — $projName
 
-_Last consolidated: $today_
+_Last consolidated: ${today}_
 
 ## Established patterns
 

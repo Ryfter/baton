@@ -177,7 +177,13 @@ function Merge-ItemToIntegration {
     Push-Location $intWt
     try {
         git checkout $Integration 2>&1 | Out-Null
-        git merge --no-ff -m "merge $Branch into $Integration (gate passed)" $Branch 2>&1 | Out-Null
+        # Append `Closes #N` when the branch encodes an issue number (e.g.
+        # auto/issue-24-claude, plan9/issue-20) so GitHub auto-closes the issue
+        # once this merge commit reaches the default branch — otherwise the
+        # tracker drifts (work merged, issue left open).
+        $mergeMsg = "merge $Branch into $Integration (gate passed)"
+        if ($Branch -match 'issue-(\d+)') { $mergeMsg += "`n`nCloses #$($matches[1])" }
+        git merge --no-ff -m $mergeMsg $Branch 2>&1 | Out-Null
         $mergeExit = $LASTEXITCODE
         if ($mergeExit -ne 0) {
             git merge --abort 2>&1 | Out-Null

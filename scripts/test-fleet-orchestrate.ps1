@@ -80,6 +80,29 @@ Run-Case 'reject: over file budget' {
               1..6 | ForEach-Object { Set-Content (Join-Path $p "scripts/extra$_.ps1") "x" -Encoding utf8NoBOM }
 } @('scripts/*') 'exit 0' $false 'budget:*'
 
+# 5. AUTO-CLOSE: a branch encoding an issue number gets `Closes #N` in the merge
+#    commit body, so GitHub closes the issue when it reaches the default branch.
+Write-Host "`n[auto-close: Closes #N in merge commit]" -ForegroundColor Cyan
+$repo = New-TempRepo
+$wtRoot = Join-Path $env:TEMP ("cao-gatewt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+try {
+    Initialize-IntegrationBranch -RepoRoot $repo -Base master | Out-Null
+    $wt = New-ItemWorktree -RepoRoot $repo -ItemId 'issue-77' -Model 'codex' -Base 'integration/backlog' -WorktreeRoot $wtRoot
+    Set-Content (Join-Path $wt.path 'scripts/app.ps1') "function App { 'v2' }" -Encoding utf8NoBOM
+    $res = Merge-ItemToIntegration -RepoRoot $repo -WorktreePath $wt.path -Branch $wt.branch `
+        -Integration 'integration/backlog' -AllowedPathPatterns @('scripts/*') -MaxChangedFiles 5 `
+        -TestCommand 'exit 0' -WorktreeRoot $wtRoot -AutoCommit
+    Assert ($res.merged -eq $true) "merged (got $($res.merged))"
+    Push-Location $repo
+    try {
+        $msg = (git log -1 --format='%B' integration/backlog 2>$null | Out-String)
+        Assert ($msg -match 'Closes #77') "merge commit body contains 'Closes #77'"
+    } finally { Pop-Location }
+} finally {
+    Push-Location $repo; try { git worktree prune 2>&1 | Out-Null } finally { Pop-Location }
+    Remove-Item -Recurse -Force $repo, $wtRoot -ErrorAction SilentlyContinue
+}
+
 Write-Host ""
 if ($script:fail -eq 0) { Write-Host "ALL GATE TESTS PASSED" -ForegroundColor Green; exit 0 }
 else { Write-Host "$script:fail ASSERTION(S) FAILED" -ForegroundColor Red; exit 1 }
