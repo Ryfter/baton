@@ -22,11 +22,20 @@ function Set-JsonFileAtomic {
 }
 
 function ConvertFrom-FleetValue {
-    # Strip surrounding quotes; coerce true/false to bool.
+    # Strip an inline comment + surrounding quotes; coerce true/false to bool.
     param([string]$Raw)
     $v = $Raw.Trim()
-    if ($v.Length -ge 2 -and (($v[0] -eq '"' -and $v[-1] -eq '"') -or ($v[0] -eq "'" -and $v[-1] -eq "'"))) {
-        $v = $v.Substring(1, $v.Length - 2)
+    if ($v.Length -ge 1 -and ($v[0] -eq '"' -or $v[0] -eq "'")) {
+        # Quoted: the value is the span up to the matching closing quote; anything
+        # after it (e.g. a trailing "  # wraith2 over Tailscale") is a comment.
+        $q = $v[0]
+        $end = $v.IndexOf($q, 1)
+        $v = if ($end -ge 1) { $v.Substring(1, $end - 1) } else { $v.Substring(1) }
+    } else {
+        # Unquoted: a whitespace-preceded '#' starts a comment (YAML rule). A '#'
+        # with no preceding space (e.g. a hex colour 'ab#cd') stays in the value.
+        $hash = $v.IndexOf(' #')
+        if ($hash -ge 0) { $v = $v.Substring(0, $hash).TrimEnd() }
     }
     if ($v -eq 'true')  { return $true }
     if ($v -eq 'false') { return $false }

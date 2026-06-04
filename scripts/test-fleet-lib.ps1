@@ -44,6 +44,13 @@ $threw = $false
 try { Resolve-FleetCommand -Provider $badProvider -Prompt 'x' } catch { $threw = $true }
 Assert "rejects template lacking {{prompt}}" ($threw)
 
+# --- ConvertFrom-FleetValue: inline-comment stripping (Plan 9 base_url regression) ---
+Assert "inline comment stripped (quoted)"   ((ConvertFrom-FleetValue "'http://100.115.71.9:11434'   # wraith2 over Tailscale") -eq 'http://100.115.71.9:11434')
+Assert "inline comment stripped (unquoted)" ((ConvertFrom-FleetValue "dolphin3:8b   # fits 8GB") -eq 'dolphin3:8b')
+Assert "plain quoted value preserved"        ((ConvertFrom-FleetValue "'http://localhost:1234'") -eq 'http://localhost:1234')
+Assert "inner quotes preserved"              ((ConvertFrom-FleetValue "'claude -p `"{{prompt}}`"'") -eq 'claude -p "{{prompt}}"')
+Assert "hash without leading space kept"     ((ConvertFrom-FleetValue "ab#cd") -eq 'ab#cd')
+
 # --- Write-FleetJournalLine ---
 $tmpJournal = Join-Path $env:TEMP "fleet-journal-$(Get-Random).md"
 $tmpState   = Join-Path $env:TEMP "fleet-state-$(Get-Random).json"
