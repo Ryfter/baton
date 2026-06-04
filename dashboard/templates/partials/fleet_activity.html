@@ -17,6 +17,18 @@
   @keyframes fleetpulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.35;transform:scale(.6);} }
   .fleet-muted { opacity:.6; font-size:.8rem; }
   .fleet-recent { display:flex; gap:.6rem; align-items:center; font-size:.8rem; opacity:.8; margin:.2rem 0; }
+  .fleet-outputs { margin-top:.5rem; display:flex; flex-direction:column; gap:.3rem; }
+  .fleet-output > summary { cursor:pointer; font-size:.8rem; }
+  .fleet-output > summary .prov-name { font-weight:600; }
+  .fleet-output pre { white-space:pre-wrap; word-break:break-word; font-size:.78rem; line-height:1.4;
+        margin:.35rem 0 0; padding:.5rem .6rem; background:#14141e; border:1px solid #262633; border-radius:6px;
+        max-height:18rem; overflow:auto; }
+  .fleet-trunc { opacity:.55; font-size:.72rem; }
+  .fleet-synth { margin-top:.5rem; }
+  .fleet-synth > summary { cursor:pointer; font-size:.82rem; font-weight:600; color:#fcd34d; }
+  .fleet-synth pre { white-space:pre-wrap; word-break:break-word; font-size:.8rem; line-height:1.45;
+        margin:.35rem 0 0; padding:.55rem .7rem; background:#1a1710; border:1px solid #3a3320; border-radius:6px;
+        max-height:24rem; overflow:auto; }
 </style>
 
 {% set f = fleet | default(None) %}
@@ -45,6 +57,25 @@
               </span>
             {% endfor %}
           </div>
+          {# Partial responses as they arrive (#26): a provider's text appears the
+             moment that model finishes, while others may still be running. #}
+          {% set shown = run.providers | selectattr('preview') | list %}
+          {% if shown %}
+            <div class="fleet-outputs">
+              {% for p in shown %}
+                <details class="fleet-output">
+                  <summary><span class="prov-name">{{ p.provider }}{% if p.label and p.label != p.provider %} · {{ p.label }}{% endif %}</span> — {{ p.state }} · {{ p.duration_s }}s</summary>
+                  <pre>{{ p.preview }}{% if p.preview_truncated %}<span class="fleet-trunc"> … (truncated)</span>{% endif %}</pre>
+                </details>
+              {% endfor %}
+            </div>
+          {% endif %}
+          {% if run.synthesis %}
+            <details class="fleet-synth" open>
+              <summary>🧬 Synthesis preview</summary>
+              <pre>{{ run.synthesis }}{% if run.synthesis_truncated %}<span class="fleet-trunc"> … (truncated)</span>{% endif %}</pre>
+            </details>
+          {% endif %}
         </div>
       {% endfor %}
     {% else %}
@@ -60,6 +91,12 @@
           <span>{{ run.providers|length }} models</span>
           <span>{{ run.counts.done }} ok{% if run.counts.error %} · {{ run.counts.error }} err{% endif %}</span>
         </div>
+        {% if run.synthesis %}
+          <details class="fleet-synth">
+            <summary>🧬 {{ run.run_id }} synthesis</summary>
+            <pre>{{ run.synthesis }}{% if run.synthesis_truncated %}<span class="fleet-trunc"> … (truncated)</span>{% endif %}</pre>
+          </details>
+        {% endif %}
       {% endfor %}
     {% endif %}
   {% endif %}

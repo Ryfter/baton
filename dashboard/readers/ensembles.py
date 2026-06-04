@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _GRACE_S = 60
+_PROVIDER_PREVIEW_CHARS = 500
+_SYNTHESIS_PREVIEW_CHARS = 1200
 
 
 def _read_json(path: Path):
@@ -30,6 +32,20 @@ def _read_json(path: Path):
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _preview(path: Path, limit: int) -> tuple[str, bool]:
+    """Return (truncated-text, was_truncated) for a .md file, or ('', False) if
+    absent/empty. Powers the cockpit's partial-content + synthesis previews."""
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return "", False
+    if not text:
+        return "", False
+    if len(text) > limit:
+        return text[:limit].rstrip(), True
+    return text, False
 
 
 def _parse_ts(value):
@@ -67,6 +83,10 @@ def _provider_states(run_dir: Path, tasks: list[dict], run_running: bool) -> lis
     for t in tasks:
         label = t.get("label") or t.get("provider") or "?"
         provider = t.get("provider") or label
+        # Partial content: a provider's <label>.md appears the instant that child
+        # finishes (done/error/timeout), independently of its siblings — this is
+        # what makes responses show up "as they arrive" (#26).
+        preview, preview_trunc = _preview(run_dir / f"{label}.md", _PROVIDER_PREVIEW_CHARS)
         live = _read_json(run_dir / f"{label}.live.json")
         if live:
             state = live.get("state", "running")
@@ -81,6 +101,8 @@ def _provider_states(run_dir: Path, tasks: list[dict], run_running: bool) -> lis
                 "state": state,
                 "duration_s": int(dur),
                 "live": state == "running",
+                "preview": preview,
+                "preview_truncated": preview_trunc,
             })
         else:
             # No heartbeat yet: queued if the run is still live, else unknown.
@@ -90,6 +112,8 @@ def _provider_states(run_dir: Path, tasks: list[dict], run_running: bool) -> lis
                 "state": "queued" if run_running else "unknown",
                 "duration_s": 0,
                 "live": False,
+                "preview": preview,
+                "preview_truncated": preview_trunc,
             })
     return out
 
@@ -104,7 +128,11 @@ def _derive_legacy(run_dir: Path) -> dict | None:
         label = p.stem
         providers.append({"label": label, "provider": label, "state": "done",
                           "duration_s": 0, "live": False})
+    for p in providers:
+        prev, trunc = _preview(run_dir / f"{p['label']}.md", _PROVIDER_PREVIEW_CHARS)
+        p["preview"], p["preview_truncated"] = prev, trunc
     mtime = datetime.fromtimestamp(run_dir.stat().st_mtime, tz=timezone.utc)
+    synthesis, synthesis_trunc = _preview(run_dir / "synthesis.md", _SYNTHESIS_PREVIEW_CHARS)
     return {
         "run_id": run_dir.name,
         "kind": "legacy",
@@ -115,6 +143,8 @@ def _derive_legacy(run_dir: Path) -> dict | None:
         "elapsed_s": 0,
         "providers": providers,
         "counts": {"running": 0, "done": len(providers), "error": 0, "queued": 0},
+        "synthesis": synthesis,
+        "synthesis_truncated": synthesis_trunc,
     }
 
 
@@ -142,6 +172,7 @@ def _build_run(run_dir: Path, meta: dict | None) -> dict | None:
         key = p["state"] if p["state"] in counts else "error" if p["state"] in ("timeout",) else "queued"
         counts[key] = counts.get(key, 0) + 1
 
+    synthesis, synthesis_trunc = _preview(run_dir / "synthesis.md", _SYNTHESIS_PREVIEW_CHARS)
     return {
         "run_id": meta.get("run_id", run_dir.name),
         "kind": meta.get("kind", "ensemble"),
@@ -152,6 +183,8 @@ def _build_run(run_dir: Path, meta: dict | None) -> dict | None:
         "elapsed_s": _elapsed_s(started, ended if state != "running" else None),
         "providers": providers,
         "counts": counts,
+        "synthesis": synthesis,
+        "synthesis_truncated": synthesis_trunc,
     }
 
 
