@@ -17,17 +17,17 @@
   {% include "partials/projects_list.html" %}
 </div>
 
-<!-- KB Search panel (Plan 8) — user-driven, no polling -->
-<div class="card" style="grid-column: 1 / -1;">
-  {% include "partials/kb_search.html" %}
-</div>
-
-<!-- Jobs panel — polls every 30 s -->
-<div class="card" style="grid-column: 1 / -1;"
+<!-- Jobs panel — polls every 30s -->
+<div class="card"
      hx-get="/partials/jobs"
      hx-trigger="every 30s"
      hx-swap="innerHTML">
   {% include "partials/jobs_list.html" %}
+</div>
+
+<!-- KB Search panel (Plan 8) — user-driven, no polling -->
+<div class="card">
+  {% include "partials/kb_search.html" %}
 </div>
 
 <!-- Spend Today — polls every 30s -->
@@ -38,20 +38,20 @@
   {% include "partials/spend_today.html" %}
 </div>
 
-<!-- Model Leaderboard — polls every 30s -->
-<div class="card"
-     hx-get="/partials/leaderboard"
-     hx-trigger="every 30s"
-     hx-swap="innerHTML">
-  {% include "partials/leaderboard.html" %}
-</div>
-
 <!-- Cost Doughnut Chart -->
 <div class="card">
   <h2>Cost Breakdown</h2>
   <div class="chart-wrap">
     <canvas id="costChart"></canvas>
   </div>
+</div>
+
+<!-- Model Leaderboard — polls every 30s -->
+<div class="card"
+     hx-get="/partials/leaderboard"
+     hx-trigger="every 30s"
+     hx-swap="innerHTML">
+  {% include "partials/leaderboard.html" %}
 </div>
 
 <!-- Controls — polls every 15s so model lists stay fresh -->

@@ -6,14 +6,17 @@
   <title>{% block title %}Routing Dashboard{% endblock %}</title>
   <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header>
     <h1><a href="/" style="text-decoration:none;color:inherit;">🐙 Routing Dashboard</a></h1>
     <nav class="topnav">
-      <a href="/">Home</a>
-      <a href="/projects">Portfolio</a>
+      <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Home</a>
+      <a href="/projects" class="{% if request.url.path.startswith('/projects') %}active{% endif %}">Portfolio</a>
     </nav>
     <span class="server-time">{{ server_time }}</span>
   </header>
