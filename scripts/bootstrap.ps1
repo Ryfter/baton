@@ -25,6 +25,21 @@ function Write-Skip($msg) { Write-Host "    skip: $msg" -ForegroundColor Yellow 
 function Write-Warn($msg) { Write-Host "    warn: $msg" -ForegroundColor Yellow }
 function Write-Err($msg)  { Write-Host "    err: $msg" -ForegroundColor Red }
 
+# --- Step 0: Report repo-vs-deployed version drift ---
+# Surfaces at a glance whether ~/.claude/ is running an older deploy than the repo.
+# Repo version = nearest v* tag (+ commits since); deployed version = marker written
+# at the end of the last successful (non-dry-run) bootstrap.
+Write-Step "Checking repo vs deployed version"
+$repoVersion = (& git -C $repoRoot describe --tags --match 'v*' --always 2>$null | Select-Object -First 1)
+if (-not $repoVersion) { $repoVersion = 'unknown' }
+$versionMarker = Join-Path $claudeDir '.cao-version'
+$deployedVersion = if (Test-Path $versionMarker) { (Get-Content $versionMarker -Raw).Trim() } else { '(none - first run)' }
+if ($deployedVersion -eq $repoVersion) {
+    Write-Ok "in sync: repo and deployed both at $repoVersion"
+} else {
+    Write-Warn "drift: repo $repoVersion vs deployed $deployedVersion (this run deploys $repoVersion)"
+}
+
 function Copy-IfMissing($src, $dst, $label) {
     if (Test-Path $dst) {
         Write-Skip "$label already exists at $dst"
@@ -382,6 +397,13 @@ if (-not $DryRun) {
 
 # --- Summary ---
 Write-Step "Bootstrap complete (Plans 1-8 + Decision Loop + Cost Ledger)"
+# Record the deployed version so the next run's Step 0 can report drift.
+if (-not $DryRun) {
+    Set-Content -Path $versionMarker -Value $repoVersion -Encoding utf8NoBOM
+    Write-Ok "recorded deployed version $repoVersion -> $versionMarker"
+} else {
+    Write-Ok "[dry-run] would record deployed version $repoVersion -> $versionMarker"
+}
 # Plan 8 first-run hint
 $nomicPresent = $false
 try {
@@ -396,11 +418,16 @@ if (-not $nomicPresent) {
 }
 Write-Host ""
 Write-Host "Next steps:"
-Write-Host "  1. Source the OTel env helper in your PowerShell profile or before each session:"
-Write-Host "       . $otelEnvDst"
-Write-Host "  2. Run a real Claude Code task to populate the journal."
-Write-Host "  3. Inspect $logDst to see hook + otel lines."
-Write-Host "  4. After a week of use, run /consolidate-routing to tune the catalog."
-Write-Host "  5. Use /job-start, /job-status, /job-list to track work in ~/.claude/jobs/."
-Write-Host "  6. Use /job-lesson + /consolidate-lessons to build the knowledge base."
+Write-Host "  1. Source the OTel env helper before each session:  . $otelEnvDst"
+Write-Host "  2. Start the live dashboard:"
+Write-Host "       python -m uvicorn dashboard.main:app --port 8765   (then open http://localhost:8765)"
+Write-Host "  3. Fleet: /fleet doctor to health-check providers, then fan out with"
+Write-Host "       /ensemble, /six-hats, or /council across every model at once."
+Write-Host "  4. Code phase: /code-decompose -> /code-parallel -> /code-merge"
+Write-Host "       for parallel, worktree-isolated implementation."
+Write-Host "  5. Jobs + KB: /job-start to track work; /kb-index --full then /kb-search"
+Write-Host "       to build and query the knowledge base."
+Write-Host "  6. Projects + cost: /projects for the multi-project command center; /cost for the ledger."
+Write-Host "  7. Over time: /consolidate-routing, /consolidate-lessons, /consolidate-decisions"
+Write-Host "       to tune the catalog and let the system self-improve."
 Write-Host ""
