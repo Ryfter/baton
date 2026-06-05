@@ -43,7 +43,7 @@ The Tier 1–3 backlog (issues #16–#26) is **cleared** — see the Shipped tab
 What remains:
 
 - **Cross-project consolidation sweep.** Walk every project's decision history; promote patterns appearing in ≥2 projects to `universal/decision-guidance.md`. Wired (`/consolidate-decisions`) but **blocked** until a second project exists — universal guidance stays empty with a single project. No issue tracked.
-- **Wire `decision-detect` as a `Stop` hook.** The heuristic (`scripts/hooks/decision-detect.ps1`) shipped with #25 but isn't registered in `~/.claude/settings.json`, so auto-capture isn't live. One-line opt-in when desired.
+- ~~**Wire `decision-detect` as a `Stop` hook.**~~ **Done 2026-06-05** — `scripts/hooks/decision-detect.ps1` is deployed to `~/.claude/hooks` and registered as a `Stop` hook in `~/.claude/settings.json`; bootstrap now deploys + registers it for reproducibility. At end of each turn it scans the final message for decision phrasing and, on a hit, writes a review-ready intake draft to `$TEMP` (advisory — it doesn't auto-create the record; the orchestrator's two-step intake remains authoritative).
 
 ### Housekeeping ideas (no issue tracked yet)
 
