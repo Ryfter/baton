@@ -2,6 +2,7 @@
 {% if not projects %}
   <p class="muted">No projects yet. Run /project-init in any repo to seed one.</p>
 {% else %}
+  <div class="table-scroll">
   <table class="projects-table">
     <thead>
       <tr>
@@ -24,4 +25,5 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 {% endif %}
