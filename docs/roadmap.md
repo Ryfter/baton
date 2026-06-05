@@ -47,8 +47,9 @@ What remains:
 
 ### Housekeeping ideas (no issue tracked yet)
 
-- Bootstrap should print a one-line "version vs. deployed" diff at startup so drift between repo and `~/.claude/` is visible.
-- The bootstrap message currently lists "Next steps" 1-6 from Plan 1 era; a refresh to surface Plan 5/6/7/8 commands would help new users.
+- ~~Bootstrap should print a one-line "version vs. deployed" diff at startup.~~ **Done 2026-06-05** — Step 0 compares the repo's nearest `v*` tag against `~/.claude/.cao-version` (written on each deploy).
+- ~~Refresh the bootstrap "Next steps" from the Plan-1 era to surface Plan 5/6/7/8 commands.~~ **Done 2026-06-05** — now lists dashboard, fleet/ensemble/six-hats/council, code phase, jobs+KB, projects+cost, and the consolidators.
+- **Bootstrap hangs on `Read-Host` in non-interactive runs.** When a deployed file differs from the repo, `Copy-WithPrompt` prompts to overwrite; in a non-interactive/CI child process (incl. `test-bootstrap.ps1`) that blocks forever. Consider a `-NonInteractive`/`-AssumeNo` switch (or detecting `[Console]::IsInputRedirected`) so prompts default to "keep existing" instead of hanging.
 
 ---
 
