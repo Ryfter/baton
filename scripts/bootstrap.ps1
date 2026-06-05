@@ -11,13 +11,21 @@
 
 param(
     [switch]$DryRun,
-    [switch]$Force  # overwrite the catalog without prompting
+    [switch]$Force,           # overwrite the catalog without prompting
+    [switch]$NonInteractive   # never prompt; differing files are kept as-is
 )
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $here
 $claudeDir = Join-Path $HOME '.claude'
+
+# Auto-detect non-interactive runs (CI, piped stdin, child process). Without this,
+# a Copy-WithPrompt over a differing file would block on Read-Host forever — which
+# is exactly how the dry-run smoke test used to hang.
+if (-not $NonInteractive) {
+    try { if ([Console]::IsInputRedirected) { $NonInteractive = $true } } catch { }
+}
 
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    ok: $msg" -ForegroundColor Green }
@@ -64,6 +72,10 @@ function Copy-WithPrompt($src, $dst, $label, [switch]$Force) {
         $srcHash = (Get-FileHash $src).Hash
         $dstHash = (Get-FileHash $dst).Hash
         if ($srcHash -eq $dstHash) { Write-Skip "$label already up-to-date at $dst"; return }
+        # File differs and -Force was not given. Never block: in dry-run just report,
+        # and in a non-interactive run keep the existing file rather than prompting.
+        if ($DryRun) { Write-Ok "[dry-run] $label differs from repo; would prompt to overwrite"; return }
+        if ($NonInteractive) { Write-Skip "$label differs from repo; kept existing (non-interactive)"; return }
         $ans = Read-Host "    $label at $dst differs from repo. Overwrite? [y/N]"
         if ($ans -ne 'y') { Write-Skip "kept existing $label"; return }
     }
@@ -91,58 +103,67 @@ if ($octoCheck -match 'octo@nyldn-plugins') {
     }
 }
 
-# --- Step 2: Deploy the hook ---
+# --- Step 2: Deploy the hooks ---
 Write-Step "Deploying PostToolUse hook"
 $hookSrc = Join-Path $repoRoot 'scripts\hooks\log-tool-call.ps1'
 $hookDst = Join-Path $claudeDir 'hooks\log-tool-call.ps1'
 Copy-WithPrompt $hookSrc $hookDst 'hook script'
 
-# --- Step 3: Merge settings.json PostToolUse entry ---
-Write-Step "Registering hook in settings.json"
+# Decision-detect Stop hook: at the end of each turn it scans the final assistant
+# message for decision phrasing and, on a hit, writes a decision-intake draft to
+# TEMP + prints the suggested intake command. Always exits 0 (non-blocking).
+$ddHookSrc = Join-Path $repoRoot 'scripts\hooks\decision-detect.ps1'
+$ddHookDst = Join-Path $claudeDir 'hooks\decision-detect.ps1'
+Copy-WithPrompt $ddHookSrc $ddHookDst 'decision-detect hook'
+
+# --- Step 3: Register hooks in settings.json (PostToolUse + Stop) ---
+Write-Step "Registering hooks in settings.json"
 $settingsPath = Join-Path $claudeDir 'settings.json'
 if (-not (Test-Path $settingsPath)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $settingsPath" }
     else { Set-Content $settingsPath '{}' -Encoding utf8; Write-Ok "created empty settings.json" }
 }
 
+# Ensure an event array contains a hook whose command references $Marker; returns
+# $true if it added one. Idempotent: re-running never duplicates an entry.
+function Add-HookEntry($SettingsObj, $Event, $Command, $Marker) {
+    if (-not $SettingsObj.hooks.$Event) {
+        $SettingsObj.hooks | Add-Member -NotePropertyName $Event -NotePropertyValue @() -Force
+    }
+    foreach ($e in $SettingsObj.hooks.$Event) {
+        foreach ($h in $e.hooks) { if ($h.command -like "*$Marker*") { return $false } }
+    }
+    $SettingsObj.hooks.$Event += @{ matcher = '*'; hooks = @(@{ type = 'command'; command = $Command }) }
+    return $true
+}
+
 if ($DryRun -and -not (Test-Path $settingsPath)) {
-    # File doesn't exist and we're in dry-run; still surface the would-add message
-    # so the user gets full visibility into what a real run would do.
-    Write-Ok "[dry-run] would add PostToolUse entry pointing to $hookDst"
+    # File doesn't exist and we're in dry-run; still surface the would-add message.
+    Write-Ok "[dry-run] would register PostToolUse (log-tool-call) + Stop (decision-detect) hooks"
 } else {
     # Tolerate zero-byte / whitespace-only settings.json (otherwise ConvertFrom-Json throws)
     $raw = Get-Content $settingsPath -Raw
     if ([string]::IsNullOrWhiteSpace($raw)) { $raw = '{}' }
     $settings = $raw | ConvertFrom-Json
     if (-not $settings.hooks) { $settings | Add-Member -NotePropertyName hooks -NotePropertyValue (New-Object PSObject) -Force }
-    if (-not $settings.hooks.PostToolUse) { $settings.hooks | Add-Member -NotePropertyName PostToolUse -NotePropertyValue @() -Force }
 
-    $hookEntry = @{
-        matcher = '*'
-        hooks = @(@{
-            type = 'command'
-            command = "pwsh -NoProfile -File `"$hookDst`""
-        })
+    $addedPost = Add-HookEntry $settings 'PostToolUse' "pwsh -NoProfile -File `"$hookDst`"" 'log-tool-call.ps1'
+    $addedStop = Add-HookEntry $settings 'Stop'        "pwsh -NoProfile -File `"$ddHookDst`"" 'decision-detect.ps1'
+
+    foreach ($r in @(
+        @{ name = 'PostToolUse hook (log-tool-call)'; added = $addedPost },
+        @{ name = 'Stop hook (decision-detect)';      added = $addedStop }
+    )) {
+        if (-not $r.added)  { Write-Skip "$($r.name) already registered" }
+        elseif ($DryRun)    { Write-Ok "[dry-run] would register $($r.name)" }
     }
 
-    # Check for existing entry pointing to our hook
-    $exists = $false
-    foreach ($e in $settings.hooks.PostToolUse) {
-        foreach ($h in $e.hooks) {
-            if ($h.command -like "*log-tool-call.ps1*") { $exists = $true }
-        }
-    }
-    if ($exists) {
-        Write-Skip "hook already registered in settings.json"
-    } elseif ($DryRun) {
-        Write-Ok "[dry-run] would add PostToolUse entry pointing to $hookDst"
-    } else {
+    if (($addedPost -or $addedStop) -and -not $DryRun) {
         # Backup before mutating: if write is interrupted, user can recover .bak
         $backupPath = "$settingsPath.bak"
         Copy-Item $settingsPath $backupPath -Force
-        $settings.hooks.PostToolUse += $hookEntry
         $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding utf8
-        Write-Ok "added PostToolUse entry to settings.json (backup: $backupPath)"
+        Write-Ok "registered hooks in settings.json (backup: $backupPath)"
     }
 }
 
@@ -300,7 +321,8 @@ if (-not (Test-Path $ruleSrc)) {
     if ($DryRun) {
         Write-Ok "[dry-run] would create $claudeMd and insert capture rule"
     } else {
-        $ans = Read-Host "    Project root has no CLAUDE.md. Create one with the decision-capture rule? [Y/n]"
+        # Default (incl. non-interactive) is the documented [Y]: create it.
+        $ans = if ($NonInteractive) { 'y' } else { Read-Host "    Project root has no CLAUDE.md. Create one with the decision-capture rule? [Y/n]" }
         if ($ans -ne 'n' -and $ans -ne 'N') {
             Copy-Item $ruleSrc $claudeMd
             Write-Ok "created CLAUDE.md with the capture rule"

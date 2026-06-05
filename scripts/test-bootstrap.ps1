@@ -13,8 +13,9 @@ function Assert($label, $cond) {
     else { Write-Host "FAIL  $label" -ForegroundColor Red; $script:failures++ }
 }
 
-# Run dry-run; capture stdout
-$out = & pwsh -NoProfile -File $bootstrap -DryRun 2>&1 | Out-String
+# Run dry-run; capture stdout. -NonInteractive so a differing deployed file can
+# never block the smoke test on a Read-Host prompt.
+$out = & pwsh -NoProfile -File $bootstrap -DryRun -NonInteractive 2>&1 | Out-String
 
 Assert "mentions hook deployment"        ($out -match 'PostToolUse hook')
 Assert "mentions OTel env helper"        ($out -match 'OTel env')
