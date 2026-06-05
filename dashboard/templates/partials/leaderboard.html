@@ -1,5 +1,6 @@
 <h2>Model Leaderboard</h2>
 {% if stats.models %}
+<div class="table-scroll">
 <table>
   <thead>
     <tr>
@@ -22,6 +23,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="empty">No OTel events yet. Run <code>scripts\parse-otel.ps1</code> to populate.</p>
 {% endif %}

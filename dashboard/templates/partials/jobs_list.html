@@ -1,5 +1,6 @@
 <h2>Jobs</h2>
 {% if active_jobs %}
+<div class="table-scroll">
 <table class="jobs-table">
   <thead>
     <tr><th>Job</th><th>Phase</th><th>Project</th><th>Cost</th><th>Started</th></tr>
@@ -16,12 +17,14 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="empty">No active jobs. Use <code>/job-start</code> in Claude Code to begin.</p>
 {% endif %}
 
 {% if done_jobs %}
 <h3 class="recent-done">Recently completed</h3>
+<div class="table-scroll">
 <table class="jobs-table dim">
   <tbody>
     {% for j in done_jobs %}
@@ -35,4 +38,5 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}

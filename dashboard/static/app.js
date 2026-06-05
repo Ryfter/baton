@@ -6,15 +6,19 @@
   if (!canvas) return;
 
   const PALETTE = [
-    '#3b82f6', // Electric Blue
-    '#a855f7', // Neon Purple
-    '#10b981', // Neon Green
-    '#f59e0b', // Amber
-    '#ef4444', // Coral/Red
-    '#06b6d4', // Cyan
-    '#ec4899', // Hot Pink
-    '#6366f1', // Indigo
+    '#3b82f6', // blue
+    '#a855f7', // purple
+    '#10b981', // green
+    '#f59e0b', // amber
+    '#ef4444', // red
+    '#06b6d4', // cyan
+    '#ec4899', // pink
+    '#6366f1', // indigo
   ];
+
+  // Match the dashboard's system font stack (no web fonts loaded).
+  const SYS_FONT =
+    'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 
   new Chart(canvas, {
     type: 'doughnut',
@@ -36,9 +40,9 @@
         legend: {
           position: 'right',
           labels: {
-            color: '#94a3b8',
+            color: '#a3b1c2',
             font: {
-              family: "'Outfit', sans-serif",
+              family: SYS_FONT,
               size: 12,
               weight: '500'
             },
@@ -51,11 +55,11 @@
         },
         tooltip: {
           bodyFont: {
-            family: "'Outfit', sans-serif",
+            family: SYS_FONT,
             size: 13
           },
           titleFont: {
-            family: "'Outfit', sans-serif",
+            family: SYS_FONT,
             size: 13,
             weight: 'bold'
           },

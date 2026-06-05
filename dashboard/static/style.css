@@ -4,41 +4,47 @@
 :root {
   --bg-primary: #080b11;
   --bg-secondary: #0f131a;
-  --bg-card: rgba(18, 24, 38, 0.7);
-  --bg-card-hover: rgba(24, 32, 51, 0.85);
+  --bg-card: rgba(19, 25, 37, 0.92);
+  --bg-card-hover: rgba(24, 32, 51, 0.95);
   --border-color: rgba(255, 255, 255, 0.08);
   --border-color-hover: rgba(255, 255, 255, 0.16);
   --border-glow: rgba(59, 130, 246, 0.2);
 
   --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-secondary: #a3b1c2;
+  --text-muted: #8593a6;
 
-  --accent-primary: #3b82f6; /* Electric Blue */
-  --accent-primary-glow: rgba(59, 130, 246, 0.2);
-  --accent-purple: #a855f7; /* Neon Purple */
-  --accent-purple-glow: rgba(168, 85, 247, 0.25);
-  --accent-success: #10b981; /* Neon Green */
-  --accent-success-glow: rgba(16, 185, 129, 0.2);
-  --accent-warning: #f59e0b; /* Amber */
-  --accent-danger: #ef4444; /* Coral/Red */
-  --accent-danger-glow: rgba(239, 68, 68, 0.2);
+  --accent-primary: #3b82f6; /* Blue — running / active */
+  --accent-primary-glow: rgba(59, 130, 246, 0.18);
+  --accent-purple: #a855f7;
+  --accent-purple-glow: rgba(168, 85, 247, 0.18);
+  --accent-success: #10b981; /* Green — done / ok */
+  --accent-success-glow: rgba(16, 185, 129, 0.15);
+  --accent-warning: #f59e0b; /* Amber — synthesis */
+  --accent-danger: #ef4444; /* Red — error / timeout */
+  --accent-danger-glow: rgba(239, 68, 68, 0.15);
 
-  --font-sans: 'Outfit', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  /* System font stacks — no external/Google Fonts, so the dashboard renders
+     identically offline. Distinctive enough on each OS, zero network cost. */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SF Mono", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
 
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 15px 40px rgba(0, 0, 0, 0.7);
+  /* Operational dashboard: compact radii, restrained shadows, no neon glow. */
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-pill: 999px;
 
-  --transition-fast: 0.15s ease;
-  --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 10px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 6px 20px rgba(0, 0, 0, 0.4);
+
+  --transition-fast: 0.12s ease;
+  --transition-normal: 0.18s ease;
 }
 
 body {
   font-family: var(--font-sans);
-  background: radial-gradient(circle at 50% 0%, #111827 0%, var(--bg-primary) 70%);
-  background-attachment: fixed;
+  background: var(--bg-primary);
   color: var(--text-primary);
   margin: 0;
   padding: 0;
@@ -84,22 +90,17 @@ header {
 
 header h1 {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: 1.4rem;
   font-weight: 700;
-  background: linear-gradient(135deg, #60a5fa 0%, #c084fc 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-header h1 a {
-  transition: transform var(--transition-fast);
-}
-
 header h1 a:hover {
-  transform: scale(1.02);
+  color: #93c5fd;
 }
 
 .server-time {
@@ -149,39 +150,23 @@ main {
   margin: 0 auto;
 }
 
-/* Card Styling (Glassmorphism) */
+/* Card — flat operational panel (subtle elevation, no hover lift/glow). */
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 1.5rem;
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  box-shadow: var(--shadow-md);
-  transition: all var(--transition-normal);
+  border-radius: var(--radius);
+  padding: 1.4rem;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--transition-fast);
   position: relative;
   overflow: hidden;
-}
-
-.card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
-  transition: var(--transition-normal);
+  min-width: 0;
 }
 
 .card:hover {
-  transform: translateY(-2px);
   border-color: var(--border-color-hover);
-  box-shadow: var(--shadow-lg), 0 0 15px var(--border-glow);
-}
-
-.card:hover::before {
-  background: linear-gradient(90deg, transparent, var(--accent-primary), transparent);
 }
 
 .card h2 {
@@ -269,12 +254,11 @@ main {
 
 /* Spend Badge */
 .spend-value {
-  font-size: 3rem;
+  font-size: 2.6rem;
   font-weight: 800;
   color: var(--accent-success);
   font-family: var(--font-mono);
   letter-spacing: -0.02em;
-  text-shadow: 0 0 20px rgba(16, 185, 129, 0.2);
   line-height: 1.1;
 }
 
@@ -415,7 +399,6 @@ button {
 button:hover {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.2);
-  transform: translateY(-1px);
 }
 
 button:active {
@@ -432,7 +415,6 @@ button.danger:hover {
   background: rgba(239, 68, 68, 0.2);
   border-color: var(--accent-danger);
   color: #ffffff;
-  box-shadow: 0 0 12px var(--accent-danger-glow);
 }
 
 /* Chart */
@@ -757,14 +739,13 @@ input[name=q] {
 
 input[name=q]:focus {
   outline: none;
-  border-color: var(--accent-primary) !important;
-  box-shadow: 0 0 10px var(--accent-primary-glow);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary-glow);
 }
 
 .decision-badge {
-  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
+  background: #1d4ed8;
   font-weight: 600;
-  box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3);
 }
 
 /* Decision Details Panel */
@@ -802,77 +783,211 @@ input[name=q]:focus {
   color: #f472b6;
 }
 
-/* Fleet Activity custom overrides for cockpit */
-.fleet-cockpit h2 {
-  font-size: 0.9rem !important;
-}
+/* ─────────────────────────────────────────────────────────────
+   Fleet Activity cockpit — consolidated here (no inline <style>,
+   no !important). Status is signalled by border + glyph + text,
+   never colour alone (accessible). Flat panels, not nested cards.
+   ───────────────────────────────────────────────────────────── */
+.fleet-cockpit h2 { font-size: 0.9rem; margin: 0 0 0.75rem; }
 
 .fleet-run {
-  border: 1px solid var(--border-color) !important;
-  background: rgba(0, 0, 0, 0.2) !important;
-  transition: all var(--transition-normal);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 0.9rem 1.1rem;
+  margin: 0.75rem 0;
+  background: rgba(255, 255, 255, 0.015);
 }
-
 .fleet-run.active {
-  border-color: var(--accent-primary) !important;
-  box-shadow: 0 0 15px var(--accent-primary-glow) !important;
-  background: rgba(59, 130, 246, 0.02) !important;
+  border-left-color: var(--accent-primary);
+  background: rgba(59, 130, 246, 0.05);
 }
 
-.fleet-kind {
-  color: #93c5fd !important;
+.fleet-run-head {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
   font-family: var(--font-mono);
-  font-weight: 700 !important;
+}
+.fleet-kind {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #93c5fd;
 }
 
+.fleet-prompt {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin: 0.5rem 0;
+  max-height: 3em;
+  overflow: hidden;
+  padding: 0.4rem 0.6rem;
+  background: rgba(0, 0, 0, 0.18);
+  border-left: 2px solid var(--border-color-hover);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.fleet-provs {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.7rem;
+}
 .prov {
-  border: 1px solid var(--border-color) !important;
-  background: #111520 !important;
-  transition: all var(--transition-fast) !important;
-  font-family: var(--font-mono) !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
 }
-
-.prov:hover {
-  transform: translateY(-1px);
-}
-
-.prov-running {
-  border-color: var(--accent-primary) !important;
-  color: #93c5fd !important;
-  box-shadow: 0 0 8px var(--accent-primary-glow);
-}
-
-.prov-done {
-  border-color: var(--accent-success) !important;
-  color: #a7f3d0 !important;
-  box-shadow: 0 0 8px var(--accent-success-glow);
-}
-
-.prov-error, .prov-timeout {
-  border-color: var(--accent-danger) !important;
-  color: #fca5a5 !important;
-  box-shadow: 0 0 8px var(--accent-danger-glow);
-}
+/* Border carries the colour; ::before carries a colour-independent glyph. */
+.prov-running { border-color: rgba(59, 130, 246, 0.65); color: #bfdbfe; }
+.prov-done    { border-color: rgba(16, 185, 129, 0.65); color: #a7f3d0; }
+.prov-error,
+.prov-timeout { border-color: rgba(239, 68, 68, 0.65); color: #fca5a5; }
+.prov-queued  { opacity: 0.55; }
+.prov-done::before    { content: "✓"; font-weight: 700; }
+.prov-error::before   { content: "✕"; font-weight: 700; }
+.prov-timeout::before { content: "⌛"; }
+.prov-queued::before  { content: "◌"; }
+.prov-dur { opacity: 0.7; font-variant-numeric: tabular-nums; }
 
 .pulse {
-  background: var(--accent-primary) !important;
-  box-shadow: 0 0 8px var(--accent-primary);
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  animation: fleetpulse 1s infinite;
+  flex: none;
+}
+@keyframes fleetpulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.7); }
 }
 
+.fleet-muted { opacity: 0.7; font-size: 0.85rem; }
+
+.fleet-recent {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  opacity: 0.85;
+  margin: 0.4rem 0;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255, 255, 255, 0.015);
+  border-radius: var(--radius-sm);
+}
+
+.fleet-outputs {
+  margin-top: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+/* Outputs/synthesis read as collapsible sections, not framed cards-in-cards. */
+.fleet-output {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: var(--radius-sm);
+}
+.fleet-output > summary,
+.fleet-synth > summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 0.45rem 0.7rem;
+  user-select: none;
+}
+.fleet-output > summary:hover,
+.fleet-synth > summary:hover { background: rgba(255, 255, 255, 0.03); }
+.fleet-output > summary .prov-name { font-weight: 600; color: #7cb3ff; }
+
+.fleet-output pre,
 .fleet-synth pre {
-  background: #181510 !important;
-  border-color: rgba(245, 158, 11, 0.2) !important;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  background: rgba(0, 0, 0, 0.28);
+  border-top: 1px solid var(--border-color);
+  max-height: 18rem;
+  overflow: auto;
+  color: #cbd5e1;
   font-family: var(--font-mono);
 }
+.fleet-trunc { opacity: 0.55; font-size: 0.72rem; }
 
-.fleet-output pre {
-  font-family: var(--font-mono);
+.fleet-synth {
+  margin-top: 0.7rem;
+  background: rgba(245, 158, 11, 0.05);
+  border-radius: var(--radius-sm);
+}
+.fleet-synth > summary { font-weight: 600; color: #fcd34d; }
+.fleet-synth pre {
+  max-height: 24rem;
+  color: #fde9c8;
+  background: rgba(0, 0, 0, 0.3);
+  border-top-color: rgba(245, 158, 11, 0.2);
 }
 
-/* Responsiveness */
-@media (max-width: 1024px) {
-  main {
-    grid-template-columns: 1fr;
+/* Horizontal scroll for wide tables inside cards (prevents clipping). */
+.table-scroll { overflow-x: auto; }
+
+/* ── Focus visibility (keyboard a11y) ───────────────────────── */
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+input:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Reduced motion ─────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
+  .pulse { animation: none; }
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 1024px) {
+  main { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  header {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.85rem 1rem;
+  }
+  header h1 { font-size: 1.2rem; }
+  .topnav { order: 3; width: 100%; }
+  main { padding: 1rem; gap: 1rem; }
+  .card { padding: 1.1rem; }
+  .spend-value { font-size: 2.1rem; }
+  td.model-name, .lms-id { max-width: 140px; }
+
+  /* Stack the activity feed rows instead of forcing a 4-column grid. */
+  .activity-row {
+    grid-template-columns: 1fr auto;
+    gap: 0.15rem 0.5rem;
+  }
+  .activity-row .ts { grid-column: 1 / -1; }
+  .activity-row .cmd { grid-column: 1 / -1; white-space: normal; }
 }
 
