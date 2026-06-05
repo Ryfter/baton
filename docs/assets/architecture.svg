@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 640" font-family="ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif">
+  <rect x="0" y="0" width="920" height="640" rx="16" fill="#0f131a"/>
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="460" y="44" text-anchor="middle" fill="#f1f5f9" font-size="30" font-weight="700">coding-agent-orchestrator</text>
+  <text x="460" y="70" text-anchor="middle" fill="#8593a6" font-size="16">architecture overview</text>
+
+  <!-- Orchestrator -->
+  <rect x="60" y="96" width="340" height="80" rx="10" fill="#161b22" stroke="#a855f7" stroke-width="2"/>
+  <text x="230" y="130" text-anchor="middle" fill="#c4b5fd" font-size="16" font-weight="600">Claude Code — orchestrator</text>
+  <text x="230" y="152" text-anchor="middle" fill="#cbd5e1" font-size="13">+ Octopus: routing &amp; dispatch</text>
+
+  <!-- Fleet -->
+  <rect x="520" y="96" width="340" height="80" rx="10" fill="#161b22" stroke="#3b82f6" stroke-width="2"/>
+  <text x="690" y="130" text-anchor="middle" fill="#93c5fd" font-size="16" font-weight="600">AI fleet</text>
+  <text x="690" y="152" text-anchor="middle" fill="#cbd5e1" font-size="13">Claude · Codex · Gemini · Ollama · GH Copilot</text>
+
+  <!-- dispatch arrow -->
+  <line x1="400" y1="136" x2="516" y2="136" stroke="#94a3b8" stroke-width="2" marker-end="url(#ah)"/>
+  <text x="458" y="128" text-anchor="middle" fill="#8593a6" font-size="12">dispatch</text>
+
+  <!-- Observation zone -->
+  <rect x="60" y="212" width="800" height="120" rx="12" fill="#0d1b30" stroke="#1e3a5f" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text x="78" y="236" fill="#93c5fd" font-size="14" font-weight="600">Observation layer — automatic capture</text>
+
+  <!-- hook -->
+  <rect x="80" y="250" width="236" height="64" rx="10" fill="#161b22" stroke="#10b981" stroke-width="2"/>
+  <text x="198" y="278" text-anchor="middle" fill="#6ee7b7" font-size="15" font-weight="600">PostToolUse hook</text>
+  <text x="198" y="298" text-anchor="middle" fill="#cbd5e1" font-size="12">tool · elapsed · status</text>
+
+  <!-- otel -->
+  <rect x="342" y="250" width="236" height="64" rx="10" fill="#161b22" stroke="#10b981" stroke-width="2"/>
+  <text x="460" y="278" text-anchor="middle" fill="#6ee7b7" font-size="15" font-weight="600">OTel exporter</text>
+  <text x="460" y="298" text-anchor="middle" fill="#cbd5e1" font-size="12">tokens · cost · latency</text>
+
+  <!-- log-routing -->
+  <rect x="604" y="250" width="236" height="64" rx="10" fill="#161b22" stroke="#10b981" stroke-width="2"/>
+  <text x="722" y="278" text-anchor="middle" fill="#6ee7b7" font-size="15" font-weight="600">/log-routing</text>
+  <text x="722" y="298" text-anchor="middle" fill="#cbd5e1" font-size="12">qualitative notes</text>
+
+  <!-- orchestrator/fleet -> observation -->
+  <line x1="210" y1="176" x2="200" y2="248" stroke="#94a3b8" stroke-width="2" marker-end="url(#ah)"/>
+  <text x="150" y="214" text-anchor="middle" fill="#8593a6" font-size="12">observes</text>
+  <line x1="700" y1="176" x2="722" y2="248" stroke="#94a3b8" stroke-width="2" marker-end="url(#ah)"/>
+
+  <!-- Journal -->
+  <rect x="180" y="372" width="300" height="86" rx="10" fill="#161b22" stroke="#06b6d4" stroke-width="2"/>
+  <text x="330" y="402" text-anchor="middle" fill="#67e8f9" font-size="16" font-weight="600">Journal</text>
+  <text x="330" y="424" text-anchor="middle" fill="#cbd5e1" font-size="13">model-routing-log.md</text>
+  <text x="330" y="444" text-anchor="middle" fill="#8593a6" font-size="12">append-only</text>
+
+  <!-- observation -> journal -->
+  <line x1="198" y1="314" x2="280" y2="370" stroke="#94a3b8" stroke-width="2" marker-end="url(#ah)"/>
+  <line x1="460" y1="314" x2="372" y2="370" stroke="#94a3b8" stroke-width="2" marker-end="url(#ah)"/>
+  <line x1="722" y1="314" x2="420" y2="370" stroke="#94a3b8" stroke-width="2" marker-end="url(#ah)"/>
+
+  <!-- Catalog -->
+  <rect x="560" y="380" width="280" height="74" rx="10" fill="#161b22" stroke="#f59e0b" stroke-width="2"/>
+  <text x="700" y="408" text-anchor="middle" fill="#fcd34d" font-size="16" font-weight="600">Catalog</text>
+  <text x="700" y="429" text-anchor="middle" fill="#cbd5e1" font-size="13">model-routing.md</text>
+  <text x="700" y="447" text-anchor="middle" fill="#8593a6" font-size="12">evolves over time</text>
+
+  <!-- journal -> catalog -->
+  <line x1="480" y1="415" x2="558" y2="415" stroke="#94a3b8" stroke-width="2" marker-end="url(#ah)"/>
+  <text x="519" y="407" text-anchor="middle" fill="#8593a6" font-size="12">consolidate</text>
+
+  <!-- Dashboard -->
+  <rect x="200" y="512" width="520" height="104" rx="10" fill="#161b22" stroke="#a855f7" stroke-width="2"/>
+  <text x="460" y="544" text-anchor="middle" fill="#d8b4fe" font-size="16" font-weight="600">Dashboard — http://localhost:8765</text>
+  <text x="460" y="568" text-anchor="middle" fill="#cbd5e1" font-size="13">Reads: journal · telemetry · ollama · LM Studio</text>
+  <text x="460" y="590" text-anchor="middle" fill="#cbd5e1" font-size="13">Controls: load / unload models · kill stuck PIDs</text>
+
+  <!-- journal/catalog -> dashboard -->
+  <line x1="330" y1="458" x2="390" y2="510" stroke="#94a3b8" stroke-width="2" marker-end="url(#ah)"/>
+  <line x1="660" y1="454" x2="560" y2="510" stroke="#94a3b8" stroke-width="2" marker-end="url(#ah)"/>
+</svg>

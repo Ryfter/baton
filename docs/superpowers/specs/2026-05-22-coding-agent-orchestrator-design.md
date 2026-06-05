@@ -24,49 +24,51 @@ Use Claude Code as the command-and-control layer for a fleet of coding-capable L
 
 ## Architecture overview
 
-```
-┌───────────────────────────────────────────────────────────────────┐
-│                         Claude Code                               │
-│  ┌──────────────────────────────────────────────────────────────┐ │
-│  │  Octopus plugin (installed) — owns routing + dispatch        │ │
-│  │  - /octo:auto picks providers for general tasks              │ │
-│  │  - dispatches Claude/Codex/Gemini/Copilot/Qwen/Ollama/       │ │
-│  │    Perplexity/OpenRouter                                     │ │
-│  │  - writes to ~/.claude-octopus/{logs,results}/               │ │
-│  └──────────────────────────────────────────────────────────────┘ │
-│                                                                   │
-│  Specialty Ollama models invoked directly via Bash:               │
-│  - tavernari/git-commit-message (commits)                         │
-│  - nuextract (structured extraction)                              │
-│  - deepseek-ocr (document OCR)                                    │
-└───────────────────────────────────────────────────────────────────┘
-                              │
-       ┌──────────────────────┼──────────────────────┐
-       │ observation layer    │                      │
-       ▼                      ▼                      ▼
-   PostToolUse hook     OTel exporter         /log-routing
-   (settings.json)      (env vars)            (slash command)
-       │                      │                      │
-       │ tool / agent /       │ token counts /       │ qualitative
-       │ elapsed / status     │ cost / latency       │ judgment notes
-       │                      │                      │
-       └──────────────────────┼──────────────────────┘
-                              ▼
-                  ~/.claude/model-routing-log.md
-                  (append-only journal)
-                              │
-                              │  (manual: "consolidate routing notes")
-                              ▼
-                  ~/.claude/model-routing.md
-                  (catalog — evolves over time)
+<p align="center">
+  <img src="../../assets/architecture.svg" alt="coding-agent-orchestrator architecture overview" width="840">
+</p>
 
-       Dashboard (browser, http://localhost:8765)
-       ─────────────────────────────────────────
-       Reads: journal + telemetry/events.jsonl
-              + ollama ps + LM Studio /v1/models
-              + ~/.claude-octopus/results/
-       Controls: load/unload models, kill stuck PIDs
-       Launched by: scripts/dashboard.ps1
+> The SVG above is the committed, self-contained render — it scales to fit, renders
+> inline on GitHub, and depends on no external service. An editable hand-drawn version
+> can be regenerated with the Excalidraw connector.
+
+### Repository & runtime layout
+
+The repo is the **source of truth**; `bootstrap.ps1` deploys copies into `~/.claude/`,
+where your jobs, knowledge, and journal accumulate as you work.
+
+```mermaid
+flowchart LR
+    subgraph REPO["repo: coding-agent-orchestrator/"]
+        direction TB
+        R1["commands/ — slash-command definitions"]
+        R2["scripts/ — PowerShell libs, hooks/, fleet/"]
+        R3["dashboard/ — FastAPI + htmx web UI"]
+        R4["kb/ — Python embeddings + search"]
+        R5["docs/ — GUIDE, COMMANDS, DECISIONS, specs"]
+        R6["references/fleet.yaml — starter fleet registry"]
+    end
+    subgraph HOME["~/.claude/ — deployed runtime + your data"]
+        direction TB
+        H1["commands · hooks · scripts — deployed copies"]
+        H2["fleet.yaml — your live model registry"]
+        H3["model-routing-log.md — the journal"]
+        H4["jobs/ — one folder per job"]
+        H5["ensembles/ — ad-hoc multi-model runs"]
+        subgraph KNOW["knowledge/ — private Ryfter/knowledge repo"]
+            direction TB
+            K1["universal/ — routing catalog + guidance"]
+            K2["projects/ID/ — decisions, guidance, cost"]
+            K3[".index/ — semantic search vectors"]
+        end
+    end
+    REPO ==>|"bootstrap.ps1 deploys"| HOME
+    classDef repo fill:#13233b,stroke:#3b82f6,color:#e2e8f0
+    classDef home fill:#13233b,stroke:#10b981,color:#e2e8f0
+    classDef know fill:#241a3a,stroke:#a855f7,color:#f3e8ff
+    class R1,R2,R3,R4,R5,R6 repo
+    class H1,H2,H3,H4,H5 home
+    class K1,K2,K3 know
 ```
 
 **Source of truth:** the repo at `D:\Dev\coding-agent-orchestrator`. A bootstrap script deploys hooks, OTel config, slash command, and catalog into `~/.claude/`.
