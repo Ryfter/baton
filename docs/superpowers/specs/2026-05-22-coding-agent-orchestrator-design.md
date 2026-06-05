@@ -38,37 +38,33 @@ The repo is the **source of truth**; `bootstrap.ps1` deploys copies into `~/.cla
 where your jobs, knowledge, and journal accumulate as you work.
 
 ```mermaid
-flowchart LR
-    subgraph REPO["repo: coding-agent-orchestrator/"]
+flowchart TB
+    subgraph REPO["repo (source of truth)"]
         direction TB
-        R1["commands/ — slash-command definitions"]
-        R2["scripts/ — PowerShell libs, hooks/, fleet/"]
-        R3["dashboard/ — FastAPI + htmx web UI"]
-        R4["kb/ — Python embeddings + search"]
-        R5["docs/ — GUIDE, COMMANDS, DECISIONS, specs"]
-        R6["references/fleet.yaml — starter fleet registry"]
+        R1["commands/"]
+        R2["scripts/ — libs, hooks, fleet"]
+        R3["dashboard/ — web UI"]
+        R4["kb/ — search engine"]
+        R5["docs/ + references/fleet.yaml"]
     end
-    subgraph HOME["~/.claude/ — deployed runtime + your data"]
+    subgraph HOME["~/.claude/ (runtime + your data)"]
         direction TB
-        H1["commands · hooks · scripts — deployed copies"]
-        H2["fleet.yaml — your live model registry"]
-        H3["model-routing-log.md — the journal"]
-        H4["jobs/ — one folder per job"]
-        H5["ensembles/ — ad-hoc multi-model runs"]
-        subgraph KNOW["knowledge/ — private Ryfter/knowledge repo"]
+        H1["commands, hooks, scripts"]
+        H2["fleet.yaml + journal"]
+        H3["jobs/ — per-job folders"]
+        subgraph KNOW["knowledge/ (private repo)"]
             direction TB
-            K1["universal/ — routing catalog + guidance"]
-            K2["projects/ID/ — decisions, guidance, cost"]
-            K3[".index/ — semantic search vectors"]
+            K1["universal/ + projects/ID/"]
+            K2[".index/ — search vectors"]
         end
     end
     REPO ==>|"bootstrap.ps1 deploys"| HOME
     classDef repo fill:#13233b,stroke:#3b82f6,color:#e2e8f0
     classDef home fill:#13233b,stroke:#10b981,color:#e2e8f0
     classDef know fill:#241a3a,stroke:#a855f7,color:#f3e8ff
-    class R1,R2,R3,R4,R5,R6 repo
-    class H1,H2,H3,H4,H5 home
-    class K1,K2,K3 know
+    class R1,R2,R3,R4,R5 repo
+    class H1,H2,H3 home
+    class K1,K2 know
 ```
 
 **Source of truth:** the repo at `D:\Dev\coding-agent-orchestrator`. A bootstrap script deploys hooks, OTel config, slash command, and catalog into `~/.claude/`.
