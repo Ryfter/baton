@@ -1,5 +1,9 @@
 # Getting started
 
+> **The canonical, fuller walkthrough now lives in [`GUIDE.md`](GUIDE.md)** (install →
+> start → a complete worked session) with the full [`COMMANDS.md`](COMMANDS.md) reference.
+> This page is the original quick version, kept for continuity.
+
 You're holding a working orchestrator. This doc tells you how to **use** it on a real project — not how to build it.
 
 ## What's deployed in `~/.claude/`
