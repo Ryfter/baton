@@ -1,3 +1,11 @@
+<!-- Multi-agent project. Shared rules for ALL agents: docs/agent-handoffs.md -->
+
+> **Claude = orchestrator / conductor.** Shared rules for every agent on this
+> project (orientation, the 965-byte shell limit, the gated merge flow, the
+> backup standing order, the model-agnostic knowledge base) live in
+> [`docs/agent-handoffs.md`](docs/agent-handoffs.md) — read it first. The
+> decision-capture rule below is the canonical copy and applies to every agent.
+
 <!-- decision-capture-rule:v2 -->
 
 ## Decision capture (orchestrator)
