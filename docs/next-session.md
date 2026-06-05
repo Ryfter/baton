@@ -2,6 +2,15 @@
 
 How to pick the orchestrator back up and use it on its own backlog.
 
+## 0. Immediate priority - dashboard redesign WIP
+
+Before any new feature work, Claude must fix and verify the unreviewed
+`gemini/dashboard-redesign` branch. Codex audited it on 2026-06-05 and recorded
+required fixes in [`dashboard-redesign-audit.md`](dashboard-redesign-audit.md).
+Treat that audit as a stop condition: no merge and no new dashboard expansion
+until the branch has browser evidence, cleaned-up CSS, local/offline-safe assets,
+responsive checks, and a clear handoff.
+
 ## A. Re-opening the project (every session)
 
 1. **Open Claude Code in the repo:**
