@@ -4,7 +4,18 @@
       "mcp__context7__resolve-library-id",
       "mcp__context7__query-docs",
       "mcp__plugin_context7_context7__resolve-library-id",
-      "mcp__plugin_context7_context7__query-docs"
+      "mcp__plugin_context7_context7__query-docs",
+      "Bash(python -m pytest dashboard kb -q)",
+      "Bash(python -m pytest dashboard/tests -q)",
+      "Bash(python -m pytest dashboard/tests kb/tests -q)",
+      "Bash(python -m pytest kb/tests -q)",
+      "Bash(curl -s http://127.0.0.1:8765/*)",
+      "Bash(curl -s http://localhost:8765/*)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(Select-String *)",
+      "PowerShell(Test-Path *)",
+      "PowerShell(Get-Item *)"
     ]
   }
 }
