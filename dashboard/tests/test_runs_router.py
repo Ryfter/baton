@@ -69,3 +69,10 @@ def test_post_answer_writes_file(runs_root: Path):
 def test_post_answer_404(runs_root: Path):
     client = TestClient(make_app(runs_root))
     assert client.post("/runs/run_nope/answer", data={"answer": "x"}).status_code == 404
+
+
+def test_app_registers_runs_routes():
+    from dashboard.main import app
+    paths = {r.path for r in app.routes}
+    assert "/partials/runs" in paths
+    assert "/runs/{run_id}" in paths
