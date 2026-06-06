@@ -1,0 +1,31 @@
+<div class="run-detail">
+  <h2>{{ detail.record.name }} · {{ detail.record.model }}{% if detail.record.reasoning %} · {{ detail.record.reasoning }}{% endif %}
+      {% if detail.record.tree %} · {{ detail.record.tree }}{% endif %}</h2>
+
+  {% if detail.record.current_step %}
+  <p class="now">Now: {{ detail.record.current_step }}</p>
+  {% endif %}
+
+  <ol class="timeline">
+    {% for e in detail.events %}
+    <li class="ev-{{ e.kind }}">
+      <span class="what">{{ e.what }}</span>
+      {% if e.why %}<span class="why"> — {{ e.why }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+
+  <p class="cost">{{ detail.record.tokens_in }}k in / {{ detail.record.tokens_out }}k out ·
+     ${{ "%.2f"|format(detail.record.cost_usd) }}
+     {% if detail.record.files_touched %}· {{ detail.record.files_touched|join(", ") }}{% endif %}</p>
+
+  {% if detail.record.status == 'needs-you' and detail.record.parked_question %}
+  <div class="needs-you">
+    <p class="question">⏳ Needs you: {{ detail.record.parked_question }}</p>
+    <form hx-post="/runs/{{ detail.record.id }}/answer" hx-target="#run-detail">
+      <input type="text" name="answer" placeholder="Your answer…" autocomplete="off">
+      <button type="submit">Answer &amp; un-block</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
