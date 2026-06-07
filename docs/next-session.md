@@ -16,6 +16,46 @@ Open follow-up (optional, not blocking): capture a screenshot of an *active*
 fleet run, and consider real browser-driven fleet controls (provider roster,
 `/fleet doctor`, `/ensemble` launch, backlog approval) as a separate feature.
 
+## 0b. Fleet Conductor — vision + Slice 1 SHIPPED (2026-06-06)
+
+The orchestrator is evolving into a **Fleet Conductor**. North star (the *why*):
+**autonomy** (stop forcing the human to press 1/2) + **legibility** (always show, in
+plain English, what each agent is doing and why); interrupt only for real decisions.
+
+Architecture (decisions in `Ryfter/knowledge/projects/coding-agent-orchestrator/decisions/`):
+- **d018 — conductor, not monolith:** stay a thin conductor; call out to best-of-breed
+  harnesses (ruflo for swarm execution, the adversarial-dev Planner/Generator/Evaluator
+  pattern for quality, GitHub for coordination) as uniform *callable capabilities*,
+  extending the `fleet.yaml` registry pattern from models up to whole subsystems.
+- **d019 — web dashboard is the primary surface;** pixel-agents sprites are an optional,
+  themeable plugin. Surfaces (web / VS Code / Kiro / Copilot) are interchangeable
+  renderers over one neutral "what's happening" feed.
+
+Docs: concept `docs/superpowers/specs/2026-06-05-fleet-conductor-concept.md`;
+Slice 1 spec `…/2026-06-05-legibility-dashboard-design.md`; plan
+`docs/superpowers/plans/2026-06-06-legibility-dashboard.md`.
+
+**Slice 1 — legibility dashboard: SHIPPED** (merged `0c0f274`). A file-based feed under
+`~/.claude/runs/` (`run.json` + `events.jsonl` + `index.json`) written by PowerShell
+(`scripts/runs-lib.ps1`, the `run-feed.ps1` PostToolUse narration hook, and
+`statusline-feed.ps1`) and read by the FastAPI dashboard: a **runs gutter** + **detail
+pane** + **global strip** + a **needs-you** answer queue. Autonomy win shipped too: a
+curated permission allowlist (`.claude/settings.json` read-only; project-scoped script
+exec in `.claude/settings.local.json`). Gate: 143 Python tests + 3 PS suites + bootstrap
+smoke all green.
+
+**Deferred follow-ups (tracked, not done):**
+- Stale-run auto-idle (spec §5) — a dead `running` producer shows 🟢 forever; needs a
+  read-time `updated_at`-age check + fixture rework (deferred to avoid wall-clock test fragility).
+- Styling/`frontend-design` pass for the gutter/detail/sprites (templates ship unstyled).
+- Wire fleet dispatch to set/clear `~/.claude/current-run.json` per dispatched run so the
+  hook narrates real fleet runs.
+
+**Next slices (each gets its own spec → plan → build):** SP2 coordination backbone
+(verify **GitHub Agent HQ** ride-vs-build *before* speccing), SP3 `/idea` front door
+(research+viability debate → reviewable concept doc → tasks on the board), SP4 surface
+delight (pixel sprites + IDE renderers), plus the role/adversarial engine + ruflo call-out.
+
 ## A. Re-opening the project (every session)
 
 1. **Open Claude Code in the repo:**

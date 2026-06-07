@@ -31,6 +31,12 @@ Every agent should also read `docs/next-session.md` (the operating loop) and
    roll — including the `Ryfter/knowledge` base. Don't ask; just do it.
 6. **Knowledge is model-agnostic** (`Ryfter/knowledge`): keep `universal/` +
    `projects/` tool-neutral; isolate tool config under `config/` (decision d014).
+7. **Task-group closeout & compaction:** at the end of any task group (a finished
+   plan / sprint / milestone) — or proactively whenever context grows long — FIRST
+   save everything (every significant decision recorded with reasons + alternatives,
+   code committed, pushed to GitHub, memory + these handoff docs updated), state the
+   checklist explicitly, THEN prompt the human to compact the conversation. Save
+   before compacting, always. Canonical copy: `~/.claude/rules/task-group-closeout.md`.
 
 Shared rules live HERE. Model files should **reference** this section, not re-copy
 it — re-copying is how drift starts.
