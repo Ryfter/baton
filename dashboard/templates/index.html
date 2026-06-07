@@ -9,6 +9,12 @@
   {% include "partials/fleet_activity.html" %}
 </div>
 
+<!-- Per-agent assignment board (legibility feed, polls every 5s) -->
+<section class="assignments-section" style="grid-column: 1 / -1;">
+  <h2>Fleet assignments</h2>
+  <div id="assignments" hx-get="/partials/assignments" hx-trigger="load, every 5s"></div>
+</section>
+
 <!-- Runs gutter + detail (legibility feed, polls every 5s) -->
 <section class="runs-section">
   <h2>Runs</h2>

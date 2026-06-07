@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from dashboard.models.runs import RunRecord, RunEvent, RunDetail, GlobalStrip
+from dashboard.models.runs import RunRecord, RunEvent, RunDetail, GlobalStrip, AgentLane
 
 _ACTIVE_ORDER = {"needs-you": 0, "running": 1, "queued": 2, "idle": 3, "done": 4, "failed": 5}
 
@@ -108,3 +108,26 @@ def write_run_answer(runs_root: Path, run_id: str, answer: str) -> None:
     if not (run_dir / "run.json").exists():
         raise FileNotFoundError(f"No such run: {run_id}")
     (run_dir / "answer.txt").write_text(answer, encoding="utf-8")
+
+
+def read_assignments(runs_root: Path) -> list[AgentLane]:
+    """Group runs by model into per-agent lanes (active/queued/parked).
+
+    A model gets a lane if it has at least one run. Only running/queued/needs-you
+    runs populate the three lanes; done/failed/idle runs live in the gutter/history,
+    so a model whose runs are all terminal shows an empty (idle) lane. Lanes are
+    sorted by model name; runs within each lane keep list_runs' ordering.
+    """
+    lanes: dict[str, AgentLane] = {}
+    for r in list_runs(runs_root):       # already sorted by _sort_key
+        lane = lanes.get(r.model)
+        if lane is None:
+            lane = AgentLane(model=r.model)
+            lanes[r.model] = lane
+        if r.status == "running":
+            lane.active.append(r)
+        elif r.status == "queued":
+            lane.queued.append(r)
+        elif r.status == "needs-you":
+            lane.parked.append(r)
+    return [lanes[m] for m in sorted(lanes)]

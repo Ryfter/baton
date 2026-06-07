@@ -44,3 +44,10 @@ class GlobalStrip(BaseModel):
     rate_limit_resets_at: Optional[str] = None
     spend_today_usd: float = 0.0
     active_runs: int = 0
+
+
+class AgentLane(BaseModel):
+    model: str
+    active: list[RunRecord] = []     # status running
+    queued: list[RunRecord] = []     # status queued
+    parked: list[RunRecord] = []     # status needs-you

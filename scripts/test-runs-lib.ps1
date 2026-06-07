@@ -62,6 +62,23 @@ try {
     $raw2 = Get-Content (Join-Path $root 'run_files/run.json') -Raw | ConvertFrom-Json
     Check 'single-element files_touched is array' ($raw2.files_touched -is [System.Array] -or $raw2.files_touched.Count -eq 1)
     Check 'single-element files_touched value'    ($raw2.files_touched[0] -eq 'only.ts')
+
+    # --- SP2: current-run wiring ---
+    Set-CurrentRun -RunsRoot $root -Id 'job-x1' -Name 'wire SP2' -Model 'claude-opus-4-8' -Project 'coding-agent-orchestrator'
+    $curPath = Join-Path $root 'current-run.json'
+    Check 'current-run.json written'  (Test-Path $curPath)
+    $cur = Get-Content $curPath -Raw | ConvertFrom-Json
+    Check 'current id'                ($cur.id -eq 'job-x1')
+    Check 'current name'              ($cur.name -eq 'wire SP2')
+    $seed = Get-Content (Join-Path $root 'job-x1/run.json') -Raw | ConvertFrom-Json
+    Check 'run record seeded running' ($seed.status -eq 'running')
+
+    Clear-CurrentRun -RunsRoot $root
+    Check 'current-run.json removed'  (-not (Test-Path $curPath))
+    Check 'run record survives clear' (Test-Path (Join-Path $root 'job-x1/run.json'))
+    # idempotent: second clear must not throw
+    Clear-CurrentRun -RunsRoot $root
+    Check 'clear is idempotent'       (-not (Test-Path $curPath))
 }
 finally {
     if (Test-Path $root) { Remove-Item -Recurse -Force $root }

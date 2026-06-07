@@ -1,0 +1,41 @@
+{# Per-agent assignment board over the legibility feed. Polled every 5s. #}
+{% set parked_runs = [] %}
+{% for lane in lanes %}{% for r in lane.parked %}{% set _ = parked_runs.append(r) %}{% endfor %}{% endfor %}
+
+{% if parked_runs %}
+<div class="assign-parked-lane">
+  <h3>⏸ Parked — waiting on you</h3>
+  {% for r in parked_runs %}
+  <div class="assign-parked-item">
+    <span class="assign-model">{{ r.model }}</span>
+    <span class="assign-name">{{ r.name }}</span>
+    <p class="assign-question">{{ r.parked_question or "needs your input" }}</p>
+    <form hx-post="/runs/{{ r.id }}/answer" hx-target="#run-detail" hx-swap="innerHTML">
+      <input type="text" name="answer" placeholder="your answer…" required>
+      <button type="submit">Send</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="assign-board">
+  {% for lane in lanes %}
+  <div class="assign-lane">
+    <h4 class="assign-model">{{ lane.model }}</h4>
+    {% if lane.active %}
+      {% for r in lane.active %}
+      <div class="assign-active" hx-get="/partials/runs/{{ r.id }}" hx-target="#run-detail" hx-swap="innerHTML" style="cursor:pointer">
+        ▶ {{ r.name }}{% if r.current_step %} — {{ r.current_step }}{% endif %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="assign-idle muted">idle</div>
+    {% endif %}
+    <div class="assign-queued">
+      queued:
+      {% if lane.queued %}{{ lane.queued | map(attribute='name') | join(', ') }}{% else %}—{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>

@@ -22,6 +22,15 @@
 
 . (Join-Path $PSScriptRoot 'fleet-orchestrate.ps1')
 . (Join-Path $PSScriptRoot 'fleet-ensemble.ps1')
+. (Join-Path $PSScriptRoot 'fleet-runs-bridge.ps1')
+
+function script:Publish-ItemRunSafe {
+    # NB: parameter is $Splat, not $Args — $Args is a PowerShell automatic
+    # variable (unbound-arg array) and splatting it (@Args) picks up the
+    # automatic, not this param, breaking the call.
+    param([hashtable]$Splat)
+    try { Publish-ItemRun @Splat } catch { Write-Verbose "runs-feed publish failed: $_" }
+}
 
 function Get-TopoOrder {
     <# Kahn's algorithm over @( @{id; depends_on=@()} ). Throws on cycle/unknown dep. #>
@@ -89,6 +98,7 @@ function Invoke-BacklogItem {
 
     $wt = New-ItemWorktree -RepoRoot $RepoRoot -ItemId $id -Model $model -Base $Integration -WorktreeRoot $WorktreeRoot
     if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State 'running' -Extra @{ branch = $wt.branch } }
+    Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'running'; Branch = $wt.branch }
 
     $implErr = $null
     try { & $Implementer $wt.path $Item } catch { $implErr = $_.Exception.Message }
@@ -103,6 +113,11 @@ function Invoke-BacklogItem {
     if ($OutputDir) {
         Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State $state `
             -Extra @{ branch = $wt.branch; merged = $res.merged; reasons = $reasons; changed = @($res.gate.changed) }
+    }
+    if ($res.merged) {
+        Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'done'; Branch = $wt.branch }
+    } else {
+        Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'blocked'; Branch = $wt.branch; Reasons = $reasons }
     }
     return [pscustomobject]@{
         id = $id; model = $model; branch = $wt.branch; path = $wt.path
@@ -136,7 +151,10 @@ function Invoke-Backlog {
         $metaTasks = @($Tasks | ForEach-Object { @{ label = $_.id; provider = $_.model } })
         Write-EnsembleRunMeta -OutputDir $OutputDir -Kind 'backlog' -Prompt 'autonomous backlog run' `
             -Tasks $metaTasks -State 'running' -Started ((Get-Date).ToString('o'))
-        foreach ($t in $Tasks) { Write-ItemLive -OutputDir $OutputDir -Id $t.id -Model $t.model -State 'queued' }
+        foreach ($t in $Tasks) {
+            Write-ItemLive -OutputDir $OutputDir -Id $t.id -Model $t.model -State 'queued'
+            Publish-ItemRunSafe @{ Id = $t.id; Model = $t.model; State = 'queued'; Name = $t.title }
+        }
     }
 
     $results = @(); $blocked = @{}
@@ -147,6 +165,7 @@ function Invoke-Backlog {
         if ($deadDep.Count -gt 0) {
             $blocked[$id] = $true
             if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $item.model -State 'blocked' -Extra @{ reasons = @("dep-blocked: $($deadDep -join ', ')") } }
+            Publish-ItemRunSafe @{ Id = $id; Model = $item.model; State = 'blocked'; Reasons = @("dep-blocked: $($deadDep -join ', ')") }
             $results += [pscustomobject]@{ id = $id; model = $item.model; merged = $false; reasons = @("dep-blocked: $($deadDep -join ', ')"); changed = @() }
             continue
         }
@@ -154,6 +173,7 @@ function Invoke-Backlog {
         if (-not $impl) {
             $blocked[$id] = $true
             if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $item.model -State 'blocked' -Extra @{ reasons = @("no-implementer: '$($item.model)' cannot edit a worktree") } }
+            Publish-ItemRunSafe @{ Id = $id; Model = $item.model; State = 'blocked'; Reasons = @("no-implementer: '$($item.model)'") }
             $results += [pscustomobject]@{ id = $id; model = $item.model; merged = $false; reasons = @("no-implementer: '$($item.model)'"); changed = @() }
             continue
         }
@@ -226,7 +246,10 @@ function Invoke-BacklogConcurrent {
         $metaTasks = @($Tasks | ForEach-Object { @{ label = $_.id; provider = $_.model } })
         Write-EnsembleRunMeta -OutputDir $OutputDir -Kind 'backlog-concurrent' -Prompt 'autonomous concurrent backlog run' `
             -Tasks $metaTasks -State 'running' -Started ((Get-Date).ToString('o')) -TimeoutS $TimeoutS
-        foreach ($t in $Tasks) { Write-ItemLive -OutputDir $OutputDir -Id $t.id -Model $t.model -State 'queued' }
+        foreach ($t in $Tasks) {
+            Write-ItemLive -OutputDir $OutputDir -Id $t.id -Model $t.model -State 'queued'
+            Publish-ItemRunSafe @{ Id = $t.id; Model = $t.model; State = 'queued'; Name = $t.title }
+        }
     }
 
     $proc = @{}   # id -> result object (merged bool)
@@ -237,6 +260,7 @@ function Invoke-BacklogConcurrent {
             $deadDep = @(@($byId[$id].depends_on) | Where-Object { $_ -and $proc.ContainsKey($_) -and -not $proc[$_].merged })
             if ($deadDep.Count -gt 0) {
                 if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $byId[$id].model -State 'blocked' -Extra @{ reasons = @("dep-blocked: $($deadDep -join ', ')") } }
+                Publish-ItemRunSafe @{ Id = $id; Model = $byId[$id].model; State = 'blocked'; Reasons = @("dep-blocked: $($deadDep -join ', ')") }
                 $proc[$id] = [pscustomobject]@{ id = $id; model = $byId[$id].model; merged = $false; reasons = @("dep-blocked: $($deadDep -join ', ')"); changed = @() }
             }
         }
@@ -253,6 +277,7 @@ function Invoke-BacklogConcurrent {
             $item = $byId[$id]; $model = [string]$item.model
             if (-not $ModelSpecs[$model]) {
                 if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State 'blocked' -Extra @{ reasons = @("no-implementer: '$model'") } }
+                Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'blocked'; Reasons = @("no-implementer: '$model'") }
                 $proc[$id] = [pscustomobject]@{ id = $id; model = $model; merged = $false; reasons = @("no-implementer: '$model'"); changed = @() }
                 continue
             }
@@ -264,6 +289,7 @@ function Invoke-BacklogConcurrent {
             if (-not $argsJson) { $argsJson = '[]' }
             $job = Start-Job -ScriptBlock $script:BacklogJobWorker -ArgumentList $wt.path, $pf, $id, $OutputDir, $model, $spec.exe, $argsJson
             $jobs[$id] = @{ job = $job; wt = $wt; pf = $pf; item = $item }
+            Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'running'; Branch = $wt.branch }
         }
         if ($jobs.Count -eq 0) { continue }
 
@@ -281,6 +307,11 @@ function Invoke-BacklogConcurrent {
                 -TestCommand $item.test_command -WorktreeRoot $WorktreeRoot -AutoCommit
             $state = if ($res.merged) { 'done' } else { 'blocked' }
             if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $item.model -State $state -Extra @{ merged = $res.merged; reasons = @($res.gate.reasons); changed = @($res.gate.changed); branch = $info.wt.branch } }
+            if ($res.merged) {
+                Publish-ItemRunSafe @{ Id = $id; Model = $item.model; State = 'done'; Branch = $info.wt.branch }
+            } else {
+                Publish-ItemRunSafe @{ Id = $id; Model = $item.model; State = 'blocked'; Branch = $info.wt.branch; Reasons = @($res.gate.reasons) }
+            }
             $proc[$id] = [pscustomobject]@{ id = $id; model = $item.model; merged = $res.merged; reasons = @($res.gate.reasons); changed = @($res.gate.changed); branch = $info.wt.branch }
         }
     }

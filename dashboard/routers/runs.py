@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from dashboard.readers.runs import (
-    list_runs, read_run_detail, read_global_strip, write_run_answer,
+    list_runs, read_run_detail, read_global_strip, write_run_answer, read_assignments,
 )
 
 
@@ -25,6 +25,14 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
             "request": request,
             "runs": list_runs(root),
             "strip": read_global_strip(root),
+        })
+
+    @router.get("/partials/assignments", response_class=HTMLResponse)
+    async def partial_assignments(request: Request) -> HTMLResponse:
+        root = _runs_root(request)
+        return templates.TemplateResponse("partials/assignments.html", {
+            "request": request,
+            "lanes": read_assignments(root),
         })
 
     @router.get("/runs/{run_id}", response_class=HTMLResponse)

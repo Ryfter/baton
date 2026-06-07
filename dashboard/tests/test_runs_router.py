@@ -76,3 +76,14 @@ def test_app_registers_runs_routes():
     paths = {r.path for r in app.routes}
     assert "/partials/runs" in paths
     assert "/runs/{run_id}" in paths
+
+
+def test_partial_assignments_renders_models_and_parked(runs_root: Path):
+    client = TestClient(make_app(runs_root))
+    resp = client.get("/partials/assignments")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "claude-opus-4-8" in body
+    assert "codex" in body
+    # parked question from the fixture's needs-you run
+    assert "rotate tokens without invalidating logins?" in body

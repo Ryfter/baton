@@ -1,10 +1,14 @@
 import json
+import shutil
+import subprocess
 from pathlib import Path
+import pytest
 from fastapi import FastAPI
 from fastapi.templating import Jinja2Templates
 from fastapi.testclient import TestClient
 
 from dashboard.routers.runs import build_router
+from dashboard.readers.runs import read_assignments
 
 
 def make_app(runs_root: Path) -> FastAPI:
@@ -46,3 +50,24 @@ def test_full_lifecycle(tmp_path: Path):
     # agent resumes -> done
     _write_run(root, "run_e", status="done", current_step="finished")
     assert "run_e" in client.get("/partials/runs").text
+
+
+pwsh = shutil.which("pwsh")
+REPO = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.skipif(pwsh is None, reason="pwsh not available")
+def test_publish_item_run_lifecycle_to_assignments(tmp_path: Path):
+    runs_root = tmp_path / "runs"
+    script = (
+        f". '{REPO}/scripts/fleet-runs-bridge.ps1'; "
+        f"$env:ROUTING_RUNS_ROOT='{runs_root.as_posix()}'; "
+        "Publish-ItemRun -Id 'issue-22' -Model 'codex' -State 'queued' -Name 'wire bridge'; "
+        "Publish-ItemRun -Id 'issue-22' -Model 'codex' -State 'running' -Branch 'auto/issue-22-codex'"
+    )
+    subprocess.run([pwsh, "-NoProfile", "-Command", script], check=True, cwd=REPO)
+
+    lanes = {l.model: l for l in read_assignments(runs_root)}
+    assert "codex" in lanes
+    assert [r.id for r in lanes["codex"].active] == ["backlog-issue-22-codex"]
+    assert lanes["codex"].active[0].tree == "auto/issue-22-codex"
