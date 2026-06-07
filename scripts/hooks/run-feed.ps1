@@ -6,10 +6,11 @@
 #>
 param(
     [string]$RunsRoot    = $(if ($env:ROUTING_RUNS_ROOT) { $env:ROUTING_RUNS_ROOT } else { Join-Path $HOME '.claude/runs' }),
-    [string]$PointerPath = (Join-Path $HOME '.claude/current-run.json'),
+    [string]$PointerPath,
     [string]$ErrorPath   = (Join-Path $HOME '.claude/hooks/run-feed.err.log')
 )
 $ErrorActionPreference = 'Continue'  # never crash Claude Code
+if (-not $PointerPath) { $PointerPath = Join-Path $RunsRoot 'current-run.json' }
 
 function Write-ErrLog($m) {
     try {
@@ -35,7 +36,13 @@ function Narrate($tool, $inp) {
 
 try {
     $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-    . "$scriptDir/../runs-lib.ps1"
+    $libCandidates = @(
+        (Join-Path $scriptDir '../runs-lib.ps1'),          # repo layout: scripts/hooks -> scripts
+        (Join-Path $scriptDir '../scripts/runs-lib.ps1')   # deployed layout: ~/.claude/hooks -> ~/.claude/scripts
+    )
+    $libPath = $libCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $libPath) { throw "runs-lib.ps1 not found near $scriptDir" }
+    . $libPath
     if (-not (Test-Path $PointerPath)) { exit 0 }
     $ptr = Get-Content $PointerPath -Raw | ConvertFrom-Json
     if (-not $ptr.id) { exit 0 }

@@ -36,15 +36,15 @@ try {
     New-IdeaConceptDoc -Path $cpath -Title 'Better Front Door' -Idea 'a better front door' -Date '2026-06-07'
     Check 'concept.md written'         (Test-Path $cpath)
     $c = Get-Content $cpath -Raw
-    Check 'frontmatter title'          ($c -match '(?m)^title: Better Front Door$')
-    Check 'frontmatter status draft'   ($c -match '(?m)^status: draft$')
-    Check 'frontmatter source /idea'   ($c -match '(?m)^source: /idea$')
-    Check 'has Problem header'         ($c -match '(?m)^## Problem$')
-    Check 'has Viability header'       ($c -match '(?m)^## Viability verdict$')
-    Check 'has Approach header'        ($c -match '(?m)^## Proposed approach$')
-    Check 'has Risks header'           ($c -match '(?m)^## Risks & open questions$')
-    Check 'has Decomposition header'   ($c -match '(?m)^## Decomposition$')
-    Check 'has Out of scope header'    ($c -match '(?m)^## Out of scope$')
+    Check 'frontmatter title'          ($c -match '(?m)^title: Better Front Door\r?$')
+    Check 'frontmatter status draft'   ($c -match '(?m)^status: draft\r?$')
+    Check 'frontmatter source /idea'   ($c -match '(?m)^source: /idea\r?$')
+    Check 'has Problem header'         ($c -match '(?m)^## Problem\r?$')
+    Check 'has Viability header'       ($c -match '(?m)^## Viability verdict\r?$')
+    Check 'has Approach header'        ($c -match '(?m)^## Proposed approach\r?$')
+    Check 'has Risks header'           ($c -match '(?m)^## Risks & open questions\r?$')
+    Check 'has Decomposition header'   ($c -match '(?m)^## Decomposition\r?$')
+    Check 'has Out of scope header'    ($c -match '(?m)^## Out of scope\r?$')
 
     # --- Task 3: Build-IdeaIssues (pure) ---
     $tasks = @(
@@ -75,8 +75,11 @@ try {
     # --- Task 4: Publish-IdeaIssues (stubbed gh) ---
     # Stub: 'auth status' honours $script:authExit; 'issue create' fails for title 'FAILME'.
     $script:authExit = 0
+    $script:createdLabels = @()
     function gh {
         if ($args[0] -eq 'auth') { $global:LASTEXITCODE = $script:authExit; return 'ok' }
+        if ($args[0] -eq 'label' -and $args[1] -eq 'list') { $global:LASTEXITCODE = 0; return 'bug' }
+        if ($args[0] -eq 'label' -and $args[1] -eq 'create') { $global:LASTEXITCODE = 0; $script:createdLabels += $args[2]; return 'created' }
         $ti = [array]::IndexOf([object[]]$args, '--title')
         $title = if ($ti -ge 0) { $args[$ti + 1] } else { '' }
         if ($title -eq 'FAILME') { $global:LASTEXITCODE = 1; return 'boom' }
@@ -93,6 +96,8 @@ try {
     Check 'two results returned'       ($res.Count -eq 2)
     Check 'first ok'                   ($res[0].ok -eq $true)
     Check 'number parsed'              ($res[0].number -eq 123)
+    Check 'from:idea label ensured'    ($script:createdLabels -contains 'from:idea')
+    Check 'tier label ensured'         ($script:createdLabels -contains 'Tier-2')
 
     # per-issue isolation: middle one fails, others still created
     $mixed = @(

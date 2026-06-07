@@ -107,6 +107,42 @@ function Build-IdeaIssues {
     return ,([object[]]$out)
 }
 
+function Ensure-IdeaIssueLabels {
+    # Ensure labels used by /idea exist before issue creation. This keeps the
+    # publishing step from failing on a fresh repository with only default labels.
+    param(
+        [string[]]$Labels,
+        [string]$Repo
+    )
+    $want = @($Labels | Where-Object { $_ } | Select-Object -Unique)
+    if ($want.Count -eq 0) { return }
+
+    $listArgs = @('label', 'list', '--limit', '1000')
+    if ($Repo) { $listArgs += @('--repo', $Repo) }
+    $existingOut = (& gh @listArgs 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "gh label list failed: $($existingOut -join "`n")" }
+    $existing = @{}
+    foreach ($line in @($existingOut)) {
+        $name = ("$line" -split "`t| {2,}", 2)[0].Trim()
+        if ($name) { $existing[$name] = $true }
+    }
+
+    $defaults = @{
+        'from:idea' = @{ color = '5319E7'; description = 'Created by the /idea front door' }
+        'Tier-1'    = @{ color = 'D73A4A'; description = 'Highest-priority implementation tier' }
+        'Tier-2'    = @{ color = 'FBCA04'; description = 'Medium-priority implementation tier' }
+        'Tier-3'    = @{ color = '0E8A16'; description = 'Lower-priority implementation tier' }
+    }
+    foreach ($label in $want) {
+        if ($existing.ContainsKey($label)) { continue }
+        $meta = if ($defaults.ContainsKey($label)) { $defaults[$label] } else { @{ color = 'C5DEF5'; description = 'Created by /idea' } }
+        $createArgs = @('label', 'create', $label, '--color', $meta.color, '--description', $meta.description)
+        if ($Repo) { $createArgs += @('--repo', $Repo) }
+        $created = (& gh @createArgs 2>&1)
+        if ($LASTEXITCODE -ne 0) { throw "gh label create failed for ${label}: $($created -join "`n")" }
+    }
+}
+
 function Publish-IdeaIssues {
     # Thin gh wrapper. Pre-flight auth check stops before creating anything;
     # then best-effort per issue so one failure never aborts the rest.
@@ -120,6 +156,13 @@ function Publish-IdeaIssues {
     catch { $authOk = $false }
     if (-not $authOk) {
         return ,([object[]]@([pscustomobject]@{ title = '(preflight)'; number = $null; ok = $false; error = 'gh not authenticated' }))
+    }
+    try {
+        $allLabels = foreach ($iss in @($Issues)) { foreach ($l in @($iss.labels)) { $l } }
+        Ensure-IdeaIssueLabels -Labels ([string[]]$allLabels) -Repo $Repo
+    }
+    catch {
+        return ,([object[]]@([pscustomobject]@{ title = '(preflight)'; number = $null; ok = $false; error = "$_" }))
     }
     $results = @()
     foreach ($iss in @($Issues)) {

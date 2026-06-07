@@ -10,9 +10,10 @@
 #>
 param(
     [string]$RunsRoot    = $(if ($env:ROUTING_RUNS_ROOT) { $env:ROUTING_RUNS_ROOT } else { Join-Path $HOME '.claude/runs' }),
-    [string]$PointerPath = (Join-Path $HOME '.claude/current-run.json')
+    [string]$PointerPath
 )
 $ErrorActionPreference = 'Continue'
+if (-not $PointerPath) { $PointerPath = Join-Path $RunsRoot 'current-run.json' }
 
 function Field($obj, [string[]]$names) {
     foreach ($n in $names) {

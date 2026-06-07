@@ -102,6 +102,11 @@ Publish-IdeaIssues -Issues <object[]> [-Project <string>] [-Repo <string>] -> [o
 ```
 
 - **Pre-flight:** `gh auth status`; if it fails, stop **before** creating any issue and return a single error result (the conductor surfaces it; nothing partial is created).
+- **Label readiness:** before the first issue is created, ensure generated labels
+  exist (`from:idea`, `Tier-*`, and any extras). A fresh GitHub repo usually has
+  only default labels, and missing labels make `gh issue create` fail. Label
+  setup is treated as part of the pre-flight boundary: if it fails, no issues are
+  created.
 - Per issue: write `body` to a **temp file**, then `gh issue create --title <t> --body-file <tmp> --label <l>[,…]` (and add to Project #5 via the appropriate `gh` call). **965-byte rule:** the body is never passed as an inline argument.
 - Best-effort per issue: wrap each in try/catch; collect `{title, number, ok, error}` so the conductor can report exactly which landed and which failed. One failure never aborts the rest.
 - `Project`/`Repo` default to this project (Project #5, the orchestrator repo); params allow override + test stubbing.
@@ -123,6 +128,8 @@ Drives the six stages. Mirrors `/research` and `/council` structure:
 
 - **Thin research / debate does not abort the idea.** A council quorum-abort or sparse research is recorded as a *low-confidence viability* note in the concept doc; the human still gets a doc to judge. The pipeline never dead-ends before the gate.
 - **`gh` unauthenticated:** pre-flight check stops before any issue is created, with a clear message; nothing partial.
+- **Missing issue labels:** pre-flight creates them. If listing or creating labels
+  fails, return one pre-flight error and create no issues.
 - **Per-issue failures:** isolated by try/catch; reported by title with the error; remaining issues still created.
 - **965-byte ceiling:** issue bodies via `--body-file`, never inline. (Standing project rule.)
 - **Slug collisions:** the `-<ts>` suffix; degenerate slugs fall back to `idea`.
@@ -135,6 +142,9 @@ PowerShell (`scripts/test-idea-lib.ps1`):
 - `New-IdeaConceptDoc`: writes expected frontmatter + all six section headers.
 - `Build-IdeaIssues` (the core): N tasks → N payloads; title/body/labels assembled correctly; acceptance block included only when present; backlink present; `from:idea` always; tier label carried; labels de-duplicated; empty tasks → empty; a task with no title → skipped with warning; special characters in title/body survive.
 - `Publish-IdeaIssues`: with a stubbed `gh` (function shadow), unauth pre-flight returns the stop result and creates nothing; a per-issue failure is isolated and the rest proceed; results carry `{title, number, ok, error}`. (The real `gh` shell-out is not exercised in CI — network — and is intentionally a thin wrapper.)
+- Label readiness: the stubbed `gh` verifies missing generated labels are created
+  before issue creation, preventing first-run failures on repos with only default
+  labels.
 
 Smoke (`bootstrap.ps1` / `test-bootstrap.ps1`): bootstrap deploys `idea-lib.ps1` and `idea.md`.
 

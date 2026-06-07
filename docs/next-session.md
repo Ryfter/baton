@@ -87,9 +87,19 @@ boundary = issues on the board; dispatch stays a separate human act (decision **
 
 **SP3 deferred follow-ups (tracked, not done):**
 - Add `gh project item-add` wiring if `gh issue create --project` doesn't place issues on
-  Project #5 directly (the command passes `-Project`; verify on first real run).
-- First real `/idea` run is the acceptance test — `Publish-IdeaIssues`' `gh` shell-out is only
-  smoke-tested (network), so exercise it end to end once.
+  Project #5 directly (the command passes `-Project`; local `gh issue create --help`
+  confirms `--project` is supported and requires the `project` scope).
+- First real `/idea` run is still the acceptance test for project placement. The
+  issue publisher now preflights auth and ensures generated labels (`from:idea`,
+  `Tier-*`, extras) before creating issues, so a fresh repo's default-label state
+  should not block the run.
+
+**2026-06-07 review hardening:** Codex found and fixed two SP2 live-path gaps that
+tests did not catch: the deployed `run-feed.ps1` hook now locates
+`~/.claude/scripts/runs-lib.ps1` from the deployed `~/.claude/hooks/` layout, and
+`run-feed.ps1`/`statusline-feed.ps1` now default to the same runs-root
+`current-run.json` pointer written by `Set-CurrentRun`. The tests now cover both
+the default pointer path and the deployed hook layout.
 
 **Cost-optimization direction — tiered tool/model offload (decision d024, 2026-06-07).** User
 wants to cut direct Claude-token cost by pushing work off Claude: deterministic work → tools

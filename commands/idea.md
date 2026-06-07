@@ -100,9 +100,13 @@ you approve the concept doc before any issue is created.
    $results | Format-Table title, number, ok, error -AutoSize
    ```
 
-   If the first result is the `(preflight)` row with `ok = $false`, tell the user
-   `gh` isn't authenticated (suggest `! gh auth login`) and that **no issues were
-   created**. Otherwise report which issues landed (by number) and which failed.
+   `Publish-IdeaIssues` first checks `gh auth status`, then ensures the generated
+   labels (`from:idea`, any `Tier-*`, plus extras) exist before creating issues.
+   This is deliberate: a fresh repo normally has only GitHub's default labels, and
+   `gh issue create --label <missing>` fails. If the first result is the
+   `(preflight)` row with `ok = $false`, tell the user what failed (auth, label
+   listing/creation, project scope, etc.) and that **no issues were created**.
+   Otherwise report which issues landed (by number) and which failed.
 
 9. **Write the issue numbers back into `concept.md`** under the Decomposition
    section (e.g. append `- #<number> — <title>` for each created issue) so the

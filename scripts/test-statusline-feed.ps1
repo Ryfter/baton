@@ -10,7 +10,7 @@ function Check($n,$c){ if($c){Write-Host "PASS: $n"} else {Write-Host "FAIL: $n"
 
 try {
     $payload = '{"model":{"id":"claude-opus-4-8","display_name":"Opus"},"workspace":{"current_dir":"D:/Dev/coding-agent-orchestrator"},"cost":{"total_cost_usd":1.23}}'
-    $out = $payload | & pwsh -NoProfile -File $script -RunsRoot $root -PointerPath $pointer
+    $out = $payload | & pwsh -NoProfile -File $script -RunsRoot $root
     Check 'prints a status line' ($out -and $out.Length -gt 0)
     $rj = Join-Path $root 'run_t/run.json'
     Check 'run.json updated' (Test-Path $rj)
@@ -18,7 +18,7 @@ try {
     Check 'model captured' ($rec.model -eq 'claude-opus-4-8')
 
     # Empty/garbage payload must not crash and still print something
-    $out2 = '' | & pwsh -NoProfile -File $script -RunsRoot $root -PointerPath $pointer
+    $out2 = '' | & pwsh -NoProfile -File $script -RunsRoot $root
     Check 'survives empty stdin' ($LASTEXITCODE -eq 0)
 }
 finally { if (Test-Path $root) { Remove-Item -Recurse -Force $root } }
