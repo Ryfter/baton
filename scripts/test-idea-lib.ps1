@@ -71,6 +71,49 @@ try {
 
     $special = Build-IdeaIssues -Tasks @([pscustomobject]@{ title='Fix "quotes" & <tags>'; description='100% done' }) -ConceptPath '/x/concept.md'
     Check 'special chars survive'      ($special[0].title -eq 'Fix "quotes" & <tags>')
+
+    # --- Task 4: Publish-IdeaIssues (stubbed gh) ---
+    # Stub: 'auth status' honours $script:authExit; 'issue create' fails for title 'FAILME'.
+    $script:authExit = 0
+    function gh {
+        if ($args[0] -eq 'auth') { $global:LASTEXITCODE = $script:authExit; return 'ok' }
+        $ti = [array]::IndexOf([object[]]$args, '--title')
+        $title = if ($ti -ge 0) { $args[$ti + 1] } else { '' }
+        if ($title -eq 'FAILME') { $global:LASTEXITCODE = 1; return 'boom' }
+        $global:LASTEXITCODE = 0
+        return 'https://github.com/Ryfter/coding-agent-orchestrator/issues/123'
+    }
+
+    # happy path: two issues created
+    $okIssues = @(
+        [pscustomobject]@{ title='Alpha'; body='a'; labels=@('from:idea') },
+        [pscustomobject]@{ title='Beta';  body='b'; labels=@('from:idea','Tier-2') }
+    )
+    $res = Publish-IdeaIssues -Issues $okIssues
+    Check 'two results returned'       ($res.Count -eq 2)
+    Check 'first ok'                   ($res[0].ok -eq $true)
+    Check 'number parsed'              ($res[0].number -eq 123)
+
+    # per-issue isolation: middle one fails, others still created
+    $mixed = @(
+        [pscustomobject]@{ title='Alpha';  body='a'; labels=@('from:idea') },
+        [pscustomobject]@{ title='FAILME'; body='x'; labels=@('from:idea') },
+        [pscustomobject]@{ title='Gamma';  body='g'; labels=@('from:idea') }
+    )
+    $res2 = Publish-IdeaIssues -Issues $mixed
+    Check 'three results returned'     ($res2.Count -eq 3)
+    Check 'failing one flagged'        ($res2[1].ok -eq $false -and $res2[1].error)
+    Check 'after-failure one still ok' ($res2[2].ok -eq $true)
+
+    # unauth pre-flight: nothing created, single preflight error
+    $script:authExit = 1
+    $res3 = Publish-IdeaIssues -Issues $okIssues
+    Check 'unauth -> one preflight row'($res3.Count -eq 1)
+    Check 'unauth row not ok'          ($res3[0].ok -eq $false)
+    Check 'unauth error mentions auth' ($res3[0].error -like '*auth*')
+    $script:authExit = 0
+
+    Remove-Item Function:gh
 }
 finally {
     if (Test-Path $root) { Remove-Item -Recurse -Force $root }

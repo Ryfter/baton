@@ -106,3 +106,42 @@ function Build-IdeaIssues {
     }
     return ,([object[]]$out)
 }
+
+function Publish-IdeaIssues {
+    # Thin gh wrapper. Pre-flight auth check stops before creating anything;
+    # then best-effort per issue so one failure never aborts the rest.
+    param(
+        [object[]]$Issues,
+        [string]$Project,
+        [string]$Repo
+    )
+    $authOk = $true
+    try { & gh auth status 2>&1 | Out-Null; if ($LASTEXITCODE -ne 0) { $authOk = $false } }
+    catch { $authOk = $false }
+    if (-not $authOk) {
+        return ,([object[]]@([pscustomobject]@{ title = '(preflight)'; number = $null; ok = $false; error = 'gh not authenticated' }))
+    }
+    $results = @()
+    foreach ($iss in @($Issues)) {
+        $tmp = $null
+        try {
+            $tmp = New-TemporaryFile
+            Set-Content -Path $tmp -Value $iss.body -Encoding utf8
+            $ghArgs = @('issue', 'create', '--title', $iss.title, '--body-file', "$tmp")
+            foreach ($l in @($iss.labels)) { $ghArgs += @('--label', $l) }
+            if ($Repo)    { $ghArgs += @('--repo', $Repo) }
+            if ($Project) { $ghArgs += @('--project', $Project) }
+            $url = (& gh @ghArgs 2>&1 | Select-Object -Last 1)
+            if ($LASTEXITCODE -ne 0) { throw "gh issue create failed: $url" }
+            $num = if ("$url" -match '/(\d+)\s*$') { [int]$Matches[1] } else { $null }
+            $results += [pscustomobject]@{ title = $iss.title; number = $num; ok = $true; error = $null }
+        }
+        catch {
+            $results += [pscustomobject]@{ title = $iss.title; number = $null; ok = $false; error = "$_" }
+        }
+        finally {
+            if ($tmp -and (Test-Path $tmp)) { Remove-Item -Force $tmp }
+        }
+    }
+    return ,([object[]]$results)
+}
