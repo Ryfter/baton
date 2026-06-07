@@ -45,6 +45,32 @@ try {
     Check 'has Risks header'           ($c -match '(?m)^## Risks & open questions$')
     Check 'has Decomposition header'   ($c -match '(?m)^## Decomposition$')
     Check 'has Out of scope header'    ($c -match '(?m)^## Out of scope$')
+
+    # --- Task 3: Build-IdeaIssues (pure) ---
+    $tasks = @(
+        [pscustomobject]@{ title='Wire the bridge'; description='Connect A to B.'; acceptance='Tests pass.'; tier='Tier-1' },
+        [pscustomobject]@{ title='Add the view';    description='New panel.' }
+    )
+    $issues = Build-IdeaIssues -Tasks $tasks -ConceptPath '/x/concept.md' -ExtraLabels @('sp3')
+    Check 'two issues built'           ($issues.Count -eq 2)
+    Check 'title carried'              ($issues[0].title -eq 'Wire the bridge')
+    Check 'desc in body'              ($issues[0].body -like '*Connect A to B.*')
+    Check 'acceptance block present'   ($issues[0].body -like '*## Acceptance criteria*')
+    Check 'backlink present'           ($issues[0].body -like '*From concept: /x/concept.md*')
+    Check 'from:idea label always'     ($issues[0].labels -contains 'from:idea')
+    Check 'tier label carried'         ($issues[0].labels -contains 'Tier-1')
+    Check 'extra label carried'        ($issues[0].labels -contains 'sp3')
+    Check 'no acceptance -> no block'  ($issues[1].body -notlike '*## Acceptance criteria*')
+    Check 'labels de-duplicated'       (($issues[0].labels | Where-Object { $_ -eq 'from:idea' }).Count -eq 1)
+
+    $none = Build-IdeaIssues -Tasks @() -ConceptPath '/x/concept.md'
+    Check 'empty tasks -> empty'       ($none.Count -eq 0)
+
+    $bad = Build-IdeaIssues -Tasks @([pscustomobject]@{ description='no title here' }) -ConceptPath '/x/concept.md' -WarningAction SilentlyContinue
+    Check 'titleless task skipped'     ($bad.Count -eq 0)
+
+    $special = Build-IdeaIssues -Tasks @([pscustomobject]@{ title='Fix "quotes" & <tags>'; description='100% done' }) -ConceptPath '/x/concept.md'
+    Check 'special chars survive'      ($special[0].title -eq 'Fix "quotes" & <tags>')
 }
 finally {
     if (Test-Path $root) { Remove-Item -Recurse -Force $root }

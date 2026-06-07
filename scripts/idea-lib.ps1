@@ -81,3 +81,28 @@ _What this explicitly does not include._
 "@
     Set-Content -Path $Path -Value $doc -Encoding utf8
 }
+
+function Build-IdeaIssues {
+    # Pure: turn epic-level task objects into GitHub issue payloads. No network.
+    param(
+        [object[]]$Tasks,
+        [Parameter(Mandatory)][string]$ConceptPath,
+        [string[]]$ExtraLabels
+    )
+    $out = @()
+    foreach ($t in @($Tasks)) {
+        $title = "$($t.title)".Trim()
+        if (-not $title) { Write-Warning "Skipping task with no title."; continue }
+        $bodyParts = @()
+        if ($t.description) { $bodyParts += "$($t.description)".Trim() }
+        if ($t.acceptance)  { $bodyParts += "## Acceptance criteria`n`n$("$($t.acceptance)".Trim())" }
+        $bodyParts += "From concept: $ConceptPath"
+        $body = ($bodyParts -join "`n`n")
+        $labels = @('from:idea')
+        if ($t.tier) { $labels += "$($t.tier)".Trim() }
+        if ($ExtraLabels) { $labels += $ExtraLabels }
+        $labels = @($labels | Where-Object { $_ } | Select-Object -Unique)
+        $out += [pscustomobject]@{ title = $title; body = $body; labels = $labels }
+    }
+    return ,([object[]]$out)
+}
