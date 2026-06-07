@@ -73,9 +73,36 @@ Spec/plan: `docs/superpowers/specs/2026-06-06-sp2-coordination-backbone-design.m
 - The Slice 1 deferrals still stand: stale-run auto-idle (spec §5) and a `frontend-design`
   styling pass for the gutter/assignment board/sprites.
 
-**Next slices (each gets its own spec → plan → build):** SP3 `/idea` front door
-(research+viability debate → reviewable concept doc → tasks on the board), SP4 surface
-delight (pixel sprites + IDE renderers), plus the role/adversarial engine + ruflo call-out.
+**SP3 — `/idea` front door: SHIPPED** (merged `b348855`, 2026-06-07). One command turns a
+raw idea into board-ready GitHub Issues with a single human gate (concept-doc approval).
+Job-less stitch (Approach A) of existing primitives — KB prefetch → `/research` ensemble →
+`/council` two-round viability debate → a conductor-written concept doc → Issues on Project
+#5 — backed by one new tested lib `scripts/idea-lib.ps1` (`New-IdeaWorkspace`,
+`New-IdeaConceptDoc`, pure `Build-IdeaIssues`, `gh` `Publish-IdeaIssues` with auth pre-flight
++ per-issue isolation + `--body-file` for the 965-byte rule) and `commands/idea.md`. End
+boundary = issues on the board; dispatch stays a separate human act (decision **d023**). Gate:
+154 Python + 6 PowerShell suites + bootstrap smoke. Spec/plan:
+`docs/superpowers/specs/2026-06-07-sp3-idea-front-door-design.md`,
+`docs/superpowers/plans/2026-06-07-sp3-idea-front-door.md`.
+
+**SP3 deferred follow-ups (tracked, not done):**
+- Add `gh project item-add` wiring if `gh issue create --project` doesn't place issues on
+  Project #5 directly (the command passes `-Project`; verify on first real run).
+- First real `/idea` run is the acceptance test — `Publish-IdeaIssues`' `gh` shell-out is only
+  smoke-tested (network), so exercise it end to end once.
+
+**Cost-optimization direction — tiered tool/model offload (decision d024, 2026-06-07).** User
+wants to cut direct Claude-token cost by pushing work off Claude: deterministic work → tools
+(free), cheap-LLM work → local/free fleet models, Claude reserved for coordination/judgment.
+First concrete capability: **PDF breakdown** — plain token-bounded chunking done in local
+Python (free, zero Claude tokens) for the KB; **Docling** (IBM OSS, local, free) chosen as the
+hard-PDF extraction **call-out** per d018 (NeMo Retriever = too heavy/GPU-bound; Gemini
+Flash/Mistral OCR = cheap-cloud fallbacks). This is the likely **next slice** (own spec → plan
+→ build): a tool/model cost-tiering layer with the Docling PDF call-out as its first entry.
+
+**Next slices (each gets its own spec → plan → build):** the cost-tiering / Docling PDF
+call-out layer (d024, above); SP4 surface delight (pixel sprites + IDE renderers); plus the
+role/adversarial engine + ruflo call-out.
 
 ## A. Re-opening the project (every session)
 
