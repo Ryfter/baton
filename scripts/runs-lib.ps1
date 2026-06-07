@@ -84,3 +84,31 @@ function Get-RunAnswer {
     if (Test-Path $path) { return (Get-Content $path -Raw).TrimEnd("`r","`n") }
     return $null
 }
+
+function Set-CurrentRun {
+    # Mark the conductor's own session as the active run so the PostToolUse
+    # run-feed hook narrates into it. Seeds the run record as 'running'.
+    param(
+        [string]$RunsRoot, [Parameter(Mandatory)][string]$Id,
+        [string]$Name, [string]$Model, [string]$Project
+    )
+    $root = Get-RunsRoot $RunsRoot
+    if (-not (Test-Path $root)) { New-Item -ItemType Directory -Force -Path $root | Out-Null }
+    $seed = @{ RunsRoot = $RunsRoot; Id = $Id; Status = 'running' }
+    if ($Name)    { $seed['Name'] = $Name }
+    if ($Model)   { $seed['Model'] = $Model }
+    if ($Project) { $seed['Project'] = $Project }
+    Set-RunRecord @seed
+    $obj = [ordered]@{ id = $Id }
+    if ($Name)    { $obj.name = $Name }
+    if ($Model)   { $obj.model = $Model }
+    if ($Project) { $obj.project = $Project }
+    ($obj | ConvertTo-Json) | Set-Content -Path (Join-Path $root 'current-run.json') -Encoding utf8
+}
+
+function Clear-CurrentRun {
+    # Remove the current-run pointer (idempotent). Leaves the run record as history.
+    param([string]$RunsRoot)
+    $path = Join-Path (Get-RunsRoot $RunsRoot) 'current-run.json'
+    if (Test-Path $path) { Remove-Item -Force $path }
+}
