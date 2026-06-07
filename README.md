@@ -113,6 +113,9 @@ pwsh -NoProfile -File scripts\test-six-hats.ps1
 pwsh -NoProfile -File scripts\test-council.ps1
 pwsh -NoProfile -File scripts\test-code-lib.ps1
 pwsh -NoProfile -File scripts\test-bootstrap.ps1
+pwsh -NoProfile -File scripts\test-runs-lib.ps1
+pwsh -NoProfile -File scripts\test-run-feed-hook.ps1
+pwsh -NoProfile -File scripts\test-statusline-feed.ps1
 # Python (dashboard + knowledge base)
 python -m pytest dashboard kb -q
 ```

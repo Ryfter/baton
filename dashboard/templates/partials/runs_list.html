@@ -1,0 +1,18 @@
+<div class="runs-gutter">
+  {% for r in runs %}
+  <a class="run-card status-{{ r.status }}" href="/runs/{{ r.id }}"
+     hx-get="/partials/runs/{{ r.id }}" hx-target="#run-detail">
+    <div class="run-name">{{ r.name }}
+      {% if r.status == 'needs-you' %}⏳{% elif r.status == 'running' %}🟢{% elif r.status == 'idle' %}💤{% elif r.status == 'done' %}✓{% elif r.status == 'failed' %}✗{% endif %}
+    </div>
+    <div class="run-meta">{{ r.model }}{% if r.tree %} · {{ r.tree }}{% endif %}</div>
+    <div class="run-meta">
+      {% if r.context_pct is not none %}ctx{{ r.context_pct }}%{% endif %}
+      · ${{ "%.2f"|format(r.cost_usd) }}
+    </div>
+  </a>
+  {% else %}
+  <p class="muted">No runs yet.</p>
+  {% endfor %}
+</div>
+{% include "partials/global_strip.html" %}

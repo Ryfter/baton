@@ -116,6 +116,12 @@ $ddHookSrc = Join-Path $repoRoot 'scripts\hooks\decision-detect.ps1'
 $ddHookDst = Join-Path $claudeDir 'hooks\decision-detect.ps1'
 Copy-WithPrompt $ddHookSrc $ddHookDst 'decision-detect hook'
 
+# Legibility-feed narration hook: appends a plain-English event for the active run
+# on every tool use. No-ops when no current-run.json pointer exists. Always exits 0.
+$runFeedHookSrc = Join-Path $repoRoot 'scripts\hooks\run-feed.ps1'
+$runFeedHookDst = Join-Path $claudeDir 'hooks\run-feed.ps1'
+Copy-WithPrompt $runFeedHookSrc $runFeedHookDst 'run-feed hook'
+
 # --- Step 3: Register hooks in settings.json (PostToolUse + Stop) ---
 Write-Step "Registering hooks in settings.json"
 $settingsPath = Join-Path $claudeDir 'settings.json'
@@ -147,18 +153,30 @@ if ($DryRun -and -not (Test-Path $settingsPath)) {
     $settings = $raw | ConvertFrom-Json
     if (-not $settings.hooks) { $settings | Add-Member -NotePropertyName hooks -NotePropertyValue (New-Object PSObject) -Force }
 
-    $addedPost = Add-HookEntry $settings 'PostToolUse' "pwsh -NoProfile -File `"$hookDst`"" 'log-tool-call.ps1'
-    $addedStop = Add-HookEntry $settings 'Stop'        "pwsh -NoProfile -File `"$ddHookDst`"" 'decision-detect.ps1'
+    $addedPost    = Add-HookEntry $settings 'PostToolUse' "pwsh -NoProfile -File `"$hookDst`"" 'log-tool-call.ps1'
+    $addedStop    = Add-HookEntry $settings 'Stop'        "pwsh -NoProfile -File `"$ddHookDst`"" 'decision-detect.ps1'
+    $addedRunFeed = Add-HookEntry $settings 'PostToolUse' "pwsh -NoProfile -File `"$runFeedHookDst`"" 'run-feed.ps1'
+
+    # statusLine: point at the legibility-feed status-line script (idempotent).
+    $statusLineDst = Join-Path $claudeDir 'scripts\statusline-feed.ps1'
+    $addedStatusLine = $false
+    if (-not ($settings.PSObject.Properties.Name -contains 'statusLine') -or
+        [string]::IsNullOrEmpty($settings.statusLine)) {
+        $settings | Add-Member -NotePropertyName statusLine -NotePropertyValue "pwsh -NoProfile -File `"$statusLineDst`"" -Force
+        $addedStatusLine = $true
+    }
 
     foreach ($r in @(
-        @{ name = 'PostToolUse hook (log-tool-call)'; added = $addedPost },
-        @{ name = 'Stop hook (decision-detect)';      added = $addedStop }
+        @{ name = 'PostToolUse hook (log-tool-call)';  added = $addedPost },
+        @{ name = 'Stop hook (decision-detect)';        added = $addedStop },
+        @{ name = 'PostToolUse hook (run-feed)';        added = $addedRunFeed },
+        @{ name = 'statusLine (statusline-feed)';       added = $addedStatusLine }
     )) {
         if (-not $r.added)  { Write-Skip "$($r.name) already registered" }
         elseif ($DryRun)    { Write-Ok "[dry-run] would register $($r.name)" }
     }
 
-    if (($addedPost -or $addedStop) -and -not $DryRun) {
+    if (($addedPost -or $addedStop -or $addedRunFeed -or $addedStatusLine) -and -not $DryRun) {
         # Backup before mutating: if write is interrupted, user can recover .bak
         $backupPath = "$settingsPath.bak"
         Copy-Item $settingsPath $backupPath -Force
@@ -229,7 +247,7 @@ if (-not (Test-Path $scriptsDst)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $scriptsDst" }
     else { New-Item -ItemType Directory -Force -Path $scriptsDst | Out-Null; Write-Ok "created $scriptsDst" }
 }
-foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'six-hats-lib.ps1', 'council-lib.ps1', 'code-lib.ps1', 'kb-lib.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1')) {
+foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'six-hats-lib.ps1', 'council-lib.ps1', 'code-lib.ps1', 'kb-lib.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1', 'runs-lib.ps1', 'statusline-feed.ps1')) {
     $src = Join-Path $repoRoot "scripts\$script"
     $dst = Join-Path $scriptsDst $script
     Copy-WithPrompt $src $dst "lib script: $script" -Force

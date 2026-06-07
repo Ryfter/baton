@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/">← Back to dashboard</a></p>
+<div id="run-detail"
+     hx-get="/partials/runs/{{ detail.record.id }}"
+     hx-trigger="every 5s">
+  {% include "partials/run_detail_live.html" %}
+</div>
+{% endblock %}

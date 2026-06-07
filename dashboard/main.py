@@ -34,6 +34,11 @@ ENSEMBLES_ROOT = Path(
     or Path.home() / '.claude' / 'ensembles'
 )
 
+RUNS_ROOT = Path(
+    os.environ.get('ROUTING_RUNS_ROOT', '')
+    or Path.home() / '.claude' / 'runs'
+)
+
 _HERE = Path(__file__).parent
 
 app = FastAPI(title="Routing Dashboard", version="2.0.0")
@@ -41,6 +46,7 @@ app.state.journal_path = JOURNAL_PATH
 app.state.jobs_root = JOBS_ROOT
 app.state.kb_root = KB_ROOT
 app.state.ensembles_root = ENSEMBLES_ROOT
+app.state.runs_root = RUNS_ROOT
 
 app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 templates = Jinja2Templates(directory=str(_HERE / "templates"))
@@ -56,6 +62,9 @@ app.include_router(build_projects_router(templates))
 
 from dashboard.routers.kb import build_router as build_kb_router
 app.include_router(build_kb_router(templates))
+
+from dashboard.routers.runs import build_router as build_runs_router
+app.include_router(build_runs_router(templates))
 
 
 def _ctx(request: Request) -> dict:

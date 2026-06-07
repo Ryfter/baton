@@ -1,0 +1,8 @@
+<div class="global-strip">
+  <span>⏱ 5h
+    {% if strip.rate_limit_pct is not none %}{{ strip.rate_limit_pct }}%{% else %}—{% endif %}
+    {% if strip.rate_limit_resets_at %}→ {{ strip.rate_limit_resets_at }}{% endif %}
+  </span>
+  <span>· today ${{ "%.2f"|format(strip.spend_today_usd) }}</span>
+  <span>· {{ strip.active_runs }} runs</span>
+</div>

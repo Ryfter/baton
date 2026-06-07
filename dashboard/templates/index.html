@@ -9,6 +9,13 @@
   {% include "partials/fleet_activity.html" %}
 </div>
 
+<!-- Runs gutter + detail (legibility feed, polls every 5s) -->
+<section class="runs-section">
+  <h2>Runs</h2>
+  <div id="runs-gutter" hx-get="/partials/runs" hx-trigger="load, every 5s"></div>
+  <div id="run-detail"><p class="muted">Select a run to see what it's doing.</p></div>
+</section>
+
 <!-- Portfolio panel — polls every 60s -->
 <div class="card" style="grid-column: 1 / -1;"
      hx-get="/partials/projects"
