@@ -15,7 +15,7 @@
     {% endfor %}
   </ol>
 
-  <p class="cost">{{ detail.record.tokens_in }}k in / {{ detail.record.tokens_out }}k out ·
+  <p class="cost">{{ "{:,}".format(detail.record.tokens_in) }} in / {{ "{:,}".format(detail.record.tokens_out) }} out tok ·
      ${{ "%.2f"|format(detail.record.cost_usd) }}
      {% if detail.record.files_touched %}· {{ detail.record.files_touched|join(", ") }}{% endif %}</p>
 
