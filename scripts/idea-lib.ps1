@@ -1,0 +1,147 @@
+#!/usr/bin/env pwsh
+# Library for the /idea front door. Job-less: creates an idea workspace, scaffolds
+# the concept doc, builds GitHub issue payloads (pure), and publishes them via gh.
+
+function Get-IdeasRoot([string]$IdeasRoot) {
+    if ($IdeasRoot) { return $IdeasRoot }
+    if ($env:IDEAS_ROOT) { return $env:IDEAS_ROOT }
+    return (Join-Path $HOME '.claude/ideas')
+}
+
+function ConvertTo-IdeaSlug([string]$Text) {
+    if (-not $Text) { return 'idea' }
+    $s = $Text.ToLowerInvariant() -replace '[^a-z0-9]+', '-'
+    $s = $s.Trim('-')
+    if ($s.Length -gt 60) { $s = $s.Substring(0, 60).Trim('-') }
+    if (-not $s) { return 'idea' }
+    return $s
+}
+
+function New-IdeaWorkspace {
+    param(
+        [Parameter(Mandatory)][string]$Idea,
+        [string]$IdeasRoot,
+        [string]$Timestamp
+    )
+    $root = Get-IdeasRoot $IdeasRoot
+    $slug = ConvertTo-IdeaSlug $Idea
+    if (-not $Timestamp) { $Timestamp = (Get-Date -Format 'yyyy-MM-ddTHH-mm-ss') }
+    $path = Join-Path $root "$slug-$Timestamp"
+    foreach ($sub in @('', 'research', 'council')) {
+        $d = if ($sub) { Join-Path $path $sub } else { $path }
+        if (-not (Test-Path $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+    }
+    return [pscustomobject]@{ path = $path; slug = $slug }
+}
+
+function New-IdeaConceptDoc {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Title,
+        [string]$Idea,
+        [string]$Date
+    )
+    if (-not $Date) { $Date = (Get-Date -Format 'yyyy-MM-dd') }
+    $ideaLine = if ($Idea) { $Idea } else { '(raw idea)' }
+    $doc = @"
+---
+title: $Title
+date: $Date
+status: draft
+source: /idea
+---
+
+# $Title
+
+> Raw idea: $ideaLine
+
+## Problem
+
+_What hurts, and for whom._
+
+## Viability verdict
+
+_The debate's go / no-go / go-if, with confidence._
+
+## Proposed approach
+
+_The strongest version of the idea._
+
+## Risks & open questions
+
+_What could sink this; what we still don't know._
+
+## Decomposition
+
+_Epic-level tasks — each becomes a GitHub Issue._
+
+## Out of scope
+
+_What this explicitly does not include._
+"@
+    Set-Content -Path $Path -Value $doc -Encoding utf8
+}
+
+function Build-IdeaIssues {
+    # Pure: turn epic-level task objects into GitHub issue payloads. No network.
+    param(
+        [object[]]$Tasks,
+        [Parameter(Mandatory)][string]$ConceptPath,
+        [string[]]$ExtraLabels
+    )
+    $out = @()
+    foreach ($t in @($Tasks)) {
+        $title = "$($t.title)".Trim()
+        if (-not $title) { Write-Warning "Skipping task with no title."; continue }
+        $bodyParts = @()
+        if ($t.description) { $bodyParts += "$($t.description)".Trim() }
+        if ($t.acceptance)  { $bodyParts += "## Acceptance criteria`n`n$("$($t.acceptance)".Trim())" }
+        $bodyParts += "From concept: $ConceptPath"
+        $body = ($bodyParts -join "`n`n")
+        $labels = @('from:idea')
+        if ($t.tier) { $labels += "$($t.tier)".Trim() }
+        if ($ExtraLabels) { $labels += $ExtraLabels }
+        $labels = @($labels | Where-Object { $_ } | Select-Object -Unique)
+        $out += [pscustomobject]@{ title = $title; body = $body; labels = $labels }
+    }
+    return ,([object[]]$out)
+}
+
+function Publish-IdeaIssues {
+    # Thin gh wrapper. Pre-flight auth check stops before creating anything;
+    # then best-effort per issue so one failure never aborts the rest.
+    param(
+        [object[]]$Issues,
+        [string]$Project,
+        [string]$Repo
+    )
+    $authOk = $true
+    try { & gh auth status 2>&1 | Out-Null; if ($LASTEXITCODE -ne 0) { $authOk = $false } }
+    catch { $authOk = $false }
+    if (-not $authOk) {
+        return ,([object[]]@([pscustomobject]@{ title = '(preflight)'; number = $null; ok = $false; error = 'gh not authenticated' }))
+    }
+    $results = @()
+    foreach ($iss in @($Issues)) {
+        $tmp = $null
+        try {
+            $tmp = New-TemporaryFile
+            Set-Content -Path $tmp -Value $iss.body -Encoding utf8
+            $ghArgs = @('issue', 'create', '--title', $iss.title, '--body-file', "$tmp")
+            foreach ($l in @($iss.labels)) { $ghArgs += @('--label', $l) }
+            if ($Repo)    { $ghArgs += @('--repo', $Repo) }
+            if ($Project) { $ghArgs += @('--project', $Project) }
+            $url = (& gh @ghArgs 2>&1 | Select-Object -Last 1)
+            if ($LASTEXITCODE -ne 0) { throw "gh issue create failed: $url" }
+            $num = if ("$url" -match '/(\d+)\s*$') { [int]$Matches[1] } else { $null }
+            $results += [pscustomobject]@{ title = $iss.title; number = $num; ok = $true; error = $null }
+        }
+        catch {
+            $results += [pscustomobject]@{ title = $iss.title; number = $null; ok = $false; error = "$_" }
+        }
+        finally {
+            if ($tmp -and (Test-Path $tmp)) { Remove-Item -Force $tmp }
+        }
+    }
+    return ,([object[]]$results)
+}

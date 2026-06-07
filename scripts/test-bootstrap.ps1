@@ -22,6 +22,8 @@ Assert "mentions OTel env helper"        ($out -match 'OTel env')
 Assert "mentions slash commands"         ($out -match 'slash commands')
 Assert "mentions catalog deployment"     ($out -match 'catalog')
 Assert "mentions backend verification"   ($out -match 'Verifying backends')
+Assert "would deploy idea-lib.ps1"        ($out -match 'idea-lib\.ps1')
+Assert "would deploy idea.md"             ($out -match 'idea\.md')
 Assert "does not exit non-zero"          ($LASTEXITCODE -eq 0 -or $out -match 'Bootstrap complete')
 
 # Static check: bootstrap must back up settings.json before overwriting it.
