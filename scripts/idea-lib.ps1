@@ -33,3 +33,51 @@ function New-IdeaWorkspace {
     }
     return [pscustomobject]@{ path = $path; slug = $slug }
 }
+
+function New-IdeaConceptDoc {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Title,
+        [string]$Idea,
+        [string]$Date
+    )
+    if (-not $Date) { $Date = (Get-Date -Format 'yyyy-MM-dd') }
+    $ideaLine = if ($Idea) { $Idea } else { '(raw idea)' }
+    $doc = @"
+---
+title: $Title
+date: $Date
+status: draft
+source: /idea
+---
+
+# $Title
+
+> Raw idea: $ideaLine
+
+## Problem
+
+_What hurts, and for whom._
+
+## Viability verdict
+
+_The debate's go / no-go / go-if, with confidence._
+
+## Proposed approach
+
+_The strongest version of the idea._
+
+## Risks & open questions
+
+_What could sink this; what we still don't know._
+
+## Decomposition
+
+_Epic-level tasks — each becomes a GitHub Issue._
+
+## Out of scope
+
+_What this explicitly does not include._
+"@
+    Set-Content -Path $Path -Value $doc -Encoding utf8
+}
