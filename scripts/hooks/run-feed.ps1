@@ -34,7 +34,8 @@ function Narrate($tool, $inp) {
 }
 
 try {
-    . "$PSScriptRoot/../runs-lib.ps1"
+    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+    . "$scriptDir/../runs-lib.ps1"
     if (-not (Test-Path $PointerPath)) { exit 0 }
     $ptr = Get-Content $PointerPath -Raw | ConvertFrom-Json
     if (-not $ptr.id) { exit 0 }
@@ -46,6 +47,23 @@ try {
     if (-not $what) { exit 0 }
     $status = if ($null -ne $evt.tool_response.exit_code -and $evt.tool_response.exit_code -ne 0) { 'failed' } else { 'done' }
     Add-RunEvent -RunsRoot $RunsRoot -Id $ptr.id -Kind 'action' -What $what -Status $status
+
+    # Update run.json: refresh current_step (+ updated_at always); merge files_touched for file-oriented tools
+    $setParams = @{ RunsRoot = $RunsRoot; Id = $ptr.id; CurrentStep = $what }
+    if ($evt.tool_name -in @('Read','Write','Edit')) {
+        $leaf = Split-Path -Leaf $evt.tool_input.file_path
+        if ($leaf) {
+            $runPath = Join-Path (Get-RunsRoot $RunsRoot) "$($ptr.id)/run.json"
+            $existing = @()
+            if (Test-Path $runPath) {
+                $r = Get-Content $runPath -Raw | ConvertFrom-Json
+                if ($r.files_touched) { $existing = @($r.files_touched) }
+            }
+            if ($existing -notcontains $leaf) { $existing = $existing + $leaf }
+            $setParams['FilesTouched'] = [string[]]$existing
+        }
+    }
+    Set-RunRecord @setParams
     exit 0
 } catch {
     Write-ErrLog "run-feed hook: $($_.Exception.Message)"

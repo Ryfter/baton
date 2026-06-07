@@ -22,7 +22,7 @@ function Set-RunRecord {
         [string]$Model, [string]$Status, [string]$Reasoning, [string]$Project,
         [string]$Tree, [bool]$Worktree = $false, [object]$ContextPct,
         [double]$CostUsd = 0, [int]$TokensIn = 0, [int]$TokensOut = 0,
-        [string]$CurrentStep, [object]$ParkedQuestion
+        [string]$CurrentStep, [object]$ParkedQuestion, [string[]]$FilesTouched
     )
     $dir = Ensure-RunDir $RunsRoot $Id
     $path = Join-Path $dir 'run.json'
@@ -34,13 +34,18 @@ function Set-RunRecord {
     if ($Reasoning)   { $rec | Add-Member -NotePropertyName reasoning -NotePropertyValue $Reasoning -Force }
     if ($Project)     { $rec | Add-Member -NotePropertyName project -NotePropertyValue $Project -Force }
     if ($Tree)        { $rec | Add-Member -NotePropertyName tree -NotePropertyValue $Tree -Force }
-    $rec | Add-Member -NotePropertyName worktree -NotePropertyValue $Worktree -Force
-    if ($null -ne $ContextPct)     { $rec | Add-Member -NotePropertyName context_pct -NotePropertyValue ([int]$ContextPct) -Force }
-    $rec | Add-Member -NotePropertyName cost_usd -NotePropertyValue $CostUsd -Force
-    $rec | Add-Member -NotePropertyName tokens_in -NotePropertyValue $TokensIn -Force
-    $rec | Add-Member -NotePropertyName tokens_out -NotePropertyValue $TokensOut -Force
+    # Guard: only write these when caller explicitly passed them (partial updates must not reset existing values)
+    if ($PSBoundParameters.ContainsKey('Worktree'))   { $rec | Add-Member -NotePropertyName worktree -NotePropertyValue $Worktree -Force }
+    if ($null -ne $ContextPct)                        { $rec | Add-Member -NotePropertyName context_pct -NotePropertyValue ([int]$ContextPct) -Force }
+    if ($PSBoundParameters.ContainsKey('CostUsd'))    { $rec | Add-Member -NotePropertyName cost_usd -NotePropertyValue $CostUsd -Force }
+    if ($PSBoundParameters.ContainsKey('TokensIn'))   { $rec | Add-Member -NotePropertyName tokens_in -NotePropertyValue $TokensIn -Force }
+    if ($PSBoundParameters.ContainsKey('TokensOut'))  { $rec | Add-Member -NotePropertyName tokens_out -NotePropertyValue $TokensOut -Force }
     if ($CurrentStep) { $rec | Add-Member -NotePropertyName current_step -NotePropertyValue $CurrentStep -Force }
     if ($null -ne $ParkedQuestion) { $rec | Add-Member -NotePropertyName parked_question -NotePropertyValue $ParkedQuestion -Force }
+    # FilesTouched: ensure single-element lists serialise as JSON arrays, not bare strings
+    if ($PSBoundParameters.ContainsKey('FilesTouched')) {
+        $rec | Add-Member -NotePropertyName files_touched -NotePropertyValue ([object[]]$FilesTouched) -Force
+    }
     $rec | Add-Member -NotePropertyName updated_at -NotePropertyValue (Now-Iso) -Force
     $rec | ConvertTo-Json -Depth 6 | Set-Content -Path $path -Encoding utf8
 }

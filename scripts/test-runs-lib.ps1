@@ -36,6 +36,32 @@ try {
     Check 'answer absent -> null' ($null -eq (Get-RunAnswer -RunsRoot $root -Id 'run_t'))
     Set-Content -Path (Join-Path $root 'run_t/answer.txt') -Value 'use a grace window' -NoNewline
     Check 'answer read back' ((Get-RunAnswer -RunsRoot $root -Id 'run_t') -eq 'use a grace window')
+
+    # --- Fix #1 regression: partial update (Set-RunStatus) must not clobber cost/tokens ---
+    Set-RunRecord -RunsRoot $root -Id 'run_cost' -Name 'costtest' -Status 'running' `
+        -CostUsd 12.40 -TokensIn 41000 -TokensOut 7000 -Worktree $true
+    Set-RunStatus -RunsRoot $root -Id 'run_cost' -Status 'needs-you' -ParkedQuestion 'q?'
+    $rc = Get-Content (Join-Path $root 'run_cost/run.json') -Raw | ConvertFrom-Json
+    Check 'partial update preserves cost_usd'    ([double]$rc.cost_usd   -eq 12.40)
+    Check 'partial update preserves tokens_in'   ([int]$rc.tokens_in    -eq 41000)
+    Check 'partial update preserves tokens_out'  ([int]$rc.tokens_out   -eq 7000)
+    Check 'partial update preserves worktree'    ($rc.worktree -eq $true)
+    Check 'partial update still changes status'  ($rc.status -eq 'needs-you')
+    Check 'partial update still sets parked_q'   ($rc.parked_question -eq 'q?')
+
+    # --- Fix #3: FilesTouched writer ---
+    Set-RunRecord -RunsRoot $root -Id 'run_files' -Name 'filetest' -Status 'running' `
+        -FilesTouched @('auth.ts', 'validator.ts')
+    $rf = Get-Content (Join-Path $root 'run_files/run.json') -Raw | ConvertFrom-Json
+    Check 'files_touched round-trips 2 items'    ($rf.files_touched.Count -eq 2)
+    Check 'files_touched contains auth.ts'       ($rf.files_touched -contains 'auth.ts')
+    Check 'files_touched contains validator.ts'  ($rf.files_touched -contains 'validator.ts')
+
+    # Single-element must stay a JSON array (not a bare string)
+    Set-RunRecord -RunsRoot $root -Id 'run_files' -FilesTouched @('only.ts')
+    $raw2 = Get-Content (Join-Path $root 'run_files/run.json') -Raw | ConvertFrom-Json
+    Check 'single-element files_touched is array' ($raw2.files_touched -is [System.Array] -or $raw2.files_touched.Count -eq 1)
+    Check 'single-element files_touched value'    ($raw2.files_touched[0] -eq 'only.ts')
 }
 finally {
     if (Test-Path $root) { Remove-Item -Recurse -Force $root }
