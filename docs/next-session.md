@@ -51,8 +51,29 @@ smoke all green.
 - Wire fleet dispatch to set/clear `~/.claude/current-run.json` per dispatched run so the
   hook narrates real fleet runs.
 
-**Next slices (each gets its own spec → plan → build):** SP2 coordination backbone
-(verify **GitHub Agent HQ** ride-vs-build *before* speccing), SP3 `/idea` front door
+**SP2 — coordination backbone: SHIPPED** (merged `5027956`, 2026-06-07). GitHub Agent HQ
+was verified first (decision **d020**): it's cloud-Copilot-only with no public API and
+cannot orchestrate a local fleet, so we build the local backbone and ride GitHub artifacts
+(Projects/issues/PRs); Agent HQ stays a *future* call-out per d018. Built: a fleet→runs
+**bridge** (`scripts/fleet-runs-bridge.ps1`, `Publish-ItemRun`) wired into both backlog
+drivers (parent-process, best-effort try/catch) so real dispatched agents now appear in the
+legibility feed; a per-agent **assignment view** (`read_assignments` + `partials/assignments.html`)
+with active/queued/**parked-for-human** lanes; and **current-run** wiring (`Set-CurrentRun`/
+`Clear-CurrentRun` + `/job-start`/`/job-phase done`) so the conductor's own session narrates
+in. Decision **d022** = wire the calls inside the existing markdown command PS blocks. Gate:
+154 Python + 5 PowerShell suites + bootstrap smoke; adversarial review verdict SHIP.
+Spec/plan: `docs/superpowers/specs/2026-06-06-sp2-coordination-backbone-design.md`,
+`docs/superpowers/plans/2026-06-06-sp2-coordination-backbone.md`.
+
+**SP2 deferred follow-ups (tracked, not done):**
+- Defense-in-depth: slugify/reject `[\\/]|..` in `Publish-ItemRun`'s item id (NIT; item ids are
+  operator-supplied today, and the old ensemble feed shares the same trust model — not a regression).
+- Retire the old ensemble cockpit (`ensembles.py` + `_ensemble.json`/`*.live.json`) once the
+  assignment view fully supersedes it — the two feeds run in parallel by design for now.
+- The Slice 1 deferrals still stand: stale-run auto-idle (spec §5) and a `frontend-design`
+  styling pass for the gutter/assignment board/sprites.
+
+**Next slices (each gets its own spec → plan → build):** SP3 `/idea` front door
 (research+viability debate → reviewable concept doc → tasks on the board), SP4 surface
 delight (pixel sprites + IDE renderers), plus the role/adversarial engine + ruflo call-out.
 
