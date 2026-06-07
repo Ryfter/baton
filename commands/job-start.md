@@ -62,6 +62,11 @@ You are starting a new orchestrator job. The brief and optional flags are in
    Append-PhaseLog -JobDir $jobDir -Kind 'created' -Detail 'research'
    Write-CurrentJob -JobId $jobId -Phase 'research'
 
+   # Point the run-feed at this job so the PostToolUse hook narrates the
+   # conductor's session into it (seeds the run record as 'running').
+   . "$HOME/.claude/scripts/runs-lib.ps1"
+   Set-CurrentRun -Id $jobId -Name $brief -Project $project
+
    Write-Host ""
    Write-Host "Job started: $jobId" -ForegroundColor Green
    Write-Host "  project: $project"

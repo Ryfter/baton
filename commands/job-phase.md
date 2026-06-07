@@ -61,6 +61,9 @@ Manage the active job's phase.
 
    if ($newPhase -eq 'done') {
        Clear-CurrentJob
+       # Clear the run-feed pointer (idempotent); the run record survives as history.
+       . "$HOME/.claude/scripts/runs-lib.ps1"
+       Clear-CurrentRun
    } else {
        Write-CurrentJob -JobId $state.job_id -Phase $newPhase
    }
