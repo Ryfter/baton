@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from kb.extractors import extract_to_text
+
 _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+?)\s*$', re.MULTILINE)
 
 
@@ -58,7 +60,25 @@ def chunk_file(
     max_chars: int = 1500,
     overlap: int = 200,
 ) -> list[Chunk]:
-    """Chunk a markdown (or plain text) file.
+    """Chunk a corpus file. Markdown/text read directly; PDFs go through the
+    tools-registry extractor (Docling). Returns [] for empty input or an
+    unknown/unhandled extension; raises ExtractorUnavailable/ExtractorError for a
+    PDF whose tool is missing/disabled or whose conversion failed."""
+    p = Path(path)
+    raw = extract_to_text(p)
+    if raw is None:
+        return []
+    return chunk_text(raw, source=str(p.resolve()), max_chars=max_chars, overlap=overlap)
+
+
+def chunk_text(
+    raw: str,
+    *,
+    source: str,
+    max_chars: int = 1500,
+    overlap: int = 200,
+) -> list[Chunk]:
+    """Chunk an in-memory string. Heading-bounded, paragraph-respecting, overlap-friendly.
 
     Rules:
       - Chunks never cross a markdown heading boundary (sections are independent).
@@ -66,12 +86,10 @@ def chunk_file(
         chunk starts with `overlap` trailing characters carried over for context.
       - Each chunk records its nearest preceding heading (section).
     """
-    p = Path(path)
-    raw = p.read_text(encoding='utf-8', errors='replace')
     if not raw.strip():
         return []
 
-    src = str(p.resolve())
+    src = source
     sections = _find_sections(raw)
 
     # Build section boundaries: list of (start, end_exclusive). Last extends to EOF.
