@@ -92,6 +92,39 @@ providers:
     Check 'known has tool cap'         ($known -contains 'commit-msg')
     Check 'known has general cap'      ($known -contains 'reasoning')
     Check 'known is deduped'           (($known | Group-Object | Where-Object { $_.Count -gt 1 }).Count -eq 0)
+
+    # --- Task 4: Select-Capability ---
+    $common = @{ ToolsPath = $toolsPath; FleetPath = $fleetPath }
+
+    # specialized capability → the one enabled tool, source=tools
+    $cm = Select-Capability -Capability 'commit-msg' @common
+    Check 'commit-msg one candidate'   ($cm.Count -eq 1)
+    Check 'commit-msg picks tool'      ($cm[0].name -eq 'git-commit-message')
+    Check 'commit-msg source tools'    ($cm[0].source -eq 'tools')
+    Check 'commit-msg has why'         ([bool]$cm[0].why)
+    Check 'disabled tool excluded'     (-not ($cm | Where-Object { $_.name -eq 'off-tool' }))
+
+    # cheapest-tier-first: ocr has a local and a paid tool → local first
+    $ocr = Select-Capability -Capability 'ocr' @common
+    Check 'ocr two candidates'         ($ocr.Count -eq 2)
+    Check 'ocr local ranks first'      ($ocr[0].name -eq 'local-ocr')
+    Check 'ocr paid ranks last'        ($ocr[1].name -eq 'paid-ocr')
+
+    # general capability → enabled fleet providers, source=fleet, cheapest first
+    $cg = Select-Capability -Capability 'code-gen' @common
+    Check 'code-gen from fleet'        ($cg[0].source -eq 'fleet')
+    Check 'code-gen local first'       ($cg[0].name -eq 'ollama-local')
+    Check 'code-gen excludes disabled' (-not ($cg | Where-Object { $_.name -eq 'off-model' }))
+
+    # constraints
+    $cgLocal = Select-Capability -Capability 'code-gen' -RequireLocal @common
+    Check 'RequireLocal drops paid'    (-not ($cgLocal | Where-Object { $_.cost_tier -eq 'paid' }))
+    $ocrFree = Select-Capability -Capability 'ocr' -MaxCostTier 'free' @common
+    Check 'MaxCostTier free drops paid' (-not ($ocrFree | Where-Object { $_.cost_tier -eq 'paid' }))
+
+    # unknown capability → empty
+    $none = Select-Capability -Capability 'nonexistent' @common
+    Check 'unknown cap empty'          ($none.Count -eq 0)
 }
 finally { if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp } }
 if ($fail -gt 0) { Write-Host "`n$fail FAILED"; exit 1 } else { Write-Host "`nALL PASS"; exit 0 }

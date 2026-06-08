@@ -68,3 +68,67 @@ function Get-KnownCapabilities {
     foreach ($g in (Get-GeneralCapabilities -FleetPath $FleetPath)) { [void]$caps.Add($g) }
     return @($caps | Select-Object -Unique)
 }
+
+function Get-CostTierRank([string]$Tier) {
+    switch ($Tier) {
+        'local' { return 0 }
+        'free'  { return 1 }
+        'paid'  { return 2 }
+        default { return 3 }   # unknown tiers sort last
+    }
+}
+
+function Select-Capability {
+    <# Return ranked candidates (tools + general models) that serve a capability.
+       Cheapest cost-tier first; quality is unrated in Slice 1 (neutral 0.5).
+       Recommendation only — no dispatch. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [ValidateSet('local','free','paid')][string]$MaxCostTier,
+        [switch]$RequireLocal,
+        [string]$ToolsPath = $script:DefaultToolsPath,
+        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml')
+    )
+    $candidates = [System.Collections.ArrayList]@()
+
+    # 1. Specialized candidates from tools.yaml
+    if (Test-Path $ToolsPath) {
+        foreach ($t in (Read-Tools -Path $ToolsPath)) {
+            if ($t.enabled -ne $true) { continue }
+            if ([string]$t.capability -ne $Capability) { continue }
+            $q = if ($null -ne $t.quality) { [double]$t.quality } else { 0.5 }
+            [void]$candidates.Add([pscustomobject]@{
+                name = [string]$t.name; kind = [string]$t.kind; source = 'tools'
+                cost_tier = [string]$t.cost_tier; quality = $q
+                why = "specialized tool for $Capability ($($t.cost_tier))"
+            })
+        }
+    }
+
+    # 2. General candidates from fleet.yaml when the capability is a general one
+    $general = Get-GeneralCapabilities -FleetPath $FleetPath
+    if ($general -contains $Capability -and (Test-Path $FleetPath)) {
+        foreach ($p in (Read-Fleet -Path $FleetPath)) {
+            if ($p.enabled -ne $true) { continue }
+            $q = if ($null -ne $p.quality) { [double]$p.quality } else { 0.5 }
+            [void]$candidates.Add([pscustomobject]@{
+                name = [string]$p.name; kind = [string]$p.kind; source = 'fleet'
+                cost_tier = [string]$p.cost_tier; quality = $q
+                why = "general model for $Capability ($($p.cost_tier) tier)"
+            })
+        }
+    }
+
+    # 3. Filter by constraints
+    $filtered = foreach ($c in $candidates) {
+        if ($RequireLocal -and $c.cost_tier -ne 'local') { continue }
+        if ($MaxCostTier -and (Get-CostTierRank $c.cost_tier) -gt (Get-CostTierRank $MaxCostTier)) { continue }
+        $c
+    }
+
+    # 4. Rank: cost tier asc, then quality desc, then name. Attach a numeric score.
+    $ranked = $filtered |
+        Select-Object *, @{n='score'; e={ (Get-CostTierRank $_.cost_tier) - ($_.quality * 0.001) }} |
+        Sort-Object @{e='score'}, @{e={ -$_.quality }}, @{e='name'}
+    return ,([object[]]$ranked)
+}
