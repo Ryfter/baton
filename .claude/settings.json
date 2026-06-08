@@ -11,6 +11,8 @@
       "Bash(python -m pytest kb/tests -q)",
       "Bash(curl -s http://127.0.0.1:8765/*)",
       "Bash(curl -s http://localhost:8765/*)",
+      "Bash(gh *)",
+      "PowerShell(gh *)",
       "PowerShell(Get-ChildItem *)",
       "PowerShell(Get-Content *)",
       "PowerShell(Select-String *)",
