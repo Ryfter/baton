@@ -123,3 +123,59 @@ def test_single_file_incremental_indexes_only_target(tmp_path: Path) -> None:
     assert summary["files_seen"] == 1
     assert summary["files_indexed"] == 1
     assert summary["files_skipped"] == 0
+
+
+def test_pdf_indexed_via_extractor(tmp_path: Path, monkeypatch) -> None:
+    paths = _setup_corpus(tmp_path)
+    # Drop a PDF into the corpus and make the extractor return markdown for it.
+    pdf = paths["kb"] / "projects" / "alpha" / "spec.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    import kb.chunker as chunker_mod
+    real = chunker_mod.extract_to_text
+
+    def fake_extract(p):
+        if str(p).lower().endswith(".pdf"):
+            return "# Spec\n\nExtracted PDF body about routing."
+        return real(p)
+
+    monkeypatch.setattr(chunker_mod, "extract_to_text", fake_extract)
+    idx = tmp_path / "index"
+    summary = run_index(
+        corpus_root=paths["kb"], jobs_root=paths["jobs"], index_dir=idx,
+        full=True, print_progress=False,
+    )
+    assert summary["files_indexed"] == 3   # 2 md + 1 pdf
+    assert summary["extractor_skips"] == 0
+    assert summary["extractor_errors"] == []
+    st = VectorStore(idx); st.load()
+    assert any(s.endswith("spec.pdf") for s in {r["source"] for r in st.metadata})
+
+
+def test_pdf_unavailable_tool_is_skipped(tmp_path: Path, monkeypatch) -> None:
+    from kb.extractors import ExtractorUnavailable
+    paths = _setup_corpus(tmp_path)
+    pdf = paths["kb"] / "projects" / "alpha" / "spec.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    import kb.chunker as chunker_mod
+    real = chunker_mod.extract_to_text
+
+    def fake_extract(p):
+        if str(p).lower().endswith(".pdf"):
+            raise ExtractorUnavailable("pdf-extract: no enabled tool")
+        return real(p)
+
+    monkeypatch.setattr(chunker_mod, "extract_to_text", fake_extract)
+    idx = tmp_path / "index"
+    summary = run_index(
+        corpus_root=paths["kb"], jobs_root=paths["jobs"], index_dir=idx,
+        full=True, print_progress=False,
+    )
+    assert summary["extractor_skips"] == 1
+    assert summary["files_indexed"] == 2   # the 2 md files
+    # mtime recorded → a second incremental run does not retry the pdf
+    summary2 = run_index(
+        corpus_root=paths["kb"], jobs_root=paths["jobs"], index_dir=idx,
+        full=False, print_progress=False,
+    )
+    assert summary2["extractor_skips"] == 0
+    assert summary2["files_skipped"] == 3  # all 3 now have recorded mtimes
