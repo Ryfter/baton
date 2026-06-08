@@ -1,0 +1,21 @@
+# tools.yaml — non-LLM callable capabilities, co-equal with fleet.yaml models.
+# Lean by design: only what's needed to SELECT and INVOKE a tool lives here.
+# "Which tool for what" qualitative notes live in
+# ~/.claude/knowledge/universal/routing.md and evolve via /consolidate-routing.
+#
+# Fields:
+#   name         unique key, [a-z0-9-]+
+#   kind         python | cli | http   (how it is invoked)
+#   enabled      true | false          (disabled tools are skipped, not invoked)
+#   cost_tier    paid | free | local
+#   capability   the need it serves (the routing key), e.g. pdf-extract
+#   module       (kind:python) importable module path used by the invoker
+#   command_template / base_url   (cli/http, future tools)
+
+tools:
+  - name: docling
+    kind: python
+    enabled: true
+    cost_tier: local
+    capability: pdf-extract
+    module: docling.document_converter
