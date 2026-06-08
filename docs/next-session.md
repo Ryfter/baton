@@ -101,17 +101,37 @@ tests did not catch: the deployed `run-feed.ps1` hook now locates
 `current-run.json` pointer written by `Set-CurrentRun`. The tests now cover both
 the default pointer path and the deployed hook layout.
 
-**Cost-optimization direction — tiered tool/model offload (decision d024, 2026-06-07).** User
-wants to cut direct Claude-token cost by pushing work off Claude: deterministic work → tools
-(free), cheap-LLM work → local/free fleet models, Claude reserved for coordination/judgment.
-First concrete capability: **PDF breakdown** — plain token-bounded chunking done in local
-Python (free, zero Claude tokens) for the KB; **Docling** (IBM OSS, local, free) chosen as the
-hard-PDF extraction **call-out** per d018 (NeMo Retriever = too heavy/GPU-bound; Gemini
-Flash/Mistral OCR = cheap-cloud fallbacks). This is the likely **next slice** (own spec → plan
-→ build): a tool/model cost-tiering layer with the Docling PDF call-out as its first entry.
+**Tools registry + Docling PDF call-out: SHIPPED** (merged `5573ecc`, 2026-06-07). The first
+slice of the cost-optimization direction (d024). Stood up **`tools.yaml`** — a non-LLM
+capability registry, the co-equal sibling of `fleet.yaml` (decision **d025**: build it at n=1
+because it names the `tools` concept a later routing layer needs; tools are declared with
+`cost_tier` + `capability`, invoked per-entry `kind` — `python` in-process / `cli` / `http`).
+First entry: **Docling** (`kind: python`, `capability: pdf-extract`, `cost_tier: local`).
+Wired into KB ingest: `kb/extractors/` converts a corpus file to text (markdown→read,
+PDF→Docling via a **lazy/optional** import gated by the registry); the chunker was split into
+a pure `chunk_text` + an extractor-fed `chunk_file`; the indexer now discovers `*.pdf` and
+counts `extractor_skips`/`extractor_errors`. A PDF is **never silently zero-chunked** — no
+tool / not-installed → counted skip, corrupt → error, `.md` pipeline never breaks. New
+`tools/` Python package (`registry`/`doctor`/`list`) + `/tools list|doctor` command, deployed
+via bootstrap. Gate: 176 Python + 8 PowerShell suites + bootstrap smoke; review verdict SHIP.
+Spec/plan: `docs/superpowers/specs/2026-06-07-tools-registry-docling-design.md`,
+`docs/superpowers/plans/2026-06-07-tools-registry-docling.md`.
 
-**Next slices (each gets its own spec → plan → build):** the cost-tiering / Docling PDF
-call-out layer (d024, above); SP4 surface delight (pixel sprites + IDE renderers); plus the
+**Tools-registry deferred follow-ups (tracked, not done):**
+- Real end-to-end acceptance: `pip install docling`, drop a real PDF under the corpus, run
+  `python -m kb.index`, confirm `/kb-search` returns a hit. The Docling shell path is only
+  stub/monkeypatch-tested in CI (optional heavy dep — same posture as SP3's `gh`).
+- `import sys` in `tools/doctor.py` is unused (harmless; left to avoid a churn commit).
+- DOCX/PPTX/scan extractors are trivial to add (extractor keyed by extension) — not built.
+
+**Cost-optimization direction — NEXT layer (decision d024).** With the registry foundation
+shipped, the next slice is the **capability-routing optimizer**: "pick the *optimal* tool/model
+for the need" (optimal, not best — a free/local capability as-good-or-close beats the most
+powerful paid one). It extends `knowledge/universal/routing.md` + `/consolidate-routing` from
+models to tools. Explicitly out of scope of the shipped slice.
+
+**Next slices (each gets its own spec → plan → build):** the capability-routing optimizer
+(d024 next layer, above); SP4 surface delight (pixel sprites + IDE renderers); plus the
 role/adversarial engine + ruflo call-out.
 
 ## A. Re-opening the project (every session)
