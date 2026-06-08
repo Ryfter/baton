@@ -37,3 +37,34 @@ function Read-Tools {
     if ($current) { [void]$tools.Add($current) }
     return $tools.ToArray()
 }
+
+function Get-GeneralCapabilities {
+    <# Read the top-level `general_capabilities: [a, b, c]` inline list from fleet.yaml.
+       Returns string[] (empty if the key is absent). Mirrors Get-FleetResearchDefault. #>
+    param([string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'))
+    if (-not (Test-Path $FleetPath)) { return @() }
+    foreach ($line in (Get-Content $FleetPath)) {
+        if ($line -match '^\s*general_capabilities:\s*\[(.*)\]\s*$') {
+            $inner = $matches[1].Trim()
+            if (-not $inner) { return @() }
+            return @($inner -split ',' | ForEach-Object { $_.Trim().Trim('"', "'") } | Where-Object { $_ })
+        }
+    }
+    return @()
+}
+
+function Get-KnownCapabilities {
+    <# Union of every tools.yaml capability + fleet.yaml general_capabilities. #>
+    param(
+        [string]$ToolsPath = $script:DefaultToolsPath,
+        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml')
+    )
+    $caps = [System.Collections.Generic.List[string]]::new()
+    if (Test-Path $ToolsPath) {
+        foreach ($t in (Read-Tools -Path $ToolsPath)) {
+            if ($t.capability) { [void]$caps.Add([string]$t.capability) }
+        }
+    }
+    foreach ($g in (Get-GeneralCapabilities -FleetPath $FleetPath)) { [void]$caps.Add($g) }
+    return @($caps | Select-Object -Unique)
+}

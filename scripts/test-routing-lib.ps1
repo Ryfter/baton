@@ -81,6 +81,17 @@ providers:
     Check 'stdin parsed bool'          ($gcm.stdin -eq $true)
     Check 'command_template parsed'    ($gcm.command_template -eq 'ollama run tavernari/git-commit-message')
     Check 'enabled bool'              (($tools | Where-Object { $_.name -eq 'off-tool' }).enabled -eq $false)
+
+    # --- Task 3: capability vocab ---
+    $gc = Get-GeneralCapabilities -FleetPath $fleetPath
+    Check 'general caps count'         ($gc.Count -eq 3)
+    Check 'general caps has code-gen'  ($gc -contains 'code-gen')
+    Check 'general caps absent = empty' ((Get-GeneralCapabilities -FleetPath $toolsPath).Count -eq 0)
+
+    $known = Get-KnownCapabilities -ToolsPath $toolsPath -FleetPath $fleetPath
+    Check 'known has tool cap'         ($known -contains 'commit-msg')
+    Check 'known has general cap'      ($known -contains 'reasoning')
+    Check 'known is deduped'           (($known | Group-Object | Where-Object { $_.Count -gt 1 }).Count -eq 0)
 }
 finally { if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp } }
 if ($fail -gt 0) { Write-Host "`n$fail FAILED"; exit 1 } else { Write-Host "`nALL PASS"; exit 0 }
