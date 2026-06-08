@@ -124,15 +124,38 @@ Spec/plan: `docs/superpowers/specs/2026-06-07-tools-registry-docling-design.md`,
 - `import sys` in `tools/doctor.py` is unused (harmless; left to avoid a churn commit).
 - DOCX/PPTX/scan extractors are trivial to add (extractor keyed by extension) — not built.
 
-**Cost-optimization direction — NEXT layer (decision d024).** With the registry foundation
-shipped, the next slice is the **capability-routing optimizer**: "pick the *optimal* tool/model
-for the need" (optimal, not best — a free/local capability as-good-or-close beats the most
-powerful paid one). It extends `knowledge/universal/routing.md` + `/consolidate-routing` from
-models to tools. Explicitly out of scope of the shipped slice.
+**Capability-routing optimizer (decision d026) — auto-router + learning loop, in 3 slices.**
+North star (user's words): "a way to code applications, using multiple tools/models to reduce
+costs on the orchestrator and let it orchestrate other LLMs and Tools... It needs to learn over
+time, integrate the wins and losses... get smarter... understand what I want better... I also
+want it fully autonomous — I give it a folder and github repo, and it goes until tokens are out
+or it is finished." The model/tool×capability performance dataset is itself a GitHub-backed,
+compounding deliverable.
 
-**Next slices (each gets its own spec → plan → build):** the capability-routing optimizer
-(d024 next layer, above); SP4 surface delight (pixel sprites + IDE renderers); plus the
-role/adversarial engine + ruflo call-out.
+- **Slice 1 — selector + data model: SHIPPED** (merged `82be1b9`, 2026-06-08). PowerShell
+  `Select-Capability` (`scripts/routing-lib.ps1`) over `tools.yaml` + `fleet.yaml` returns an
+  explainable, **cheapest-tier-first** ranked candidate list (`local`<`free`<`paid`; quality an
+  unrated neutral-0.5 slot); `/route <capability> [--max-tier] [--local]` shows the pick + why
+  (recommendation only). Specialty models (commit-msg/struct-extract/ocr) migrated from
+  `routing.md` prose into `tools.yaml` as `kind:cli` entries; `fleet.yaml` gained a top-level
+  `general_capabilities: [code-gen, reasoning, summarize]`. Gate: 26 routing checks + 176 Python
+  + 8 PS suites + bootstrap smoke; review SHIP. Spec/plan:
+  `docs/superpowers/specs/2026-06-07-routing-s1-capability-selector-design.md`,
+  `docs/superpowers/plans/2026-06-07-routing-s1-capability-selector.md`.
+- **Slice 2 — auto-dispatch + verify/escalate (NEXT):** the router picks (S1), dispatches
+  automatically, grades the output, and escalates up the cost ladder on a failed check — ending
+  at Claude. Logs every choice + outcome to the routing journal.
+- **Slice 3 — ratings + calibration learning loop:** surface choices for the user to rate
+  (worked/didn't), store ratings keyed by (capability, candidate) in the GitHub-backed knowledge
+  repo, feed them back as the selector's quality signal (replacing the static 0.5), add a
+  calibration mode (proactively run candidates, grade, collect the user's opinion).
+
+**Future epic (beyond the 3 slices):** a fully-autonomous run-loop — given a folder + GitHub
+repo, run until token budget exhausted or the goal is met — built ON TOP OF the router.
+
+**Next slices (each gets its own spec → plan → build):** routing Slice 2 (auto-dispatch +
+verify/escalate, above), then Slice 3 (learning loop); SP4 surface delight (pixel sprites + IDE
+renderers); plus the role/adversarial engine + ruflo call-out.
 
 ## A. Re-opening the project (every session)
 
