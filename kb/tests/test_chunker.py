@@ -2,7 +2,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kb.chunker import chunk_file
+from kb.chunker import chunk_file, chunk_text  # noqa: F401 — chunk_text is new
+
+
+def test_chunk_text_direct_string() -> None:
+    chunks = chunk_text("# Sec\n\nalpha body here", source="/virtual/x.pdf")
+    assert len(chunks) >= 1
+    assert chunks[0].source == "/virtual/x.pdf"
+    assert "alpha" in "\n\n".join(c.text for c in chunks)
+
+
+def test_chunk_file_routes_through_extractor(tmp_path, monkeypatch) -> None:
+    import kb.chunker as chunker_mod
+    fake = tmp_path / "doc.pdf"
+    fake.write_bytes(b"%PDF-1.4")
+    monkeypatch.setattr(chunker_mod, "extract_to_text", lambda p: "# T\n\nextracted body")
+    chunks = chunk_file(fake)
+    assert any("extracted body" in c.text for c in chunks)
 
 
 def test_empty_file_no_chunks(tmp_path: Path) -> None:

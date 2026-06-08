@@ -13,23 +13,27 @@ from pathlib import Path
 
 from kb.chunker import chunk_file
 from kb.embedder import DEFAULT_MODEL, embed, EmbedError
+from kb.extractors import ExtractorUnavailable, ExtractorError
 from kb.store import VectorStore
 
 
 def _default_corpus_paths(corpus_root: Path, jobs_root: Path) -> list[Path]:
     """Return every file that should be indexed (full enumeration)."""
     files: list[Path] = []
+    _CORPUS_GLOBS = ("*.md", "*.pdf")
     # Universal KB
     uni = corpus_root / "universal"
     if uni.exists():
-        files.extend(p for p in uni.rglob("*.md") if p.is_file())
+        for glob in _CORPUS_GLOBS:
+            files.extend(p for p in uni.rglob(glob) if p.is_file())
     # Per-project KB (incl. decisions/, decision-guidance.md, cost.md, etc.)
     projs = corpus_root / "projects"
     if projs.exists():
         for project_dir in projs.iterdir():
             if not project_dir.is_dir():
                 continue
-            files.extend(p for p in project_dir.rglob("*.md") if p.is_file())
+            for glob in _CORPUS_GLOBS:
+                files.extend(p for p in project_dir.rglob(glob) if p.is_file())
     # Job lessons.md
     if jobs_root.exists():
         for job_dir in jobs_root.iterdir():
@@ -134,11 +138,26 @@ def run_index(
     embed_calls = 0
     files_indexed = 0
     embed_errors: list[str] = []
+    extractor_skips = 0
+    extractor_errors: list[str] = []
     for p in changed_files:
         src = str(p.resolve())
         # Drop any prior rows for this source before reinserting
         store.remove_source(src)
-        chunks = chunk_file(p)
+        try:
+            chunks = chunk_file(p)
+        except ExtractorUnavailable as e:
+            extractor_skips += 1
+            store.record_source_mtime(src, _mtime_iso(p))
+            if print_progress:
+                print(f"  ~ skipped (tool unavailable): {p.name} ({e})")
+            continue
+        except ExtractorError as e:
+            extractor_errors.append(f"{src}: {e}")
+            store.record_source_mtime(src, _mtime_iso(p))
+            if print_progress:
+                print(f"  ! extract failed for {src}: {e}", file=sys.stderr)
+            continue
         if not chunks:
             store.record_source_mtime(src, _mtime_iso(p))
             continue
@@ -180,6 +199,8 @@ def run_index(
         "rows_removed": rows_removed,
         "embed_calls": embed_calls,
         "embed_errors": embed_errors,
+        "extractor_skips": extractor_skips,
+        "extractor_errors": extractor_errors,
         "elapsed_s": round(elapsed, 2),
         "total_rows": len(store.metadata),
     }
@@ -222,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
         host=args.host,
         print_progress=not args.quiet,
     )
-    return 0 if not summary["embed_errors"] else 2
+    return 0 if not (summary["embed_errors"] or summary["extractor_errors"]) else 2
 
 
 if __name__ == "__main__":

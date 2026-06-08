@@ -229,7 +229,7 @@ foreach ($cmd in @(
     'log-routing.md','consolidate-routing.md',
     'job-start.md','job-status.md','job-list.md','job-phase.md',
     'job-resume.md','job-lesson.md','consolidate-lessons.md',
-    'fleet.md','ensemble.md','research.md','six-hats.md','council.md','idea.md',
+    'fleet.md','ensemble.md','research.md','six-hats.md','council.md','idea.md','tools.md',
     'code-decompose.md','code-parallel.md','code-merge.md',
     'kb-index.md','kb-search.md',
     'decision-feedback.md','consolidate-decisions.md','project-init.md',
@@ -272,6 +272,12 @@ Write-Step "Deploying fleet.yaml seed"
 $fleetSrc = Join-Path $repoRoot 'references\fleet.yaml'
 $fleetDst = Join-Path $claudeDir 'fleet.yaml'
 Copy-WithPrompt $fleetSrc $fleetDst 'fleet registry'
+
+# --- Step 5b4: Deploy tools.yaml seed ---
+Write-Step "Deploying tools.yaml seed"
+$toolsSrc = Join-Path $repoRoot 'references\tools.yaml'
+$toolsDst = Join-Path $claudeDir 'tools.yaml'
+Copy-WithPrompt $toolsSrc $toolsDst 'tools registry'
 
 # --- Step 5c: Create jobs + knowledge dirs ---
 Write-Step "Creating jobs + knowledge directories"
