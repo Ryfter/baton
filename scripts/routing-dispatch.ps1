@@ -1,0 +1,184 @@
+#!/usr/bin/env pwsh
+<#
+.SYNOPSIS
+  Capability-routing dispatcher (Slice 2). Dispatches the cheapest capable candidate
+  for a capability, verifies its output with a heuristic grader, escalates up the
+  ranked ladder on failure, and journals every attempt.
+.DESCRIPTION
+  Builds on Slice 1's Select-Capability. Heuristic grading only; the -Grader parameter
+  on Invoke-RoutedCapability is the seam Slice 3 fills (LLM-judge + user ratings).
+  See docs/superpowers/specs/2026-06-08-routing-s2-dispatch-verify-escalate-design.md.
+#>
+
+# routing-lib.ps1 gives Select-Capability/Read-Tools/Get-CostTierRank and dot-sources
+# fleet-lib.ps1 (Invoke-Fleet, Invoke-Fleet-Cli) transitively.
+. "$PSScriptRoot/routing-lib.ps1"
+
+function Test-RoutingOutputHeuristic {
+    <# Default grader. Deterministic and free. Contract: (Capability, Result) -> {passed, score, reason}.
+       Result is a dispatch result hashtable {stdout, exit_code, ...}. Heuristic score is binary. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)][hashtable]$Result
+    )
+    if ([int]$Result.exit_code -ne 0) {
+        return @{ passed = $false; score = 0.0; reason = "exit $([int]$Result.exit_code)" }
+    }
+    $out = [string]$Result.stdout
+    if ([string]::IsNullOrWhiteSpace($out)) {
+        return @{ passed = $false; score = 0.0; reason = 'empty output' }
+    }
+    switch ($Capability) {
+        'struct-extract' {
+            try { $null = $out | ConvertFrom-Json -ErrorAction Stop }
+            catch { return @{ passed = $false; score = 0.0; reason = 'not valid JSON' } }
+        }
+        'commit-msg' {
+            $subject = $out -split "\r?\n" | Where-Object { $_.Trim() } | Select-Object -First 1
+            if ([string]::IsNullOrWhiteSpace($subject)) {
+                return @{ passed = $false; score = 0.0; reason = 'no commit subject line' }
+            }
+        }
+        default { }   # base gate already satisfied; non-empty output suffices (quality is Slice 3)
+    }
+    return @{ passed = $true; score = 1.0; reason = 'ok' }
+}
+
+function Write-RoutingJournalLine {
+    <# Append one compact JSON row (JSONL) per dispatch attempt. A logging fault warns
+       and returns; it never crashes the dispatch loop. -Timestamp is injectable for tests. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)][string]$Candidate,
+        [string]$Source, [string]$Kind, [string]$CostTier,
+        [int]$ExitCode, [int]$DurationS,
+        [bool]$Passed, [double]$Score, [string]$Reason,
+        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl'),
+        [string]$Timestamp
+    )
+    if (-not $Timestamp) { $Timestamp = (Get-Date).ToString('o') }
+    $row = [ordered]@{
+        ts = $Timestamp; capability = $Capability; candidate = $Candidate
+        source = $Source; kind = $Kind; cost_tier = $CostTier
+        exit_code = $ExitCode; duration_s = $DurationS
+        passed = $Passed; score = $Score; reason = $Reason
+    }
+    try {
+        $line = ($row | ConvertTo-Json -Compress)
+        Add-Content -LiteralPath $JournalPath -Value $line -Encoding utf8NoBOM
+    } catch {
+        Write-Warning "routing journal write failed: $($_.Exception.Message)"
+    }
+}
+
+function Invoke-Tool {
+    <# Dispatch a tools.yaml kind:cli entry. Pipe the prompt via stdin when stdin:true
+       (robust path, immune to embedded quotes/$/backticks); otherwise pass it as the
+       final positional arg. Returns @{ stdout; stderr; exit_code; duration_s }.
+       -TimeoutS is accepted for signature parity with Invoke-Fleet-Cli (not enforced inline). #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Tool,
+        [Parameter(Mandatory)][string]$Prompt,
+        [int]$TimeoutS = 120
+    )
+    $cmd = [string]$Tool.command_template
+    $tokens = $cmd -split '\s+' | Where-Object { $_ -ne '' }
+    $exe = $tokens[0]
+    $rest = @($tokens | Select-Object -Skip 1)
+    $start = Get-Date
+    try {
+        if ($Tool.stdin -eq $true) {
+            $tmpFile = [System.IO.Path]::GetTempFileName()
+            try {
+                Set-Content -LiteralPath $tmpFile -Value $Prompt -Encoding utf8NoBOM
+                $out = (Get-Content -LiteralPath $tmpFile -Raw | & $exe @rest 2>&1 | Out-String)
+            } finally {
+                Remove-Item -LiteralPath $tmpFile -ErrorAction SilentlyContinue
+            }
+        } else {
+            $out = (& $exe @rest $Prompt 2>&1 | Out-String)
+        }
+        $exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+        $duration = [int]((Get-Date) - $start).TotalSeconds
+        return @{ stdout = $out; stderr = ''; exit_code = $exit; duration_s = $duration }
+    } catch {
+        $duration = [int]((Get-Date) - $start).TotalSeconds
+        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = -1; duration_s = $duration }
+    }
+}
+
+function Invoke-RoutedCapability {
+    <# Dispatch -> verify -> escalate over Select-Capability's cost-ascending candidates.
+       The first candidate whose output passes the grader wins. If all fail, the outcome
+       is 'escalate-to-conductor' (PowerShell cannot invoke Claude; Claude is the orchestrator).
+       -Grader is the seam Slice 3 fills (default = heuristic). -Dispatcher is test injection. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)][string]$Prompt,
+        [ValidateSet('local','free','paid')][string]$MaxCostTier,
+        [switch]$RequireLocal,
+        [int]$TimeoutS = 120,
+        [scriptblock]$Grader,
+        [scriptblock]$Dispatcher,
+        [string]$ToolsPath = (Join-Path $HOME '.claude/tools.yaml'),
+        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
+        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl')
+    )
+    $sel = @{ Capability = $Capability; ToolsPath = $ToolsPath; FleetPath = $FleetPath }
+    if ($RequireLocal) { $sel['RequireLocal'] = $true }
+    if ($MaxCostTier)  { $sel['MaxCostTier']  = $MaxCostTier }
+    $candidates = Select-Capability @sel
+
+    $attempts = [System.Collections.ArrayList]@()
+    if (-not $candidates -or $candidates.Count -eq 0) {
+        return [pscustomobject]@{ status='no-candidate'; capability=$Capability; winner=$null; result=$null; attempts=@() }
+    }
+
+    foreach ($c in $candidates) {
+        # Slice 2 dispatches only cli tools + fleet models. Skip other tool kinds.
+        if ($c.source -eq 'tools' -and $c.kind -ne 'cli') {
+            $reason = "unsupported kind $($c.kind) in Slice 2"
+            [void]$attempts.Add([pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0 })
+            Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath
+            continue
+        }
+
+        # Dispatch (injected for tests, else real).
+        try {
+            if ($Dispatcher) {
+                $result = & $Dispatcher $c $Prompt
+            } elseif ($c.source -eq 'tools') {
+                $tool = Read-Tools -Path $ToolsPath | Where-Object { $_.name -eq $c.name } | Select-Object -First 1
+                $result = Invoke-Tool -Tool $tool -Prompt $Prompt -TimeoutS $TimeoutS
+            } else {
+                $result = Invoke-Fleet -Name $c.name -Prompt $Prompt -Path $FleetPath -NoJournal
+            }
+        } catch {
+            $result = @{ stdout=''; stderr=$_.Exception.Message; exit_code=-1; duration_s=0 }
+        }
+
+        # Verify (custom grader via the seam, else the heuristic default).
+        try {
+            if ($Grader) { $verdict = & $Grader -Capability $Capability -Result $result }
+            else         { $verdict = Test-RoutingOutputHeuristic -Capability $Capability -Result $result }
+        } catch {
+            $verdict = @{ passed=$false; score=0.0; reason="grader error: $($_.Exception.Message)" }
+        }
+
+        [void]$attempts.Add([pscustomobject]@{
+            candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier
+            passed=[bool]$verdict.passed; score=[double]$verdict.score; reason=[string]$verdict.reason
+            duration_s=[int]$result.duration_s
+        })
+        Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind `
+            -CostTier $c.cost_tier -ExitCode ([int]$result.exit_code) -DurationS ([int]$result.duration_s) `
+            -Passed ([bool]$verdict.passed) -Score ([double]$verdict.score) -Reason ([string]$verdict.reason) `
+            -JournalPath $JournalPath
+
+        if ($verdict.passed) {
+            return [pscustomobject]@{ status='passed'; capability=$Capability; winner=$c.name; result=$result; attempts=$attempts.ToArray() }
+        }
+    }
+
+    return [pscustomobject]@{ status='escalate-to-conductor'; capability=$Capability; winner=$null; result=$null; attempts=$attempts.ToArray() }
+}
