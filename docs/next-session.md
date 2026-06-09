@@ -142,10 +142,22 @@ compounding deliverable.
   + 8 PS suites + bootstrap smoke; review SHIP. Spec/plan:
   `docs/superpowers/specs/2026-06-07-routing-s1-capability-selector-design.md`,
   `docs/superpowers/plans/2026-06-07-routing-s1-capability-selector.md`.
-- **Slice 2 — auto-dispatch + verify/escalate (NEXT):** the router picks (S1), dispatches
-  automatically, grades the output, and escalates up the cost ladder on a failed check — ending
-  at Claude. Logs every choice + outcome to the routing journal.
-- **Slice 3 — ratings + calibration learning loop:** surface choices for the user to rate
+- **Slice 2 — auto-dispatch + verify/escalate: SHIPPED** (merged `39c63b2`, closes #34,
+  2026-06-08). `scripts/routing-dispatch.ps1`: `Invoke-RoutedCapability` walks
+  `Select-Capability`'s cost-ascending ladder, dispatches each candidate (`Invoke-Tool` for
+  `tools.yaml` cli entries, `Invoke-Fleet -NoJournal` for fleet models), grades with
+  `Test-RoutingOutputHeuristic` (exit 0 + non-empty + per-capability validator), and escalates
+  to the next candidate on failure — terminal `escalate-to-conductor` when all fail. Every
+  attempt is logged to `~/.claude/routing-journal.jsonl` (structured JSONL — the Slice 3 learning
+  substrate). `/route --run "<prompt>"` dispatches + prints the ladder walked. **Grader seam:**
+  `Invoke-RoutedCapability -Grader <scriptblock>` (contract `(Capability,Result)->{passed,score,
+  reason}`) defaults to heuristic; Slice 3 plugs in its judge here — **decision d027**. Gate: 28
+  routing-dispatch checks + routing-lib regression + fleet + bootstrap smoke + 165 Python; review
+  SHIP. Spec/plan: `docs/superpowers/specs/2026-06-08-routing-s2-dispatch-verify-escalate-design.md`,
+  `docs/superpowers/plans/2026-06-08-routing-s2-dispatch-verify-escalate.md`. Scope note: file
+  capabilities (`pdf-extract`/`ocr`) and `http`/`python` tool kinds are NOT auto-dispatched (cli
+  tools + fleet models only) — they keep their existing paths.
+- **Slice 3 — ratings + calibration learning loop (NEXT):** surface choices for the user to rate
   (worked/didn't), store ratings keyed by (capability, candidate) in the GitHub-backed knowledge
   repo, feed them back as the selector's quality signal (replacing the static 0.5), add a
   calibration mode (proactively run candidates, grade, collect the user's opinion).
@@ -153,9 +165,10 @@ compounding deliverable.
 **Future epic (beyond the 3 slices):** a fully-autonomous run-loop — given a folder + GitHub
 repo, run until token budget exhausted or the goal is met — built ON TOP OF the router.
 
-**Next slices (each gets its own spec → plan → build):** routing Slice 2 (auto-dispatch +
-verify/escalate, above), then Slice 3 (learning loop); SP4 surface delight (pixel sprites + IDE
-renderers); plus the role/adversarial engine + ruflo call-out.
+**Next slices (each gets its own spec → plan → build):** routing Slice 3 (ratings + calibration
+learning loop, above) — plug a learned-quality grader into the `-Grader` seam + feed ratings back
+as the selector's quality signal; then SP4 surface delight (pixel sprites + IDE renderers); plus
+the role/adversarial engine + ruflo call-out. (Slices 1 & 2 SHIPPED.)
 
 ## A. Re-opening the project (every session)
 
