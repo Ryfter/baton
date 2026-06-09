@@ -51,6 +51,22 @@ try {
         -Passed $false -Score 0.0 -Reason 'empty output' -JournalPath $journal `
         -Timestamp '2026-06-08T00:00:01.0000000-06:00'
     Check 'journal appends second line' (@(Get-Content $journal).Count -eq 2)
+
+    # ===== Task 3: Invoke-Tool =====
+    $echoTool = @{ name='echo-tool'; kind='cli'; stdin=$true
+                   command_template='pwsh -NoProfile -Command [Console]::In.ReadToEnd()' }
+    $r1 = Invoke-Tool -Tool $echoTool -Prompt 'hello-stdin'
+    Check 'Invoke-Tool stdin echoes prompt' ($r1.stdout -match 'hello-stdin' -and $r1.exit_code -eq 0)
+    Check 'Invoke-Tool returns duration'    ($r1.ContainsKey('duration_s'))
+
+    $argTool = @{ name='arg-tool'; kind='cli'; stdin=$false
+                  command_template='pwsh -NoProfile -Command & { $args[0] }' }
+    $r2 = Invoke-Tool -Tool $argTool -Prompt 'arg-prompt'
+    Check 'Invoke-Tool non-stdin passes arg' ($r2.stdout -match 'arg-prompt' -and $r2.exit_code -eq 0)
+
+    $badTool = @{ name='bad'; kind='cli'; stdin=$false; command_template='no-such-exe-xyz-123' }
+    $r3 = Invoke-Tool -Tool $badTool -Prompt 'x'
+    Check 'Invoke-Tool missing exe -> exit -1' ($r3.exit_code -eq -1 -and $r3.stderr)
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

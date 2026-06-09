@@ -70,3 +70,39 @@ function Write-RoutingJournalLine {
         Write-Warning "routing journal write failed: $($_.Exception.Message)"
     }
 }
+
+function Invoke-Tool {
+    <# Dispatch a tools.yaml kind:cli entry. Pipe the prompt via stdin when stdin:true
+       (robust path, immune to embedded quotes/$/backticks); otherwise pass it as the
+       final positional arg. Returns @{ stdout; stderr; exit_code; duration_s }.
+       -TimeoutS is accepted for signature parity with Invoke-Fleet-Cli (not enforced inline). #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Tool,
+        [Parameter(Mandatory)][string]$Prompt,
+        [int]$TimeoutS = 120
+    )
+    $cmd = [string]$Tool.command_template
+    $tokens = $cmd -split '\s+' | Where-Object { $_ -ne '' }
+    $exe = $tokens[0]
+    $rest = @($tokens | Select-Object -Skip 1)
+    $start = Get-Date
+    try {
+        if ($Tool.stdin -eq $true) {
+            $tmpFile = [System.IO.Path]::GetTempFileName()
+            try {
+                Set-Content -LiteralPath $tmpFile -Value $Prompt -Encoding utf8NoBOM
+                $out = (Get-Content -LiteralPath $tmpFile -Raw | & $exe @rest 2>&1 | Out-String)
+            } finally {
+                Remove-Item -LiteralPath $tmpFile -ErrorAction SilentlyContinue
+            }
+        } else {
+            $out = (& $exe @rest $Prompt 2>&1 | Out-String)
+        }
+        $exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+        $duration = [int]((Get-Date) - $start).TotalSeconds
+        return @{ stdout = $out; stderr = ''; exit_code = $exit; duration_s = $duration }
+    } catch {
+        $duration = [int]((Get-Date) - $start).TotalSeconds
+        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = -1; duration_s = $duration }
+    }
+}
