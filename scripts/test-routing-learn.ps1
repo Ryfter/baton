@@ -104,6 +104,45 @@ try {
     # Malformed tail line tolerated.
     Add-Content -LiteralPath $jt -Value 'broken{{' -Encoding utf8NoBOM
     Check 'tail tolerates malformed line' ((Get-LastRoutedAttempt -JournalPath $jt).candidate -eq 'd')
+
+    # ===== Task 4: LLM-judge grader =====
+    # Injected judge dispatcher returns a fixed JSON; counts calls to prove short-circuit.
+    $script:judgeCalls = 0
+    $judgeDisp = { param($model,$prompt) $script:judgeCalls++; '{"score":0.9,"reason":"good output"}' }
+
+    # Heuristic FAIL (empty) short-circuits -> no judge dispatch.
+    $grader = Get-LlmJudgeGrader -JudgeModel 'judge-m' -JudgeDispatcher $judgeDisp
+    $vEmpty = & $grader -Capability 'code-gen' -Result @{ stdout="  `n "; exit_code=0; duration_s=1 }
+    Check 'judge: empty short-circuits'   ($vEmpty.passed -eq $false -and $vEmpty.grader -eq 'heuristic')
+    Check 'judge: no dispatch on fail'    ($script:judgeCalls -eq 0)
+
+    # Heuristic PASS -> judge runs, score>=threshold -> pass, tagged llm-judge.
+    $vPass = & $grader -Capability 'code-gen' -Result @{ stdout='real output'; exit_code=0; duration_s=1 }
+    Check 'judge: passes high score'      ($vPass.passed -eq $true -and $vPass.grader -eq 'llm-judge')
+    Check 'judge: score surfaced'         ([math]::Abs($vPass.score - 0.9) -lt 1e-9)
+    Check 'judge: dispatched once'        ($script:judgeCalls -eq 1)
+
+    # Low judge score -> fail.
+    $lowDisp = { param($model,$prompt) '{"score":0.2,"reason":"weak"}' }
+    $graderLow = Get-LlmJudgeGrader -JudgeModel 'judge-m' -Threshold 0.6 -JudgeDispatcher $lowDisp
+    $vLow = & $graderLow -Capability 'code-gen' -Result @{ stdout='meh'; exit_code=0; duration_s=1 }
+    Check 'judge: low score fails'        ($vLow.passed -eq $false -and $vLow.grader -eq 'llm-judge')
+
+    # Judge throws -> heuristic fallback, never blocks.
+    $boomDisp = { param($model,$prompt) throw 'model down' }
+    $graderBoom = Get-LlmJudgeGrader -JudgeModel 'judge-m' -JudgeDispatcher $boomDisp
+    $vBoom = & $graderBoom -Capability 'code-gen' -Result @{ stdout='real output'; exit_code=0; duration_s=1 }
+    Check 'judge: error -> heuristic fallback' ($vBoom.passed -eq $true -and $vBoom.grader -eq 'heuristic' -and $vBoom.reason -match 'judge unavailable')
+
+    # No judge model available + no injected dispatcher -> heuristic fallback.
+    $graderNone = Get-LlmJudgeGrader -FleetPath (Join-Path $tmp 'no-fleet.yaml')
+    $vNone = & $graderNone -Capability 'code-gen' -Result @{ stdout='real output'; exit_code=0; duration_s=1 }
+    Check 'judge: no model -> heuristic'  ($vNone.grader -eq 'heuristic' -and $vNone.reason -match 'judge unavailable')
+
+    # Invoke-LlmJudge parses an embedded JSON object out of chatty output.
+    $chatDisp = { param($model,$prompt) 'Here is my rating: {"score": 0.75, "reason": "ok"} done.' }
+    $ij = Invoke-LlmJudge -Capability 'code-gen' -Output 'x' -JudgeModel 'j' -Dispatcher $chatDisp
+    Check 'Invoke-LlmJudge parses embedded JSON' ([math]::Abs($ij.score - 0.75) -lt 1e-9)
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

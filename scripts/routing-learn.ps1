@@ -139,3 +139,77 @@ function Get-LastRoutedAttempt {
     }
     return $null
 }
+
+function Get-CheapestLocalModel {
+    <# Name of the first enabled local ($0) fleet model, or $null. #>
+    param([string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'))
+    if (-not (Test-Path $FleetPath)) { return $null }
+    $local = @(Read-Fleet -Path $FleetPath | Where-Object { $_.enabled -eq $true -and $_.cost_tier -eq 'local' })
+    if ($local.Count -eq 0) { return $null }
+    return [string]$local[0].name
+}
+
+function Invoke-LlmJudge {
+    <# Ask a cheap model to score an output 0..1 for a capability. Returns @{score;reason}.
+       -Dispatcher (param: model, prompt -> raw string) is injected in tests; otherwise the
+       judge dispatches via Invoke-Fleet -NoJournal. Throws on no-JSON / parse failure so the
+       grader can fall back. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)][string]$Output,
+        [Parameter(Mandatory)][string]$JudgeModel,
+        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
+        [scriptblock]$Dispatcher
+    )
+    $rubric = @"
+You are grading the OUTPUT of a tool that was asked to perform a '$Capability' task.
+Score from 0.0 to 1.0 how well the OUTPUT satisfies such a request.
+Reply with ONLY compact JSON: {"score": <number 0..1>, "reason": "<short>"}
+
+OUTPUT:
+$Output
+"@
+    if ($Dispatcher) {
+        $raw = [string](& $Dispatcher $JudgeModel $rubric)
+    } else {
+        $r = Invoke-Fleet -Name $JudgeModel -Prompt $rubric -Path $FleetPath -NoJournal
+        $raw = [string]$r.stdout
+    }
+    $m = [regex]::Match($raw, '\{.*\}', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $m.Success) { throw "judge returned no JSON object" }
+    $obj = $m.Value | ConvertFrom-Json -ErrorAction Stop
+    $score = [double]$obj.score
+    if ($score -lt 0.0) { $score = 0.0 }
+    if ($score -gt 1.0) { $score = 1.0 }
+    return @{ score = $score; reason = [string]$obj.reason }
+}
+
+function Get-LlmJudgeGrader {
+    <# Build a grader scriptblock for the Slice 2 -Grader seam. Heuristic gates first (no
+       paid judge call on broken output); a passing output is scored by the judge model.
+       Tags the verdict with grader='llm-judge' (or 'heuristic' on gate-fail/fallback). #>
+    param(
+        [string]$JudgeModel,
+        [double]$Threshold = 0.6,
+        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
+        [scriptblock]$JudgeDispatcher
+    )
+    $jm = $JudgeModel; $th = $Threshold; $fp = $FleetPath; $jd = $JudgeDispatcher
+    return {
+        param($Capability, $Result)
+        $h = Test-RoutingOutputHeuristic -Capability $Capability -Result $Result
+        if (-not $h.passed) {
+            return @{ passed = $false; score = $h.score; reason = $h.reason; grader = 'heuristic' }
+        }
+        $model = if ($jm) { $jm } else { Get-CheapestLocalModel -FleetPath $fp }
+        if (-not $model) {
+            return @{ passed = $h.passed; score = $h.score; reason = "$($h.reason) (judge unavailable: no local model)"; grader = 'heuristic' }
+        }
+        try {
+            $j = Invoke-LlmJudge -Capability $Capability -Output ([string]$Result.stdout) -JudgeModel $model -FleetPath $fp -Dispatcher $jd
+            return @{ passed = ($j.score -ge $th); score = $j.score; reason = $j.reason; grader = 'llm-judge' }
+        } catch {
+            return @{ passed = $h.passed; score = $h.score; reason = "$($h.reason) (judge unavailable: $($_.Exception.Message))"; grader = 'heuristic' }
+        }
+    }.GetNewClosure()
+}
