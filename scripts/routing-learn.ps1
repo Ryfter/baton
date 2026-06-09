@@ -128,3 +128,14 @@ function Get-CapabilityQuality {
     )
     return (Get-CapabilityQualityDetail -Capability $Capability -Candidate $Candidate -JournalPath $JournalPath -RatingsPath $RatingsPath -Prior $Prior).quality
 }
+
+function Get-LastRoutedAttempt {
+    <# The most recent PASSING attempt in the journal — the winner the user last saw.
+       Returns $null when no passing attempt exists. #>
+    param([string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl'))
+    $rows = @(Read-JsonlRows -Path $JournalPath)
+    for ($i = $rows.Count - 1; $i -ge 0; $i--) {
+        if ($rows[$i].passed -eq $true) { return $rows[$i] }
+    }
+    return $null
+}

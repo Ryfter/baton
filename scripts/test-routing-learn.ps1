@@ -85,6 +85,25 @@ try {
     Check 'detail heuristic n' ($d.heuristic.n -eq 8)
     Check 'detail user n zero' ($d.user.n -eq 0)
     Check 'detail quality matches' ([math]::Abs($d.quality - $qj) -lt 1e-9)
+
+    # ===== Task 3: last routed attempt =====
+    $jt = Join-Path $tmp 'tail-journal.jsonl'
+    Check 'no journal -> null winner' ($null -eq (Get-LastRoutedAttempt -JournalPath $jt))
+
+    Add-JRow 'code-gen' 'a' $false 0.0 'heuristic' $jt
+    Add-JRow 'code-gen' 'b' $true  1.0 'heuristic' $jt   # winner of run 1
+    Add-JRow 'summarize' 'c' $false 0.0 'heuristic' $jt
+    Add-JRow 'summarize' 'd' $true  1.0 'llm-judge' $jt  # winner of run 2 (most recent)
+    $last = Get-LastRoutedAttempt -JournalPath $jt
+    Check 'last winner is most recent pass' ($last.candidate -eq 'd' -and $last.capability -eq 'summarize')
+
+    Add-JRow 'code-gen' 'e' $false 0.0 'heuristic' $jt
+    $last2 = Get-LastRoutedAttempt -JournalPath $jt
+    Check 'last winner skips trailing fails' ($last2.candidate -eq 'd')
+
+    # Malformed tail line tolerated.
+    Add-Content -LiteralPath $jt -Value 'broken{{' -Encoding utf8NoBOM
+    Check 'tail tolerates malformed line' ((Get-LastRoutedAttempt -JournalPath $jt).candidate -eq 'd')
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
