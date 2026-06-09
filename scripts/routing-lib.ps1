@@ -9,6 +9,7 @@
 #>
 
 . "$PSScriptRoot/fleet-lib.ps1"   # for Read-Fleet + ConvertFrom-FleetValue
+. "$PSScriptRoot/routing-learn.ps1"   # Slice 3 learning loop (ratings + learned quality + judge)
 
 $script:DefaultToolsPath = (Join-Path $HOME '.claude/tools.yaml')
 
