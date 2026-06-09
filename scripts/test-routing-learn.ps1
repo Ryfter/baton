@@ -143,6 +143,38 @@ try {
     $chatDisp = { param($model,$prompt) 'Here is my rating: {"score": 0.75, "reason": "ok"} done.' }
     $ij = Invoke-LlmJudge -Capability 'code-gen' -Output 'x' -JudgeModel 'j' -Dispatcher $chatDisp
     Check 'Invoke-LlmJudge parses embedded JSON' ([math]::Abs($ij.score - 0.75) -lt 1e-9)
+
+    # ===== Task 5: -Judge switch wires the judge grader + journals the grader tag =====
+    $tj = Join-Path $tmp 't5-tools.yaml'
+    Set-Content -Path $tj -Value "tools: []" -Encoding utf8
+    $fj = Join-Path $tmp 't5-fleet.yaml'
+    Set-Content -Path $fj -Value @"
+general_capabilities: [code-gen]
+
+providers:
+  - name: local-a
+    kind: cli
+    enabled: true
+    cost_tier: local
+    command_template: 'x "{{prompt}}"'
+"@ -Encoding utf8
+    $jj = Join-Path $tmp 't5-journal.jsonl'
+
+    $candDisp  = { param($cand,$prompt) @{ stdout='generated code'; stderr=''; exit_code=0; duration_s=1 } }
+    $jDisp     = { param($model,$prompt) '{"score":0.95,"reason":"great"}' }
+    $oJ = Invoke-RoutedCapability -Capability 'code-gen' -Prompt 'x' -Dispatcher $candDisp `
+            -Judge -JudgeModel 'local-a' -JudgeDispatcher $jDisp `
+            -ToolsPath $tj -FleetPath $fj -JournalPath $jj
+    Check 'judge path: passes'          ($oJ.status -eq 'passed' -and $oJ.winner -eq 'local-a')
+    $jrow = (@(Get-Content $jj))[0] | ConvertFrom-Json
+    Check 'judge path: grader logged'   ($jrow.grader -eq 'llm-judge')
+    Check 'judge path: judge score logged' ([math]::Abs($jrow.score - 0.95) -lt 1e-9)
+
+    $jj2 = Join-Path $tmp 't5b-journal.jsonl'
+    $oH = Invoke-RoutedCapability -Capability 'code-gen' -Prompt 'x' -Dispatcher $candDisp `
+            -ToolsPath $tj -FleetPath $fj -JournalPath $jj2
+    $hrow = (@(Get-Content $jj2))[0] | ConvertFrom-Json
+    Check 'default path: grader=heuristic' ($hrow.grader -eq 'heuristic')
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

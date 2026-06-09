@@ -53,6 +53,7 @@ function Write-RoutingJournalLine {
         [string]$Source, [string]$Kind, [string]$CostTier,
         [int]$ExitCode, [int]$DurationS,
         [bool]$Passed, [double]$Score, [string]$Reason,
+        [string]$Grader = 'heuristic',
         [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl'),
         [string]$Timestamp
     )
@@ -61,7 +62,7 @@ function Write-RoutingJournalLine {
         ts = $Timestamp; capability = $Capability; candidate = $Candidate
         source = $Source; kind = $Kind; cost_tier = $CostTier
         exit_code = $ExitCode; duration_s = $DurationS
-        passed = $Passed; score = $Score; reason = $Reason
+        passed = $Passed; score = $Score; reason = $Reason; grader = $Grader
     }
     try {
         $line = ($row | ConvertTo-Json -Compress)
@@ -120,6 +121,9 @@ function Invoke-RoutedCapability {
         [int]$TimeoutS = 120,
         [scriptblock]$Grader,
         [scriptblock]$Dispatcher,
+        [switch]$Judge,
+        [string]$JudgeModel,
+        [scriptblock]$JudgeDispatcher,
         [string]$ToolsPath = (Join-Path $HOME '.claude/tools.yaml'),
         [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
         [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl')
@@ -128,6 +132,11 @@ function Invoke-RoutedCapability {
     if ($RequireLocal) { $sel['RequireLocal'] = $true }
     if ($MaxCostTier)  { $sel['MaxCostTier']  = $MaxCostTier }
     $candidates = Select-Capability @sel
+
+    # Slice 3: -Grader wins; else -Judge wires the LLM-judge grader; else heuristic default.
+    $effGrader = if ($Grader) { $Grader }
+                 elseif ($Judge) { Get-LlmJudgeGrader -JudgeModel $JudgeModel -FleetPath $FleetPath -JudgeDispatcher $JudgeDispatcher }
+                 else { $null }
 
     $attempts = [System.Collections.ArrayList]@()
     if (-not $candidates -or $candidates.Count -eq 0) {
@@ -157,13 +166,14 @@ function Invoke-RoutedCapability {
             $result = @{ stdout=''; stderr=$_.Exception.Message; exit_code=-1; duration_s=0 }
         }
 
-        # Verify (custom grader via the seam, else the heuristic default).
+        # Verify (effective grader: explicit -Grader, judge via -Judge, else heuristic default).
         try {
-            if ($Grader) { $verdict = & $Grader -Capability $Capability -Result $result }
-            else         { $verdict = Test-RoutingOutputHeuristic -Capability $Capability -Result $result }
+            if ($effGrader) { $verdict = & $effGrader -Capability $Capability -Result $result }
+            else            { $verdict = Test-RoutingOutputHeuristic -Capability $Capability -Result $result }
         } catch {
             $verdict = @{ passed=$false; score=0.0; reason="grader error: $($_.Exception.Message)" }
         }
+        $graderTag = if ($verdict.grader) { [string]$verdict.grader } else { 'heuristic' }
 
         [void]$attempts.Add([pscustomobject]@{
             candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier
@@ -173,7 +183,7 @@ function Invoke-RoutedCapability {
         Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind `
             -CostTier $c.cost_tier -ExitCode ([int]$result.exit_code) -DurationS ([int]$result.duration_s) `
             -Passed ([bool]$verdict.passed) -Score ([double]$verdict.score) -Reason ([string]$verdict.reason) `
-            -JournalPath $JournalPath
+            -Grader $graderTag -JournalPath $JournalPath
 
         if ($verdict.passed) {
             return [pscustomobject]@{ status='passed'; capability=$Capability; winner=$c.name; result=$result; attempts=$attempts.ToArray() }
