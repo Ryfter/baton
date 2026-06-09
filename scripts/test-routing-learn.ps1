@@ -38,6 +38,53 @@ try {
     # Malformed line skipped on read.
     Add-Content -LiteralPath $ratings -Value 'not json{{' -Encoding utf8NoBOM
     Check 'malformed ratings line skipped' (@(Get-CapabilityRatings -RatingsPath $ratings).Count -eq 2)
+
+    # ===== Task 2: learned quality blend =====
+    $jq = Join-Path $tmp 'q-journal.jsonl'
+    $rq = Join-Path $tmp 'q-ratings.jsonl'
+
+    # Cold start: no data -> prior.
+    Check 'cold-start -> 0.5 prior' ([math]::Abs((Get-CapabilityQuality -Capability 'code-gen' -Candidate 'm1' -JournalPath $jq -RatingsPath $rq) - 0.5) -lt 1e-9)
+    Check 'cold-start -> yaml prior' ([math]::Abs((Get-CapabilityQuality -Capability 'code-gen' -Candidate 'm1' -JournalPath $jq -RatingsPath $rq -Prior 0.8) - 0.8) -lt 1e-9)
+
+    # Helper to seed journal rows (passed + grader + score).
+    function Add-JRow($cap,$cand,$passed,$score,$grader,$path){
+        $o=[ordered]@{ ts='2026-01-01T00:00:00Z'; capability=$cap; candidate=$cand; source='fleet'; kind='cli'; cost_tier='free'; exit_code=0; duration_s=1; passed=$passed; score=$score; reason='x'; grader=$grader }
+        Add-Content -LiteralPath $path -Value ($o|ConvertTo-Json -Compress) -Encoding utf8NoBOM
+    }
+
+    # All-good user ratings pull quality up toward 1.0.
+    1..5 | ForEach-Object { Add-CapabilityRating -Capability 'code-gen' -Candidate 'm2' -Source 'fleet' -Rating 'good' -RatingsPath $rq -Timestamp "2026-01-01T00:00:0$_Z" }
+    $qUp = Get-CapabilityQuality -Capability 'code-gen' -Candidate 'm2' -JournalPath $jq -RatingsPath $rq
+    Check 'good ratings raise quality' ($qUp -gt 0.7)
+
+    # All-bad ratings pull quality down below the prior.
+    1..5 | ForEach-Object { Add-CapabilityRating -Capability 'code-gen' -Candidate 'm3' -Source 'fleet' -Rating 'bad' -RatingsPath $rq -Timestamp "2026-01-01T00:01:0$_Z" }
+    $qDn = Get-CapabilityQuality -Capability 'code-gen' -Candidate 'm3' -JournalPath $jq -RatingsPath $rq
+    Check 'bad ratings lower quality' ($qDn -lt 0.3)
+
+    # Low-n shrinkage: a single good rating stays nearer the prior than 5 do.
+    Add-CapabilityRating -Capability 'code-gen' -Candidate 'm4' -Source 'fleet' -Rating 'good' -RatingsPath $rq -Timestamp '2026-01-01T00:02:00Z'
+    $q1 = Get-CapabilityQuality -Capability 'code-gen' -Candidate 'm4' -JournalPath $jq -RatingsPath $rq
+    Check 'single rating shrinks toward prior' ($q1 -gt 0.5 -and $q1 -lt $qUp)
+
+    # Judge + heuristic blend (no user ratings): mid-high judge + all-pass heuristic > prior.
+    1..4 | ForEach-Object { Add-JRow 'code-gen' 'm5' $true 0.8 'llm-judge' $jq }
+    1..4 | ForEach-Object { Add-JRow 'code-gen' 'm5' $true 1.0 'heuristic' $jq }
+    $qj = Get-CapabilityQuality -Capability 'code-gen' -Candidate 'm5' -JournalPath $jq -RatingsPath $rq
+    Check 'judge+heuristic raise quality' ($qj -gt 0.5)
+
+    # Bounded [0,1].
+    1..20 | ForEach-Object { Add-CapabilityRating -Capability 'code-gen' -Candidate 'm6' -Source 'fleet' -Rating 'good' -RatingsPath $rq -Timestamp "2026-01-01T00:03:$($_.ToString('00'))Z" }
+    $qMax = Get-CapabilityQuality -Capability 'code-gen' -Candidate 'm6' -JournalPath $jq -RatingsPath $rq
+    Check 'quality bounded <= 1' ($qMax -le 1.0 -and $qMax -gt 0.9)
+
+    # Detail breakdown reports component rates + counts.
+    $d = Get-CapabilityQualityDetail -Capability 'code-gen' -Candidate 'm5' -JournalPath $jq -RatingsPath $rq
+    Check 'detail judge n' ($d.judge.n -eq 4)
+    Check 'detail heuristic n' ($d.heuristic.n -eq 8)
+    Check 'detail user n zero' ($d.user.n -eq 0)
+    Check 'detail quality matches' ([math]::Abs($d.quality - $qj) -lt 1e-9)
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

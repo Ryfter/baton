@@ -61,3 +61,70 @@ function Add-CapabilityRating {
         Write-Warning "routing rating write failed: $($_.Exception.Message)"
     }
 }
+
+function Get-RoutingStats {
+    <# Per-(capability,candidate) signal stats from ratings + journal. Internal. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)][string]$Candidate,
+        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl'),
+        [string]$RatingsPath = $script:DefaultRatingsPath
+    )
+    # User ratings
+    $rt = Get-CapabilityRatings -Capability $Capability -Candidate $Candidate -RatingsPath $RatingsPath
+    $nu = @($rt).Count
+    $gu = @($rt | Where-Object { $_.rating -eq 'good' }).Count
+    $ru = if ($nu -gt 0) { [double]$gu / $nu } else { 0.0 }
+
+    # Journal rows for this pair
+    $rows = @(Read-JsonlRows -Path $JournalPath | Where-Object { $_.capability -eq $Capability -and $_.candidate -eq $Candidate })
+    $judge = @($rows | Where-Object { $_.grader -eq 'llm-judge' })
+    $nj = $judge.Count
+    $rj = if ($nj -gt 0) { [double](($judge | Measure-Object -Property score -Average).Average) } else { 0.0 }
+    $nh = $rows.Count
+    $ph = @($rows | Where-Object { $_.passed -eq $true }).Count
+    $rh = if ($nh -gt 0) { [double]$ph / $nh } else { 0.0 }
+
+    return @{
+        user      = @{ rate = $ru; n = [int]$nu }
+        judge     = @{ rate = $rj; n = [int]$nj }
+        heuristic = @{ rate = $rh; n = [int]$nh }
+    }
+}
+
+function Get-CapabilityQualityDetail {
+    <# Learned quality + its provenance. Pseudo-count Bayesian blend; shrinks to -Prior. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)][string]$Candidate,
+        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl'),
+        [string]$RatingsPath = $script:DefaultRatingsPath,
+        [double]$Prior = 0.5
+    )
+    $s  = Get-RoutingStats -Capability $Capability -Candidate $Candidate -JournalPath $JournalPath -RatingsPath $RatingsPath
+    $k  = 2.0; $Wu = 1.0; $Wj = 0.5; $Wh = 0.25
+    $numer = ($Prior * $k) + ($Wu * $s.user.n * $s.user.rate) + ($Wj * $s.judge.n * $s.judge.rate) + ($Wh * $s.heuristic.n * $s.heuristic.rate)
+    $denom = $k + ($Wu * $s.user.n) + ($Wj * $s.judge.n) + ($Wh * $s.heuristic.n)
+    $q = if ($denom -gt 0) { $numer / $denom } else { $Prior }
+    if ($q -lt 0.0) { $q = 0.0 }
+    if ($q -gt 1.0) { $q = 1.0 }
+    return @{
+        quality   = [double]$q
+        prior     = [double]$Prior
+        user      = $s.user
+        judge     = $s.judge
+        heuristic = $s.heuristic
+    }
+}
+
+function Get-CapabilityQuality {
+    <# Learned quality in [0,1] for a (capability, candidate). Convenience wrapper. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)][string]$Candidate,
+        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl'),
+        [string]$RatingsPath = $script:DefaultRatingsPath,
+        [double]$Prior = 0.5
+    )
+    return (Get-CapabilityQualityDetail -Capability $Capability -Candidate $Candidate -JournalPath $JournalPath -RatingsPath $RatingsPath -Prior $Prior).quality
+}
