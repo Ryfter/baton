@@ -43,3 +43,30 @@ function Test-RoutingOutputHeuristic {
     }
     return @{ passed = $true; score = 1.0; reason = 'ok' }
 }
+
+function Write-RoutingJournalLine {
+    <# Append one compact JSON row (JSONL) per dispatch attempt. A logging fault warns
+       and returns; it never crashes the dispatch loop. -Timestamp is injectable for tests. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)][string]$Candidate,
+        [string]$Source, [string]$Kind, [string]$CostTier,
+        [int]$ExitCode, [int]$DurationS,
+        [bool]$Passed, [double]$Score, [string]$Reason,
+        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl'),
+        [string]$Timestamp
+    )
+    if (-not $Timestamp) { $Timestamp = (Get-Date).ToString('o') }
+    $row = [ordered]@{
+        ts = $Timestamp; capability = $Capability; candidate = $Candidate
+        source = $Source; kind = $Kind; cost_tier = $CostTier
+        exit_code = $ExitCode; duration_s = $DurationS
+        passed = $Passed; score = $Score; reason = $Reason
+    }
+    try {
+        $line = ($row | ConvertTo-Json -Compress)
+        Add-Content -LiteralPath $JournalPath -Value $line -Encoding utf8NoBOM
+    } catch {
+        Write-Warning "routing journal write failed: $($_.Exception.Message)"
+    }
+}

@@ -30,6 +30,27 @@ try {
 
     $cmOk = @{ stdout = "fix: tighten parser`n`nbody"; exit_code = 0; duration_s = 1 }
     Check 'commit-msg subject pass'        ((Test-RoutingOutputHeuristic -Capability 'commit-msg' -Result $cmOk).passed -eq $true)
+
+    # ===== Task 2: journal =====
+    $journal = Join-Path $tmp 'routing-journal.jsonl'
+    Write-RoutingJournalLine -Capability 'commit-msg' -Candidate 'git-commit-message' `
+        -Source 'tools' -Kind 'cli' -CostTier 'local' -ExitCode 0 -DurationS 1 `
+        -Passed $true -Score 1.0 -Reason 'ok' -JournalPath $journal `
+        -Timestamp '2026-06-08T00:00:00.0000000-06:00'
+    $jl = @(Get-Content $journal)
+    Check 'journal writes one line'    ($jl.Count -eq 1)
+    $obj = $jl[0] | ConvertFrom-Json
+    Check 'journal capability field'   ($obj.capability -eq 'commit-msg')
+    Check 'journal passed bool'        ($obj.passed -eq $true)
+    Check 'journal score field'        ($obj.score -eq 1.0)
+    Check 'journal ts injected'        ($obj.ts -eq '2026-06-08T00:00:00.0000000-06:00')
+    Check 'journal reason field'       ($obj.reason -eq 'ok')
+
+    Write-RoutingJournalLine -Capability 'code-gen' -Candidate 'gemini' `
+        -Source 'fleet' -Kind 'cli' -CostTier 'free' -ExitCode 0 -DurationS 5 `
+        -Passed $false -Score 0.0 -Reason 'empty output' -JournalPath $journal `
+        -Timestamp '2026-06-08T00:00:01.0000000-06:00'
+    Check 'journal appends second line' (@(Get-Content $journal).Count -eq 2)
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
