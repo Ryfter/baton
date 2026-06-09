@@ -5,10 +5,12 @@ argument-hint: "<capability>" [--max-tier local|free|paid] [--local] [--run "<pr
 
 # /route
 
-Recommend the optimal capability for a need. Reads the `tools.yaml` (capability-specific tools
-+ specialty models) and `fleet.yaml` (general models) registries and ranks the candidates that
-serve `<capability>`, cheapest cost-tier first. **Recommendation only** — dispatch is manual
-until the auto-router slice lands.
+Recommend **or dispatch** the optimal capability for a need. Reads the `tools.yaml`
+(capability-specific tools + specialty models) and `fleet.yaml` (general models) registries and
+ranks the candidates that serve `<capability>`, cheapest cost-tier first. **Without `--run`** it
+recommends only. **With `--run "<prompt>"`** it auto-dispatches the cheapest candidate, verifies
+the output with a heuristic grader, escalates up the cost ladder on failure (ending at
+"escalate to conductor"), and logs every attempt to `~/.claude/routing-journal.jsonl`.
 
 ## Steps
 
