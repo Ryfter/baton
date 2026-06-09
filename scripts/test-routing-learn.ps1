@@ -175,6 +175,36 @@ providers:
             -ToolsPath $tj -FleetPath $fj -JournalPath $jj2
     $hrow = (@(Get-Content $jj2))[0] | ConvertFrom-Json
     Check 'default path: grader=heuristic' ($hrow.grader -eq 'heuristic')
+
+    # ===== Task 6: learned quality flows into Select-Capability =====
+    $t6tools = Join-Path $tmp 't6-tools.yaml'
+    Set-Content -Path $t6tools -Value @"
+tools:
+  - name: tool-local
+    kind: cli
+    enabled: true
+    cost_tier: local
+    capability: commit-msg
+  - name: tool-paid
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    capability: commit-msg
+"@ -Encoding utf8
+    $t6fleet = Join-Path $tmp 't6-fleet.yaml'
+    Set-Content -Path $t6fleet -Value "general_capabilities: []`n`nproviders: []" -Encoding utf8
+    $t6ratings = Join-Path $tmp 't6-ratings.jsonl'
+    $t6journal = Join-Path $tmp 't6-journal.jsonl'
+
+    1..5 | ForEach-Object { Add-CapabilityRating -Capability 'commit-msg' -Candidate 'tool-paid' -Source 'tools' -Rating 'good' -RatingsPath $t6ratings -Timestamp "2026-02-01T00:00:0$_Z" }
+    1..5 | ForEach-Object { Add-CapabilityRating -Capability 'commit-msg' -Candidate 'tool-local' -Source 'tools' -Rating 'bad' -RatingsPath $t6ratings -Timestamp "2026-02-01T00:01:0$_Z" }
+
+    $cands = Select-Capability -Capability 'commit-msg' -ToolsPath $t6tools -FleetPath $t6fleet -RatingsPath $t6ratings -JournalPath $t6journal
+    Check 'cost tier still dominates' ($cands[0].name -eq 'tool-local')
+    Check 'paid learned quality high'  (($cands | Where-Object { $_.name -eq 'tool-paid' }).quality -gt 0.7)
+    Check 'local learned quality low'  (($cands | Where-Object { $_.name -eq 'tool-local' }).quality -lt 0.3)
+    Check 'quality_detail attached'    ($null -ne ($cands[0].quality_detail))
+    Check 'quality_detail user n'      (($cands | Where-Object { $_.name -eq 'tool-paid' }).quality_detail.user.n -eq 5)
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
