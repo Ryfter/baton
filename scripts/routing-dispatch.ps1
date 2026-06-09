@@ -106,3 +106,79 @@ function Invoke-Tool {
         return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = -1; duration_s = $duration }
     }
 }
+
+function Invoke-RoutedCapability {
+    <# Dispatch -> verify -> escalate over Select-Capability's cost-ascending candidates.
+       The first candidate whose output passes the grader wins. If all fail, the outcome
+       is 'escalate-to-conductor' (PowerShell cannot invoke Claude; Claude is the orchestrator).
+       -Grader is the seam Slice 3 fills (default = heuristic). -Dispatcher is test injection. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)][string]$Prompt,
+        [ValidateSet('local','free','paid')][string]$MaxCostTier,
+        [switch]$RequireLocal,
+        [int]$TimeoutS = 120,
+        [scriptblock]$Grader,
+        [scriptblock]$Dispatcher,
+        [string]$ToolsPath = (Join-Path $HOME '.claude/tools.yaml'),
+        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
+        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl')
+    )
+    $sel = @{ Capability = $Capability; ToolsPath = $ToolsPath; FleetPath = $FleetPath }
+    if ($RequireLocal) { $sel['RequireLocal'] = $true }
+    if ($MaxCostTier)  { $sel['MaxCostTier']  = $MaxCostTier }
+    $candidates = Select-Capability @sel
+
+    $attempts = [System.Collections.ArrayList]@()
+    if (-not $candidates -or $candidates.Count -eq 0) {
+        return [pscustomobject]@{ status='no-candidate'; capability=$Capability; winner=$null; result=$null; attempts=@() }
+    }
+
+    foreach ($c in $candidates) {
+        # Slice 2 dispatches only cli tools + fleet models. Skip other tool kinds.
+        if ($c.source -eq 'tools' -and $c.kind -ne 'cli') {
+            $reason = "unsupported kind $($c.kind) in Slice 2"
+            [void]$attempts.Add([pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0 })
+            Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath
+            continue
+        }
+
+        # Dispatch (injected for tests, else real).
+        try {
+            if ($Dispatcher) {
+                $result = & $Dispatcher $c $Prompt
+            } elseif ($c.source -eq 'tools') {
+                $tool = Read-Tools -Path $ToolsPath | Where-Object { $_.name -eq $c.name } | Select-Object -First 1
+                $result = Invoke-Tool -Tool $tool -Prompt $Prompt -TimeoutS $TimeoutS
+            } else {
+                $result = Invoke-Fleet -Name $c.name -Prompt $Prompt -Path $FleetPath -NoJournal
+            }
+        } catch {
+            $result = @{ stdout=''; stderr=$_.Exception.Message; exit_code=-1; duration_s=0 }
+        }
+
+        # Verify (custom grader via the seam, else the heuristic default).
+        try {
+            if ($Grader) { $verdict = & $Grader -Capability $Capability -Result $result }
+            else         { $verdict = Test-RoutingOutputHeuristic -Capability $Capability -Result $result }
+        } catch {
+            $verdict = @{ passed=$false; score=0.0; reason="grader error: $($_.Exception.Message)" }
+        }
+
+        [void]$attempts.Add([pscustomobject]@{
+            candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier
+            passed=[bool]$verdict.passed; score=[double]$verdict.score; reason=[string]$verdict.reason
+            duration_s=[int]$result.duration_s
+        })
+        Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind `
+            -CostTier $c.cost_tier -ExitCode ([int]$result.exit_code) -DurationS ([int]$result.duration_s) `
+            -Passed ([bool]$verdict.passed) -Score ([double]$verdict.score) -Reason ([string]$verdict.reason) `
+            -JournalPath $JournalPath
+
+        if ($verdict.passed) {
+            return [pscustomobject]@{ status='passed'; capability=$Capability; winner=$c.name; result=$result; attempts=$attempts.ToArray() }
+        }
+    }
+
+    return [pscustomobject]@{ status='escalate-to-conductor'; capability=$Capability; winner=$null; result=$null; attempts=$attempts.ToArray() }
+}
