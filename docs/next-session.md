@@ -176,19 +176,37 @@ compounding deliverable.
   Spec/plan: `docs/superpowers/specs/2026-06-08-routing-s3-learning-loop-design.md`,
   `docs/superpowers/plans/2026-06-08-routing-s3-learning-loop.md`.
 
-**Slice 3 deferred follow-ups (tracked, not done):**
-- **Calibration mode** (the carved-out Slice 4): `/route --calibrate <cap> "<prompt>"` proactively
-  dispatches ALL candidates, grades each, shows them side-by-side, and collects a rating for every
-  one — seeds many ratings deliberately instead of waiting for organic `--run` use.
-- Per-prompt similarity matching (ratings aggregate per capability×candidate, not per prompt) and
-  auto-tuning of the blend weights — both explicitly out of Slice 3 scope.
+- **Slice 4 — calibration mode: SHIPPED** (merged `b88b12b`, closes #36, 2026-06-10). The
+  **exploration** twin of S3's exploitation. `/route --calibrate "<cap>" "<prompt>"` fans out
+  across **all** candidates (within a tier cap), judge-scores each, journals one row per candidate
+  (`grader=llm-judge` — signal with zero human effort), and shows a side-by-side table
+  (candidate · tier · judge · learned-quality provenance · output excerpt) plus a **pre-filled**
+  Phase-2 rate command. Phase 2 — `/route --calibrate "<cap>" --rate "qwen=good devstral=bad …"`
+  — records a verdict per candidate to the GitHub-backed ratings store (human thumbs Wu 1.0
+  dominate the judge seed). Cost-safe by default: caps at `--max-tier free`; paid candidates need
+  explicit `--max-tier paid`; a preview line announces the dispatch count. Architecture: a shared
+  `Invoke-RoutedCandidate` helper was extracted from `Invoke-RoutedCapability` so the escalate-and-
+  stop loop and calibration's fan-out share one dispatch→grade→journal primitive (regression-safe:
+  S2's 31 checks unchanged). New `scripts/routing-calibrate.ps1` (`Invoke-CapabilityCalibration` +
+  `Add-CalibrationRatings`). Decision **d031** (judge-seeded with human confirm/override). Gate: 13
+  suites green (routing-calibrate 17, routing-dispatch 31, routing-learn 43, routing-lib 27,
+  bootstrap 16, all fleet) + live deploy smoke; review verdict SHIP (provenance nit fixed).
+  Spec/plan: `docs/superpowers/specs/2026-06-09-routing-s4-calibration-mode-design.md`,
+  `docs/superpowers/plans/2026-06-09-routing-s4-calibration-mode.md`.
 
-**Future epic (beyond the 3 slices):** a fully-autonomous run-loop — given a folder + GitHub
+**Routing optimizer follow-ups (tracked, not done):**
+- Per-prompt similarity matching — ratings/judge scores aggregate per capability×candidate, not
+  per prompt; a learned router could match new prompts to similar past ones.
+- Auto-tuning of the blend weights (`Wu/Wj/Wh`, `k`) instead of the fixed d028 constants.
+
+**Future epic (beyond the routing slices):** a fully-autonomous run-loop — given a folder + GitHub
 repo, run until token budget exhausted or the goal is met — built ON TOP OF the router.
 
-**Next slices (each gets its own spec → plan → build):** routing Slice 4 (calibration mode,
-above); then SP4 surface delight (pixel sprites + IDE renderers); plus the role/adversarial
-engine + ruflo call-out. (Slices 1, 2 & 3 SHIPPED.)
+**Next (each gets its own spec → plan → build):** the routing optimizer's core is now complete
+(S1 selector, S2 dispatch, S3 learning, S4 calibration — all SHIPPED). Candidate next moves:
+the **autonomous run-loop epic** (the headline goal), or routing refinements (per-prompt
+similarity / weight auto-tuning); plus SP4 surface delight (pixel sprites + IDE renderers) and
+the role/adversarial engine + ruflo call-out. Pick at session start.
 
 ## A. Re-opening the project (every session)
 
