@@ -21,6 +21,14 @@ pointer stanzas wire every tool to contribute. A disciplined maintenance sweep
 (read-only audit + human-gated consolidation, incremental). Tight universal root +
 per-project tiers. Existing content is repo `Ryfter/knowledge` at `~/.claude/knowledge`.
 
+GRACEFUL DEGRADATION (decision d033): the orchestrator and Grimdex are mutually
+independent. Grimdex must expose two stable contracts so the orchestrator can
+detect-and-upgrade (and still work when Grimdex is absent): (1) a detection marker —
+`GRIMDEX.md` at the root; (2) a plain-markdown contribution layout (decisions / lessons /
+ratings) matching what the orchestrator already writes, so self-contained writes are
+forward-compatible. When the marker is present, the orchestrator lights up the robust
+features (wiring, audit, index); when absent, it falls back to plain local markdown.
+
 The architecture is decided, so do a QUICK lean spec (focus only on: migration safety,
 the exact pointer-stanza wording, and the script surface), then build. Deliverables:
 
