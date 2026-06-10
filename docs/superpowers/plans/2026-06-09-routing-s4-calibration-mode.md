@@ -381,7 +381,9 @@ function Add-CalibrationRatings {
         [string]$RatingsPath = (Join-Path $HOME '.claude/knowledge/universal/routing-ratings.jsonl'),
         [string]$Timestamp
     )
-    $cands = @(Select-Capability -Capability $Capability -ToolsPath $ToolsPath -FleetPath $FleetPath)
+    # Select-Capability returns a comma-protected ,([object[]]); assign directly (never @()-wrap,
+    # which collapses it to a single nested element). Mirrors Invoke-RoutedCapability's consumer.
+    $cands = Select-Capability -Capability $Capability -ToolsPath $ToolsPath -FleetPath $FleetPath
     $srcByName = @{}
     foreach ($c in $cands) { $srcByName[$c.name] = $c.source }
 
