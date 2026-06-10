@@ -57,6 +57,7 @@ providers:
     Check 'returns one row per candidate'($o1.candidates.Count -eq 3)
     Check 'all rows passed (heuristic)'  (@($o1.candidates | Where-Object { -not $_.passed }).Count -eq 0)
     Check 'rows carry an excerpt'        (-not [string]::IsNullOrWhiteSpace($o1.candidates[0].excerpt))
+    Check 'rows carry quality_detail'    ($null -ne $o1.candidates[0].quality_detail -and $null -ne $o1.candidates[0].quality_detail.user)
     Check 'journal has 3 rows'           (@(Get-Content $journal).Count -eq 3)
 
     # ===== tier cap: default free excludes the paid candidate =====

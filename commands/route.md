@@ -109,7 +109,8 @@ and logs every attempt. **`--rate good|bad`** records whether the last run's out
        $cal = Invoke-CapabilityCalibration @opt
        $cal.candidates | Format-Table `
            @{n='candidate'; e={$_.candidate}}, @{n='tier'; e={$_.cost_tier}},
-           @{n='judge'; e={ '{0:0.00}' -f $_.score }}, @{n='ok'; e={ if($_.passed){'PASS'}else{'fail'} }},
+           @{n='judge'; e={ '{0:0.00}' -f $_.score }},
+           @{n='provenance'; e={ $d=$_.quality_detail; if($d){ $g=[int][math]::Round($d.user.rate*$d.user.n); "you {0}/{1} · judge {2:0.00}x{3} · heur {4:0.00}x{5}" -f $g, $d.user.n, $d.judge.rate, $d.judge.n, $d.heuristic.rate, $d.heuristic.n } else { '—' } }},
            @{n='excerpt'; e={$_.excerpt}} -AutoSize -Wrap
        $names = ($cal.candidates | ForEach-Object { "$($_.candidate)=good" }) -join ' '
        Write-Host ""

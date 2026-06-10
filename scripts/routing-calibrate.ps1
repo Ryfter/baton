@@ -58,6 +58,7 @@ function Invoke-CapabilityCalibration {
             candidate  = $rc.attempt.candidate; source = $rc.attempt.source; cost_tier = $rc.attempt.cost_tier
             passed     = $rc.attempt.passed;     score  = $rc.attempt.score;  reason    = $rc.attempt.reason
             duration_s = $rc.attempt.duration_s; excerpt = $excerpt
+            quality_detail = $c.quality_detail   # prior learned-quality provenance for the display column
         })
     }
     $ranked = @($rows.ToArray() | Sort-Object -Property score -Descending)
