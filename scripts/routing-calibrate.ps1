@@ -63,3 +63,38 @@ function Invoke-CapabilityCalibration {
     $ranked = @($rows.ToArray() | Sort-Object -Property score -Descending)
     return [pscustomobject]@{ status='calibrated'; capability=$Capability; candidates=$ranked }
 }
+
+function Add-CalibrationRatings {
+    <# Apply a batch of per-candidate verdicts from a "name=good name=bad ..." spec. Re-derives
+       each candidate's source via Select-Capability (no dispatch), then calls Add-CapabilityRating.
+       Tokens that are malformed, have a non good|bad verdict, or name an unknown candidate are
+       warned and skipped. Returns @{ applied; skipped }. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)][string]$Spec,
+        [string]$Note = '',
+        [string]$ToolsPath = (Join-Path $HOME '.claude/tools.yaml'),
+        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
+        [string]$RatingsPath = (Join-Path $HOME '.claude/knowledge/universal/routing-ratings.jsonl'),
+        [string]$Timestamp
+    )
+    # Select-Capability returns a comma-protected ,([object[]]); assign directly (never @()-wrap,
+    # which collapses it to a single nested element). Mirrors Invoke-RoutedCapability's consumer.
+    $cands = Select-Capability -Capability $Capability -ToolsPath $ToolsPath -FleetPath $FleetPath
+    $srcByName = @{}
+    foreach ($c in $cands) { $srcByName[$c.name] = $c.source }
+
+    $applied = 0; $skipped = 0
+    foreach ($tok in @($Spec -split '\s+' | Where-Object { $_ -ne '' })) {
+        $kv = $tok -split '=', 2
+        if ($kv.Count -ne 2) { Write-Warning "calibration rating: malformed token '$tok'"; $skipped++; continue }
+        $name = $kv[0]; $rating = $kv[1].ToLower()
+        if ($rating -ne 'good' -and $rating -ne 'bad') { Write-Warning "calibration rating: bad verdict in '$tok' (use good|bad)"; $skipped++; continue }
+        if (-not $srcByName.ContainsKey($name)) { Write-Warning "calibration rating: '$name' is not a candidate for $Capability"; $skipped++; continue }
+        $addArgs = @{ Capability=$Capability; Candidate=$name; Source=$srcByName[$name]; Rating=$rating; Note=$Note; RatingsPath=$RatingsPath }
+        if ($Timestamp) { $addArgs['Timestamp'] = $Timestamp }
+        Add-CapabilityRating @addArgs
+        $applied++
+    }
+    return @{ applied = $applied; skipped = $skipped }
+}

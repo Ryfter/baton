@@ -78,6 +78,20 @@ providers:
     Check 'judge tags rows llm-judge'    (@($rows4 | Where-Object { $_.grader -eq 'llm-judge' }).Count -eq 3)
     Check 'judge score flows to rows'    ([math]::Abs([double]$o4.candidates[0].score - 0.8) -lt 0.001)
 
+    # ===== Add-CalibrationRatings: batch verdicts, source re-derivation, skip unknown/bad =====
+    $ratings = Join-Path $tmp 'routing-ratings.jsonl'
+    $res = Add-CalibrationRatings -Capability 'code-gen' `
+        -Spec 'local-a=good free-b=bad ghost=good free-b=sideways' `
+        -ToolsPath $toolsPath -FleetPath $fleetPath -RatingsPath $ratings `
+        -Timestamp '2026-06-09T00:00:00.0000000-06:00'
+    Check 'applied 2 (local-a, free-b)'  ($res.applied -eq 2)
+    Check 'skipped 2 (ghost, sideways)'  ($res.skipped -eq 2)
+    $rr = @(Get-Content $ratings | ForEach-Object { $_ | ConvertFrom-Json })
+    Check 'ratings file has 2 rows'      ($rr.Count -eq 2)
+    Check 'good row recorded'            (@($rr | Where-Object { $_.candidate -eq 'local-a' -and $_.rating -eq 'good' }).Count -eq 1)
+    Check 'bad row recorded'             (@($rr | Where-Object { $_.candidate -eq 'free-b' -and $_.rating -eq 'bad' }).Count -eq 1)
+    Check 'source re-derived as fleet'   (@($rr | Where-Object { $_.source -eq 'fleet' }).Count -eq 2)
+
     Write-Host ""
     if ($script:fail -gt 0) { Write-Host "$script:fail check(s) FAILED"; exit 1 }
     Write-Host "All routing-calibrate checks passed."; exit 0
