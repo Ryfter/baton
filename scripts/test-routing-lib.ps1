@@ -7,6 +7,7 @@ function Check($n,$c){ if($c){Write-Host "PASS: $n"} else {Write-Host "FAIL: $n"
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("routing-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+$nopath = Join-Path ([System.IO.Path]::GetTempPath()) ("rl-none-" + [guid]::NewGuid().ToString('N'))
 
 try {
     # --- Fixtures ---
@@ -97,7 +98,7 @@ providers:
     $common = @{ ToolsPath = $toolsPath; FleetPath = $fleetPath }
 
     # specialized capability → the one enabled tool, source=tools
-    $cm = Select-Capability -Capability 'commit-msg' @common
+    $cm = Select-Capability -Capability 'commit-msg' @common -RatingsPath $nopath -JournalPath $nopath
     Check 'commit-msg one candidate'   ($cm.Count -eq 1)
     Check 'commit-msg picks tool'      ($cm[0].name -eq 'git-commit-message')
     Check 'commit-msg source tools'    ($cm[0].source -eq 'tools')
@@ -105,25 +106,25 @@ providers:
     Check 'disabled tool excluded'     (-not ($cm | Where-Object { $_.name -eq 'off-tool' }))
 
     # cheapest-tier-first: ocr has a local and a paid tool → local first
-    $ocr = Select-Capability -Capability 'ocr' @common
+    $ocr = Select-Capability -Capability 'ocr' @common -RatingsPath $nopath -JournalPath $nopath
     Check 'ocr two candidates'         ($ocr.Count -eq 2)
     Check 'ocr local ranks first'      ($ocr[0].name -eq 'local-ocr')
     Check 'ocr paid ranks last'        ($ocr[1].name -eq 'paid-ocr')
 
     # general capability → enabled fleet providers, source=fleet, cheapest first
-    $cg = Select-Capability -Capability 'code-gen' @common
+    $cg = Select-Capability -Capability 'code-gen' @common -RatingsPath $nopath -JournalPath $nopath
     Check 'code-gen from fleet'        ($cg[0].source -eq 'fleet')
     Check 'code-gen local first'       ($cg[0].name -eq 'ollama-local')
     Check 'code-gen excludes disabled' (-not ($cg | Where-Object { $_.name -eq 'off-model' }))
 
     # constraints
-    $cgLocal = Select-Capability -Capability 'code-gen' -RequireLocal @common
+    $cgLocal = Select-Capability -Capability 'code-gen' -RequireLocal @common -RatingsPath $nopath -JournalPath $nopath
     Check 'RequireLocal drops paid'    (-not ($cgLocal | Where-Object { $_.cost_tier -eq 'paid' }))
-    $ocrFree = Select-Capability -Capability 'ocr' -MaxCostTier 'free' @common
+    $ocrFree = Select-Capability -Capability 'ocr' -MaxCostTier 'free' @common -RatingsPath $nopath -JournalPath $nopath
     Check 'MaxCostTier free drops paid' (-not ($ocrFree | Where-Object { $_.cost_tier -eq 'paid' }))
 
     # unknown capability → empty
-    $none = Select-Capability -Capability 'nonexistent' @common
+    $none = Select-Capability -Capability 'nonexistent' @common -RatingsPath $nopath -JournalPath $nopath
     Check 'unknown cap empty'          ($none.Count -eq 0)
 }
 finally { if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp } }

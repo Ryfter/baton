@@ -45,6 +45,7 @@ try {
     Check 'journal score field'        ($obj.score -eq 1.0)
     Check 'journal ts injected'        ($obj.ts -eq '2026-06-08T00:00:00.0000000-06:00')
     Check 'journal reason field'       ($obj.reason -eq 'ok')
+    Check 'journal grader defaults heuristic' ($obj.grader -eq 'heuristic')
 
     Write-RoutingJournalLine -Capability 'code-gen' -Candidate 'gemini' `
         -Source 'fleet' -Kind 'cli' -CostTier 'free' -ExitCode 0 -DurationS 5 `

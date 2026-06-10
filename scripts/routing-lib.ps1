@@ -9,6 +9,7 @@
 #>
 
 . "$PSScriptRoot/fleet-lib.ps1"   # for Read-Fleet + ConvertFrom-FleetValue
+. "$PSScriptRoot/routing-learn.ps1"   # Slice 3 learning loop (ratings + learned quality + judge)
 
 $script:DefaultToolsPath = (Join-Path $HOME '.claude/tools.yaml')
 
@@ -87,7 +88,9 @@ function Select-Capability {
         [ValidateSet('local','free','paid')][string]$MaxCostTier,
         [switch]$RequireLocal,
         [string]$ToolsPath = $script:DefaultToolsPath,
-        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml')
+        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
+        [string]$RatingsPath = (Join-Path $HOME '.claude/knowledge/universal/routing-ratings.jsonl'),
+        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl')
     )
     $candidates = [System.Collections.ArrayList]@()
 
@@ -96,10 +99,12 @@ function Select-Capability {
         foreach ($t in (Read-Tools -Path $ToolsPath)) {
             if ($t.enabled -ne $true) { continue }
             if ([string]$t.capability -ne $Capability) { continue }
-            $q = if ($null -ne $t.quality) { [double]$t.quality } else { 0.5 }
+            $prior = if ($null -ne $t.quality) { [double]$t.quality } else { 0.5 }
+            $detail = Get-CapabilityQualityDetail -Capability $Capability -Candidate ([string]$t.name) -Prior $prior -JournalPath $JournalPath -RatingsPath $RatingsPath
             [void]$candidates.Add([pscustomobject]@{
                 name = [string]$t.name; kind = [string]$t.kind; source = 'tools'
-                cost_tier = [string]$t.cost_tier; quality = $q
+                cost_tier = [string]$t.cost_tier; quality = $detail.quality
+                quality_detail = $detail
                 why = "specialized tool for $Capability ($($t.cost_tier))"
             })
         }
@@ -110,10 +115,12 @@ function Select-Capability {
     if ($general -contains $Capability -and (Test-Path $FleetPath)) {
         foreach ($p in (Read-Fleet -Path $FleetPath)) {
             if ($p.enabled -ne $true) { continue }
-            $q = if ($null -ne $p.quality) { [double]$p.quality } else { 0.5 }
+            $prior = if ($null -ne $p.quality) { [double]$p.quality } else { 0.5 }
+            $detail = Get-CapabilityQualityDetail -Capability $Capability -Candidate ([string]$p.name) -Prior $prior -JournalPath $JournalPath -RatingsPath $RatingsPath
             [void]$candidates.Add([pscustomobject]@{
                 name = [string]$p.name; kind = [string]$p.kind; source = 'fleet'
-                cost_tier = [string]$p.cost_tier; quality = $q
+                cost_tier = [string]$p.cost_tier; quality = $detail.quality
+                quality_detail = $detail
                 why = "general model for $Capability ($($p.cost_tier) tier)"
             })
         }

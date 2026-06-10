@@ -163,15 +163,17 @@ else the cheapest **`local`** enabled fleet model; the judge dispatches via
 dispatch-loop logging).
 
 **When the judge runs (cost-optimal default):**
-- `Invoke-RoutedCapability` / `/route --run` use the heuristic grader by default.
-- The judge grader is wired in **automatically only when a `local` ($0) judge model is
-  available** (resolved at call time). With no local judge model, judging is **opt-in**
-  via `/route --run --judge` (which passes `-Grader (Get-LlmJudgeGrader)` explicitly).
-- Rationale: free judging is free and automatic; paid judging is a deliberate keystroke.
-
-This is realized by `Invoke-RoutedCapability` resolving a default grader: if a local judge
-model exists (or `-Judge` switch is set), use `Get-LlmJudgeGrader`; else the heuristic.
-An explicit caller-supplied `-Grader` always wins (the seam is unchanged).
+- **`Invoke-RoutedCapability` stays pure:** with no `-Grader` and no `-Judge`, it uses the
+  heuristic — **identical to Slice 2** (so the Slice 2 suite is unaffected). A `-Judge`
+  switch (with `-JudgeModel`/`-JudgeDispatcher`) opts the loop into `Get-LlmJudgeGrader`;
+  an explicit `-Grader` always wins (the seam is unchanged).
+- **The auto-on decision lives in the `/route` command layer**, not the library: `/route
+  --run` checks for an enabled `local` ($0) judge model and, if one exists (or `--judge`
+  was passed), calls `Invoke-RoutedCapability -Judge`. With no local judge model and no
+  `--judge`, it dispatches with the plain heuristic.
+- Rationale: free judging is free and automatic; paid judging is a deliberate keystroke —
+  and keeping the auto-detection out of the library means no hidden model calls in tests
+  or in library callers that did not ask for a judge.
 
 **How the tag reaches the journal:** a verdict may carry an optional `grader` key. After
 grading, the dispatch loop reads `$verdict.grader` (default `'heuristic'` when absent — so
@@ -213,7 +215,7 @@ The user always sees **why** a candidate ranks where it does — the legibility 
 | **Create** | `scripts/routing-learn.ps1` | `Add-CapabilityRating`, `Get-CapabilityRatings`, `Get-CapabilityQuality`, `Get-CapabilityQualityDetail`, `Get-LastRoutedAttempt`, `Get-LlmJudgeGrader`, `Invoke-LlmJudge` |
 | **Create** | `scripts/test-routing-learn.ps1` | unit tests for all of the above (injected paths + injected judge dispatcher; zero real model calls) |
 | **Modify** | `scripts/routing-lib.ps1` | dot-source `routing-learn.ps1`; quality ← `Get-CapabilityQuality` with yaml prior; attach `quality_detail` |
-| **Modify** | `scripts/routing-dispatch.ps1` | `Write-RoutingJournalLine` `-Grader` field; `Invoke-RoutedCapability` default-grader resolution (`-Judge` switch + auto-local) |
+| **Modify** | `scripts/routing-dispatch.ps1` | `Write-RoutingJournalLine` `-Grader` field; `Invoke-RoutedCapability` `-Judge`/`-JudgeModel`/`-JudgeDispatcher` switch wiring `Get-LlmJudgeGrader`; reads `$verdict.grader` |
 | **Modify** | `commands/route.md` | `--rate` and `--judge` actions; learned-quality provenance column; description/argument-hint |
 | **Modify** | `scripts/bootstrap.ps1` | deploy `routing-learn.ps1` (libs array, next to `routing-dispatch.ps1`) |
 | **Modify** | `scripts/test-bootstrap.ps1` | assert `routing-learn.ps1` is deployed (dry-run stdout) |
@@ -268,8 +270,8 @@ All judge tests inject a dispatcher scriptblock; **no real model calls** in the 
 2. `Get-CapabilityQuality` + `Get-CapabilityQualityDetail` (TDD — the blend math).
 3. `Get-LastRoutedAttempt` (journal tail → last winner) (TDD).
 4. `Get-LlmJudgeGrader` + `Invoke-LlmJudge` with injected dispatcher (TDD).
-5. `Write-RoutingJournalLine` `-Grader` field + `Invoke-RoutedCapability` default-grader
-   resolution (`-Judge`/auto-local) (TDD).
+5. `Write-RoutingJournalLine` `-Grader` field + `Invoke-RoutedCapability` `-Judge` switch
+   (wires `Get-LlmJudgeGrader`; reads `$verdict.grader` for the journal) (TDD).
 6. Wire `Get-CapabilityQuality` into `Select-Capability` + `quality_detail`; Slice 1
    regression + cost-dominance test (TDD).
 7. `commands/route.md` `--rate`/`--judge` + provenance column.
