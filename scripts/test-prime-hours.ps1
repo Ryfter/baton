@@ -65,6 +65,15 @@ windows:
     $missing = Join-Path $tmp 'nope.yaml'
     Check 'fail-open missing config' ((Test-PrimeHoursGate -Rank 3 -CostTier 'paid' -Now $peakNow -ConfigPath $missing 3>$null).decision -eq 'allow')
 
+    # ===== Get-CapacityProfile: surge vs baseline =====
+    $sat = [datetime]'2026-06-13T10:00:00'   # Sat -> weekend surge
+    $wed = [datetime]'2026-06-10T10:00:00'   # Wed peak -> baseline (peak is not surge)
+    $cap = Get-CapacityProfile -Now $sat -ConfigPath $cfg
+    Check 'surge on weekend'        ($cap.surge -eq $true -and $cap.concurrency_factor -eq 2.0 -and $cap.window -eq 'weekend')
+    $base = Get-CapacityProfile -Now $wed -ConfigPath $cfg
+    Check 'baseline on weekday'     ($base.surge -eq $false -and $base.concurrency_factor -eq 1.0 -and $null -eq $base.window)
+    Check 'capacity fail-open'      ((Get-CapacityProfile -Now $sat -ConfigPath (Join-Path $tmp 'nope.yaml') 3>$null).concurrency_factor -eq 1.0)
+
     Write-Host ""
     if ($script:fail -gt 0) { Write-Host "$script:fail check(s) FAILED"; exit 1 }
     Write-Host "All prime-hours gate checks passed."; exit 0

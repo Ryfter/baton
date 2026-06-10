@@ -132,3 +132,19 @@ function Test-PrimeHoursGate {
     $p = Get-PrimeRankPolicy -Rank $Rank -DefaultRank ([int]$cfg.default_rank)
     return @{ decision=$p.decision; default=$p.default; reason="paid in peak window '$($peak.name)' (rank $Rank)"; window=[string]$peak.name }
 }
+
+function Get-CapacityProfile {
+    <# Per-session concurrency profile. In a 'surge' window -> that window's concurrency_factor
+       (default 2) + surge=$true; otherwise baseline 1 / surge=$false. Drives max-parallel
+       subagent count + deferred-queue drain in the backlog/run-loop. #>
+    param([datetime]$Now, [string]$ConfigPath = $script:DefaultPrimeHoursPath)
+    $cfg = Read-PrimeHoursConfig -Path $ConfigPath
+    if (-not $PSBoundParameters.ContainsKey('Now')) { $Now = Get-PrimeHoursNow -Timezone $cfg.timezone }
+    foreach ($w in @($cfg.windows)) {
+        if ([string]$w.kind -eq 'surge' -and (Test-InWindow -Window $w -Now $Now)) {
+            $cf = if ($w.concurrency_factor) { [double]$w.concurrency_factor } else { 2.0 }
+            return @{ concurrency_factor=$cf; surge=$true; window=[string]$w.name }
+        }
+    }
+    return @{ concurrency_factor=1.0; surge=$false; window=$null }
+}
