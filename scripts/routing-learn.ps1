@@ -13,7 +13,10 @@
 $script:DefaultRatingsPath = (Join-Path $HOME '.claude/knowledge/universal/routing-ratings.jsonl')
 
 function Read-JsonlRows {
-    <# Robust JSONL reader: missing path -> empty; malformed lines skipped. Returns object[]. #>
+    <# Robust JSONL reader: missing path -> empty; malformed lines skipped. Returns object[].
+       Contract: callers wrap the result in @(...) before .Count/indexing. The plain
+       (non unary-comma) return is deliberate — every consumer here uses @(), and the
+       unary-comma idiom double-unrolls under @(), corrupting counts (see test suite). #>
     param([string]$Path)
     if (-not $Path -or -not (Test-Path $Path)) { return ([object[]]@()) }
     $out = [System.Collections.ArrayList]@()
@@ -33,7 +36,7 @@ function Get-CapabilityRatings {
     $rows = Read-JsonlRows -Path $RatingsPath
     if ($Capability) { $rows = @($rows | Where-Object { $_.capability -eq $Capability }) }
     if ($Candidate)  { $rows = @($rows | Where-Object { $_.candidate  -eq $Candidate  }) }
-    return ([object[]]@($rows))
+    return ([object[]]@($rows))   # callers wrap in @(); see Read-JsonlRows contract note
 }
 
 function Add-CapabilityRating {

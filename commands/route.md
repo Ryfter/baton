@@ -36,7 +36,7 @@ and logs every attempt. **`--rate good|bad`** records whether the last run's out
      ```powershell
      $cands | Format-Table name, source, cost_tier,
          @{n='quality'; e={ '{0:0.00}' -f $_.quality }},
-         @{n='provenance'; e={ $d=$_.quality_detail; "you {0}/{1} · judge {2:0.00}x{3} · heur {4:0.00}x{5}" -f $d.user.n, ($d.user.n), $d.judge.rate, $d.judge.n, $d.heuristic.rate, $d.heuristic.n }},
+         @{n='provenance'; e={ $d=$_.quality_detail; $g=[int][math]::Round($d.user.rate*$d.user.n); "you {0}/{1} · judge {2:0.00}x{3} · heur {4:0.00}x{5}" -f $g, $d.user.n, $d.judge.rate, $d.judge.n, $d.heuristic.rate, $d.heuristic.n }},
          why -AutoSize
      Write-Host "Top pick: $($cands[0].name) — $($cands[0].why)"
      ```
