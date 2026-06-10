@@ -29,6 +29,7 @@ Assert "would deploy tools.md"            ($out -match 'tools\.md')
 Assert "would deploy routing-lib.ps1"     ($out -match 'routing-lib\.ps1')
 Assert "would deploy routing-dispatch.ps1" ($out -match 'routing-dispatch\.ps1')
 Assert "would deploy routing-learn.ps1"   ($out -match 'routing-learn\.ps1')
+Assert "would deploy routing-calibrate.ps1" ($out -match 'routing-calibrate\.ps1')
 Assert "would deploy route.md"            ($out -match 'route\.md')
 Assert "does not exit non-zero"          ($LASTEXITCODE -eq 0 -or $out -match 'Bootstrap complete')
 

@@ -108,6 +108,67 @@ function Invoke-Tool {
     }
 }
 
+function Invoke-RoutedCandidate {
+    <# Dispatch ONE candidate, grade it with the effective grader, journal the row, and
+       return both the attempt summary and the raw result. Shared by Invoke-RoutedCapability
+       (escalate-and-stop) and Invoke-CapabilityCalibration (fan-out). The caller decides
+       whether to stop on a pass. -EffGrader is the already-resolved grader ($null = heuristic
+       default). -Dispatcher is test injection. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)]$Candidate,
+        [Parameter(Mandatory)][string]$Prompt,
+        [scriptblock]$EffGrader,
+        [scriptblock]$Dispatcher,
+        [int]$TimeoutS = 120,
+        [string]$ToolsPath = (Join-Path $HOME '.claude/tools.yaml'),
+        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
+        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl')
+    )
+    $c = $Candidate
+    # Slice 2 dispatches only cli tools + fleet models. Skip other tool kinds.
+    if ($c.source -eq 'tools' -and $c.kind -ne 'cli') {
+        $reason = "unsupported kind $($c.kind) in Slice 2"
+        $attempt = [pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0 }
+        Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath
+        return @{ attempt = $attempt; result = @{ stdout=''; stderr=''; exit_code=-1; duration_s=0 } }
+    }
+
+    # Dispatch (injected for tests, else real).
+    try {
+        if ($Dispatcher) {
+            $result = & $Dispatcher $c $Prompt
+        } elseif ($c.source -eq 'tools') {
+            $tool = Read-Tools -Path $ToolsPath | Where-Object { $_.name -eq $c.name } | Select-Object -First 1
+            $result = Invoke-Tool -Tool $tool -Prompt $Prompt -TimeoutS $TimeoutS
+        } else {
+            $result = Invoke-Fleet -Name $c.name -Prompt $Prompt -Path $FleetPath -NoJournal
+        }
+    } catch {
+        $result = @{ stdout=''; stderr=$_.Exception.Message; exit_code=-1; duration_s=0 }
+    }
+
+    # Verify (effective grader: resolved -Grader/-Judge, else heuristic default).
+    try {
+        if ($EffGrader) { $verdict = & $EffGrader -Capability $Capability -Result $result }
+        else            { $verdict = Test-RoutingOutputHeuristic -Capability $Capability -Result $result }
+    } catch {
+        $verdict = @{ passed=$false; score=0.0; reason="grader error: $($_.Exception.Message)" }
+    }
+    $graderTag = if ($verdict.grader) { [string]$verdict.grader } else { 'heuristic' }
+
+    $attempt = [pscustomobject]@{
+        candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier
+        passed=[bool]$verdict.passed; score=[double]$verdict.score; reason=[string]$verdict.reason
+        duration_s=[int]$result.duration_s
+    }
+    Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind `
+        -CostTier $c.cost_tier -ExitCode ([int]$result.exit_code) -DurationS ([int]$result.duration_s) `
+        -Passed ([bool]$verdict.passed) -Score ([double]$verdict.score) -Reason ([string]$verdict.reason) `
+        -Grader $graderTag -JournalPath $JournalPath
+    return @{ attempt = $attempt; result = $result }
+}
+
 function Invoke-RoutedCapability {
     <# Dispatch -> verify -> escalate over Select-Capability's cost-ascending candidates.
        The first candidate whose output passes the grader wins. If all fail, the outcome
@@ -144,49 +205,12 @@ function Invoke-RoutedCapability {
     }
 
     foreach ($c in $candidates) {
-        # Slice 2 dispatches only cli tools + fleet models. Skip other tool kinds.
-        if ($c.source -eq 'tools' -and $c.kind -ne 'cli') {
-            $reason = "unsupported kind $($c.kind) in Slice 2"
-            [void]$attempts.Add([pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0 })
-            Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath
-            continue
-        }
-
-        # Dispatch (injected for tests, else real).
-        try {
-            if ($Dispatcher) {
-                $result = & $Dispatcher $c $Prompt
-            } elseif ($c.source -eq 'tools') {
-                $tool = Read-Tools -Path $ToolsPath | Where-Object { $_.name -eq $c.name } | Select-Object -First 1
-                $result = Invoke-Tool -Tool $tool -Prompt $Prompt -TimeoutS $TimeoutS
-            } else {
-                $result = Invoke-Fleet -Name $c.name -Prompt $Prompt -Path $FleetPath -NoJournal
-            }
-        } catch {
-            $result = @{ stdout=''; stderr=$_.Exception.Message; exit_code=-1; duration_s=0 }
-        }
-
-        # Verify (effective grader: explicit -Grader, judge via -Judge, else heuristic default).
-        try {
-            if ($effGrader) { $verdict = & $effGrader -Capability $Capability -Result $result }
-            else            { $verdict = Test-RoutingOutputHeuristic -Capability $Capability -Result $result }
-        } catch {
-            $verdict = @{ passed=$false; score=0.0; reason="grader error: $($_.Exception.Message)" }
-        }
-        $graderTag = if ($verdict.grader) { [string]$verdict.grader } else { 'heuristic' }
-
-        [void]$attempts.Add([pscustomobject]@{
-            candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier
-            passed=[bool]$verdict.passed; score=[double]$verdict.score; reason=[string]$verdict.reason
-            duration_s=[int]$result.duration_s
-        })
-        Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind `
-            -CostTier $c.cost_tier -ExitCode ([int]$result.exit_code) -DurationS ([int]$result.duration_s) `
-            -Passed ([bool]$verdict.passed) -Score ([double]$verdict.score) -Reason ([string]$verdict.reason) `
-            -Grader $graderTag -JournalPath $JournalPath
-
-        if ($verdict.passed) {
-            return [pscustomobject]@{ status='passed'; capability=$Capability; winner=$c.name; result=$result; attempts=$attempts.ToArray() }
+        $rc = Invoke-RoutedCandidate -Capability $Capability -Candidate $c -Prompt $Prompt `
+            -EffGrader $effGrader -Dispatcher $Dispatcher -TimeoutS $TimeoutS `
+            -ToolsPath $ToolsPath -FleetPath $FleetPath -JournalPath $JournalPath
+        [void]$attempts.Add($rc.attempt)
+        if ($rc.attempt.passed) {
+            return [pscustomobject]@{ status='passed'; capability=$Capability; winner=$c.name; result=$rc.result; attempts=$attempts.ToArray() }
         }
     }
 

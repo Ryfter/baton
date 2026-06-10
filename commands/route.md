@@ -1,6 +1,6 @@
 ---
-description: Recommend OR dispatch the optimal capability (tool or model) for a need — cheapest capable tier first ("optimal, not best"), now with LEARNED quality from your ratings + an LLM-judge. Reads tools.yaml + fleet.yaml + the routing journal/ratings. --run dispatches & verifies; --rate good|bad records whether the last run's output was good; --judge forces LLM-judge grading.
-argument-hint: "<capability>" [--max-tier local|free|paid] [--local] [--run "<prompt>"] [--judge] | --rate good|bad [note]
+description: Recommend OR dispatch the optimal capability (tool or model) for a need — cheapest capable tier first ("optimal, not best"), with LEARNED quality from your ratings + an LLM-judge. --run dispatches & verifies; --rate good|bad records the last run; --judge forces judging; --calibrate dispatches ALL candidates on one prompt, judge-scores each, and collects a per-candidate rating to seed learning.
+argument-hint: "<capability>" [--max-tier local|free|paid] [--local] [--run "<prompt>"] [--judge] | --rate good|bad [note] | --calibrate "<capability>" "<prompt>" | --calibrate "<capability>" --rate "<cand>=good|bad ..."
 ---
 
 # /route
@@ -85,7 +85,58 @@ and logs every attempt. **`--rate good|bad`** records whether the last run's out
    The rating lands in the GitHub-backed knowledge repo (`routing-ratings.jsonl`) — push it
    with the standing knowledge backup so it rolls to any machine.
 
-5. **On any error** (missing `tools.yaml`/`fleet.yaml`), surface the thrown message and suggest
+5. **With `--calibrate "<capability>" "<prompt>"` (calibration — Phase 1: sample & judge):**
+
+   Dispatches **every** candidate for the capability on one prompt, judge-scores each, and shows
+   them side-by-side so you can rate them. Default tier cap is `free` (local+free); include paid
+   candidates only with an explicit `--max-tier paid`.
+
+   ```powershell
+   . "$HOME/.claude/scripts/routing-calibrate.ps1"
+   $tier = if ($maxTier) { $maxTier } else { 'free' }   # calibration defaults to free, not paid
+   $prev = @{ Capability = '<capability>'; MaxCostTier = $tier }
+   if ($local) { $prev['RequireLocal'] = $true }
+   $preview = Select-Capability @prev
+   if (-not $preview -or $preview.Count -eq 0) {
+       Write-Host "No candidate serves '<capability>'. Known: $((Get-KnownCapabilities) -join ', ')"
+   } else {
+       Write-Host ("Calibrating <capability>: will dispatch {0} candidate(s) (tiers: {1})." -f `
+           $preview.Count, (($preview.cost_tier | Sort-Object -Unique) -join ','))
+       $opt = @{ Capability = '<capability>'; Prompt = '<prompt>'; MaxCostTier = $tier }
+       if ($local) { $opt['RequireLocal'] = $true }
+       # Cost-optimal judging: on if --judge OR a free local judge model is available.
+       if ($judge -or (Get-CheapestLocalModel)) { $opt['Judge'] = $true }
+       $cal = Invoke-CapabilityCalibration @opt
+       $cal.candidates | Format-Table `
+           @{n='candidate'; e={$_.candidate}}, @{n='tier'; e={$_.cost_tier}},
+           @{n='judge'; e={ '{0:0.00}' -f $_.score }},
+           @{n='provenance'; e={ $d=$_.quality_detail; if($d){ $g=[int][math]::Round($d.user.rate*$d.user.n); "you {0}/{1} · judge {2:0.00}x{3} · heur {4:0.00}x{5}" -f $g, $d.user.n, $d.judge.rate, $d.judge.n, $d.heuristic.rate, $d.heuristic.n } else { '—' } }},
+           @{n='excerpt'; e={$_.excerpt}} -AutoSize -Wrap
+       $names = ($cal.candidates | ForEach-Object { "$($_.candidate)=good" }) -join ' '
+       Write-Host ""
+       Write-Host "Rate them (edit good/bad), then run:"
+       Write-Host "  /route --calibrate `"<capability>`" --rate `"$names`""
+       Write-Host ("Logged {0} calibration attempt(s) to ~/.claude/routing-journal.jsonl." -f $cal.candidates.Count)
+   }
+   ```
+
+   Show the table to the user, then the pre-filled rate command so they only flip good→bad where
+   an output was poor.
+
+6. **With `--calibrate "<capability>" --rate "<cand>=good|bad ..."` (calibration — Phase 2: record verdicts):**
+
+   Detected when both `--calibrate` and `--rate` are present. Records one rating per candidate.
+
+   ```powershell
+   . "$HOME/.claude/scripts/routing-calibrate.ps1"
+   $res = Add-CalibrationRatings -Capability '<capability>' -Spec '<spec>'
+   Write-Host ("Recorded {0} rating(s) ({1} skipped). They will weight future routing." -f $res.applied, $res.skipped)
+   ```
+
+   The ratings land in the GitHub-backed knowledge repo (`routing-ratings.jsonl`) — push it with
+   the standing knowledge backup so they roll to any machine.
+
+7. **On any error** (missing `tools.yaml`/`fleet.yaml`), surface the thrown message and suggest
    `pwsh scripts\bootstrap.ps1 -Force` to deploy the registries.
 
 ## Arguments
