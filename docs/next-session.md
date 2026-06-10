@@ -2,6 +2,16 @@
 
 How to pick the orchestrator back up and use it on its own backlog.
 
+## ⚑ Parked threads — 2026-06-10 (read first)
+
+Three live design threads, none yet built. Recommended resume order:
+
+1. **Grimdex — standalone tool-agnostic coding KB** (decision **d032**). Promote the KB (`~/.claude/knowledge` → `Ryfter/knowledge`) into its own product reachable by Codex / Gemini-Antigravity / Copilot / Cursor / Claude. v1 is **file-first** (MCP = Phase 2): a root instructions file (`GRIMWARE.md` vs `GRIMDEX.md` vs `KNOWLEDGE.md` — undecided) as the `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` analog + per-tool pointer stanzas (every tool routes coding rules/lessons in) + a disciplined maintenance sweep (read-only audit + human-gated consolidation, incremental — generalizes `/consolidate-decisions` + `/consolidate-lessons` + `/kb-audit`) + tight universal root / per-project tiers. Orchestrator = lead consumer; Grimdex depends on nothing. Needs its own brainstorm → spec. **Naming family:** Grimdex = coding (now); **Grimlore** reserved for a future general "second-brain" KB.
+2. **`/kb-audit` + KB-root health log + rules-backup mirror** — concept doc at `~/.claude/ideas/kb-consistency-audit-…/concept.md` (3 sub-tasks: ① mirror `~/.claude/rules` into the KB — closes a LIVE backup gap, those 3 global rules are in no repo; ② the audit + `KB-AUDIT-LOG.md`; ③ weekly off-peak schedule). **RE-HOMED into Grimdex** — do NOT create these on the orchestrator board; they are Grimdex scope.
+3. **Cost-Optimization Engine** spec (`c383752`, `docs/superpowers/specs/2026-06-10-cost-optimization-engine-design.md`) — **awaiting Kevin's review.** 4 levers (1 = routing, SHIPPED; 2 = time-awareness: prime-peak rank gate + weekend surge; 3 = draft→finish cascade; 4 = multi-platform). Slice A specified build-ready; B/C roadmap. Rank: #1 highest…#5 lowest; ranks 0/6 reserved-undocumented.
+
+Also shipped 2026-06-10: routing **Slice 4 calibration** (merged `b88b12b`, closes #36, decision d031); the **post-compact-state-report** rule was relocated to write its per-project log into the KB (`knowledge/projects/<id>/compact-state-log.md`, seeded for this project) instead of the un-backed auto-memory dir.
+
 ## 0. Dashboard redesign — SHIPPED (2026-06-05)
 
 The Gemini dashboard redesign is **merged to master**. Codex's audit
