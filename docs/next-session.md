@@ -157,18 +157,38 @@ compounding deliverable.
   `docs/superpowers/plans/2026-06-08-routing-s2-dispatch-verify-escalate.md`. Scope note: file
   capabilities (`pdf-extract`/`ocr`) and `http`/`python` tool kinds are NOT auto-dispatched (cli
   tools + fleet models only) — they keep their existing paths.
-- **Slice 3 — ratings + calibration learning loop (NEXT):** surface choices for the user to rate
-  (worked/didn't), store ratings keyed by (capability, candidate) in the GitHub-backed knowledge
-  repo, feed them back as the selector's quality signal (replacing the static 0.5), add a
-  calibration mode (proactively run candidates, grade, collect the user's opinion).
+- **Slice 3 — ratings + learning loop: SHIPPED** (merged `2656ce4`, closes #35, 2026-06-09).
+  `scripts/routing-learn.ps1`: `Get-CapabilityQuality` blends the user's ratings + an LLM-judge
+  score + heuristic pass-history into a learned per-(capability,candidate) quality (pseudo-count
+  Bayesian, trust `Wu 1.0 > Wj 0.5 > Wh 0.25`, prior `k=2`, prior = yaml `quality` or 0.5). It
+  replaces Slice 1's static 0.5 as the **within-tier tiebreaker** in `Select-Capability` — the
+  cost-ascending formula is untouched, so cost tier still dominates (regression-tested: paid@1.0
+  ranks below local@0.0). `Get-LlmJudgeGrader` fills the Slice 2 `-Grader` seam: free heuristic
+  gate first (no judge call on broken output), cheap/local judge scores passing output, falls
+  back to heuristic on error/no-model. `Invoke-RoutedCapability` stays pure (heuristic default =
+  Slice 2); a `-Judge` switch opts in; the auto-on decision (local judge → on, else `--judge`)
+  lives in `/route`. Ratings persist to `~/.claude/knowledge/universal/routing-ratings.jsonl`
+  (GitHub-backed, universal); the journal stays local. `/route --rate good|bad [note]` captures
+  the last winner's rating; `/route <cap>` shows a learned-quality provenance column. Decisions
+  **d028** (blend), **d029** (ratings→repo / journal-local split), **d030** (judge free-gate +
+  command-layer auto-on). Gate: 11 suites green (routing-learn 43, routing-dispatch 31,
+  routing-lib 27, bootstrap 15, all fleet suites) + live deploy smoke; review verdict SHIP.
+  Spec/plan: `docs/superpowers/specs/2026-06-08-routing-s3-learning-loop-design.md`,
+  `docs/superpowers/plans/2026-06-08-routing-s3-learning-loop.md`.
+
+**Slice 3 deferred follow-ups (tracked, not done):**
+- **Calibration mode** (the carved-out Slice 4): `/route --calibrate <cap> "<prompt>"` proactively
+  dispatches ALL candidates, grades each, shows them side-by-side, and collects a rating for every
+  one — seeds many ratings deliberately instead of waiting for organic `--run` use.
+- Per-prompt similarity matching (ratings aggregate per capability×candidate, not per prompt) and
+  auto-tuning of the blend weights — both explicitly out of Slice 3 scope.
 
 **Future epic (beyond the 3 slices):** a fully-autonomous run-loop — given a folder + GitHub
 repo, run until token budget exhausted or the goal is met — built ON TOP OF the router.
 
-**Next slices (each gets its own spec → plan → build):** routing Slice 3 (ratings + calibration
-learning loop, above) — plug a learned-quality grader into the `-Grader` seam + feed ratings back
-as the selector's quality signal; then SP4 surface delight (pixel sprites + IDE renderers); plus
-the role/adversarial engine + ruflo call-out. (Slices 1 & 2 SHIPPED.)
+**Next slices (each gets its own spec → plan → build):** routing Slice 4 (calibration mode,
+above); then SP4 surface delight (pixel sprites + IDE renderers); plus the role/adversarial
+engine + ruflo call-out. (Slices 1, 2 & 3 SHIPPED.)
 
 ## A. Re-opening the project (every session)
 
