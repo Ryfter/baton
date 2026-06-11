@@ -51,7 +51,7 @@ The orchestrator is evolving into a **Fleet Conductor**. North star (the *why*):
 **autonomy** (stop forcing the human to press 1/2) + **legibility** (always show, in
 plain English, what each agent is doing and why); interrupt only for real decisions.
 
-Architecture (decisions in `Ryfter/knowledge/projects/coding-agent-orchestrator/decisions/`):
+Architecture (decisions in `Ryfter/grimdex-know/projects/coding-agent-orchestrator/decisions/`):
 - **d018 — conductor, not monolith:** stay a thin conductor; call out to best-of-breed
   harnesses (ruflo for swarm execution, the adversarial-dev Planner/Generator/Evaluator
   pattern for quality, GitHub for coordination) as uniform *callable capabilities*,
