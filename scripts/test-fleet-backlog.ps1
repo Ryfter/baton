@@ -45,6 +45,32 @@ Assert ($eff['a'] -eq 1) 'prereq inherits dependent rank'
 Assert ($eff['c'] -eq 4) 'own rank kept when no urgent dependent'
 Assert ($eff['b'] -eq 1) 'urgent task keeps its rank'
 
+# ===== Slice C: pure helpers =====
+Write-Host "`n[cascade helpers]" -ForegroundColor Cyan
+Assert ((Get-BacklogCascadeMode -Item @{ cascade=$true; output_file='docs/x.md' }) -eq 'full')     'mode: full'
+Assert ((Get-BacklogCascadeMode -Item @{ cascade=$true })                          -eq 'advisory') 'mode: advisory'
+Assert ((Get-BacklogCascadeMode -Item @{ id='x' })                                 -eq 'none')     'mode: none (no field)'
+Assert ((Get-BacklogCascadeMode -Item @{ cascade=$false; output_file='y' })        -eq 'none')     'mode: none (cascade false)'
+Assert ((Get-BacklogCascadeMode -Item ([pscustomobject]@{ cascade=$true; output_file='d.md' })) -eq 'full') 'mode: full (pscustomobject)'
+
+$adv = Get-AdvisoryPrompt -Prompt 'ORIGINAL TASK' -Draft 'DRAFT BODY'
+Assert ($adv -like '*ORIGINAL TASK*' -and $adv -like '*DRAFT BODY*') 'advisory prompt embeds both'
+Assert ($adv.IndexOf('ORIGINAL TASK') -lt $adv.IndexOf('DRAFT BODY')) 'original precedes draft'
+Assert ($adv -like '*Verify it independently*') 'advisory prompt carries the verify framing'
+
+$cp = Copy-BacklogItem -Item @{ id='a'; prompt='p'; rank=2 }
+$cp.prompt = 'changed'
+Assert ($cp.id -eq 'a' -and $cp.rank -eq 2) 'hashtable copy keeps fields'
+$src = [pscustomobject]@{ id='b'; prompt='orig' }
+$cp2 = Copy-BacklogItem -Item $src
+$cp2.prompt = 'changed'
+Assert ($src.prompt -eq 'orig' -and $cp2.id -eq 'b') 'pscustomobject copy does not mutate source'
+
+Assert ((Get-EffectiveMaxParallel -MaxParallel 0 -Capacity @{ surge=$true;  concurrency_factor=2 }) -eq 0) 'cap: 0 stays unbounded'
+Assert ((Get-EffectiveMaxParallel -MaxParallel 2 -Capacity @{ surge=$false; concurrency_factor=2 }) -eq 2) 'cap: no surge -> unchanged'
+Assert ((Get-EffectiveMaxParallel -MaxParallel 2 -Capacity @{ surge=$true;  concurrency_factor=2 }) -eq 4) 'cap: surge multiplies'
+Assert ((Get-EffectiveMaxParallel -MaxParallel 3 -Capacity @{ surge=$true;  concurrency_factor=1.5 }) -eq 5) 'cap: ceil(3*1.5)=5'
+
 # --- end-to-end driver test on a throwaway repo ---
 Write-Host "`n[backlog driver e2e]" -ForegroundColor Cyan
 $root = Join-Path $env:TEMP ("cao-bk-" + [guid]::NewGuid().ToString('N').Substring(0,8))
@@ -153,6 +179,7 @@ $gateImpl = {
 $gateTasks = @(
     @{ id='hi';  model='paidmodel'; rank=1; allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@() }  # rank-1 -> ask/run -> proceeds
     @{ id='lo';  model='paidmodel'; rank=3; allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@() }  # rank-3 -> defer -> skipped
+    @{ id='lodep'; model='paidmodel'; rank=3; allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@('lo') }
 )
 $gateRes = Invoke-Backlog -RepoRoot $groot -Tasks $gateTasks -Implementers @{ paidmodel = $gateImpl } `
     -Integration 'integration/backlog' -IntegrationBase 'master' -OutputDir $gout -WorktreeRoot $gwtRoot `
@@ -165,6 +192,7 @@ Assert ($script:dispatched -contains 'hi') "rank-1 paid task dispatched (proceed
 Assert ($gById['hi'].merged -eq $true -and -not $gById['hi'].deferred) "rank-1 paid task ran + merged"
 $loLive = Get-Content (Join-Path $gout 'lo.live.json') -Raw | ConvertFrom-Json
 Assert ($loLive.state -eq 'deferred') "lo.live.json state == deferred"
+Assert ($gById['lodep'].merged -eq $false -and (@($gById['lodep'].reasons) -join ' ') -like '*dep-blocked*') "gate-deferred prereq dep-blocks dependent (Slice A gap fix)"
 
 Push-Location $groot; try { git worktree prune 2>&1 | Out-Null } finally { Pop-Location }
 Remove-Item -Recurse -Force $groot, $gwtRoot, $gout -ErrorAction SilentlyContinue
@@ -172,6 +200,83 @@ Remove-Item -Recurse -Force $groot, $gwtRoot, $gout -ErrorAction SilentlyContinu
 # cleanup
 Push-Location $root; try { git worktree prune 2>&1 | Out-Null } finally { Pop-Location }
 Remove-Item -Recurse -Force $root, $wtRoot, $out -ErrorAction SilentlyContinue
+
+# ===== Slice C: serial driver cascade modes =====
+Write-Host "`n[serial cascade]" -ForegroundColor Cyan
+$croot  = Join-Path $env:TEMP ("cao-sc-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
+$cwt    = Join-Path $env:TEMP ("cao-scwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$cout   = Join-Path $env:TEMP ("cao-scout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
+New-Item -ItemType Directory -Force -Path $croot, $cout | Out-Null
+Push-Location $croot
+try {
+    git init -q -b master 2>&1 | Out-Null
+    git config user.email t@e.com; git config user.name t; git config commit.gpgsign false
+    New-Item -ItemType Directory -Force -Path 'scripts','docs' | Out-Null
+    Set-Content scripts/seed.ps1 "seed" -Encoding utf8NoBOM
+    git add -A 2>&1 | Out-Null; git commit -q -m init 2>&1 | Out-Null
+} finally { Pop-Location }
+
+# Injected cascade invoker: scripted per item id. Contract:
+#   param($Item, $EffRank, $NoFinisher, $Opts) -> cascade result object
+$script:cascadeCalls = @()
+$fakeCascade = {
+    param($Item, $EffRank, $NoFinisher, $Opts)
+    $script:cascadeCalls += @{ id = $Item.id; rank = $EffRank; nofin = [bool]$NoFinisher }
+    switch ($Item.id) {
+        'F-ok'   { [pscustomobject]@{ status='draft-sufficient'; winner='cheapo'; frontier_spent=$false
+                                      result=[pscustomobject]@{ stdout="CASCADE BODY for $($Item.id)" } } }
+        'F-def'  { [pscustomobject]@{ status='finisher-deferred'; winner='cheapo'; frontier_spent=$false
+                                      result=[pscustomobject]@{ stdout='provisional' } } }
+        'F-esc'  { [pscustomobject]@{ status='escalate-to-conductor'; winner=$null; frontier_spent=$true; result=$null } }
+        'A-draft'{ [pscustomobject]@{ status='drafts-only'; winner='cheapo'; frontier_spent=$false
+                                      result=[pscustomobject]@{ stdout='DRAFT IDEA' } } }
+        'A-none' { [pscustomobject]@{ status='drafts-only'; winner=$null; frontier_spent=$false; result=$null } }
+        'A-boom' { throw 'cascade exploded' }
+    }
+}
+
+# Advisory implementer records the prompt it actually received.
+$script:seenPrompts = @{}
+$advImpl = {
+    param($wtPath, $item)
+    $script:seenPrompts[$item.id] = [string]$item.prompt
+    Set-Content (Join-Path $wtPath "scripts/$($item.id).ps1") "x" -Encoding utf8NoBOM
+}
+
+$cTasks = @(
+    @{ id='F-ok';   cascade=$true; output_file='docs/out.md'; allowed_paths=@('docs/*');  test_command='exit 0'; depends_on=@() },
+    @{ id='F-def';  cascade=$true; output_file='docs/d.md';   allowed_paths=@('docs/*');  depends_on=@() },
+    @{ id='F-dep';  model='adv';   prompt='dep';  allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@('F-def') },
+    @{ id='F-esc';  cascade=$true; output_file='docs/e.md';   allowed_paths=@('docs/*');  depends_on=@() },
+    @{ id='F-bad';  cascade=$true; output_file='..\evil.md';  allowed_paths=@('*');       depends_on=@() },
+    @{ id='A-draft';cascade=$true; model='adv'; prompt='ORIGINAL A-draft'; allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@() },
+    @{ id='A-none'; cascade=$true; model='adv'; prompt='ORIGINAL A-none';  allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@() },
+    @{ id='A-boom'; cascade=$true; model='adv'; prompt='ORIGINAL A-boom';  allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@() }
+)
+$cRes = Invoke-Backlog -RepoRoot $croot -Tasks $cTasks -Implementers @{ adv = $advImpl } `
+    -Integration 'integration/backlog' -IntegrationBase 'master' -OutputDir $cout -WorktreeRoot $cwt `
+    -CascadeInvoker $fakeCascade
+$cById = @{}; foreach ($r in $cRes) { $cById[$r.id] = $r }
+
+Assert ($cById['F-ok'].merged -eq $true) 'full: draft-sufficient merges'
+Push-Location $croot
+try { Assert ((git show "integration/backlog:docs/out.md" 2>$null) -match 'CASCADE BODY') 'full: output_file content on integration' }
+finally { Pop-Location }
+Assert ($cById['F-ok'].frontier_spent -eq $false) 'full: frontier_spent surfaced'
+Assert ($cById['F-def'].deferred -eq $true -and $cById['F-def'].merged -eq $false) 'full: finisher-deferred -> deferred'
+Assert ($cById['F-dep'].merged -eq $false -and (@($cById['F-dep'].reasons) -join ' ') -like '*dep-blocked*') 'deferred item dep-blocks dependents'
+Assert ($cById['F-esc'].merged -eq $false -and (@($cById['F-esc'].reasons) -join ' ') -like '*escalate*') 'full: escalate -> blocked'
+Assert ($cById['F-bad'].merged -eq $false -and (@($cById['F-bad'].reasons) -join ' ') -like '*output_file*') 'full: traversal guard blocks'
+Assert ($cById['A-draft'].merged -eq $true) 'advisory: merged'
+Assert ($script:seenPrompts['A-draft'] -like '*ORIGINAL A-draft*' -and $script:seenPrompts['A-draft'] -like '*DRAFT IDEA*') 'advisory: composed prompt has original + draft'
+Assert ($script:seenPrompts['A-none'] -eq 'ORIGINAL A-none') 'advisory: no usable draft -> original prompt'
+Assert ($script:seenPrompts['A-boom'] -eq 'ORIGINAL A-boom') 'advisory: cascade error -> fail-open to original prompt'
+Assert (@($script:cascadeCalls | Where-Object { $_.id -eq 'A-draft' -and $_.nofin }).Count -eq 1) 'advisory: invoked with NoFinisher'
+$fLive = Get-Content (Join-Path $cout 'F-def.live.json') -Raw | ConvertFrom-Json
+Assert ($fLive.state -eq 'deferred') 'full: F-def.live.json state == deferred'
+
+Push-Location $croot; try { git worktree prune 2>&1 | Out-Null } finally { Pop-Location }
+Remove-Item -Recurse -Force $croot, $cwt, $cout -ErrorAction SilentlyContinue
 
 # ===== legibility-feed isolation =====
 Write-Host "`n[runs-root isolation]" -ForegroundColor Cyan

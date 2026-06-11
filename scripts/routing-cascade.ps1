@@ -46,16 +46,19 @@ $Draft
 
 function Invoke-CapabilityCascade {
     <# Draft -> good-enough gate -> finish. Statuses: draft-sufficient | finished |
-       finisher-deferred | no-finisher | no-candidate | escalate-to-conductor.
+       finisher-deferred | no-finisher | drafts-only | no-candidate | escalate-to-conductor.
        frontier_spent is true only when a paid finisher actually dispatched.
        The short-circuit requires an llm-judge verdict: the heuristic grader is binary
-       (pass = 1.0) and would skip the finisher on every pass (spec decision 2). #>
+       (pass = 1.0) and would skip the finisher on every pass (spec decision 2).
+       -NoFinisher stops after drafting+judging (Slice C advisory mode); short-circuit
+       still fires; otherwise returns drafts-only with the best USABLE draft. #>
     param(
         [Parameter(Mandatory)][string]$Capability,
         [Parameter(Mandatory)][string]$Prompt,
         [int]$DraftCount = 3,
         [double]$GoodEnough = 0.9,
         [switch]$NoShortCircuit,
+        [switch]$NoFinisher,
         [scriptblock]$Grader,
         [string]$JudgeModel,
         [scriptblock]$JudgeDispatcher,
@@ -117,14 +120,22 @@ function Invoke-CapabilityCascade {
                                   draft_attempts=$draftAttempts.ToArray(); finish_attempt=$null; frontier_spent=$false }
     }
 
+    # ── Salvage pair: best USABLE draft (non-empty stdout, passing or not) ──
+    # Used by drafts-only (Slice C), finisher-deferred, and escalate paths; the
+    # no-finisher path stays passing-only (Slice B spec step 5).
+    $bestUsableName   = if ($best -and -not [string]::IsNullOrWhiteSpace([string]$best.result.stdout)) { $best.attempt.candidate } else { $null }
+    $bestUsableResult = if ($best -and -not [string]::IsNullOrWhiteSpace([string]$best.result.stdout)) { $best.result } else { $null }
+
+    # ── -NoFinisher: stop after drafting+judging (Slice C advisory mode) ──
+    if ($NoFinisher) {
+        return [pscustomobject]@{ status='drafts-only'; capability=$Capability
+                                  winner=$bestUsableName; result=$bestUsableResult
+                                  draft_attempts=$draftAttempts.ToArray(); finish_attempt=$null; frontier_spent=$false }
+    }
+
     # ── Finisher stage ──
     $bestPassedName   = if ($best -and $best.attempt.passed) { $best.attempt.candidate } else { $null }
     $bestPassedResult = if ($best -and $best.attempt.passed) { $best.result } else { $null }
-    # Salvage pair for the deferred/escalate paths: spec steps 7-8 return the best
-    # USABLE draft (non-empty stdout), passing or not — work is never lost. The
-    # no-finisher path stays passing-only (spec step 5 says "best passing draft").
-    $bestUsableName   = if ($best -and -not [string]::IsNullOrWhiteSpace([string]$best.result.stdout)) { $best.attempt.candidate } else { $null }
-    $bestUsableResult = if ($best -and -not [string]::IsNullOrWhiteSpace([string]$best.result.stdout)) { $best.result } else { $null }
     if ($finishers.Count -eq 0) {
         return [pscustomobject]@{ status='no-finisher'; capability=$Capability
                                   winner=$bestPassedName; result=$bestPassedResult
