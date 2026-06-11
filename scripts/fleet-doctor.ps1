@@ -5,7 +5,8 @@
   Exit 0 if all enabled providers are ok; 1 if any warn/err.
 #>
 param(
-    [string]$Path = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'fleet.yaml' } else { Join-Path $HOME '.baton/fleet.yaml' })
+    [string]$Path = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'fleet.yaml' } else { Join-Path $HOME '.baton/fleet.yaml' }),
+    [switch]$Json
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'fleet-lib.ps1')
@@ -13,6 +14,10 @@ $ErrorActionPreference = 'Stop'
 try {
     $fleet = Read-Fleet -Path $Path
 } catch {
+    if ($Json) {
+        Write-Output '[]'
+        exit 1
+    }
     Write-Host "fleet doctor: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
@@ -60,7 +65,11 @@ foreach ($p in $fleet) {
     $rows += [pscustomobject]@{ NAME = $p.name; STATUS = $status; DETAIL = $detail }
 }
 
-$rows | Format-Table -AutoSize | Out-String | Write-Host
-$enabled = @($fleet | Where-Object { $_.enabled -eq $true }).Count
-Write-Host "$enabled enabled provider(s)."
+if ($Json) {
+    ConvertTo-Json -InputObject @($rows) -Depth 4
+} else {
+    $rows | Format-Table -AutoSize | Out-String | Write-Host
+    $enabled = @($fleet | Where-Object { $_.enabled -eq $true }).Count
+    Write-Host "$enabled enabled provider(s)."
+}
 if ($anyBad) { exit 1 } else { exit 0 }

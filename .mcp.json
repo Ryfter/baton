@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "baton": {
+      "command": "python",
+      "args": ["-m", "baton_mcp"],
+      "env": {
+        "PYTHONPATH": "${CLAUDE_PLUGIN_ROOT}",
+        "BATON_MCP_BRIDGE": "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-bridge.ps1"
+      }
+    }
+  }
+}

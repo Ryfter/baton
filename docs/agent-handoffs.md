@@ -128,5 +128,9 @@ must know:
   must stay readable by every agent). One-time marker-gated migration from `~/.claude/`
   runs on first `baton-init`. KB, cost ledger, and deployed `~/.claude/scripts/` unchanged.
   `kb-autoindex` stays a user-settings hook. Statusline stays bootstrap-managed.
-- **Queued next:** Phase 3 — Python MCP server exposing `baton_*` tools (route/fleet/kb/job)
-  for Codex (`codex mcp add`), Cursor, and any MCP client.
+- **Phase 3 — EXECUTED (2026-06-11):** Python MCP server `baton` ships as `baton_mcp`
+  (FastMCP stdio, 8 tools: `baton_capabilities`, `baton_route`, `baton_kb_search`,
+  `baton_job_status`, `baton_job_list`, `baton_fleet_list`, `baton_fleet_doctor`,
+  `baton_fleet_test`). Bundled in the plugin via `.mcp.json` — auto-registered in every
+  Claude Code session. Codex and Cursor registration documented in README. All tools read
+  the same `BATON_HOME`; bridge shims into existing PS libs via `scripts/mcp-bridge.ps1`.

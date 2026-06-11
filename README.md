@@ -141,6 +141,61 @@ Claude Code *is* the orchestrator (no separate daemon). State lives under `~/.cl
 [design spec](docs/superpowers/specs/2026-05-22-coding-agent-orchestrator-design.md)
 and the per-feature specs linked above.
 
+## MCP server
+
+Baton ships a FastMCP stdio server (`baton_mcp`) that exposes its core capabilities as
+eight MCP tools. Every tool reads the same `BATON_HOME` state (default `~/.baton`) and
+shells into the existing PowerShell libs via a thin adapter (`scripts/mcp-bridge.ps1`),
+except `baton_kb_search` which calls the `kb` Python package in-process. No logic is
+duplicated — the MCP surface is purely a cross-tool adapter over what already exists.
+
+| Tool | Purpose |
+|---|---|
+| `baton_capabilities` | List every capability the router knows (tools.yaml + fleet general capabilities) |
+| `baton_route` | Route a capability to the cheapest capable tool/model; with `prompt` dispatches + verifies |
+| `baton_kb_search` | Semantic search over the knowledge base (decisions, lessons, specs) |
+| `baton_job_status` | Show the active Baton job (id, phase, manifest) from BATON_HOME |
+| `baton_job_list` | List Baton jobs — filter `active` (default), `done`, or `all` |
+| `baton_fleet_list` | List registered fleet providers (name, kind, enabled, cost tier) |
+| `baton_fleet_doctor` | Health-check every enabled fleet provider (PATH/HTTP reachability) |
+| `baton_fleet_test` | Dispatch one prompt to one named fleet provider; return stdout/exit/duration |
+
+### Registration
+
+**Claude Code — automatic.** Installing the plugin (`claude plugin install baton@ryfter`)
+auto-registers the server via `.mcp.json` at the plugin root. Tools surface as
+`mcp__baton__<tool>` in every session. No extra steps needed.
+
+**Codex CLI:**
+
+```powershell
+codex mcp add baton `
+  --env PYTHONPATH=D:\Dev\Baton `
+  --env BATON_MCP_BRIDGE=D:\Dev\Baton\scripts\mcp-bridge.ps1 `
+  -- python -m baton_mcp
+```
+
+Replace `D:\Dev\Baton` with your actual repo clone path. Verify with `codex mcp list`.
+
+**Cursor** — add to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "baton": {
+      "command": "python",
+      "args": ["-m", "baton_mcp"],
+      "env": {
+        "PYTHONPATH": "D:\\Dev\\Baton",
+        "BATON_MCP_BRIDGE": "D:\\Dev\\Baton\\scripts\\mcp-bridge.ps1"
+      }
+    }
+  }
+}
+```
+
+Replace the paths with your actual repo clone path.
+
 ## Tests
 
 ```powershell
@@ -155,8 +210,8 @@ pwsh -NoProfile -File scripts\test-bootstrap.ps1
 pwsh -NoProfile -File scripts\test-runs-lib.ps1
 pwsh -NoProfile -File scripts\test-run-feed-hook.ps1
 pwsh -NoProfile -File scripts\test-statusline-feed.ps1
-# Python (dashboard + knowledge base)
-python -m pytest dashboard kb -q
+# Python (dashboard + knowledge base + MCP server)
+python -m pytest dashboard kb tools baton_mcp -q
 ```
 
 ## License
