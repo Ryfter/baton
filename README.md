@@ -6,7 +6,9 @@ and the orchestrator tracks what they did, what it cost, what you decided, and w
 learned. Built on [claude-octopus](https://github.com/nyldn/claude-octopus) as the
 dispatch layer.
 
-**Status:** v1.1.0 — feature-complete.
+**Status:** `v1.2.0-rc1` — *the Fleet Conductor release* (capability routing, cost-optimization,
+Grimdex). **MIT licensed.** An early/experimental personal project, shared in the hope it's
+useful — not a turnkey product.
 
 ### 📖 New here? Read these
 
@@ -67,6 +69,24 @@ Each feature has a one-line "what it does"; the link goes to its full design spe
   ([spec](docs/superpowers/specs/2026-05-29-decision-loop-design.md))
 - **Per-project cost ledger** — a simple running spend record per project. Command: `/cost`.
 
+### New in v1.2.0 — the Fleet Conductor release
+
+- **Capability-routing optimizer** — an explainable, cheapest-tier-first auto-router over your
+  models + tools: it picks the *optimal* (not most-powerful) capability, dispatches, verifies,
+  and escalates up the cost ladder on failure — then **learns** which model/tool wins each
+  capability from your ratings + an LLM judge, and supports a fan-out **calibration** mode.
+  Command: `/route` (`--run`, `--rate`, `--calibrate`, `--rank`).
+- **Cost-Optimization Engine (time-awareness)** — rank-gates paid/frontier dispatch during
+  prime-peak hours (rank 1 = spend-worthy … 5 = wait for off-peak) and scales concurrency up
+  during off-peak/weekend surge windows. Config: `~/.claude/prime-hours.yaml`.
+- **`/idea` front door** — turn a raw idea into board-ready GitHub issues with one human gate
+  (KB prefetch → research ensemble → council viability debate → concept doc → issues).
+- **Tools registry** — a non-LLM capability registry (`tools.yaml`), co-equal sibling of the
+  model fleet; first entry is Docling for PDF extraction. Command: `/tools list|doctor`.
+- **Grimdex integration** — the knowledge base is now its own standalone, tool-agnostic project
+  ([Ryfter/Grimdex](https://github.com/Ryfter/Grimdex)). This repo wires into it via a pointer
+  stanza and works with or without it (graceful degradation).
+
 ---
 
 ## Quick start
@@ -77,8 +97,8 @@ claude plugin marketplace add https://github.com/nyldn/plugins.git
 claude plugin install octo@nyldn-plugins
 
 # 2. Bootstrap this repo into ~/.claude/ (idempotent — safe to re-run)
-git clone <this repo> D:\Dev\coding-agent-orchestrator
-cd D:\Dev\coding-agent-orchestrator
+git clone https://github.com/Ryfter/coding-agent-orchestrator.git
+cd coding-agent-orchestrator
 pwsh -NoProfile -File scripts\bootstrap.ps1
 
 # 3. (optional) enable cost tracking — add to your PowerShell profile:
@@ -119,3 +139,12 @@ pwsh -NoProfile -File scripts\test-statusline-feed.ps1
 # Python (dashboard + knowledge base)
 python -m pytest dashboard kb -q
 ```
+
+## License
+
+[MIT](LICENSE) © 2026 Kevin Rank.
+
+This is a personal project built on [Claude Code](https://claude.com/claude-code) and
+[claude-octopus](https://github.com/nyldn/claude-octopus). It assumes a Windows + PowerShell 7
++ Python 3.12+ environment with `gh` and (optionally) Ollama for local models. Provided as-is;
+expect rough edges.
