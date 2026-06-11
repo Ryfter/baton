@@ -4,7 +4,7 @@ How to pick **Baton** back up and use it on its own backlog.
 
 ## ⚑ Parked threads — 2026-06-10 (read first)
 
-**Phase 2 shipped 2026-06-11** — state now at `$BATON_HOME` (default `~/.baton`); hooks ship with the plugin (`hooks/hooks.json`). Phase 3 (Python MCP server) is next.
+**Phase 2 shipped 2026-06-11** — state now at `$BATON_HOME` (default `~/.baton`); hooks ship with the plugin (`hooks/hooks.json`). **Phase 3 shipped 2026-06-11** — Python MCP server (`baton_mcp`, 8 tools) bundled in plugin via `.mcp.json`; Codex/Cursor registration documented in README.
 
 **THE NEXT BUILD (pick one — each gets its own worktree-isolated session):**
 
