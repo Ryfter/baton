@@ -169,13 +169,17 @@ auto-registers the server via `.mcp.json` at the plugin root. Tools surface as
 **Codex CLI:**
 
 ```powershell
+# Forward slashes are required — codex's arg parsing eats lone backslashes
+# (stores D:DevBaton…, breaking the server). Windows accepts both forms.
 codex mcp add baton `
-  --env PYTHONPATH=D:\Dev\Baton `
-  --env BATON_MCP_BRIDGE=D:\Dev\Baton\scripts\mcp-bridge.ps1 `
+  --env PYTHONPATH=D:/Dev/Baton `
+  --env BATON_MCP_BRIDGE=D:/Dev/Baton/scripts/mcp-bridge.ps1 `
   -- python -m baton_mcp
 ```
 
-Replace `D:\Dev\Baton` with your actual repo clone path. Verify with `codex mcp list`.
+Replace `D:/Dev/Baton` with your actual repo clone path. Verify with `codex mcp list`
+(check the stored env paths survived intact) and a quick
+`codex exec "Call the baton_capabilities MCP tool and report what it returns."`.
 
 **Cursor** — add to `~/.cursor/mcp.json`:
 
