@@ -65,16 +65,27 @@ prepared for open-source release as an **engine/data split** — this is cross-c
 for EVERY agent touching it:
 
 - **Public `Ryfter/Grimdex` = the ENGINE** (tool/framework): `scripts/` (setup, wire, sweep,
-  schedule, console libs + tests), `setup.ps1`, the `GRIMDEX.md` convention, `docs/`, `config/`,
+  schedule, console libs + tests), `setup.ps1`, the `GRIMDEX.md` convention, `docs/`,
   `.github/`, tool-wiring files, + an empty `universal/` skeleton + a few curated exemplar
-  records. MIT.
+  records. MIT. (`config/` is **DATA**, not engine — it holds Kevin's tool-config backups
+  with local paths; the public repo ships `config/` as an empty template. Per the Task 1 audit.)
 - **Private `Ryfter/grimdex-know` = the DATA** (accumulated knowledge): `universal/` content +
-  ALL `projects/` tiers. Stays private; remains the knowledge backup. The `~/.claude/knowledge`
-  junction repoints here post-split.
+  ALL `projects/` tiers + `config/`. Stays private; remains the knowledge backup. The
+  `~/.claude/knowledge` junction repoints here post-split.
+
+**Ownership (Grimdex decision d003):** Grimdex-side execution — the Grimdex audit, the split
+itself, the Grimdex README — runs from the **Grimdex home thread** (sessions in
+`D:\Dev\Grimdex`); this project's thread owns only the orchestrator repo's own audit + README.
+Cross-thread decisions flow as context syncs; cross-thread operations don't.
+
+**Status:** Task 1 (Grimdex secret/PII/content audit) is **COMPLETE — verdict GO for the split
+path** (full history clean: no secrets, nothing to rotate; engine genericization checklist
+enumerated). Findings + file-level manifest: `projects/grimdex/go-public-audit.md` in the KB.
+Task 2 (the split) awaits Kevin's go, step-gated. Flipping the CURRENT combined repo public is
+NO-GO permanently — it becomes the `pre-split-backup`.
 
 **For any agent working in the KB:** tag what you write as ENGINE (→ public, keep it free of
 personal content + hardcoded local paths) or DATA (→ private). Decision records (like this)
-and project tiers are DATA. Do **not** change repo visibility or rewrite history piecemeal —
-the split + a secret/content audit run as one gated job. Full plan + file-level manifest:
-`docs/go-public-hardening.md` (Task 2). Decision: `d037-grimdex-goes-public-as-engine.md`.
+and project tiers are DATA. Do **not** change repo visibility or rewrite history piecemeal.
+Plan: `docs/go-public-hardening.md` (Task 2). Decision: `d037-grimdex-goes-public-as-engine.md`.
 Until the split runs, his knowledge stays backed up in the current private `Ryfter/Grimdex`.
