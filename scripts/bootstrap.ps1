@@ -418,10 +418,6 @@ if (Test-Path "$catDst.migrated") {
     Copy-WithPrompt $catSrc $catDst 'routing catalog' -Force:$Force
 }
 
-$logSrc = Join-Path $repoRoot 'references\model-routing-log.md'
-$logDst = Join-Path $claudeDir 'model-routing-log.md'
-Copy-IfMissing $logSrc $logDst 'routing journal (never overwritten)'
-
 # --- Step 7: Verify backends ---
 Write-Step "Verifying backends reachable"
 $backends = @(

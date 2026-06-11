@@ -25,6 +25,7 @@ You are appending a single qualitative note to the model routing journal at
 3. Append the line using PowerShell:
 
    ```powershell
+   . "$HOME/.claude/scripts/baton-home.ps1"
    $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
    $target = '<first-token>'
    $obs = '<observation, with double quotes escaped>'

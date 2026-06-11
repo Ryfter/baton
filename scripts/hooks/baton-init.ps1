@@ -17,7 +17,8 @@ try {
     . $libPath
     $refs = [IO.Path]::GetFullPath((Join-Path $scriptDir '../../references'))
     if (Test-Path $refs) { Initialize-BatonHome -ReferencesDir $refs | Out-Null }
-    Move-BatonState | Out-Null
+    $mig = Move-BatonState
+    foreach ($c in @($mig.conflicts)) { Write-Output "baton-init: state exists in both ~/.claude and BATON_HOME, left in place: $c" }
     exit 0
 } catch {
     try {

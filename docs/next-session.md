@@ -79,7 +79,7 @@ smoke all green.
 - Stale-run auto-idle (spec §5) — a dead `running` producer shows 🟢 forever; needs a
   read-time `updated_at`-age check + fixture rework (deferred to avoid wall-clock test fragility).
 - Styling/`frontend-design` pass for the gutter/detail/sprites (templates ship unstyled).
-- Wire fleet dispatch to set/clear `~/.claude/current-run.json` per dispatched run so the
+- Wire fleet dispatch to set/clear `$BATON_HOME/runs/current-run.json` per dispatched run so the
   hook narrates real fleet runs.
 
 **SP2 — coordination backbone: SHIPPED** (merged `5027956`, 2026-06-07). GitHub Agent HQ

@@ -1,7 +1,7 @@
 """Reader for tools.yaml — the non-LLM capability registry (sibling of fleet.yaml).
 
 Lean by design: only what's needed to SELECT and INVOKE a tool. Path resolution
-mirrors the KB/PS convention: explicit param > $TOOLS_FILE env > ~/.claude/tools.yaml.
+mirrors the KB/PS convention: explicit param > $TOOLS_FILE env > $BATON_HOME/tools.yaml.
 A missing registry yields [] (never raises) so the .md pipeline survives its absence.
 """
 from __future__ import annotations
@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+
+from tools.paths import baton_home
 
 
 @dataclass
@@ -31,7 +33,7 @@ def _resolve_path(path: Path | None) -> Path:
     env = os.environ.get("TOOLS_FILE")
     if env:
         return Path(env)
-    return Path.home() / ".claude" / "tools.yaml"
+    return baton_home() / "tools.yaml"
 
 
 def read_tools(path: Path | None = None) -> list[ToolSpec]:

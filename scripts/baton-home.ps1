@@ -60,7 +60,7 @@ function Move-BatonState {
         $dst = Join-Path $BatonHome $name
         if (-not (Test-Path $src)) { $result.skipped += $name; continue }
         if (Test-Path $dst) { $result.conflicts += $name; continue }
-        Move-Item -LiteralPath $src -Destination $dst
+        Move-Item -LiteralPath $src -Destination $dst -ErrorAction Stop
         $result.migrated += $name
     }
     @{

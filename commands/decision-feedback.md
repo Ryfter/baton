@@ -33,6 +33,7 @@ Append feedback to a decision record at
 4. **If `--urgent`**, additionally write a journal line so the dashboard sees it:
 
    ```powershell
+   . "$HOME/.claude/scripts/baton-home.ps1"
    $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
    $line = "$ts | dashboard | decision-flag | $id | urgent feedback: $text"
    Add-Content -Path (Join-Path (Get-BatonHome) 'model-routing-log.md') -Value $line
