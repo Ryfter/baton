@@ -9,7 +9,7 @@ you decided, and what you learned. Built on
 [claude-octopus](https://github.com/nyldn/claude-octopus) as the dispatch layer
 (recommended companion plugin, not a hard dependency).
 
-**Status:** `v1.2.0-rc.5` — *the Fleet Conductor release* (capability routing, cost-optimization,
+**Status:** `v1.2.0-rc.6` — *the Fleet Conductor release* (capability routing, cost-optimization,
 Grimdex, plugin packaging + MCP server). **MIT licensed.** An early/experimental personal project, shared in the hope it's
 useful — not a turnkey product.
 
