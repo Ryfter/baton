@@ -15,7 +15,10 @@
   lives here.
 
 .PARAMETER TasksPath
-  JSON file: array of { id, model, prompt, allowed_paths[], max_files, test_command, depends_on[] }.
+  JSON file: array of { id, model, prompt, allowed_paths[], max_files, test_command, depends_on[],
+  rank, cascade, output_file, capability }. Slice C: cascade:true + output_file -> full
+  draft->finish cascade writes the file (zero-frontier short-circuit possible); cascade:true
+  without output_file -> advisory (local draft injected into the agentic prompt).
 #>
 param(
     [Parameter(Mandatory)][string]$TasksPath,
@@ -24,6 +27,7 @@ param(
     [string]$WorktreeRoot = 'D:\Dev\cao-worktrees',
     [string]$OutputRoot,
     [int]$TimeoutS = 900,
+    [int]$MaxParallel = 0,
     [switch]$NoPush
 )
 
@@ -52,13 +56,21 @@ if ($hasOrigin) {
 
 Write-Host "BACKLOG RUN ($($tasks.Count) item(s)) -> $Target | out: $out"
 $results = Invoke-BacklogConcurrent -RepoRoot $RepoRoot -Tasks $tasks -ModelSpecs $specs `
-    -Integration $Target -IntegrationBase $Target -OutputDir $out -WorktreeRoot $WorktreeRoot -TimeoutS $TimeoutS
+    -Integration $Target -IntegrationBase $Target -OutputDir $out -WorktreeRoot $WorktreeRoot -TimeoutS $TimeoutS `
+    -MaxParallel $MaxParallel
 
 foreach ($r in $results) {
-    $tag = if ($r.merged) { 'MERGED ' } else { 'blocked' }
+    $tag = if ($r.merged) { 'MERGED ' } elseif ($r.deferred) { 'DEFERRED' } else { 'blocked' }
     Write-Host ("  [{0}] {1} {2}" -f $tag, $r.id, $r.model)
     if (-not $r.merged) { Write-Host ("      reasons: {0}" -f (($r.reasons) -join '; ')) }
     if ($r.changed)     { Write-Host ("      changed: {0}" -f (($r.changed) -join ', ')) }
+    if ($r.PSObject.Properties['cascade_status']) {
+        $fs = if ($r.frontier_spent) { 'frontier spend: yes' } else { 'frontier spend: none' }
+        Write-Host ("      cascade: {0} | winner: {1} | {2}" -f $r.cascade_status, $r.winner, $fs)
+    }
+    if ($r.PSObject.Properties['draft_winner'] -and $r.draft_winner) {
+        Write-Host ("      advisory draft: {0}" -f $r.draft_winner)
+    }
 }
 
 # --- post-run push (with one fetch+merge fallback) ---
