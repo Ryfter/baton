@@ -23,6 +23,7 @@
 . (Join-Path $PSScriptRoot 'fleet-orchestrate.ps1')
 . (Join-Path $PSScriptRoot 'fleet-ensemble.ps1')
 . (Join-Path $PSScriptRoot 'fleet-runs-bridge.ps1')
+. (Join-Path $PSScriptRoot 'prime-hours.ps1')   # Test-PrimeHoursGate, Get-CapacityProfile, Get-FleetProvider chain
 
 function script:Publish-ItemRunSafe {
     # NB: parameter is $Splat, not $Args — $Args is a PowerShell automatic
@@ -55,6 +56,36 @@ function Get-TopoOrder {
     }
     if ($order.Count -ne $Tasks.Count) { throw "Dependency cycle detected among backlog tasks." }
     return $order
+}
+
+function Get-EffectiveRanks {
+    <# Effective rank = min(own rank, min effective rank of all transitive dependents).
+       A rank-1 task pulls its prerequisites up to rank 1 so they aren't starved. Returns
+       @{ id = effRank }. Unranked tasks default to 3. #>
+    param([Parameter(Mandatory)][object[]]$Tasks)
+    $own = @{}; $dependents = @{}
+    foreach ($t in $Tasks) {
+        $r = if ($null -ne $t.rank) { [int]$t.rank } else { 3 }
+        $own[$t.id] = $r; $dependents[$t.id] = @()
+    }
+    foreach ($t in $Tasks) {
+        foreach ($d in @($t.depends_on)) {
+            if ($dependents.ContainsKey($d)) { $dependents[$d] += $t.id }
+        }
+    }
+    $eff = @{}
+    function script:__effOf($id, $own, $dependents, $eff, $stack) {
+        if ($eff.ContainsKey($id)) { return $eff[$id] }
+        if ($stack -contains $id) { return $own[$id] }   # cycle guard (DAG already validated upstream)
+        $best = $own[$id]
+        foreach ($dep in $dependents[$id]) {
+            $de = script:__effOf $dep $own $dependents $eff ($stack + $id)
+            if ($de -lt $best) { $best = $de }
+        }
+        $eff[$id] = $best; return $best
+    }
+    foreach ($t in $Tasks) { [void](script:__effOf $t.id $own $dependents $eff @()) }
+    return $eff
 }
 
 function Write-ItemLive {
@@ -139,13 +170,25 @@ function Invoke-Backlog {
         [string]$Integration = 'integration/backlog',
         [string]$IntegrationBase = 'master',
         [string]$OutputDir,
-        [string]$WorktreeRoot
+        [string]$WorktreeRoot,
+        [string]$FleetPath,
+        [string]$PrimeHoursConfig,
+        [datetime]$GateNow
     )
     if ($OutputDir -and -not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null }
     Initialize-IntegrationBranch -RepoRoot $RepoRoot -Base $IntegrationBase -Name $Integration | Out-Null
 
     $byId = @{}; foreach ($t in $Tasks) { $byId[$t.id] = $t }
     $order = Get-TopoOrder -Tasks $Tasks
+    # Effective-rank tiebreak among ready (topologically-valid) items: a rank-1 task pulls
+    # its prerequisites up so they aren't starved. IndexOf preserves topo order on ties.
+    $eff = Get-EffectiveRanks -Tasks $Tasks
+    $topo = $order
+    $order = @($order | Sort-Object @{ e = { $eff[$_] } }, @{ e = { [array]::IndexOf($topo, $_) } })
+    $capArgs = @{}
+    if ($PSBoundParameters.ContainsKey('GateNow'))          { $capArgs.Now = $GateNow }
+    if ($PSBoundParameters.ContainsKey('PrimeHoursConfig')) { $capArgs.ConfigPath = $PrimeHoursConfig }
+    $cap = Get-CapacityProfile @capArgs
 
     if ($OutputDir) {
         $metaTasks = @($Tasks | ForEach-Object { @{ label = $_.id; provider = $_.model } })
@@ -176,6 +219,24 @@ function Invoke-Backlog {
             Publish-ItemRunSafe @{ Id = $id; Model = $item.model; State = 'blocked'; Reasons = @("no-implementer: '$($item.model)'") }
             $results += [pscustomobject]@{ id = $id; model = $item.model; merged = $false; reasons = @("no-implementer: '$($item.model)'"); changed = @() }
             continue
+        }
+        # Prime-hours gate (unattended): only paid providers in a peak window are gated.
+        # Fail-open: an absent fleet.yaml or unknown model -> no provider -> no gating.
+        $provArgs = @{ Name = [string]$item.model }
+        if ($FleetPath) { $provArgs.Path = $FleetPath }
+        $prov = try { Get-FleetProvider @provArgs } catch { $null }
+        if ($prov -and $prov.cost_tier -eq 'paid') {
+            $gateArgs = @{ Rank = [int]$eff[$id]; CostTier = 'paid' }
+            if ($PSBoundParameters.ContainsKey('GateNow'))          { $gateArgs.Now = $GateNow }
+            if ($PSBoundParameters.ContainsKey('PrimeHoursConfig')) { $gateArgs.ConfigPath = $PrimeHoursConfig }
+            $gate = Test-PrimeHoursGate @gateArgs
+            $eff2 = if ($gate.decision -eq 'ask') { $gate.default } else { $gate.decision }
+            if ($eff2 -eq 'defer') {
+                if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $item.model -State 'deferred' -Extra @{ reasons = @("deferred until off-peak: $($gate.reason)") } }
+                Publish-ItemRunSafe @{ Id = $id; Model = $item.model; State = 'deferred'; Reasons = @("deferred until off-peak: $($gate.reason)") }
+                $results += [pscustomobject]@{ id = $id; model = $item.model; merged = $false; deferred = $true; reasons = @("deferred until off-peak: $($gate.reason)"); changed = @() }
+                continue
+            }
         }
         $r = Invoke-BacklogItem -RepoRoot $RepoRoot -Item $item -Implementer $impl `
             -Integration $Integration -OutputDir $OutputDir -WorktreeRoot $WorktreeRoot

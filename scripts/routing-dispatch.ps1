@@ -13,6 +13,7 @@
 # routing-lib.ps1 gives Select-Capability/Read-Tools/Get-CostTierRank and dot-sources
 # fleet-lib.ps1 (Invoke-Fleet, Invoke-Fleet-Cli) transitively.
 . "$PSScriptRoot/routing-lib.ps1"
+. "$PSScriptRoot/prime-hours.ps1"
 
 function Test-RoutingOutputHeuristic {
     <# Default grader. Deterministic and free. Contract: (Capability, Result) -> {passed, score, reason}.
@@ -120,6 +121,9 @@ function Invoke-RoutedCandidate {
         [Parameter(Mandatory)][string]$Prompt,
         [scriptblock]$EffGrader,
         [scriptblock]$Dispatcher,
+        [int]$Rank = [int]::MinValue,
+        [string]$PrimeHoursConfig,
+        [datetime]$GateNow,
         [int]$TimeoutS = 120,
         [string]$ToolsPath = (Join-Path $HOME '.claude/tools.yaml'),
         [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
@@ -129,9 +133,27 @@ function Invoke-RoutedCandidate {
     # Slice 2 dispatches only cli tools + fleet models. Skip other tool kinds.
     if ($c.source -eq 'tools' -and $c.kind -ne 'cli') {
         $reason = "unsupported kind $($c.kind) in Slice 2"
-        $attempt = [pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0 }
+        $attempt = [pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0; gate=$null }
         Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath
         return @{ attempt = $attempt; result = @{ stdout=''; stderr=''; exit_code=-1; duration_s=0 } }
+    }
+
+    # Slice A: prime-hours gate (opt-in via -Rank; guards only the paid tier).
+    if ($Rank -ne [int]::MinValue -and $c.cost_tier -eq 'paid') {
+        $gateArgs = @{ Rank = $Rank; CostTier = 'paid' }
+        if ($PrimeHoursConfig) { $gateArgs['ConfigPath'] = $PrimeHoursConfig }
+        if ($PSBoundParameters.ContainsKey('GateNow')) { $gateArgs['Now'] = $GateNow }
+        $gate = Test-PrimeHoursGate @gateArgs
+        $eff = if ($gate.decision -eq 'ask') { if ($gate.default -eq 'run') { 'allow' } else { 'defer' } } else { $gate.decision }
+        if ($eff -eq 'defer') {
+            $reason = "deferred: prime-hours $($gate.reason)"
+            $attempt = [pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0; gate=$gate.decision }
+            Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath
+            return @{ attempt = $attempt; result = @{ stdout=''; stderr=''; exit_code=-1; duration_s=0 } }
+        }
+        $script:__lastGateDecision = $gate.decision   # 'ask' or 'allow' that proceeded
+    } else {
+        $script:__lastGateDecision = $null
     }
 
     # Dispatch (injected for tests, else real).
@@ -160,7 +182,7 @@ function Invoke-RoutedCandidate {
     $attempt = [pscustomobject]@{
         candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier
         passed=[bool]$verdict.passed; score=[double]$verdict.score; reason=[string]$verdict.reason
-        duration_s=[int]$result.duration_s
+        duration_s=[int]$result.duration_s; gate=$script:__lastGateDecision
     }
     Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind `
         -CostTier $c.cost_tier -ExitCode ([int]$result.exit_code) -DurationS ([int]$result.duration_s) `
@@ -185,6 +207,9 @@ function Invoke-RoutedCapability {
         [switch]$Judge,
         [string]$JudgeModel,
         [scriptblock]$JudgeDispatcher,
+        [int]$Rank = [int]::MinValue,
+        [string]$PrimeHoursConfig,
+        [datetime]$GateNow,
         [string]$ToolsPath = (Join-Path $HOME '.claude/tools.yaml'),
         [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
         [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl')
@@ -205,9 +230,15 @@ function Invoke-RoutedCapability {
     }
 
     foreach ($c in $candidates) {
-        $rc = Invoke-RoutedCandidate -Capability $Capability -Candidate $c -Prompt $Prompt `
-            -EffGrader $effGrader -Dispatcher $Dispatcher -TimeoutS $TimeoutS `
-            -ToolsPath $ToolsPath -FleetPath $FleetPath -JournalPath $JournalPath
+        $rcArgs = @{
+            Capability = $Capability; Candidate = $c; Prompt = $Prompt
+            EffGrader = $effGrader; Dispatcher = $Dispatcher; TimeoutS = $TimeoutS
+            ToolsPath = $ToolsPath; FleetPath = $FleetPath; JournalPath = $JournalPath
+        }
+        if ($Rank -ne [int]::MinValue)                 { $rcArgs['Rank'] = $Rank }
+        if ($PrimeHoursConfig)                         { $rcArgs['PrimeHoursConfig'] = $PrimeHoursConfig }
+        if ($PSBoundParameters.ContainsKey('GateNow')) { $rcArgs['GateNow'] = $GateNow }
+        $rc = Invoke-RoutedCandidate @rcArgs
         [void]$attempts.Add($rc.attempt)
         if ($rc.attempt.passed) {
             return [pscustomobject]@{ status='passed'; capability=$Capability; winner=$c.name; result=$rc.result; attempts=$attempts.ToArray() }

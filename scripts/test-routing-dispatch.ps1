@@ -146,6 +146,35 @@ providers:
     $o6 = Invoke-RoutedCapability -Capability 'pdf-extract' -Prompt 'x' @common4
     Check 'non-cli kind skipped'       ($o6.attempts.Count -eq 1 -and $o6.attempts[0].reason -match 'unsupported kind')
     Check 'only non-cli -> escalate'   ($o6.status -eq 'escalate-to-conductor')
+
+    # ===== Slice A: prime-hours gate on the paid tier (opt-in via -Rank) =====
+    $phYaml = @"
+timezone: local
+default_rank: 3
+windows:
+  - name: peak
+    days: [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+    start: "00:00"
+    end: "23:59"
+    kind: peak
+"@
+    $phCfg = Join-Path $tmp 'prime-hours.yaml'
+    Set-Content -Path $phCfg -Value $phYaml -Encoding utf8
+
+    # No -Rank -> NO gating -> cheapest (local-a) wins (regression-equivalent).
+    $allPass = { param($cand,$prompt) @{ stdout='OK'; stderr=''; exit_code=0; duration_s=0 } }
+    $g0 = Invoke-RoutedCapability -Capability 'code-gen' -Prompt 'x' -Dispatcher $allPass @common4
+    Check 'no -Rank: no gating, local wins' ($g0.winner -eq 'local-a')
+
+    # Rank 3 in an all-day peak window: only paid works, but paid is deferred -> escalate.
+    $onlyPaidWorks = { param($cand,$prompt) if ($cand.cost_tier -eq 'paid') { @{ stdout='WORKS'; stderr=''; exit_code=0; duration_s=1 } } else { @{ stdout=''; stderr=''; exit_code=0; duration_s=1 } } }
+    $g3 = Invoke-RoutedCapability -Capability 'code-gen' -Prompt 'x' -Dispatcher $onlyPaidWorks -Rank 3 -PrimeHoursConfig $phCfg -GateNow ([datetime]'2026-06-10T12:00:00') @common4
+    Check 'rank3 peak: paid deferred -> escalate' ($g3.status -eq 'escalate-to-conductor')
+    Check 'paid attempt tagged gated' (@($g3.attempts | Where-Object { $_.candidate -eq 'paid-c' -and $_.gate -eq 'defer' }).Count -eq 1)
+
+    # Rank 1 in peak: ask -> default run -> paid-c dispatched -> wins.
+    $g1 = Invoke-RoutedCapability -Capability 'code-gen' -Prompt 'x' -Dispatcher $onlyPaidWorks -Rank 1 -PrimeHoursConfig $phCfg -GateNow ([datetime]'2026-06-10T12:00:00') @common4
+    Check 'rank1 peak: paid runs (ask->run)' ($g1.status -eq 'passed' -and $g1.winner -eq 'paid-c')
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

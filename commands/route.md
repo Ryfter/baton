@@ -1,6 +1,6 @@
 ---
-description: Recommend OR dispatch the optimal capability (tool or model) for a need — cheapest capable tier first ("optimal, not best"), with LEARNED quality from your ratings + an LLM-judge. --run dispatches & verifies; --rate good|bad records the last run; --judge forces judging; --calibrate dispatches ALL candidates on one prompt, judge-scores each, and collects a per-candidate rating to seed learning.
-argument-hint: "<capability>" [--max-tier local|free|paid] [--local] [--run "<prompt>"] [--judge] | --rate good|bad [note] | --calibrate "<capability>" "<prompt>" | --calibrate "<capability>" --rate "<cand>=good|bad ..."
+description: Recommend OR dispatch the optimal capability (tool or model) for a need — cheapest capable tier first ("optimal, not best"), with LEARNED quality from your ratings + an LLM-judge. --run dispatches & verifies; --rate good|bad records the last run; --judge forces judging; --calibrate dispatches ALL candidates on one prompt, judge-scores each, and collects a per-candidate rating to seed learning. Paid/frontier dispatch is rank-gated during prime hours (--rank 1 highest .. 5 lowest); lower-priority paid work defers to off-peak so premium spend happens only when it matters.
+argument-hint: "<capability>" [--max-tier local|free|paid] [--local] [--run "<prompt>"] [--rank <1-5>] [--judge] | --rate good|bad [note] | --calibrate "<capability>" "<prompt>" | --calibrate "<capability>" --rate "<cand>=good|bad ..."
 ---
 
 # /route
@@ -17,8 +17,9 @@ and logs every attempt. **`--rate good|bad`** records whether the last run's out
 ## Steps
 
 1. **Parse `$ARGUMENTS`:** the first token is `<capability>`; optional `--max-tier local|free|paid`,
-   `--local`, and `--run "<prompt>"`. Empty capability → stop with:
-   *"Usage: /route \"<capability>\" [--max-tier local|free|paid] [--local] [--run \"<prompt>\"]"*.
+   `--local`, `--rank <1-5>` (paid-dispatch priority for the prime-hours gate, default `3`), and
+   `--run "<prompt>"`. Empty capability → stop with:
+   *"Usage: /route \"<capability>\" [--max-tier local|free|paid] [--local] [--rank <1-5>] [--run \"<prompt>\"]"*.
 
 2. **Without `--run` (recommendation mode, unchanged):**
 
@@ -50,12 +51,19 @@ and logs every attempt. **`--rate good|bad`** records whether the last run's out
    $opt = @{ Capability = '<capability>'; Prompt = '<prompt>' }
    if ($local)   { $opt['RequireLocal'] = $true }
    if ($maxTier) { $opt['MaxCostTier']  = '<tier>' }
+   $rank = if ($rankArg) { [int]$rankArg } else { 3 }
+   $opt['Rank'] = $rank   # enables the prime-hours gate on paid candidates
    # Cost-optimal judging: on if --judge OR a free local judge model is available.
    if ($judge -or (Get-CheapestLocalModel)) { $opt['Judge'] = $true }
    $outcome = Invoke-RoutedCapability @opt
    foreach ($a in $outcome.attempts) {
        $mark = if ($a.passed) { 'PASS' } else { 'fail' }
        Write-Host ("  {0,-5} {1,-22} {2}  ({3}s)  {4}" -f $a.cost_tier, $a.candidate, $mark, $a.duration_s, $a.reason)
+   }
+   $gated = @($outcome.attempts | Where-Object { $_.gate -eq 'defer' -or $_.gate -eq 'ask' })
+   if ($gated.Count -gt 0) {
+       Write-Host ""
+       Write-Host "Prime-hours: $($gated.Count) paid candidate(s) gated this run (rank $rank). To pay premium now, re-run with --rank 1; to stay cheap, wait for off-peak or use --max-tier free."
    }
    ```
 
@@ -65,6 +73,14 @@ and logs every attempt. **`--rate good|bad`** records whether the last run's out
      reasons above) and that it is escalating to the conductor (you, Claude) to do the task
      directly or pick a model manually.
    - `no-candidate` → no candidate serves `<capability>`; list `Get-KnownCapabilities`.
+
+   **Prime-hours ask (interactive):** when a rank-1 or rank-2 paid candidate would be the pick
+   during a peak window — the library surfaces this as a gate decision of `ask` on the attempt —
+   ASK the user before dispatching it, e.g. *"This will use the paid model `<name>` during peak
+   hours — proceed? (cheaper local/free options failed.)"* Spending premium during peak is a real
+   cost decision, so confirm it rather than charging ahead. Unattended callers (the backlog or the
+   autonomous run-loop) skip this prompt because the library already resolves `ask` to its rank
+   default for non-interactive dispatch.
 
    Finish with: *"Logged $($outcome.attempts.Count) attempt(s) to ~/.claude/routing-journal.jsonl."*
 
