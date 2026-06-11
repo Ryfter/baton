@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from dashboard.paths import baton_home
 from dashboard.readers.jobs import list_job_summaries, read_job_detail
 
 
@@ -16,13 +17,13 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
     def _jobs_root(req: Request) -> Path:
         return getattr(
             req.app.state, 'jobs_root',
-            Path.home() / '.claude' / 'jobs',
+            baton_home() / 'jobs',
         )
 
     def _journal_path(req: Request) -> Path:
         return getattr(
             req.app.state, 'journal_path',
-            Path.home() / '.claude' / 'model-routing-log.md',
+            baton_home() / 'model-routing-log.md',
         )
 
     @router.get('/partials/jobs', response_class=HTMLResponse)
