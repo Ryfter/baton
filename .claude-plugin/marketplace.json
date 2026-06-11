@@ -1,0 +1,11 @@
+{
+  "name": "ryfter",
+  "owner": { "name": "Kevin Rank" },
+  "plugins": [
+    {
+      "name": "baton",
+      "source": "./",
+      "description": "Conduct a fleet of coding agents — routing, cost engine, jobs, decisions, knowledge base."
+    }
+  ]
+}
