@@ -9,6 +9,8 @@
   worktree status probing, output-dir math, and journal append.
 #>
 
+. "$PSScriptRoot/baton-home.ps1"
+
 function New-CodeSubtasksFile {
     <#
     .SYNOPSIS
@@ -114,7 +116,7 @@ function Get-CodeOutputDir {
         [Parameter(Mandatory)][string]$Sprint,
         [string]$Stamp = (Get-Date -Format 'yyyy-MM-ddTHH-mm-ss')
     )
-    return (Join-Path $HOME ".claude/jobs/$JobId/phases/$Sprint/parallel-$Stamp")
+    return (Join-Path (Get-BatonHome) "jobs/$JobId/phases/$Sprint/parallel-$Stamp")
 }
 
 function Write-CodeParallelManifest {
@@ -182,8 +184,8 @@ function Write-CodeJournalLine {
         [Parameter(Mandatory)][int]$TaskCount,
         [Parameter(Mandatory)][int]$OkCount,
         [Parameter(Mandatory)][int]$ErrCount,
-        [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md'),
-        [string]$StatePath = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } else { Join-Path $HOME '.claude/current-job.json' })
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md'),
+        [string]$StatePath = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } else { Join-Path (Get-BatonHome) 'current-job.json' })
     )
     $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
     $line = "$ts | code | parallel | $JobId | sprint:$Sprint | tasks:$TaskCount | ok:$OkCount | err:$ErrCount"

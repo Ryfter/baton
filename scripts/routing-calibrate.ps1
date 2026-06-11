@@ -11,6 +11,7 @@
   See docs/superpowers/specs/2026-06-09-routing-s4-calibration-mode-design.md.
 #>
 
+. "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/routing-dispatch.ps1"
 
 function Invoke-CapabilityCalibration {
@@ -29,9 +30,9 @@ function Invoke-CapabilityCalibration {
         [string]$JudgeModel,
         [scriptblock]$JudgeDispatcher,
         [int]$ExcerptChars = 280,
-        [string]$ToolsPath = (Join-Path $HOME '.claude/tools.yaml'),
-        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
-        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl')
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl')
     )
     $sel = @{ Capability = $Capability; ToolsPath = $ToolsPath; FleetPath = $FleetPath }
     if ($RequireLocal) { $sel['RequireLocal'] = $true }
@@ -74,8 +75,8 @@ function Add-CalibrationRatings {
         [Parameter(Mandatory)][string]$Capability,
         [Parameter(Mandatory)][string]$Spec,
         [string]$Note = '',
-        [string]$ToolsPath = (Join-Path $HOME '.claude/tools.yaml'),
-        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
         [string]$RatingsPath = (Join-Path $HOME '.claude/knowledge/universal/routing-ratings.jsonl'),
         [string]$Timestamp
     )

@@ -5,16 +5,17 @@
   paid/frontier dispatch by item rank during prime-peak windows; reports a concurrency
   surge during off-peak/weekend windows. PURE: returns decisions, never prompts.
 .DESCRIPTION
-  Reads ~/.claude/prime-hours.yaml. -Now is injectable so tests are clock-independent.
+  Reads $BATON_HOME/prime-hours.yaml. -Now is injectable so tests are clock-independent.
   Fail-open: a missing/garbage config never blocks work (returns allow). The gate guards
   ONLY the paid tier inside a peak window — local/free and off-peak always allow. Ranks
   0 and 6 are RESERVED rows in the policy table (one-line future activation), intentionally
   undocumented in v1. See docs/superpowers/specs/2026-06-10-cost-optimization-engine-design.md.
 #>
 
+. "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/fleet-lib.ps1"   # ConvertFrom-FleetValue
 
-$script:DefaultPrimeHoursPath = (Join-Path $HOME '.claude/prime-hours.yaml')
+$script:DefaultPrimeHoursPath = (Join-Path (Get-BatonHome) 'prime-hours.yaml')
 
 function Read-PrimeHoursConfig {
     <# Parse prime-hours.yaml -> @{ timezone; default_rank; windows=@(@{name;days;start;end;kind;concurrency_factor}) }.

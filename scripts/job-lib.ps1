@@ -12,7 +12,8 @@
     (more added in later tasks)
 #>
 
-$script:DefaultStatePath = (Join-Path $HOME '.claude/current-job.json')
+. "$PSScriptRoot/baton-home.ps1"
+$script:DefaultStatePath = (Join-Path (Get-BatonHome) 'current-job.json')
 
 function Read-CurrentJob {
     param([string]$StatePath = $script:DefaultStatePath)

@@ -19,6 +19,7 @@
   files to render every model running concurrently in real time.
 #>
 
+. (Join-Path $PSScriptRoot 'baton-home.ps1')
 . (Join-Path $PSScriptRoot 'fleet-lib.ps1')
 
 # Child-side scriptblock shared by both ensemble functions. Emits a <label>.live.json
@@ -85,8 +86,8 @@ function Invoke-FleetEnsemble {
         [Parameter(Mandatory)][string]$OutputDir,
         [int]$TimeoutS = 300,
         [string]$Kind = 'ensemble',
-        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
-        [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md')
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md')
     )
     if (-not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null }
     $libPath = Join-Path $PSScriptRoot 'fleet-lib.ps1'
@@ -168,8 +169,8 @@ function Invoke-FleetEnsembleTasks {
         [Parameter(Mandatory)][string]$OutputDir,
         [int]$TimeoutS = 300,
         [string]$Kind = 'tasks',
-        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
-        [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md')
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md')
     )
     if (-not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null }
     $libPath = Join-Path $PSScriptRoot 'fleet-lib.ps1'
