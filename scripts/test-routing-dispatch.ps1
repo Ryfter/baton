@@ -168,12 +168,12 @@ windows:
 
     # Rank 3 in an all-day peak window: only paid works, but paid is deferred -> escalate.
     $onlyPaidWorks = { param($cand,$prompt) if ($cand.cost_tier -eq 'paid') { @{ stdout='WORKS'; stderr=''; exit_code=0; duration_s=1 } } else { @{ stdout=''; stderr=''; exit_code=0; duration_s=1 } } }
-    $g3 = Invoke-RoutedCapability -Capability 'code-gen' -Prompt 'x' -Dispatcher $onlyPaidWorks -Rank 3 -PrimeHoursConfig $phCfg @common4
+    $g3 = Invoke-RoutedCapability -Capability 'code-gen' -Prompt 'x' -Dispatcher $onlyPaidWorks -Rank 3 -PrimeHoursConfig $phCfg -GateNow ([datetime]'2026-06-10T12:00:00') @common4
     Check 'rank3 peak: paid deferred -> escalate' ($g3.status -eq 'escalate-to-conductor')
     Check 'paid attempt tagged gated' (@($g3.attempts | Where-Object { $_.candidate -eq 'paid-c' -and $_.gate -eq 'defer' }).Count -eq 1)
 
     # Rank 1 in peak: ask -> default run -> paid-c dispatched -> wins.
-    $g1 = Invoke-RoutedCapability -Capability 'code-gen' -Prompt 'x' -Dispatcher $onlyPaidWorks -Rank 1 -PrimeHoursConfig $phCfg @common4
+    $g1 = Invoke-RoutedCapability -Capability 'code-gen' -Prompt 'x' -Dispatcher $onlyPaidWorks -Rank 1 -PrimeHoursConfig $phCfg -GateNow ([datetime]'2026-06-10T12:00:00') @common4
     Check 'rank1 peak: paid runs (ask->run)' ($g1.status -eq 'passed' -and $g1.winner -eq 'paid-c')
 }
 finally {
