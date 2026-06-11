@@ -7,7 +7,7 @@ How to pick the orchestrator back up and use it on its own backlog.
 **THE NEXT BUILD (pick one — each gets its own worktree-isolated session):**
 
 1. **Cost-Optimization Engine — Slice B (draft→finish cascade)** OR the **cost/speed advisor** (parked thread 6 below, slotted "after Slice A" — now unblocked). Slice B (Lever 3) = local/cheap drafts a "good enough" output, a frontier model takes-and-extends; Slice C folds the cascade into the run-loop. The advisor = two dials (cost × speed) + an infra inventory; fast+cheap corner → recommend *expanding cheap capacity* (2nd $20 platform, add a PC) not deepening expensive. Both need their own spec → plan → build. **A→B→C order confirmed.**
-2. **`/schedule` rank surfacing** — the one Slice A consumer deferred (it's a skill, no test harness here): carry a rank on a `/schedule`d job → gate decides allow/defer-to-next-off-peak (unattended). Small follow-up.
+2. **`/schedule` rank surfacing — NOT a loose end (no artifact yet).** Reconciled 2026-06-10: there is **no orchestrator `/schedule` skill** — the only `schedule.md` on the box is the `octo` marketplace plugin's, and native scheduling is Claude Code's own `ScheduleWakeup`/`CronCreate`. The Slice A spec's "`/schedule` carries a rank" was *aspirational*. So this is a **feature** (build an orchestrator `/schedule` skill that carries a rank → prime-hours gate decides allow/defer-to-off-peak), not a quick consumer-wiring. De-prioritized until/unless we want our own scheduling skill; the gate library is ready for it whenever.
 
 **SHIPPED this spurt:**
 
@@ -21,7 +21,7 @@ How to pick the orchestrator back up and use it on its own backlog.
 
 2. **Grimdex — SHIPPED & LIVE.** The KB is now the standalone **Grimdex** app at `D:\Dev\Grimdex`; `~/.claude/knowledge` is a directory junction → it (old dir at `~/.claude/knowledge.bak`). GitHub repo renamed **`Ryfter/knowledge` → `Ryfter/Grimdex`** (old URL redirects). This repo's `CLAUDE.md` is wired with the `<!-- grimdex:start -->` pointer stanza. Decisions **d032/d033** (standalone, tool-agnostic, file-first; graceful degradation). **Grimdex-side rules (its d002):** project-tier writes (d-records/guidance/ratings) go *direct* to `projects/<id>/`; cross-project/universal rule proposals go to `universal/promotions/<id>.md` (do NOT hand-edit `GRIMDEX.md`) — a **daily 5:30am sweep** auto-inscribes clean additions, defers conflicts to Kevin; **`git pull --rebase` before writing, push after** (shared repo). Naming family: Grimdex = coding now; **Grimlore** reserved for a future general "second-brain" KB.
 
-3. **`/kb-audit` + rules-mirror — RE-HOMED into Grimdex.** Grimdex's d002 promotions-inbox + 5:30am sweep already realizes the *consolidation* half. Remaining concrete sub-task: mirror `~/.claude/rules` into Grimdex (`universal/claude-rules/`) — closes the live backup gap (those 3 global rules are in no repo). Grimdex scope, not the orchestrator board.
+3. **`/kb-audit` + rules-mirror.** **Rules-mirror: DONE** (Grimdex `dc3279e`, verified 2026-06-10) — the 3 global rules (context7, task-group-closeout, post-compact-state-report) are mirrored to Grimdex `universal/claude-rules/`, redeployed on fresh setup via `Sync-GrimdexRules` (`setup-lib.ps1`, called from `setup.ps1:31`, with live-vs-mirror drift warning + tests), committed and pushed. **The live backup-order gap is closed.** Remaining (Grimdex scope, not the orchestrator board): the broader **`/kb-audit`** read-only health sweep (6b–6d in the kickoff) — MEMORY pointers/wikilinks/decision-id/cross-project-contamination checks + `KB-AUDIT-LOG.md`. Grimdex's d002 promotions-inbox + 5:30am sweep already realizes the *consolidation* half.
 
 **DESIGN SPURT — parked for spec (full detail in memory `project_fleet_conductor_design_spurt`):**
 
@@ -268,7 +268,7 @@ the role/adversarial engine + ruflo call-out. Pick at session start.
    `docs/releases/2026-06-04-backlog-clearance.md`. The board is empty.
 
 6. **What's left (no open issues — file one when you pick these up):**
-   - **Wire `decision-detect` as a `Stop` hook** — make auto-decision-capture live (the heuristic shipped with #25 but isn't registered in `~/.claude/settings.json`). One-line opt-in.
+   - ~~**Wire `decision-detect` as a `Stop` hook**~~ — **DONE** (verified 2026-06-10): registered in `~/.claude/settings.json` Stop hook + deployed by `bootstrap.ps1:112-116`. Auto-decision-capture is live.
    - **Cross-project consolidation sweep** — blocked until a second project exists (universal guidance stays empty with one project).
    - **Attach decision feedback** — `/decision-feedback <id> worked|didnt|mixed` over d001–d013 to graduate "Open / under-feedback" entries into "Established patterns".
    - **New capability** — brainstorm the next plan; capture the decision, open an issue, run the loop below.
