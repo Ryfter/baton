@@ -57,3 +57,24 @@ it — re-copying is how drift starts.
   it, so they can't drift.
 - Add a **model-specific** item → put it in that model's file **and** list it in the
   registry above, so every divergence is intentional and visible.
+
+## Grimdex knowledge base — go-public engine/data split (2026-06-10, decision d037)
+
+The knowledge base (historically `Ryfter/knowledge`, since renamed `Ryfter/Grimdex`) is being
+prepared for open-source release as an **engine/data split** — this is cross-cutting context
+for EVERY agent touching it:
+
+- **Public `Ryfter/Grimdex` = the ENGINE** (tool/framework): `scripts/` (setup, wire, sweep,
+  schedule, console libs + tests), `setup.ps1`, the `GRIMDEX.md` convention, `docs/`, `config/`,
+  `.github/`, tool-wiring files, + an empty `universal/` skeleton + a few curated exemplar
+  records. MIT.
+- **Private `Ryfter/grimdex-know` = the DATA** (accumulated knowledge): `universal/` content +
+  ALL `projects/` tiers. Stays private; remains the knowledge backup. The `~/.claude/knowledge`
+  junction repoints here post-split.
+
+**For any agent working in the KB:** tag what you write as ENGINE (→ public, keep it free of
+personal content + hardcoded local paths) or DATA (→ private). Decision records (like this)
+and project tiers are DATA. Do **not** change repo visibility or rewrite history piecemeal —
+the split + a secret/content audit run as one gated job. Full plan + file-level manifest:
+`docs/go-public-hardening.md` (Task 2). Decision: `d037-grimdex-goes-public-as-engine.md`.
+Until the split runs, his knowledge stays backed up in the current private `Ryfter/Grimdex`.
