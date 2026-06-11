@@ -71,14 +71,42 @@ where iteration is wasted → an escalate-early signal.
    and on failure feed the error back for up to N attempts (the **iterate-debug loop**).
    Reuses the routing escalate primitive; the new piece is *loop-until-green* (today's
    dispatch is one-shot per candidate).
-3. **Oracle** — the atom's hidden test (`pwsh`/`pytest`), run in isolation. Deterministic,
-   fast, the only correctness signal. The model never sees the test body unless the
-   spec-level says so — only the pass/fail + error text.
+3. **Oracle(s)** — the atom's hidden test (`pwsh`/`pytest`), run in isolation.
+   Deterministic, fast, the primary correctness signal. The model never sees the test body
+   unless the spec-level says so — only the pass/fail + error text. An **optional second
+   oracle** (static type-check) can run ahead of the test — see below.
 4. **Scheduler / pacer** — unattended driver that consumes `Get-CapacityProfile` to size
    max-parallel (surge → more), drains a work queue, and **stops at token budget or a
    configured wake time**. Writes progress to the runs feed for the morning read-out.
 5. **Recorder** — appends each cell result to a results store (routing-grade JSONL), and a
    morning **summary report** (the surface, the floors, surprises).
+
+## Second oracle: static type-check (Pyrefly)
+
+Tests prove *behavior*; a static type-checker catches a whole class of errors **before the
+code runs** — cheaply, deterministically, no frontier judge. Local models produce
+type-sloppy code, so a fast type gate is extra free feedback that tightens the iterate-debug
+loop. Design it as an **optional, ordered pre-test gate** per atom (Python-lane only):
+
+1. type-check → if it fails, feed the type errors back to the model first (a faster, often
+   more localized signal than a runtime failure);
+2. then run the test for behavioral correctness.
+
+**Tool:** **Pyrefly** (Meta's Rust type checker, v1.0 May 2026) — registered as a
+`tools.yaml` entry (`kind: cli`, `cost_tier: local`, `capability: type-check`), consistent
+with d025. Chosen over mypy/pyright for **speed in the hot loop** (10–50× faster; the
+floor-finder runs thousands of red→green cycles, so oracle latency compounds) and over
+Astral's `ty` for CLI conformance/maturity (`ty`'s edge is live-editor recompute, which this
+batch role doesn't use). Keep it **non-blocking and optional**: it's young, and the *test*
+remains the authoritative oracle — the type gate only adds signal.
+
+**Scope caveat:** this is a **Python-lane** enhancement. PowerShell atoms have no type
+oracle (PSScriptAnalyzer is lint, not types); they rely on the test alone. The harness
+should treat "second oracle available?" as a per-language capability, not assume it.
+
+**As a measurable axis (bonus):** running cells *with* vs *without* the type pre-gate is
+itself worth measuring — does the extra oracle raise pass@k or cut attempts for small
+models? If so, it's a cheap win the cascade should adopt by default for Python.
 
 ## Benchmark source (the key fork)
 
