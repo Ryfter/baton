@@ -103,6 +103,91 @@ providers:
     # Journal rows carry stage=draft for draft dispatches.
     $stages = @(Get-Content $journal | ForEach-Object { ($_ | ConvertFrom-Json).stage } | Where-Object { $_ -eq 'draft' })
     Check 'journal has stage=draft rows'   ($stages.Count -ge 1)
+
+    # ===== Task 4: finisher paths =====
+    # Below-threshold drafts -> finisher runs with the take-and-extend prompt.
+    $script:finisherPrompt = $null
+    $lowMap = @{ 'local-a' = 0.7; 'local-b' = 0.6; 'cheap-paid-draft' = 0.6; 'bulk-paid' = 0.6 }
+    $lowJudge = {
+        param($Capability, $Result)
+        $name = ([string]$Result.stdout).Trim()
+        if ($name -eq 'FINISHED') { return @{ passed=$true; score=0.97; reason='judged'; grader='llm-judge' } }
+        $s = if ($lowMap.ContainsKey($name)) { [double]$lowMap[$name] } else { 0.3 }
+        @{ passed = ($s -ge 0.6); score = $s; reason = 'judged'; grader = 'llm-judge' }
+    }.GetNewClosure()
+    $captureFinish = {
+        param($cand,$prompt)
+        if ($cand.name -eq 'frontier') { $script:finisherPrompt = $prompt; return @{ stdout='FINISHED'; stderr=''; exit_code=0; duration_s=1 } }
+        @{ stdout=$cand.name; stderr=''; exit_code=0; duration_s=1 }
+    }
+    $f1 = Invoke-CapabilityCascade -Capability 'code-gen' -Prompt 'TASK-MARKER do x' `
+        -Grader $lowJudge -Dispatcher $captureFinish @common
+    Check 'below threshold -> finished'      ($f1.status -eq 'finished')
+    Check 'finisher wins'                    ($f1.winner -eq 'frontier')
+    Check 'frontier_spent true'              ($f1.frontier_spent -eq $true)
+    Check 'finisher prompt has task'         ($script:finisherPrompt -match 'TASK-MARKER do x')
+    Check 'finisher prompt has best draft'   ($script:finisherPrompt -match 'local-a')
+    Check 'finisher prompt is the template'  ($script:finisherPrompt -match "finishing another model's draft")
+    Check 'finish_attempt recorded'          ($f1.finish_attempt.candidate -eq 'frontier')
+
+    # All drafts fail -> finisher gets the ORIGINAL prompt alone.
+    $script:finisherPrompt = $null
+    $allFailJudge = {
+        param($Capability, $Result)
+        $name = ([string]$Result.stdout).Trim()
+        if ($name -eq 'FINISHED') { return @{ passed=$true; score=0.97; reason='judged'; grader='llm-judge' } }
+        @{ passed=$false; score=0.0; reason='judged-bad'; grader='llm-judge' }
+    }
+    $failDrafts = {
+        param($cand,$prompt)
+        if ($cand.name -eq 'frontier') { $script:finisherPrompt = $prompt; return @{ stdout='FINISHED'; stderr=''; exit_code=0; duration_s=1 } }
+        @{ stdout=''; stderr=''; exit_code=1; duration_s=1 }
+    }
+    $f2 = Invoke-CapabilityCascade -Capability 'code-gen' -Prompt 'ORIGINAL-ONLY' `
+        -Grader $allFailJudge -Dispatcher $failDrafts @common
+    Check 'all drafts fail -> still finishes'   ($f2.status -eq 'finished')
+    Check 'failed drafts -> original prompt'    ($script:finisherPrompt -eq 'ORIGINAL-ONLY')
+
+    # Finisher fails grading -> escalate-to-conductor, paid spend still recorded.
+    $allBad = { param($Capability,$Result) @{ passed=$false; score=0.2; reason='judged-bad'; grader='llm-judge' } }
+    $f3 = Invoke-CapabilityCascade -Capability 'code-gen' -Prompt 'x' `
+        -Grader $allBad -Dispatcher $echoName @common
+    Check 'finisher fails -> escalate'       ($f3.status -eq 'escalate-to-conductor')
+    Check 'escalate still spent frontier'    ($f3.frontier_spent -eq $true)
+
+    # -RequireLocal -> no paid candidates -> no finisher-eligible -> no-finisher,
+    # best passing draft returned.
+    $okJudge = { param($Capability,$Result) @{ passed=$true; score=0.7; reason='judged'; grader='llm-judge' } }
+    $f4 = Invoke-CapabilityCascade -Capability 'code-gen' -Prompt 'x' `
+        -RequireLocal -Grader $okJudge -Dispatcher $echoName @common
+    Check 'RequireLocal -> no-finisher'      ($f4.status -eq 'no-finisher')
+    Check 'no-finisher returns best draft'   ($f4.winner -in @('local-a','local-b'))
+    Check 'no-finisher zero frontier'        ($f4.frontier_spent -eq $false)
+
+    # Gate defers the finisher (all-day peak, rank 3) -> finisher-deferred + provisional draft.
+    $phYaml = @"
+timezone: local
+default_rank: 3
+windows:
+  - name: peak
+    days: [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+    start: "00:00"
+    end: "23:59"
+    kind: peak
+"@
+    $phCfg = Join-Path $tmp 'prime-hours.yaml'; Set-Content -Path $phCfg -Value $phYaml -Encoding utf8
+    $f5 = Invoke-CapabilityCascade -Capability 'code-gen' -Prompt 'x' `
+        -Grader $lowJudge -Dispatcher $captureFinish `
+        -Rank 3 -PrimeHoursConfig $phCfg -GateNow ([datetime]'2026-06-10T12:00:00') `
+        -DraftCount 2 @common
+    Check 'peak rank3 -> finisher-deferred'  ($f5.status -eq 'finisher-deferred')
+    Check 'deferred keeps best draft'        ($f5.winner -eq 'local-a')
+    Check 'deferred zero frontier'           ($f5.frontier_spent -eq $false)
+    Check 'deferred finish_attempt gated'    ($f5.finish_attempt.gate -in @('defer','ask'))
+
+    # Journal rows carry stage=finish for finisher dispatches.
+    $finRows = @(Get-Content $journal | ForEach-Object { ($_ | ConvertFrom-Json).stage } | Where-Object { $_ -eq 'finish' })
+    Check 'journal has stage=finish rows'    ($finRows.Count -ge 1)
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
