@@ -78,11 +78,16 @@ itself, the Grimdex README — runs from the **Grimdex home thread** (sessions i
 `D:\Dev\Grimdex`); this project's thread owns only the orchestrator repo's own audit + README.
 Cross-thread decisions flow as context syncs; cross-thread operations don't.
 
-**Status:** Task 1 (Grimdex secret/PII/content audit) is **COMPLETE — verdict GO for the split
-path** (full history clean: no secrets, nothing to rotate; engine genericization checklist
-enumerated). Findings + file-level manifest: `projects/grimdex/go-public-audit.md` in the KB.
-Task 2 (the split) awaits Kevin's go, step-gated. Flipping the CURRENT combined repo public is
-NO-GO permanently — it becomes the `pre-split-backup`.
+**Status: the SPLIT IS EXECUTED (2026-06-10, Grimdex d004 — via rename, not migration).**
+The combined private repo was renamed `Ryfter/Grimdex` → **`Ryfter/grimdex-know`** (data +
+full history + `pre-split-backup` tag; the `D:\Dev\Grimdex` working dir, the
+`~/.claude/knowledge` junction, and the scheduled routines are all UNCHANGED — only the
+remote URL changed, already updated in the shared tree). A NEW public-destined
+**`Ryfter/Grimdex`** = the engine, rebuilt from zero history (1 commit, audited: no data
+paths, no secrets, noreply author), currently still PRIVATE — **the visibility flip is
+Kevin's manual action.** Audit findings: `projects/grimdex/go-public-audit.md` in the KB.
+⚠️ If any agent has a stale remote pointing at `github.com/Ryfter/Grimdex.git` for the KB,
+fix it to `grimdex-know` — the old redirect died when the engine repo took the name.
 
 **For any agent working in the KB:** tag what you write as ENGINE (→ public, keep it free of
 personal content + hardcoded local paths) or DATA (→ private). Decision records (like this)
