@@ -59,7 +59,7 @@ is not enough. Audit **full history**, not just the working tree, in BOTH repos.
 3. **PII / leakage pass (report, don't auto-fix):**
    - Author emails in history (`git log --format='%ae' | sort -u`) — note them; I decide
      whether to keep `kevin.rank@gmail.com` public or rewrite to a noreply.
-   - Absolute paths revealing the username (`C:\Users\krank\…`) — cosmetic; list count, don't
+   - Absolute paths revealing the username (`C:\Users\<you>\…`) — cosmetic; list count, don't
      rewrite unless I ask.
    - Orchestrator referencing private Grimdex content/paths that a public user can't reach.
 4. **Grimdex content manifest (the big one — human judgment, not regex).** List every file

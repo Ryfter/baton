@@ -14,7 +14,7 @@
 
 ## Pre-Plan: Working Directory
 
-All paths in this plan are relative to `D:\Dev\coding-agent-orchestrator` unless otherwise specified. Deployment targets are under `~/.claude/` (i.e. `C:\Users\krank\.claude\`).
+All paths in this plan are relative to `D:\Dev\coding-agent-orchestrator` unless otherwise specified. Deployment targets are under `~/.claude/` (i.e. `%USERPROFILE%\.claude\`).
 
 ## Task 1: Investigate Claude Code OTel configuration
 
