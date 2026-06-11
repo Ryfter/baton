@@ -56,6 +56,7 @@ function Write-RoutingJournalLine {
         [int]$ExitCode, [int]$DurationS,
         [bool]$Passed, [double]$Score, [string]$Reason,
         [string]$Grader = 'heuristic',
+        [string]$Stage,
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'),
         [string]$Timestamp
     )
@@ -66,6 +67,7 @@ function Write-RoutingJournalLine {
         exit_code = $ExitCode; duration_s = $DurationS
         passed = $Passed; score = $Score; reason = $Reason; grader = $Grader
     }
+    if ($Stage) { $row['stage'] = $Stage }
     try {
         $line = ($row | ConvertTo-Json -Compress)
         Add-Content -LiteralPath $JournalPath -Value $line -Encoding utf8NoBOM
@@ -125,6 +127,7 @@ function Invoke-RoutedCandidate {
         [int]$Rank = [int]::MinValue,
         [string]$PrimeHoursConfig,
         [datetime]$GateNow,
+        [string]$Stage,
         [int]$TimeoutS = 120,
         [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
         [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
@@ -134,8 +137,8 @@ function Invoke-RoutedCandidate {
     # Slice 2 dispatches only cli tools + fleet models. Skip other tool kinds.
     if ($c.source -eq 'tools' -and $c.kind -ne 'cli') {
         $reason = "unsupported kind $($c.kind) in Slice 2"
-        $attempt = [pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0; gate=$null }
-        Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath
+        $attempt = [pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0; gate=$null; grader='heuristic' }
+        Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath -Stage $Stage
         return @{ attempt = $attempt; result = @{ stdout=''; stderr=''; exit_code=-1; duration_s=0 } }
     }
 
@@ -148,8 +151,8 @@ function Invoke-RoutedCandidate {
         $eff = if ($gate.decision -eq 'ask') { if ($gate.default -eq 'run') { 'allow' } else { 'defer' } } else { $gate.decision }
         if ($eff -eq 'defer') {
             $reason = "deferred: prime-hours $($gate.reason)"
-            $attempt = [pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0; gate=$gate.decision }
-            Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath
+            $attempt = [pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0; gate=$gate.decision; grader=$null }
+            Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath -Stage $Stage
             return @{ attempt = $attempt; result = @{ stdout=''; stderr=''; exit_code=-1; duration_s=0 } }
         }
         $script:__lastGateDecision = $gate.decision   # 'ask' or 'allow' that proceeded
@@ -183,12 +186,12 @@ function Invoke-RoutedCandidate {
     $attempt = [pscustomobject]@{
         candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier
         passed=[bool]$verdict.passed; score=[double]$verdict.score; reason=[string]$verdict.reason
-        duration_s=[int]$result.duration_s; gate=$script:__lastGateDecision
+        duration_s=[int]$result.duration_s; gate=$script:__lastGateDecision; grader=$graderTag
     }
     Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind `
         -CostTier $c.cost_tier -ExitCode ([int]$result.exit_code) -DurationS ([int]$result.duration_s) `
         -Passed ([bool]$verdict.passed) -Score ([double]$verdict.score) -Reason ([string]$verdict.reason) `
-        -Grader $graderTag -JournalPath $JournalPath
+        -Grader $graderTag -JournalPath $JournalPath -Stage $Stage
     return @{ attempt = $attempt; result = $result }
 }
 

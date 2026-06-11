@@ -128,4 +128,55 @@ providers:
     Check 'unknown cap empty'          ($none.Count -eq 0)
 }
 finally { if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp } }
+
+# ===== Slice B: role/platform passthrough =====
+$tmpB = Join-Path ([System.IO.Path]::GetTempPath()) ("routing-roleb-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $tmpB | Out-Null
+try {
+    $toolsB = @"
+tools:
+  - name: anno-tool
+    kind: cli
+    enabled: true
+    cost_tier: local
+    capability: cap-b
+    role: draft
+    platform: local
+    command_template: 'x'
+"@
+    $fleetB = @"
+general_capabilities: [cap-b]
+
+providers:
+  - name: anno-paid
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    role: finisher
+    platform: codex
+    command_template: 'x "{{prompt}}"'
+  - name: bare-local
+    kind: cli
+    enabled: true
+    cost_tier: local
+    command_template: 'x "{{prompt}}"'
+"@
+    $tpB = Join-Path $tmpB 'tools.yaml';  Set-Content -Path $tpB -Value $toolsB -Encoding utf8
+    $fpB = Join-Path $tmpB 'fleet.yaml';  Set-Content -Path $fpB -Value $fleetB -Encoding utf8
+    $jpB = Join-Path $tmpB 'j.jsonl'
+
+    $cB = Select-Capability -Capability 'cap-b' -ToolsPath $tpB -FleetPath $fpB -JournalPath $jpB -RatingsPath $nopath
+    $annoTool = @($cB | Where-Object { $_.name -eq 'anno-tool' })[0]
+    $annoPaid = @($cB | Where-Object { $_.name -eq 'anno-paid' })[0]
+    $bare     = @($cB | Where-Object { $_.name -eq 'bare-local' })[0]
+    Check 'tools candidate exposes role'      ($annoTool.role -eq 'draft')
+    Check 'tools candidate exposes platform'  ($annoTool.platform -eq 'local')
+    Check 'fleet candidate exposes role'      ($annoPaid.role -eq 'finisher')
+    Check 'fleet candidate exposes platform'  ($annoPaid.platform -eq 'codex')
+    Check 'unannotated role is null'          ($null -eq $bare.role)
+    Check 'unannotated platform is null'      ($null -eq $bare.platform)
+    Check 'role fields do not affect ranking' ($cB[-1].name -eq 'anno-paid')
+}
+finally { Remove-Item -Recurse -Force $tmpB -ErrorAction SilentlyContinue }
+
 if ($fail -gt 0) { Write-Host "`n$fail FAILED"; exit 1 } else { Write-Host "`nALL PASS"; exit 0 }

@@ -12,6 +12,10 @@
 #   model_default     (optional) fallback when --model not given
 #   env               (optional) env vars set before invoking, restored after
 #   base_url          (http only) read by scripts/fleet/<name>.ps1
+#   role              (optional) draft | bulk | finisher — cascade stage (Slice B).
+#                     Absent -> inferred: local/free = draft, paid = finisher.
+#   platform          (optional) claude | codex | gemini | github | local — Lever 4
+#                     identity; journaled now, consumed by the cost/speed advisor later.
 
 # Default roster for /research and /ensemble when no --providers/--tier given.
 research_default: [claude-cli, codex, ollama-local]
@@ -24,36 +28,47 @@ providers:
     kind: cli
     enabled: true
     cost_tier: paid
+    role: finisher
+    platform: claude
     command_template: 'claude -p "{{prompt}}"'
 
   - name: codex
     kind: cli
     enabled: true
     cost_tier: paid
+    role: finisher
+    platform: codex
     command_template: 'codex exec "{{prompt}}"'
 
   - name: gemini-antigravity
     kind: cli
     enabled: true
     cost_tier: paid
+    role: finisher
+    platform: gemini
     command_template: 'agy --print "{{prompt}}"'
 
   - name: gh-copilot
     kind: cli
     enabled: true
     cost_tier: paid
+    role: bulk
+    platform: github
     command_template: 'gh copilot suggest "{{prompt}}"'
 
   - name: opencode
     kind: cli
     enabled: false
     cost_tier: free
+    role: draft
     command_template: 'opencode -p "{{prompt}}"'
 
   - name: ollama-local
     kind: cli
     enabled: true
     cost_tier: local
+    role: draft
+    platform: local
     model_default: 'devstral:24b'
     command_template: 'ollama run {{model}} "{{prompt}}"'
 
@@ -65,6 +80,8 @@ providers:
     kind: http
     enabled: true
     cost_tier: local
+    role: draft
+    platform: local
     model_default: 'dolphin3:8b'
     base_url: 'http://100.115.71.9:11434'   # wraith2 over Tailscale
 
@@ -72,5 +89,7 @@ providers:
     kind: http
     enabled: true
     cost_tier: local
+    role: draft
+    platform: local
     base_url: 'http://localhost:1234'
     model_default: 'auto'

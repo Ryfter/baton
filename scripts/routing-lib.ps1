@@ -106,6 +106,7 @@ function Select-Capability {
                 name = [string]$t.name; kind = [string]$t.kind; source = 'tools'
                 cost_tier = [string]$t.cost_tier; quality = $detail.quality
                 quality_detail = $detail
+                role = $t.role; platform = $t.platform   # Slice B passthrough (null when absent)
                 why = "specialized tool for $Capability ($($t.cost_tier))"
             })
         }
@@ -122,6 +123,7 @@ function Select-Capability {
                 name = [string]$p.name; kind = [string]$p.kind; source = 'fleet'
                 cost_tier = [string]$p.cost_tier; quality = $detail.quality
                 quality_detail = $detail
+                role = $p.role; platform = $p.platform   # Slice B passthrough (null when absent)
                 why = "general model for $Capability ($($p.cost_tier) tier)"
             })
         }

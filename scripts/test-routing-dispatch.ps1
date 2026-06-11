@@ -175,6 +175,34 @@ windows:
     # Rank 1 in peak: ask -> default run -> paid-c dispatched -> wins.
     $g1 = Invoke-RoutedCapability -Capability 'code-gen' -Prompt 'x' -Dispatcher $onlyPaidWorks -Rank 1 -PrimeHoursConfig $phCfg -GateNow ([datetime]'2026-06-10T12:00:00') @common4
     Check 'rank1 peak: paid runs (ask->run)' ($g1.status -eq 'passed' -and $g1.winner -eq 'paid-c')
+
+    # ===== Slice B: stage field + grader tag =====
+    $journalS = Join-Path $tmp 'stage-journal.jsonl'
+    Write-RoutingJournalLine -Capability 'code-gen' -Candidate 'local-a' `
+        -Source 'fleet' -Kind 'cli' -CostTier 'local' -ExitCode 0 -DurationS 1 `
+        -Passed $true -Score 0.8 -Reason 'ok' -Stage 'draft' -JournalPath $journalS `
+        -Timestamp '2026-06-11T00:00:00.0000000-06:00'
+    $sObj = @(Get-Content $journalS)[0] | ConvertFrom-Json
+    Check 'journal row carries stage'    ($sObj.stage -eq 'draft')
+
+    Write-RoutingJournalLine -Capability 'code-gen' -Candidate 'local-a' `
+        -Source 'fleet' -Kind 'cli' -CostTier 'local' -ExitCode 0 -DurationS 1 `
+        -Passed $true -Score 0.8 -Reason 'ok' -JournalPath $journalS `
+        -Timestamp '2026-06-11T00:00:01.0000000-06:00'
+    $sObj2 = @(Get-Content $journalS)[1] | ConvertFrom-Json
+    Check 'no -Stage -> no stage field'  ($null -eq $sObj2.PSObject.Properties['stage'])
+
+    # Invoke-RoutedCandidate: -Stage flows to the journal; attempt carries the grader tag.
+    $noRatings = Join-Path $tmp 'no-ratings.jsonl'
+    # Select-Capability returns ,([object[]]) (NoEnumerate) — index the returned array directly.
+    $candS = (Select-Capability -Capability 'code-gen' -ToolsPath $toolsPath -FleetPath $fleetPath -RatingsPath $noRatings -JournalPath $journalS)[0]
+    $journalS2 = Join-Path $tmp 'stage-journal2.jsonl'
+    $rcS = Invoke-RoutedCandidate -Capability 'code-gen' -Candidate $candS -Prompt 'x' `
+        -Dispatcher $dispAllPass -ToolsPath $toolsPath -FleetPath $fleetPath `
+        -JournalPath $journalS2 -Stage 'finish'
+    $sRow = @(Get-Content $journalS2)[0] | ConvertFrom-Json
+    Check 'RoutedCandidate journals stage'   ($sRow.stage -eq 'finish')
+    Check 'attempt carries grader tag'       ($rcS.attempt.grader -eq 'heuristic')
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
