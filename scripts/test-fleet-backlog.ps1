@@ -11,6 +11,18 @@ function Assert($cond, $msg) {
     else { Write-Host "  FAIL  $msg" -ForegroundColor Red; $script:fail++ }
 }
 
+# Isolate the legibility feed: the driver publishes run records best-effort via
+# Publish-ItemRun, which defaults to the REAL runs root ($BATON_HOME/runs, or
+# $env:ROUTING_RUNS_ROOT when set). Redirect to a temp dir for the duration so
+# test runs never leak backlog-* dirs into the live feed.
+$realRunsRoot   = Get-RunsRoot
+$realRunsBefore = @(if (Test-Path $realRunsRoot) { Get-ChildItem $realRunsRoot -Name })
+$prevRunsRoot   = $env:ROUTING_RUNS_ROOT
+$tmpRunsRoot    = Join-Path $env:TEMP ("cao-bkruns-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$env:ROUTING_RUNS_ROOT = $tmpRunsRoot
+try {
+# (body intentionally not re-indented under the isolation try)
+
 # --- topo unit test ---
 Write-Host "[topo order]" -ForegroundColor Cyan
 $order = Get-TopoOrder -Tasks @(
@@ -160,6 +172,20 @@ Remove-Item -Recurse -Force $groot, $gwtRoot, $gout -ErrorAction SilentlyContinu
 # cleanup
 Push-Location $root; try { git worktree prune 2>&1 | Out-Null } finally { Pop-Location }
 Remove-Item -Recurse -Force $root, $wtRoot, $out -ErrorAction SilentlyContinue
+
+# ===== legibility-feed isolation =====
+Write-Host "`n[runs-root isolation]" -ForegroundColor Cyan
+$tmpRuns = @(Get-ChildItem $tmpRunsRoot -Name -ErrorAction SilentlyContinue | Where-Object { $_ -like 'backlog-*' })
+Assert ($tmpRuns.Count -gt 0) "driver publishes captured by temp runs root ($($tmpRuns.Count) backlog-* dirs)"
+$realRunsAfter = @(if (Test-Path $realRunsRoot) { Get-ChildItem $realRunsRoot -Name })
+$leaked = @($realRunsAfter | Where-Object { $realRunsBefore -notcontains $_ })
+Assert ($leaked.Count -eq 0) "real runs root gained no entries ($realRunsRoot)"
+
+} finally {
+    if ($null -ne $prevRunsRoot) { $env:ROUTING_RUNS_ROOT = $prevRunsRoot }
+    else { Remove-Item Env:ROUTING_RUNS_ROOT -ErrorAction SilentlyContinue }
+    Remove-Item -Recurse -Force $tmpRunsRoot -ErrorAction SilentlyContinue
+}
 
 Write-Host ""
 if ($script:fail -eq 0) { Write-Host "ALL BACKLOG DRIVER TESTS PASSED" -ForegroundColor Green; exit 0 }
