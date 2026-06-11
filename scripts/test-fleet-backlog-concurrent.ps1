@@ -148,6 +148,77 @@ Remove-Item Env:CC_LEDGER -ErrorAction SilentlyContinue
 Push-Location $groot; try { git worktree prune 2>&1 | Out-Null } finally { Pop-Location }
 Remove-Item -Recurse -Force $groot, $gwt, $gout -ErrorAction SilentlyContinue
 
+# ===== Slice C: cascade items through child workers =====
+Write-Host "`n[concurrent cascade]" -ForegroundColor Cyan
+$kroot  = Join-Path $env:TEMP ("cao-cck-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
+$kwt    = Join-Path $env:TEMP ("cao-cckwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$kout   = Join-Path $env:TEMP ("cao-cckout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
+New-Item -ItemType Directory -Force -Path $kroot, $kout | Out-Null
+Push-Location $kroot
+try {
+    git init -q -b master 2>&1 | Out-Null
+    git config user.email t@e.com; git config user.name t; git config commit.gpgsign false
+    New-Item -ItemType Directory -Force -Path 'scripts','docs' | Out-Null
+    Set-Content scripts/seed.ps1 "seed" -Encoding utf8NoBOM
+    git add -A 2>&1 | Out-Null; git commit -q -m init 2>&1 | Out-Null
+} finally { Pop-Location }
+
+$kfleet = Join-Path $kout 'fleet.yaml'
+Set-Content -LiteralPath $kfleet -Encoding utf8NoBOM -Value @"
+general_capabilities: [code-gen]
+providers:
+  - name: drafty
+    kind: cli
+    enabled: true
+    cost_tier: local
+    role: draft
+    stdin: true
+    command_template: 'pwsh -NoProfile -Command "Write-Output DRAFTTEXT"'
+  - name: finny
+    kind: cli
+    enabled: true
+    cost_tier: free
+    role: finisher
+    stdin: true
+    command_template: 'pwsh -NoProfile -Command "Write-Output FINISHEDTEXT"'
+"@
+$ktools = Join-Path $kout 'tools.yaml'
+Set-Content -LiteralPath $ktools -Encoding utf8NoBOM -Value "tools: []"
+$kjournal = Join-Path $kout 'journal.jsonl'
+
+# Advisory agentic fake: writes the piped-in (composed) prompt into a scoped file.
+$advScript = '$p = @($input) -join "`n"; $leaf = Split-Path (Get-Location) -Leaf; Set-Content (Join-Path "scripts" "$leaf.ps1") $p -Encoding utf8NoBOM'
+$kspecs = @{ agentic = @{ exe = 'pwsh'; args = @('-NoProfile','-Command', $advScript) } }
+
+$ktasks = @(
+    @{ id='K-full'; cascade=$true; output_file='docs/k.md'; capability='code-gen'; prompt='generate k.md'
+       allowed_paths=@('docs/*'); test_command='exit 0'; depends_on=@() },
+    @{ id='K-adv';  cascade=$true; model='agentic'; prompt='ADVISORY ORIGINAL'; capability='code-gen'
+       allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@() }
+)
+$kres = Invoke-BacklogConcurrent -RepoRoot $kroot -Tasks $ktasks -ModelSpecs $kspecs `
+    -Integration 'master' -IntegrationBase 'master' -OutputDir $kout -WorktreeRoot $kwt -TimeoutS 300 `
+    -FleetPath $kfleet -ToolsPath $ktools -JournalPath $kjournal
+$kById = @{}; foreach ($r in $kres) { if ($r) { $kById[$r.id] = $r } }
+
+Assert ($kById['K-full'].merged -eq $true) 'full cascade item merged'
+Assert ($kById['K-full'].cascade_status -in @('finished','draft-sufficient')) "cascade_status terminal ($($kById['K-full'].cascade_status))"
+Push-Location $kroot
+try {
+    $kbody = git show "master:docs/k.md" 2>$null
+    Assert ($kbody -match 'FINISHEDTEXT|DRAFTTEXT') 'output_file content from cascade on master'
+    $advBody = git show "master:scripts/K-adv-agentic.ps1" 2>$null
+    Assert ($advBody -match 'ADVISORY ORIGINAL') 'advisory: original prompt reached the agentic model'
+    Assert ($advBody -match 'DRAFTTEXT') 'advisory: draft text was injected into the prompt'
+    Assert ($advBody -match 'Verify it independently') 'advisory: Get-AdvisoryPrompt template used'
+} finally { Pop-Location }
+Assert ($kById['K-adv'].merged -eq $true) 'advisory item merged'
+$kLive = Get-Content (Join-Path $kout 'K-full.live.json') -Raw | ConvertFrom-Json
+Assert ($kLive.state -eq 'done') 'K-full live state done'
+
+Push-Location $kroot; try { git worktree prune 2>&1 | Out-Null } finally { Pop-Location }
+Remove-Item -Recurse -Force $kroot, $kwt, $kout -ErrorAction SilentlyContinue
+
 } finally {
     if ($null -ne $prevRunsRoot) { $env:ROUTING_RUNS_ROOT = $prevRunsRoot }
     else { Remove-Item Env:ROUTING_RUNS_ROOT -ErrorAction SilentlyContinue }

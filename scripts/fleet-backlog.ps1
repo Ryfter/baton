@@ -20,6 +20,8 @@
   cannot edit a worktree simply have no implementer and are reported 'no-implementer'.
 #>
 
+$script:FleetBacklogLibRoot = $PSScriptRoot
+
 . (Join-Path $PSScriptRoot 'fleet-orchestrate.ps1')
 . (Join-Path $PSScriptRoot 'fleet-ensemble.ps1')
 . (Join-Path $PSScriptRoot 'fleet-runs-bridge.ps1')
@@ -442,6 +444,83 @@ $script:BacklogJobWorker = {
        ended = (Get-Date).ToString('o'); exit = $exit }
 }
 
+# Full-cascade child: dot-source the cascade lib, run, write output_file on success,
+# always write a result JSON the parent maps. All paths are explicit args (no real-
+# state defaults; tests pass temp fixtures).
+$script:CascadeJobWorker = {
+    param($libPath, $capability, $prompt, $rank, $outputFile, $wtPath, $fleetPath, $toolsPath,
+          $primeCfg, $gateNowTicks, $journalPath, $resultPath, $outDir, $id)
+    $live = Join-Path $outDir "$id.live.json"
+    $writeLive = { param($obj) $j = $obj | ConvertTo-Json -Compress; Set-Content -LiteralPath "$live.tmp" -Value $j -Encoding utf8NoBOM; Move-Item -LiteralPath "$live.tmp" -Destination $live -Force }
+    & $writeLive @{ label = $id; provider = 'cascade'; state = 'running'; started = (Get-Date).ToString('o') }
+    $res = $null; $err = $null
+    try {
+        . $libPath
+        $a = @{ Capability = $capability; Prompt = $prompt }
+        if ($null -ne $rank -and $rank -ne [int]::MinValue) { $a.Rank = [int]$rank }
+        if ($fleetPath)    { $a.FleetPath = $fleetPath }
+        if ($toolsPath)    { $a.ToolsPath = $toolsPath }
+        if ($primeCfg)     { $a.PrimeHoursConfig = $primeCfg }
+        if ($gateNowTicks) { $a.GateNow = [datetime][long]$gateNowTicks }
+        if ($journalPath)  { $a.JournalPath = $journalPath }
+        $res = Invoke-CapabilityCascade @a
+        if ($res.status -in @('draft-sufficient','finished') -and $res.result -and
+            -not [string]::IsNullOrWhiteSpace([string]$res.result.stdout)) {
+            $dest = Join-Path $wtPath $outputFile
+            $destDir = Split-Path $dest -Parent
+            if ($destDir -and -not (Test-Path $destDir)) { New-Item -ItemType Directory -Force -Path $destDir | Out-Null }
+            Set-Content -LiteralPath $dest -Value ([string]$res.result.stdout) -Encoding utf8NoBOM
+        }
+    } catch { $err = $_.Exception.Message }
+    $payload = @{ status = $(if ($res) { $res.status } else { 'cascade-error' })
+                  winner = $(if ($res) { $res.winner } else { $null })
+                  frontier_spent = $(if ($res) { [bool]$res.frontier_spent } else { $false })
+                  error = $err }
+    Set-Content -LiteralPath "$resultPath.tmp" -Value ($payload | ConvertTo-Json -Compress) -Encoding utf8NoBOM
+    Move-Item -LiteralPath "$resultPath.tmp" -Destination $resultPath -Force
+}
+
+# Advisory child: -NoFinisher draft pre-step (fail-open) composes the prompt via the
+# parent-rendered template (placeholders keep Get-AdvisoryPrompt the single source of
+# truth), then runs the agentic exe exactly like BacklogJobWorker.
+$script:AdvisoryJobWorker = {
+    param($libPath, $capability, $rank, $fleetPath, $toolsPath, $primeCfg, $gateNowTicks, $journalPath,
+          $template, $wtPath, $promptFile, $id, $outDir, $model, $exe, $argsJson, $resultPath)
+    $live = Join-Path $outDir "$id.live.json"
+    $writeLive = { param($obj) $j = $obj | ConvertTo-Json -Compress; Set-Content -LiteralPath "$live.tmp" -Value $j -Encoding utf8NoBOM; Move-Item -LiteralPath "$live.tmp" -Destination $live -Force }
+    $started = (Get-Date).ToString('o')
+    & $writeLive @{ label = $id; provider = $model; state = 'running'; started = $started }
+    $draftWinner = $null
+    try {
+        . $libPath
+        $orig = Get-Content -LiteralPath $promptFile -Raw
+        $a = @{ Capability = $capability; Prompt = $orig; NoFinisher = $true }
+        if ($null -ne $rank -and $rank -ne [int]::MinValue) { $a.Rank = [int]$rank }
+        if ($fleetPath)    { $a.FleetPath = $fleetPath }
+        if ($toolsPath)    { $a.ToolsPath = $toolsPath }
+        if ($primeCfg)     { $a.PrimeHoursConfig = $primeCfg }
+        if ($gateNowTicks) { $a.GateNow = [datetime][long]$gateNowTicks }
+        if ($journalPath)  { $a.JournalPath = $journalPath }
+        $d = Invoke-CapabilityCascade @a
+        if ($d -and $d.winner -and $d.result -and -not [string]::IsNullOrWhiteSpace([string]$d.result.stdout)) {
+            $draftWinner = $d.winner
+            $composed = $template.Replace('__BATON_PROMPT__', $orig).Replace('__BATON_DRAFT__', [string]$d.result.stdout)
+            Set-Content -LiteralPath $promptFile -Value $composed -Encoding utf8NoBOM
+        }
+    } catch { }   # fail-open: plain prompt
+    Set-Location $wtPath
+    $exit = 0
+    try {
+        $argList = @($argsJson | ConvertFrom-Json)
+        Get-Content -LiteralPath $promptFile -Raw | & $exe @argList 2>&1 | Out-Null
+        $exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+    } catch { $exit = -1 }
+    & $writeLive @{ label = $id; provider = $model; state = 'implemented'; started = $started
+                    ended = (Get-Date).ToString('o'); exit = $exit; draft_winner = $draftWinner }
+    Set-Content -LiteralPath "$resultPath.tmp" -Value (@{ draft_winner = $draftWinner } | ConvertTo-Json -Compress) -Encoding utf8NoBOM
+    Move-Item -LiteralPath "$resultPath.tmp" -Destination $resultPath -Force
+}
+
 function Invoke-BacklogConcurrent {
     <#
     .SYNOPSIS  Wave-based CONCURRENT backlog driver: independent items implement in
@@ -465,9 +544,13 @@ function Invoke-BacklogConcurrent {
         [int]$TimeoutS = 900,
         [int]$MaxParallel = 0,
         [string]$FleetPath,
+        [string]$ToolsPath,
+        [string]$JournalPath,
+        [string]$CascadeLibPath = '',
         [string]$PrimeHoursConfig,
         [datetime]$GateNow
     )
+    if (-not $CascadeLibPath) { $CascadeLibPath = Join-Path $script:FleetBacklogLibRoot 'routing-cascade.ps1' }
     if ($OutputDir -and -not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null }
     if (-not $WorktreeRoot) { $WorktreeRoot = Join-Path (Split-Path $RepoRoot -Parent) 'cao-worktrees' }
     Initialize-IntegrationBranch -RepoRoot $RepoRoot -Base $IntegrationBase -Name $Integration | Out-Null
@@ -542,9 +625,63 @@ function Invoke-BacklogConcurrent {
         if ($ready.Count -eq 0) { continue }
 
         # 3. launch ready items concurrently (worktrees created serially first).
+        $gateNowTicks  = if ($PSBoundParameters.ContainsKey('GateNow')) { $GateNow.Ticks } else { $null }
+        $resultBase    = if ($OutputDir) { $OutputDir } else { [System.IO.Path]::GetTempPath() }
         $jobs = @{}
         foreach ($id in $ready) {
-            $item = $byId[$id]; $model = [string]$item.model
+            $item  = $byId[$id]; $model = [string]$item.model
+            $mode2 = Get-BacklogCascadeMode -Item $item
+            $cap2  = if ($item.capability) { [string]$item.capability } else { 'code-gen' }
+
+            # ── full-cascade mode ────────────────────────────────────────────────────
+            if ($mode2 -eq 'full') {
+                $of = [string]$item.output_file
+                # Traversal guard: absolute or contains '..' -> blocked immediately
+                if ([System.IO.Path]::IsPathRooted($of) -or $of -match '\.\.') {
+                    $reasons = @("output_file traversal guard: '$of' is not a relative path inside the repo")
+                    if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model 'cascade' -State 'blocked' -Extra @{ reasons = $reasons } }
+                    Publish-ItemRunSafe @{ Id = $id; Model = 'cascade'; State = 'blocked'; Reasons = $reasons }
+                    $proc[$id] = [pscustomobject]@{ id = $id; model = 'cascade'; merged = $false; reasons = $reasons; changed = @() }
+                    continue
+                }
+                $wt          = New-ItemWorktree -RepoRoot $RepoRoot -ItemId $id -Model 'cascade' -Base $Integration -WorktreeRoot $WorktreeRoot
+                $resultPath  = Join-Path $resultBase "$id.cascade.json"
+                $job = Start-Job -ScriptBlock $script:CascadeJobWorker -ArgumentList `
+                    $CascadeLibPath, $cap2, ([string]$item.prompt), ([int]$eff[$id]), $of, $wt.path, `
+                    $FleetPath, $ToolsPath, $PrimeHoursConfig, $gateNowTicks, $JournalPath, `
+                    $resultPath, $resultBase, $id
+                $jobs[$id] = @{ job = $job; wt = $wt; pf = $null; item = $item; mode = 'full'; resultPath = $resultPath }
+                if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model 'cascade' -State 'running' }
+                Publish-ItemRunSafe @{ Id = $id; Model = 'cascade'; State = 'running'; Branch = $wt.branch }
+                continue
+            }
+
+            # ── advisory mode ────────────────────────────────────────────────────────
+            if ($mode2 -eq 'advisory') {
+                if (-not $ModelSpecs[$model]) {
+                    if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State 'blocked' -Extra @{ reasons = @("no-implementer: '$model'") } }
+                    Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'blocked'; Reasons = @("no-implementer: '$model'") }
+                    $proc[$id] = [pscustomobject]@{ id = $id; model = $model; merged = $false; reasons = @("no-implementer: '$model'"); changed = @() }
+                    continue
+                }
+                $wt         = New-ItemWorktree -RepoRoot $RepoRoot -ItemId $id -Model $model -Base $Integration -WorktreeRoot $WorktreeRoot
+                $pf         = Join-Path ([System.IO.Path]::GetTempPath()) "cao-prompt-$id-$($model -replace '[^\w]','_').txt"
+                Set-Content -LiteralPath $pf -Value $item.prompt -Encoding utf8NoBOM
+                $spec       = $ModelSpecs[$model]
+                $argsJson   = (@($spec.args) | ConvertTo-Json -Compress); if (-not $argsJson) { $argsJson = '[]' }
+                $template   = Get-AdvisoryPrompt -Prompt '__BATON_PROMPT__' -Draft '__BATON_DRAFT__'
+                $resultPath = Join-Path $resultBase "$id.cascade.json"
+                $job = Start-Job -ScriptBlock $script:AdvisoryJobWorker -ArgumentList `
+                    $CascadeLibPath, $cap2, ([int]$eff[$id]), $FleetPath, $ToolsPath, $PrimeHoursConfig, `
+                    $gateNowTicks, $JournalPath, $template, $wt.path, $pf, $id, $resultBase, `
+                    $model, $spec.exe, $argsJson, $resultPath
+                $jobs[$id] = @{ job = $job; wt = $wt; pf = $pf; item = $item; mode = 'advisory'; resultPath = $resultPath }
+                if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State 'running' -Extra @{ branch = $wt.branch } }
+                Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'running'; Branch = $wt.branch }
+                continue
+            }
+
+            # ── mode 'none': existing agentic path ───────────────────────────────────
             if (-not $ModelSpecs[$model]) {
                 if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State 'blocked' -Extra @{ reasons = @("no-implementer: '$model'") } }
                 Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'blocked'; Reasons = @("no-implementer: '$model'") }
@@ -558,7 +695,7 @@ function Invoke-BacklogConcurrent {
             $argsJson = (@($spec.args) | ConvertTo-Json -Compress)
             if (-not $argsJson) { $argsJson = '[]' }
             $job = Start-Job -ScriptBlock $script:BacklogJobWorker -ArgumentList $wt.path, $pf, $id, $OutputDir, $model, $spec.exe, $argsJson
-            $jobs[$id] = @{ job = $job; wt = $wt; pf = $pf; item = $item }
+            $jobs[$id] = @{ job = $job; wt = $wt; pf = $pf; item = $item; mode = 'none' }
             Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'running'; Branch = $wt.branch }
         }
         if ($jobs.Count -eq 0) { continue }
@@ -566,23 +703,71 @@ function Invoke-BacklogConcurrent {
         # 4. wait for the whole wave, then gate + merge SERIALLY in topo order.
         $null = Wait-Job -Job (@($jobs.Values | ForEach-Object { $_.job })) -Timeout $TimeoutS
         foreach ($id in ($jobs.Keys | Sort-Object { $orderIndex[$_] })) {
-            $info = $jobs[$id]; $item = $info.item
+            $info  = $jobs[$id]; $item = $info.item
+            $model = [string]$item.model
             if ($info.job.State -eq 'Running') { Stop-Job -Job $info.job -ErrorAction SilentlyContinue }
             Remove-Job -Job $info.job -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $info.pf -ErrorAction SilentlyContinue
+            if ($info.pf) { Remove-Item -LiteralPath $info.pf -ErrorAction SilentlyContinue }
             $allowed  = if ($item.allowed_paths) { @($item.allowed_paths) } else { @('*') }
             $maxFiles = if ($item.max_files) { [int]$item.max_files } else { 20 }
+
+            # ── full-cascade merge ───────────────────────────────────────────────────
+            if ($info.mode -eq 'full') {
+                $mergeModel = 'cascade'
+                if (-not (Test-Path $info.resultPath)) {
+                    $reasons = @('cascade-error: worker produced no result')
+                    if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $mergeModel -State 'blocked' -Extra @{ reasons = $reasons } }
+                    Publish-ItemRunSafe @{ Id = $id; Model = $mergeModel; State = 'blocked'; Reasons = $reasons }
+                    $proc[$id] = [pscustomobject]@{ id = $id; model = $mergeModel; merged = $false; reasons = $reasons; changed = @() }
+                    continue
+                }
+                $cj = Get-Content -LiteralPath $info.resultPath -Raw | ConvertFrom-Json
+                if ($cj.status -eq 'finisher-deferred') {
+                    $reasons = @('deferred: cascade finisher gated until off-peak')
+                    if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $mergeModel -State 'deferred' -Extra @{ reasons = $reasons; cascade_status = $cj.status } }
+                    Publish-ItemRunSafe @{ Id = $id; Model = $mergeModel; State = 'deferred'; Reasons = $reasons }
+                    $proc[$id] = [pscustomobject]@{ id = $id; model = $mergeModel; merged = $false; deferred = $true; reasons = $reasons; changed = @() }
+                    continue
+                }
+                if ($cj.status -notin @('draft-sufficient','finished')) {
+                    $reasons = @("cascade: $($cj.status)$(if ($cj.error) { " ($($cj.error))" })")
+                    if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $mergeModel -State 'blocked' -Extra @{ reasons = $reasons } }
+                    Publish-ItemRunSafe @{ Id = $id; Model = $mergeModel; State = 'blocked'; Reasons = $reasons }
+                    $proc[$id] = [pscustomobject]@{ id = $id; model = $mergeModel; merged = $false; reasons = $reasons; changed = @() }
+                    continue
+                }
+                $res = Merge-ItemToIntegration -RepoRoot $RepoRoot -WorktreePath $info.wt.path -Branch $info.wt.branch `
+                    -Integration $Integration -AllowedPathPatterns $allowed -MaxChangedFiles $maxFiles `
+                    -TestCommand $item.test_command -WorktreeRoot $WorktreeRoot -AutoCommit
+                $state = if ($res.merged) { 'done' } else { 'blocked' }
+                if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $mergeModel -State $state `
+                    -Extra @{ merged = $res.merged; reasons = @($res.gate.reasons); changed = @($res.gate.changed)
+                               branch = $info.wt.branch; cascade_status = $cj.status; winner = $cj.winner; frontier_spent = [bool]$cj.frontier_spent } }
+                if ($res.merged) { Publish-ItemRunSafe @{ Id = $id; Model = $mergeModel; State = 'done'; Branch = $info.wt.branch } }
+                else             { Publish-ItemRunSafe @{ Id = $id; Model = $mergeModel; State = 'blocked'; Branch = $info.wt.branch; Reasons = @($res.gate.reasons) } }
+                $proc[$id] = [pscustomobject]@{ id = $id; model = $mergeModel; merged = $res.merged
+                    reasons = @($res.gate.reasons); changed = @($res.gate.changed); branch = $info.wt.branch
+                    cascade_status = $cj.status; winner = $cj.winner; frontier_spent = [bool]$cj.frontier_spent }
+                continue
+            }
+
+            # ── advisory + none: standard merge ─────────────────────────────────────
             $res = Merge-ItemToIntegration -RepoRoot $RepoRoot -WorktreePath $info.wt.path -Branch $info.wt.branch `
                 -Integration $Integration -AllowedPathPatterns $allowed -MaxChangedFiles $maxFiles `
                 -TestCommand $item.test_command -WorktreeRoot $WorktreeRoot -AutoCommit
             $state = if ($res.merged) { 'done' } else { 'blocked' }
-            if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $item.model -State $state -Extra @{ merged = $res.merged; reasons = @($res.gate.reasons); changed = @($res.gate.changed); branch = $info.wt.branch } }
+            if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State $state -Extra @{ merged = $res.merged; reasons = @($res.gate.reasons); changed = @($res.gate.changed); branch = $info.wt.branch } }
             if ($res.merged) {
-                Publish-ItemRunSafe @{ Id = $id; Model = $item.model; State = 'done'; Branch = $info.wt.branch }
+                Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'done'; Branch = $info.wt.branch }
             } else {
-                Publish-ItemRunSafe @{ Id = $id; Model = $item.model; State = 'blocked'; Branch = $info.wt.branch; Reasons = @($res.gate.reasons) }
+                Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'blocked'; Branch = $info.wt.branch; Reasons = @($res.gate.reasons) }
             }
-            $proc[$id] = [pscustomobject]@{ id = $id; model = $item.model; merged = $res.merged; reasons = @($res.gate.reasons); changed = @($res.gate.changed); branch = $info.wt.branch }
+            $proc[$id] = [pscustomobject]@{ id = $id; model = $model; merged = $res.merged; reasons = @($res.gate.reasons); changed = @($res.gate.changed); branch = $info.wt.branch }
+            # advisory: attach draft_winner from child result JSON
+            if ($info.mode -eq 'advisory' -and (Test-Path $info.resultPath)) {
+                $aj = Get-Content -LiteralPath $info.resultPath -Raw | ConvertFrom-Json
+                $proc[$id] | Add-Member -NotePropertyName draft_winner -NotePropertyValue $aj.draft_winner -Force
+            }
         }
     }
 
