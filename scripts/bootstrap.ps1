@@ -270,7 +270,7 @@ if (-not (Test-Path $fleetScriptsDst)) {
     else { New-Item -ItemType Directory -Force -Path $fleetScriptsDst | Out-Null; Write-Ok "created $fleetScriptsDst" }
 }
 # Deploy only real provider hatches — NOT the test stub (stub-http.ps1).
-foreach ($hatch in @('lm-studio.ps1')) {
+foreach ($hatch in @('lm-studio.ps1', 'lm-studio-small.ps1')) {
     $src = Join-Path $repoRoot "scripts\fleet\$hatch"
     $dst = Join-Path $fleetScriptsDst $hatch
     Copy-WithPrompt $src $dst "fleet hatch: $hatch" -Force
