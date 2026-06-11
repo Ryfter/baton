@@ -96,7 +96,7 @@ you approve the concept doc before any issue is created.
        # ... one entry per Decomposition task
    )
    $issues = Build-IdeaIssues -Tasks $tasks -ConceptPath $concept
-   $results = Publish-IdeaIssues -Issues $issues -Project 'coding-agent-orchestrator'
+   $results = Publish-IdeaIssues -Issues $issues -Project 'baton'
    $results | Format-Table title, number, ok, error -AutoSize
    ```
 

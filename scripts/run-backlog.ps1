@@ -19,7 +19,7 @@
 #>
 param(
     [Parameter(Mandatory)][string]$TasksPath,
-    [string]$RepoRoot = 'D:\Dev\coding-agent-orchestrator',
+    [string]$RepoRoot = 'D:\Dev\baton',
     [string]$Target = 'master',
     [string]$WorktreeRoot = 'D:\Dev\cao-worktrees',
     [string]$OutputRoot,

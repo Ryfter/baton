@@ -43,7 +43,7 @@ def jobs_root(tmp_path: Path) -> Path:
     (j1 / 'manifest.yaml').write_text(
         'id: j-2026-05-26-feature-flags\n'
         'title: "build a feature flag system"\n'
-        'project: coding-agent-orchestrator\n'
+        'project: baton\n'
         'status: active\n'
         'current_phase: research\n'
         'created_at: 2026-05-26T11:00:00-06:00\n'
@@ -71,7 +71,7 @@ def jobs_root(tmp_path: Path) -> Path:
     (j2 / 'manifest.yaml').write_text(
         'id: j-2026-05-20-logging-fix\n'
         'title: "fix logging"\n'
-        'project: coding-agent-orchestrator\n'
+        'project: baton\n'
         'status: done\n'
         'current_phase: done\n'
         'created_at: 2026-05-20T11:00:00-06:00\n'
@@ -119,7 +119,7 @@ def runs_root(tmp_path: Path) -> Path:
     (r1 / "run.json").write_text(json.dumps({
         "id": "run_auth-rewrite", "name": "auth-rewrite",
         "model": "claude-opus-4-8", "reasoning": "high",
-        "project": "coding-agent-orchestrator", "tree": "master", "worktree": False,
+        "project": "baton", "tree": "master", "worktree": False,
         "status": "running", "context_pct": 10, "cost_usd": 12.40,
         "tokens_in": 41000, "tokens_out": 7000, "files_touched": ["auth.ts"],
         "current_step": "implement grace window", "parked_question": None,
@@ -135,7 +135,7 @@ def runs_root(tmp_path: Path) -> Path:
     r2.mkdir()
     (r2 / "run.json").write_text(json.dumps({
         "id": "run_fix-login", "name": "fix-login", "model": "codex",
-        "project": "coding-agent-orchestrator", "tree": "wt/fix-14", "worktree": True,
+        "project": "baton", "tree": "wt/fix-14", "worktree": True,
         "status": "needs-you", "context_pct": 22, "cost_usd": 0.40,
         "parked_question": "rotate tokens without invalidating logins?",
         "updated_at": "2026-06-06T03:25:00+00:00",

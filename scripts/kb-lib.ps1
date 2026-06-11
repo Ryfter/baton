@@ -9,12 +9,15 @@
   the repo root, invoke `python -m kb.*` with the right CWD, and pass args
   through. Slash commands stay short and shell-quoteable.
 
-  Locating the repo: searches upward from PSScriptRoot for a folder
-  containing a `kb/` directory. Falls back to ~/coding-agent-orchestrator
-  and the env var $env:CAO_REPO_ROOT.
+  Locating the repo: honors $env:BATON_REPO_ROOT (preferred) or the legacy
+  $env:CAO_REPO_ROOT, then searches upward from PSScriptRoot for a folder
+  containing a `kb/` directory. Falls back to D:\Dev\baton.
 #>
 
 function Get-CaoRepoRoot {
+    if ($env:BATON_REPO_ROOT -and (Test-Path (Join-Path $env:BATON_REPO_ROOT 'kb'))) {
+        return (Resolve-Path $env:BATON_REPO_ROOT).Path
+    }
     if ($env:CAO_REPO_ROOT -and (Test-Path (Join-Path $env:CAO_REPO_ROOT 'kb'))) {
         return (Resolve-Path $env:CAO_REPO_ROOT).Path
     }
@@ -29,9 +32,9 @@ function Get-CaoRepoRoot {
         $dir = $parent
     }
     # Common dev path
-    $candidate = 'D:\Dev\coding-agent-orchestrator'
+    $candidate = 'D:\Dev\baton'
     if (Test-Path (Join-Path $candidate 'kb')) { return $candidate }
-    throw "Could not locate the coding-agent-orchestrator repo (no kb/ found). Set `$env:CAO_REPO_ROOT to the repo root."
+    throw "Could not locate the baton repo (no kb/ found). Set `$env:BATON_REPO_ROOT to the repo root."
 }
 
 function Invoke-KbIndex {

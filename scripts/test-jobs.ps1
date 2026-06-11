@@ -39,7 +39,7 @@ New-Item -ItemType Directory -Path $jobDir | Out-Null
 Set-Content -Path (Join-Path $jobDir 'brief.md') -Value "# Brief`n`n$brief" -Encoding utf8NoBOM
 Write-Manifest -JobDir $jobDir -Manifest @{
     id = $jobId; title = $brief; created_at = $now
-    status = 'active'; project = 'coding-agent-orchestrator'
+    status = 'active'; project = 'baton'
     current_phase = 'research'; phase_started_at = $now
     sprint_count = 0; last_updated = $now
 }

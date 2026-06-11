@@ -51,7 +51,7 @@ try {
     Publish-ItemRun -RunsRoot $root -Id 'issue-7' -Model 'gemini' -State 'queued'
     $rd = Get-Content (Join-Path $root 'backlog-issue-7-gemini/run.json') -Raw | ConvertFrom-Json
     Check 'default name = id'       ($rd.name -eq 'issue-7')
-    Check 'default project'         ($rd.project -eq 'coding-agent-orchestrator')
+    Check 'default project'         ($rd.project -eq 'baton')
 }
 finally {
     if (Test-Path $root) { Remove-Item -Recurse -Force $root }

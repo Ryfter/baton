@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-  Bootstraps the coding-agent-orchestrator observation layer into ~/.claude/.
+  Bootstraps Baton (the orchestrator observation layer) into ~/.claude/.
 
 .DESCRIPTION
   Idempotent. Re-runnable. Plan 1 scope: deploys hook, OTel env config, slash

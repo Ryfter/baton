@@ -12,7 +12,7 @@ function Publish-ItemRun {
         [Parameter(Mandatory)][string]$Model,
         [Parameter(Mandatory)][ValidateSet('queued','running','done','blocked')][string]$State,
         [string]$Name,
-        [string]$Project = 'coding-agent-orchestrator',
+        [string]$Project = 'baton',
         [string]$Branch,
         [string[]]$Reasons
     )

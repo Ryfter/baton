@@ -84,7 +84,7 @@ try {
         $title = if ($ti -ge 0) { $args[$ti + 1] } else { '' }
         if ($title -eq 'FAILME') { $global:LASTEXITCODE = 1; return 'boom' }
         $global:LASTEXITCODE = 0
-        return 'https://github.com/Ryfter/coding-agent-orchestrator/issues/123'
+        return 'https://github.com/Ryfter/baton/issues/123'
     }
 
     # happy path: two issues created

@@ -9,7 +9,7 @@ $fail = 0
 function Check($n,$c){ if($c){Write-Host "PASS: $n"} else {Write-Host "FAIL: $n"; $script:fail++} }
 
 try {
-    $payload = '{"model":{"id":"claude-opus-4-8","display_name":"Opus"},"workspace":{"current_dir":"D:/Dev/coding-agent-orchestrator"},"cost":{"total_cost_usd":1.23}}'
+    $payload = '{"model":{"id":"claude-opus-4-8","display_name":"Opus"},"workspace":{"current_dir":"D:/Dev/baton"},"cost":{"total_cost_usd":1.23}}'
     $out = $payload | & pwsh -NoProfile -File $script -RunsRoot $root
     Check 'prints a status line' ($out -and $out.Length -gt 0)
     $rj = Join-Path $root 'run_t/run.json'

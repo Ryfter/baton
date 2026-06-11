@@ -64,7 +64,7 @@ try {
     Check 'single-element files_touched value'    ($raw2.files_touched[0] -eq 'only.ts')
 
     # --- SP2: current-run wiring ---
-    Set-CurrentRun -RunsRoot $root -Id 'job-x1' -Name 'wire SP2' -Model 'claude-opus-4-8' -Project 'coding-agent-orchestrator'
+    Set-CurrentRun -RunsRoot $root -Id 'job-x1' -Name 'wire SP2' -Model 'claude-opus-4-8' -Project 'baton'
     $curPath = Join-Path $root 'current-run.json'
     Check 'current-run.json written'  (Test-Path $curPath)
     $cur = Get-Content $curPath -Raw | ConvertFrom-Json
