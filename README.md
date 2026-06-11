@@ -164,7 +164,10 @@ duplicated — the MCP surface is purely a cross-tool adapter over what already 
 
 **Claude Code — automatic.** Installing the plugin (`claude plugin install baton@ryfter`)
 auto-registers the server via `.mcp.json` at the plugin root. Tools surface as
-`mcp__baton__<tool>` in every session. No extra steps needed.
+`mcp__baton__<tool>` in every session. No extra steps needed. (The launch entry is a
+small inline Python bootstrap that locates the plugin at runtime — `CLAUDE_PLUGIN_ROOT`
+from the environment, falling back to the newest plugin-cache dir — because
+`${CLAUDE_PLUGIN_ROOT}` is not substituted inside `.mcp.json` `env` values.)
 
 **Codex CLI:**
 

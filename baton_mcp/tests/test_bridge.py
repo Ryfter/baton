@@ -63,6 +63,20 @@ class TestBridgeScript:
         monkeypatch.delenv("BATON_MCP_BRIDGE", raising=False)
         importlib.reload(bridge_mod)
 
+    def test_unexpanded_template_override_is_ignored(self, monkeypatch):
+        """Regression: Claude Code does not substitute ${CLAUDE_PLUGIN_ROOT} in
+        .mcp.json env values; the bridge must fall back to the package-sibling
+        path rather than hand pwsh a literal template string."""
+        from baton_mcp import bridge as bridge_mod
+
+        monkeypatch.setenv(
+            "BATON_MCP_BRIDGE", "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-bridge.ps1"
+        )
+        p = bridge_mod.bridge_script()
+        assert "${" not in str(p)
+        assert p.name == "mcp-bridge.ps1"
+        assert p.parent.name == "scripts"
+
 
 # ---------------------------------------------------------------------------
 # run_op() — command shape

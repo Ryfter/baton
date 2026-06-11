@@ -2,11 +2,10 @@
   "mcpServers": {
     "baton": {
       "command": "python",
-      "args": ["-m", "baton_mcp"],
-      "env": {
-        "PYTHONPATH": "${CLAUDE_PLUGIN_ROOT}",
-        "BATON_MCP_BRIDGE": "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-bridge.ps1"
-      }
+      "args": [
+        "-c",
+        "import os, sys, glob\nr = os.environ.get('CLAUDE_PLUGIN_ROOT', '')\nif not (r and os.path.isdir(os.path.join(r, 'baton_mcp'))):\n    pat = os.path.join(os.path.expanduser('~'), '.claude', 'plugins', 'cache', 'ryfter', 'baton', '*', 'baton_mcp')\n    hits = sorted(glob.glob(pat), key=os.path.getmtime, reverse=True)\n    r = os.path.dirname(hits[0]) if hits else ''\nif r and r not in sys.path:\n    sys.path.insert(0, r)\n    os.environ.setdefault('BATON_MCP_BRIDGE', os.path.join(r, 'scripts', 'mcp-bridge.ps1'))\nfrom baton_mcp.server import main\nmain()"
+      ]
     }
   }
 }

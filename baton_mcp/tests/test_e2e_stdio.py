@@ -142,3 +142,47 @@ def test_stdio_round_trip(tmp_path: Path) -> None:
     """Spawn the real MCP stdio server and verify list_tools + 2 tool calls."""
     home = _seed_baton_home(tmp_path)
     asyncio.run(_run_e2e(home))
+
+
+async def _run_mcp_json_launch(home: Path, repo_root: Path) -> None:
+    """Launch the server EXACTLY as .mcp.json specifies (the -c bootstrap),
+    with no PYTHONPATH / BATON_MCP_BRIDGE and a neutral cwd — the runtime
+    CLAUDE_PLUGIN_ROOT env var is the only locator, as under Claude Code.
+    Regression for the live failure where ${CLAUDE_PLUGIN_ROOT} was NOT
+    substituted in .mcp.json env values and the bridge got a literal template.
+    """
+    try:
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+    except ImportError as exc:
+        pytest.skip(f"mcp client not importable: {exc}")
+
+    spec = json.loads((repo_root / ".mcp.json").read_text(encoding="utf-8"))
+    server = spec["mcpServers"]["baton"]
+    assert "env" not in server, ".mcp.json must not rely on env-value substitution"
+
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("PYTHONPATH", "BATON_MCP_BRIDGE")}
+    env["BATON_HOME"] = str(home)
+    env["CLAUDE_PLUGIN_ROOT"] = str(repo_root)  # what Claude sets at runtime
+
+    params = StdioServerParameters(
+        command=sys.executable if server["command"] == "python" else server["command"],
+        args=server["args"],
+        env=env,
+        cwd=str(home),  # NOT the repo — module must resolve via the bootstrap
+    )
+
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            fl_result = await session.call_tool("baton_fleet_list", {})
+            payload = json.loads(fl_result.content[0].text)
+            assert payload.get("ok") is True, f"baton_fleet_list not ok: {payload}"
+            assert "stub-local" in [p["name"] for p in payload.get("providers", [])]
+
+
+def test_mcp_json_bootstrap_launch(tmp_path: Path) -> None:
+    """The .mcp.json -c bootstrap must work with runtime env discovery only."""
+    home = _seed_baton_home(tmp_path)
+    asyncio.run(_run_mcp_json_launch(home, REPO))
