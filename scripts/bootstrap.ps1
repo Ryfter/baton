@@ -447,6 +447,15 @@ foreach ($b in $backends) {
     } catch { Write-Warn "$($b.name): $($_.Exception.Message)" }
 }
 
+# MCP SDK probe (baton MCP server prereq — warn only, gates nothing)
+$mcpExitCode = 0
+& python -c "import mcp" 2>$null; $mcpExitCode = $LASTEXITCODE
+if ($mcpExitCode -eq 0) {
+    Write-Ok "python mcp SDK present (baton MCP server ready)"
+} else {
+    Write-Warn "python 'mcp' package missing - baton MCP server won't start. Run: pip install -r requirements.txt"
+}
+
 # Plan 4: run fleet doctor as part of verification
 Write-Step "Running fleet doctor"
 if (-not $DryRun) {

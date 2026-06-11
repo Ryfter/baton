@@ -1,0 +1,3 @@
+# Core dependency for the baton MCP server (baton_mcp package).
+# For dashboard extras (fastapi, uvicorn, httpx, etc.) see dashboard/requirements.txt.
+mcp>=1.25
