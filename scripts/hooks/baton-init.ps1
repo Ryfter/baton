@@ -15,10 +15,12 @@ try {
     $libPath = $libCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $libPath) { exit 0 }
     . $libPath
-    $refs = [IO.Path]::GetFullPath((Join-Path $scriptDir '../../references'))
-    if (Test-Path $refs) { Initialize-BatonHome -ReferencesDir $refs | Out-Null }
+    # Migration runs first: Initialize-BatonHome pre-creates the migration's destinations (jobs/, runs/, yamls),
+    # which would cause every legacy item to be reported as a conflict and left stranded.
     $mig = Move-BatonState
     foreach ($c in @($mig.conflicts)) { Write-Output "baton-init: state exists in both ~/.claude and BATON_HOME, left in place: $c" }
+    $refs = [IO.Path]::GetFullPath((Join-Path $scriptDir '../../references'))
+    if (Test-Path $refs) { Initialize-BatonHome -ReferencesDir $refs | Out-Null }
     exit 0
 } catch {
     try {
@@ -29,3 +31,4 @@ try {
     } catch { }
     exit 0
 }
+

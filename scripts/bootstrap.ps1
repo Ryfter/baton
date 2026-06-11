@@ -282,16 +282,20 @@ Write-Step "Initializing BATON_HOME state root + migrating legacy state"
 $batonHome = Get-BatonHome
 $fleetDst = Join-Path $batonHome 'fleet.yaml'   # fleet doctor (Step 7) verifies this path
 if ($DryRun) {
-    Write-Ok "[dry-run] would ensure $batonHome (jobs/, runs/, logs/) + seed fleet.yaml / tools.yaml / prime-hours.yaml"
+    # Migration must run before init: Initialize-BatonHome pre-creates the migration's destinations.
     Write-Ok "[dry-run] would run the one-time ~/.claude -> BATON_HOME migration (marker-gated)"
+    Write-Ok "[dry-run] would ensure $batonHome (jobs/, runs/, logs/) + seed fleet.yaml / tools.yaml / prime-hours.yaml"
 } else {
-    $seeded = Initialize-BatonHome -ReferencesDir (Join-Path $repoRoot 'references')
-    foreach ($s in $seeded) { Write-Ok "seeded $s -> $batonHome" }
-    if (-not $seeded -or @($seeded).Count -eq 0) { Write-Skip "configs already present in $batonHome" }
+    # Migration runs first: Initialize-BatonHome pre-creates jobs/, runs/, and the config yamls
+    # which are exactly the destinations Move-BatonState wants to move into; running init first
+    # would cause every legacy item to be reported as a conflict and left stranded.
     $mig = Move-BatonState
     foreach ($m in @($mig.migrated))  { Write-Ok "migrated $m -> $batonHome" }
     foreach ($c in @($mig.conflicts)) { Write-Warn "left in place (exists in both ~/.claude and BATON_HOME): $c" }
     if (@($mig.migrated).Count -eq 0 -and @($mig.conflicts).Count -eq 0) { Write-Skip "migration already done (marker present) or nothing to move" }
+    $seeded = Initialize-BatonHome -ReferencesDir (Join-Path $repoRoot 'references')
+    foreach ($s in $seeded) { Write-Ok "seeded $s -> $batonHome" }
+    if (-not $seeded -or @($seeded).Count -eq 0) { Write-Skip "configs already present in $batonHome" }
 }
 
 # --- Step 5c: Create jobs + knowledge dirs ---
