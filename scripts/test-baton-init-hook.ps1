@@ -18,6 +18,10 @@ try {
     $env:BATON_CLAUDE_DIR = Join-Path $tmp 'claude'
     New-Item -ItemType Directory -Force -Path $env:BATON_CLAUDE_DIR | Out-Null
     Set-Content (Join-Path $env:BATON_CLAUDE_DIR 'current-job.json') '{"job_id":"legacy"}' -Encoding utf8NoBOM
+    # Regression: legacy jobs dir with content must reach BATON_HOME even though
+    # Initialize-BatonHome would pre-create jobs/ if it ran first.
+    New-Item -ItemType Directory -Force -Path (Join-Path $env:BATON_CLAUDE_DIR 'jobs/j-test') | Out-Null
+    Set-Content (Join-Path $env:BATON_CLAUDE_DIR 'jobs/j-test/manifest.json') '{"id":"j-test"}' -Encoding utf8NoBOM
 
     & pwsh -NoProfile -File $hook | Out-Null
     Assert "hook exits 0"                     ($LASTEXITCODE -eq 0)
@@ -26,6 +30,8 @@ try {
     Assert "seeds prime-hours.yaml"           (Test-Path (Join-Path $env:BATON_HOME 'prime-hours.yaml'))
     Assert "migrates legacy current-job"      (Test-Path (Join-Path $env:BATON_HOME 'current-job.json'))
     Assert "writes migration marker"          (Test-Path (Join-Path $env:BATON_HOME '.migrated-from-claude.json'))
+    Assert "migrates legacy jobs WITH content (init must not pre-create destinations)" (Test-Path (Join-Path $env:BATON_HOME 'jobs/j-test/manifest.json'))
+    Assert "legacy jobs gone from claude dir" (-not (Test-Path (Join-Path $env:BATON_CLAUDE_DIR 'jobs')))
 
     Set-Content (Join-Path $env:BATON_HOME 'fleet.yaml') 'user: edited' -Encoding utf8NoBOM
     & pwsh -NoProfile -File $hook | Out-Null
