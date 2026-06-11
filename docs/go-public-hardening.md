@@ -1,5 +1,14 @@
 # Go-public hardening — instruction set (orchestrator + Grimdex)
 
+> **STATUS (2026-06-11): Grimdex side DONE.** The Grimdex home thread executed Task 2 via
+> **rename** (not the fresh-migration sketched below): the combined repo became private
+> **`Ryfter/grimdex-know`** (data, full history, `pre-split-backup` tag); a fresh-history engine
+> repo **`Ryfter/Grimdex`** was built, audited, and is **now PUBLIC** (MIT). The steps below are
+> retained as the historical plan. **Still open — owned by THIS (orchestrator) thread:** the
+> orchestrator repo's own secret/PII audit + a human-facing `README.md` + `LICENSE` (MIT) before
+> `Ryfter/coding-agent-orchestrator` itself is made public (Task 1 scoped to this repo, Task 3).
+
+
 Paste the block below into a fresh Claude Code (or any agent) session that has access to
 **both** `D:\Dev\coding-agent-orchestrator` and `D:\Dev\Grimdex`. It covers (1) a
 secret/PII history audit and (2) human-facing READMEs + MIT license. **Do not flip either

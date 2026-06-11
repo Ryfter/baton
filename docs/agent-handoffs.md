@@ -15,21 +15,22 @@ own instruction file). This doc is the source of truth and the anti-drift regist
 | Grok / others / future tools | their own convention — mirror the shared core below |
 
 Every agent should also read `docs/next-session.md` (the operating loop) and
-`docs/roadmap.md` (status), and use the shared knowledge base (`Ryfter/knowledge`).
+`docs/roadmap.md` (status), and use the shared knowledge base (`Ryfter/grimdex-know`, the
+private data repo — see the Grimdex split section below).
 
 ## Shared core — identical expectations for EVERY agent
 1. **Orient first:** read `docs/next-session.md` + `docs/roadmap.md`.
 2. **Decision capture:** when you make a significant architectural/scope/approach
    decision, record it via the file-based intake (canonical rule in `CLAUDE.md`).
-   Records live in the `Ryfter/knowledge` repo (`projects/<id>/decisions/`).
+   Records live in the `Ryfter/grimdex-know` repo (`projects/<id>/decisions/`).
 3. **965-byte shell-argument ceiling:** never pass a long string (commit message,
    prompt, file body) as one shell argument — write it to a file and read it.
    Prefer small, separate commands over long `&&` chains.
 4. **Shipping:** per-item branch → hard merge gate (`scripts/fleet-orchestrate.ps1`)
    → master. Keep master green. Gated merges auto-append `Closes #N`.
 5. **Backup standing order:** push everything to GitHub (private) so a new PC can
-   roll — including the `Ryfter/knowledge` base. Don't ask; just do it.
-6. **Knowledge is model-agnostic** (`Ryfter/knowledge`): keep `universal/` +
+   roll — including the `Ryfter/grimdex-know` base. Don't ask; just do it.
+6. **Knowledge is model-agnostic** (`Ryfter/grimdex-know`): keep `universal/` +
    `projects/` tool-neutral; isolate tool config under `config/` (decision d014).
 7. **Task-group closeout & compaction:** at the end of any task group (a finished
    plan / sprint / milestone) — or proactively whenever context grows long — FIRST
@@ -84,13 +85,16 @@ full history + `pre-split-backup` tag; the `D:\Dev\Grimdex` working dir, the
 `~/.claude/knowledge` junction, and the scheduled routines are all UNCHANGED — only the
 remote URL changed, already updated in the shared tree). A NEW public-destined
 **`Ryfter/Grimdex`** = the engine, rebuilt from zero history (1 commit, audited: no data
-paths, no secrets, noreply author), currently still PRIVATE — **the visibility flip is
-Kevin's manual action.** Audit findings: `projects/grimdex/go-public-audit.md` in the KB.
+paths, no secrets, noreply author). **Now PUBLIC (Kevin flipped it 2026-06-11) and available
+at https://github.com/Ryfter/Grimdex (MIT).** Audit findings: `projects/grimdex/go-public-audit.md`
+in the KB.
 ⚠️ If any agent has a stale remote pointing at `github.com/Ryfter/Grimdex.git` for the KB,
 fix it to `grimdex-know` — the old redirect died when the engine repo took the name.
 
-**For any agent working in the KB:** tag what you write as ENGINE (→ public, keep it free of
-personal content + hardcoded local paths) or DATA (→ private). Decision records (like this)
-and project tiers are DATA. Do **not** change repo visibility or rewrite history piecemeal.
-Plan: `docs/go-public-hardening.md` (Task 2). Decision: `d037-grimdex-goes-public-as-engine.md`.
-Until the split runs, his knowledge stays backed up in the current private `Ryfter/Grimdex`.
+**For any agent working in the KB:** the KB you read/write is the private **`Ryfter/grimdex-know`**
+(via the `~/.claude/knowledge` junction). Tag what you write as ENGINE (→ public `Ryfter/Grimdex`,
+keep it free of personal content + hardcoded local paths) or DATA (→ private grimdex-know).
+Decision records (like this) and project tiers are DATA. Engine changes are made in the Grimdex
+home thread, then synced to the public repo. Decision: `d037-grimdex-goes-public-as-engine.md`;
+historical plan (now executed via rename): `docs/go-public-hardening.md`. His knowledge stays
+backed up in private `Ryfter/grimdex-know` (with the `pre-split-backup` tag preserving pre-split history).
