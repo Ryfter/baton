@@ -5,12 +5,19 @@ Paste the block below into a fresh Claude Code (or any agent) session that has a
 secret/PII history audit and (2) human-facing READMEs + MIT license. **Do not flip either
 repo to public until Task 1 reports GO.**
 
-⚠️ **Grimdex caution (read first):** Grimdex is a *multi-project* knowledge base — it hosts
-decision records, lessons, ratings, and per-project tiers for EVERY project that uses it
-(coding-agent-orchestrator, and any others: answerbot, canvas-toolchain, etc.). Making it
-public exposes **all of them**, not just the orchestrator's. Before publishing, decide:
-publish the whole KB, publish only a subset (e.g. the orchestrator tier + universal), or
-sanitize first. Task 1 produces a content manifest to make that decision on.
+⚠️ **Grimdex plan (read first) — engine/data split, not a single public repo.** Grimdex is
+a *multi-project* knowledge base: it hosts decision records, lessons, ratings, and per-project
+tiers for EVERY project that uses it (coding-agent-orchestrator, answerbot, canvas-toolchain,
+the grimdex tier). The decision (Kevin, 2026-06-10): **split the engine from the data.**
+- **Public `Ryfter/Grimdex`** = the *tool/framework* (scripts, the `GRIMDEX.md` convention,
+  setup/wire/sweep, docs) + an empty `universal/` skeleton + a few curated exemplar records.
+- **Private `Ryfter/grimdex-know`** = the *data* (his accumulated knowledge: `universal/`
+  content + all `projects/` tiers). This stays private and remains his knowledge backup.
+
+His knowledge is ALREADY fully backed up in the current private `Ryfter/Grimdex` repo — that
+repo stays untouched as the pre-split backup until both new repos are verified. **Task 2 does
+the split; do it AFTER the Task 1 audit (the audit's content manifest drives the
+classification).**
 
 ---
 
@@ -64,7 +71,55 @@ is not enough. Audit **full history**, not just the working tree, in BOTH repos.
    exact remediation commands (for me to run/approve). NO-GO if any secret is in history or any
    Grimdex tier is flagged "no" and unresolved.
 
-## Task 2 — READMEs + MIT license
+## Task 2 — Grimdex engine/data split (do AFTER Task 1 = GO)
+
+Split the current combined `D:\Dev\Grimdex` into a public *engine* repo and a private *data*
+repo. **Critical:** the data is in the current repo's HISTORY, so it must be excised from
+history for the public repo — do NOT just `git rm` and push. Recommended approach below uses a
+**fresh-history public repo** (simplest, zero risk of a missed path lingering in history).
+
+**Classification (refine against the Task 1 manifest):**
+
+- **Engine → public `Ryfter/Grimdex`:** `scripts/` (all `*.ps1` libs + tests:
+  console/install-schedule/run-scheduled/schedule/setup/sweep/wire + `wire-project.ps1`),
+  `setup.ps1`, `GRIMDEX.md`, `KNOWLEDGE.md`, `README.md`, `docs/`, `config/` (sanitize —
+  strip any machine-specific values), `.github/`, the tool-wiring meta files (`CLAUDE.md`,
+  `AGENTS.md`, `GEMINI.md`, `.cursorrules` — sanitize absolute paths → placeholders),
+  `.gitignore`, `RIPPEDPAGES.md` (classify during audit). PLUS: an **empty `universal/`
+  skeleton** (`claude-rules/`, `playbooks/`, `topics/`, `promotions/` as empty dirs with a
+  `TEMPLATE.md` each) and an **`examples/`** dir holding a *small, audited* set of exemplar
+  decision records drawn from the `coding-agent-orchestrator` tier so the format is
+  demonstrable. Add `LICENSE` (MIT).
+- **Data → private `Ryfter/grimdex-know`:** `universal/` content (`decision-guidance.md`,
+  `mistakes.md`, `reasoning.md`, `routing.md`, `user-prefs.md`, `winners.md`,
+  `PROMOTIONS-LOG.md`, and the populated `claude-rules/`/`playbooks/`/`topics/`/`promotions/`),
+  **all of `projects/`** (answerbot, canvas-toolchain, coding-agent-orchestrator, grimdex),
+  `KB-AUDIT-LOG.md`, `.index/`, `logs/`, `.claude/` (review/gitignore the last three).
+
+**Steps (each gated by my confirmation; nothing public until the very end):**
+
+1. **Tag the pre-split backup:** in the current repo, `git tag pre-split-backup && git push
+   origin pre-split-backup`. This is the safety net — full history + all data preserved.
+2. **Create private `Ryfter/grimdex-know`** (`gh repo create Ryfter/grimdex-know --private`).
+   Move the DATA paths into it (a fresh initial commit is fine — the old repo retains full
+   history as backup). Push.
+3. **Repoint the junction:** `~/.claude/knowledge` → the local `grimdex-know` checkout (it's
+   the live data store). Decide engine wiring: either (a) deploy the Grimdex tool globally and
+   run it against the knowledge dir, or (b) pin the public Grimdex as a submodule of
+   grimdex-know. Verify decisions/sweep/wire still work against the repointed store.
+4. **Rebuild public `Ryfter/Grimdex` with clean history:** the cleanest route is to re-init —
+   stage ONLY the engine paths + skeleton + examples + LICENSE into a fresh repo with a single
+   initial commit, then force-replace the `Ryfter/Grimdex` remote (or create `Grimdex` fresh
+   and archive the old). Confirm `git log` shows no data files in ANY commit and the tree
+   contains zero private content. (Alternative if history must be preserved: `git filter-repo
+   --invert-paths` to purge every data path from every commit — but verify exhaustively.)
+5. **Verify both repos**: public Grimdex = engine-only, runs `setup.ps1`/tests green, no
+   private content in tree OR history; private grimdex-know = all data present, junction works,
+   decisions/sweep operate. Only then is Grimdex safe to make public (my manual flip).
+6. Update the orchestrator's `CLAUDE.md`/`docs/agent-handoffs.md` Grimdex pointers if the
+   data path/repo name changed.
+
+## Task 3 — READMEs + MIT license
 
 Only presentation; safe to do regardless of Task 1, but publish only after Task 1 = GO.
 
@@ -89,8 +144,8 @@ Only presentation; safe to do regardless of Task 1, but publish only after Task 
 4. Leave internal handoff docs in place (`next-session.md`, `agent-handoffs.md`) — harmless;
    optionally add a one-line "internal working notes" header.
 
-## After both tasks (my manual steps, for reference)
+## After all tasks (my manual steps, for reference)
 
 - Flip visibility: `gh repo edit Ryfter/coding-agent-orchestrator --visibility public` (and
-  Grimdex, once its content is cleared).
+  `Ryfter/Grimdex` once Task 2 is verified — `grimdex-know` stays private).
 - Promote the release: `v1.2.0-rc1` → `v1.2.0` (re-tag + `gh release edit v1.2.0 --prerelease=false`).
