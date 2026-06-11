@@ -80,6 +80,74 @@ $realRunsAfter = @(if (Test-Path $realRunsRoot) { Get-ChildItem $realRunsRoot -N
 $leaked = @($realRunsAfter | Where-Object { $realRunsBefore -notcontains $_ })
 Assert ($leaked.Count -eq 0) "real runs root gained no entries ($realRunsRoot)"
 
+# ===== Slice C: rank order + paid-peak gate + MaxParallel =====
+Write-Host "`n[rank + gate + cap]" -ForegroundColor Cyan
+$groot  = Join-Path $env:TEMP ("cao-ccg-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
+$gwt    = Join-Path $env:TEMP ("cao-ccgwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$gout   = Join-Path $env:TEMP ("cao-ccgout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
+New-Item -ItemType Directory -Force -Path $groot, $gout | Out-Null
+Push-Location $groot
+try {
+    git init -q -b master 2>&1 | Out-Null
+    git config user.email t@e.com; git config user.name t; git config commit.gpgsign false
+    New-Item -ItemType Directory -Force -Path 'scripts' | Out-Null
+    Set-Content scripts/seed.ps1 "seed" -Encoding utf8NoBOM
+    git add -A 2>&1 | Out-Null; git commit -q -m init 2>&1 | Out-Null
+} finally { Pop-Location }
+
+# Ledger records DISPATCH ORDER: each child appends its worktree leaf ("<id>-<model>").
+$ledger = Join-Path $gout 'ledger.txt'
+$env:CC_LEDGER = $ledger
+$ledgerScript = '$leaf = Split-Path (Get-Location) -Leaf; Add-Content -Path $env:CC_LEDGER -Value $leaf; Set-Content (Join-Path "scripts" "$leaf.ps1") "x" -Encoding utf8NoBOM'
+$gspecs = @{ paidmodel = @{ exe = 'pwsh'; args = @('-NoProfile','-Command', $ledgerScript) } }
+
+$gfleet = Join-Path $gout 'fleet.yaml'
+Set-Content -LiteralPath $gfleet -Encoding utf8NoBOM -Value @"
+providers:
+  - name: paidmodel
+    kind: cli
+    cost_tier: paid
+"@
+$gph = Join-Path $gout 'prime-hours.yaml'
+Set-Content -LiteralPath $gph -Encoding utf8NoBOM -Value @"
+timezone: local
+default_rank: 3
+windows:
+  - name: all-day-peak
+    days: [mon, tue, wed, thu, fri]
+    kind: peak
+"@
+$gnow = [datetime]'2026-06-10T12:00:00'   # Wednesday inside the all-day weekday peak
+
+# r3 deferred (paid+peak+rank3); prereq3 is rank-3 BUT inherits rank 1 from dep1 -> runs;
+# rank ordering observable with MaxParallel 1: prereq3 (eff 1) then dep1 then r2.
+$gtasks = @(
+    @{ id='r2';      model='paidmodel'; rank=2; allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@() },
+    @{ id='r3';      model='paidmodel'; rank=3; allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@() },
+    @{ id='r3dep';   model='paidmodel'; rank=3; allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@('r3') },
+    @{ id='prereq3'; model='paidmodel'; rank=3; allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@() },
+    @{ id='dep1';    model='paidmodel'; rank=1; allowed_paths=@('scripts/*'); test_command='exit 0'; depends_on=@('prereq3') }
+)
+# NOTE: rank 2 unattended default = defer (parent spec rank table) -> r2 also defers.
+$gres = Invoke-BacklogConcurrent -RepoRoot $groot -Tasks $gtasks -ModelSpecs $gspecs `
+    -Integration 'master' -IntegrationBase 'master' -OutputDir $gout -WorktreeRoot $gwt -TimeoutS 120 `
+    -MaxParallel 1 -FleetPath $gfleet -PrimeHoursConfig $gph -GateNow $gnow
+$gById = @{}; foreach ($r in $gres) { if ($r) { $gById[$r.id] = $r } }
+
+Assert ($gById['r3'].deferred -eq $true -and $gById['r3'].merged -eq $false) 'paid rank-3 deferred at peak'
+Assert ($gById['r2'].deferred -eq $true) 'paid rank-2 deferred (unattended ask->defer)'
+Assert ($gById['r3dep'].merged -eq $false -and (@($gById['r3dep'].reasons) -join ' ') -like '*dep-blocked*') 'deferred prereq dep-blocks dependent'
+Assert ($gById['prereq3'].merged -eq $true) 'rank-3 prereq inherits rank 1 -> runs at peak'
+Assert ($gById['dep1'].merged -eq $true) 'rank-1 dependent runs'
+$gOrder = @(Get-Content -LiteralPath $ledger | ForEach-Object { ($_ -split '-paidmodel')[0] })
+Assert ($gOrder.Count -eq 2 -and $gOrder[0] -eq 'prereq3' -and $gOrder[1] -eq 'dep1') "dispatch order ascending effective rank ($($gOrder -join ','))"
+$r3Live = Get-Content (Join-Path $gout 'r3.live.json') -Raw | ConvertFrom-Json
+Assert ($r3Live.state -eq 'deferred') 'r3.live.json state == deferred'
+
+Remove-Item Env:CC_LEDGER -ErrorAction SilentlyContinue
+Push-Location $groot; try { git worktree prune 2>&1 | Out-Null } finally { Pop-Location }
+Remove-Item -Recurse -Force $groot, $gwt, $gout -ErrorAction SilentlyContinue
+
 } finally {
     if ($null -ne $prevRunsRoot) { $env:ROUTING_RUNS_ROOT = $prevRunsRoot }
     else { Remove-Item Env:ROUTING_RUNS_ROOT -ErrorAction SilentlyContinue }

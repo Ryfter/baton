@@ -462,7 +462,11 @@ function Invoke-BacklogConcurrent {
         [string]$IntegrationBase = 'master',
         [string]$OutputDir,
         [string]$WorktreeRoot,
-        [int]$TimeoutS = 900
+        [int]$TimeoutS = 900,
+        [int]$MaxParallel = 0,
+        [string]$FleetPath,
+        [string]$PrimeHoursConfig,
+        [datetime]$GateNow
     )
     if ($OutputDir -and -not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null }
     if (-not $WorktreeRoot) { $WorktreeRoot = Join-Path (Split-Path $RepoRoot -Parent) 'cao-worktrees' }
@@ -471,6 +475,11 @@ function Invoke-BacklogConcurrent {
     $byId = @{}; foreach ($t in $Tasks) { $byId[$t.id] = $t }
     $null = Get-TopoOrder -Tasks $Tasks   # validate DAG (throws on cycle/unknown dep)
     $orderIndex = @{}; $i = 0; foreach ($id in (Get-TopoOrder -Tasks $Tasks)) { $orderIndex[$id] = $i++ }
+    $eff = Get-EffectiveRanks -Tasks $Tasks
+    $capArgs = @{}
+    if ($PSBoundParameters.ContainsKey('GateNow'))          { $capArgs.Now        = $GateNow }
+    if ($PSBoundParameters.ContainsKey('PrimeHoursConfig')) { $capArgs.ConfigPath = $PrimeHoursConfig }
+    $capN = Get-EffectiveMaxParallel -MaxParallel $MaxParallel -Capacity (Get-CapacityProfile @capArgs)
 
     if ($OutputDir) {
         $metaTasks = @($Tasks | ForEach-Object { @{ label = $_.id; provider = $_.model } })
@@ -494,12 +503,43 @@ function Invoke-BacklogConcurrent {
                 $proc[$id] = [pscustomobject]@{ id = $id; model = $byId[$id].model; merged = $false; reasons = @("dep-blocked: $($deadDep -join ', ')"); changed = @() }
             }
         }
-        # 2. ready = unprocessed, every dependency processed AND merged.
+        # 2. ready = unprocessed, every dependency processed AND merged — sorted by
+        #    ascending effective rank (topo index tiebreak), then paid-peak gated,
+        #    then capped to the surge-scaled MaxParallel.
         $ready = @($byId.Keys | Where-Object {
             -not $proc.ContainsKey($_) -and
             (@(@($byId[$_].depends_on) | Where-Object { $_ -and -not ($proc.ContainsKey($_) -and $proc[$_].merged) }).Count -eq 0)
-        })
+        } | Sort-Object @{ e = { $eff[$_] } }, @{ e = { $orderIndex[$_] } })
         if ($ready.Count -eq 0) { break }
+
+        # Paid-peak gate (unattended; full-cascade items gate INSIDE the cascade).
+        $gated = [System.Collections.ArrayList]@()
+        foreach ($id in $ready) {
+            $item = $byId[$id]
+            if ((Get-BacklogCascadeMode -Item $item) -ne 'full') {
+                $provArgs = @{ Name = [string]$item.model }
+                if ($FleetPath) { $provArgs.Path = $FleetPath }
+                $prov = try { Get-FleetProvider @provArgs } catch { $null }
+                if ($prov -and $prov.cost_tier -eq 'paid') {
+                    $gateArgs = @{ Rank = [int]$eff[$id]; CostTier = 'paid' }
+                    if ($PSBoundParameters.ContainsKey('GateNow'))          { $gateArgs.Now        = $GateNow }
+                    if ($PSBoundParameters.ContainsKey('PrimeHoursConfig')) { $gateArgs.ConfigPath = $PrimeHoursConfig }
+                    $gate = Test-PrimeHoursGate @gateArgs
+                    $eff2 = if ($gate.decision -eq 'ask') { $gate.default } else { $gate.decision }
+                    if ($eff2 -eq 'defer') {
+                        $reasons = @("deferred until off-peak: $($gate.reason)")
+                        if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $item.model -State 'deferred' -Extra @{ reasons = $reasons } }
+                        Publish-ItemRunSafe @{ Id = $id; Model = $item.model; State = 'deferred'; Reasons = $reasons }
+                        $proc[$id] = [pscustomobject]@{ id = $id; model = $item.model; merged = $false; deferred = $true; reasons = $reasons; changed = @() }
+                        continue
+                    }
+                }
+            }
+            [void]$gated.Add($id)
+        }
+        $ready = @($gated)
+        if ($capN -gt 0 -and $ready.Count -gt $capN) { $ready = @($ready | Select-Object -First $capN) }
+        if ($ready.Count -eq 0) { continue }
 
         # 3. launch ready items concurrently (worktrees created serially first).
         $jobs = @{}
