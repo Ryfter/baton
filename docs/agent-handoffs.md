@@ -1,6 +1,7 @@
 # Agent handoffs — shared core + what's intentionally model-specific
 
-This project is worked by multiple AI agents. To stay consistent **and** let each
+This project (**Baton** — https://github.com/Ryfter/baton) is worked by multiple AI
+agents. To stay consistent **and** let each
 model play to its strengths, the rules split into a **shared core** (identical for
 every agent, documented here once) and **model-specific** notes (in each model's
 own instruction file). This doc is the source of truth and the anti-drift registry.

@@ -1,4 +1,4 @@
-# GEMINI.md — Gemini / Antigravity (`agy`) handoff for coding-agent-orchestrator
+# GEMINI.md — Gemini / Antigravity (`agy`) handoff for Baton
 
 **Shared rules for every agent on this project live in [`docs/agent-handoffs.md`](docs/agent-handoffs.md)** (plus `docs/next-session.md` and `docs/roadmap.md`). Read those first — they cover orientation, the decision-capture rule, the 965-byte shell limit, the gated merge flow, and the backup standing order. Don't duplicate them here.
 
@@ -13,7 +13,7 @@
 # Grimdex — coding knowledge base (read first)
 
 PROGRAMMING DECISIONS, rules, and lessons → record them in **Grimdex** at
-`D:\Dev\Grimdex` (this project's tier: `projects/coding-agent-orchestrator/`).
+`D:\Dev\Grimdex` (this project's tier: `projects/baton/`).
 
 - Read `D:\Dev\Grimdex\GRIMDEX.md` FIRST — layout and contribution rules.
 - When you make or revise a coding rule, decision, or lesson, write it there.

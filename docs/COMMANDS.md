@@ -3,7 +3,7 @@
 Every command here is a **slash command** you type into a Claude Code chat — e.g.
 `/baton:job-start "fix the login bug"` — and press Enter. Claude runs the underlying
 script and reports back. You never run these in a terminal; they live inside Claude
-Code after you've [installed the orchestrator](GUIDE.md#2-install--bootstrap).
+Code after you've [installed Baton](GUIDE.md#2-install--bootstrap).
 
 If you're brand new, read the [**Guide**](GUIDE.md) first — it walks a whole session
 start to finish. This page is the dictionary you come back to for "what are all the

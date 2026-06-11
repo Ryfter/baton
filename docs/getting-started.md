@@ -4,7 +4,7 @@
 > start → a complete worked session) with the full [`COMMANDS.md`](COMMANDS.md) reference.
 > This page is the original quick version, kept for continuity.
 
-You're holding a working orchestrator. This doc tells you how to **use** it on a real project — not how to build it.
+You're holding a working copy of Baton. This doc tells you how to **use** it on a real project — not how to build it.
 
 ## What's deployed in `~/.claude/`
 
@@ -113,7 +113,7 @@ Every now and then (or after you've added a lot of decisions / lessons):
 ## Dashboard
 
 ```powershell
-cd path\to\coding-agent-orchestrator
+cd path\to\baton
 python -m dashboard.main
 ```
 
@@ -140,5 +140,5 @@ Repeat steps 1-7 in any number of repos. Each gets its own row in the portfolio,
 ## Where to read more
 
 - [Roadmap + parked ideas](roadmap.md)
-- [Decision records](../knowledge/projects/coding-agent-orchestrator/decisions/) (on your filesystem after first use)
+- [Decision records](../knowledge/projects/baton/decisions/) (on your filesystem after first use)
 - [Plan specs](superpowers/specs/) — every architectural choice, with alternatives

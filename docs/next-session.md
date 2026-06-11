@@ -1,6 +1,6 @@
 # Next-session playbook
 
-How to pick the orchestrator back up and use it on its own backlog.
+How to pick **Baton** back up and use it on its own backlog.
 
 ## ⚑ Parked threads — 2026-06-10 (read first)
 
@@ -51,7 +51,7 @@ The orchestrator is evolving into a **Fleet Conductor**. North star (the *why*):
 **autonomy** (stop forcing the human to press 1/2) + **legibility** (always show, in
 plain English, what each agent is doing and why); interrupt only for real decisions.
 
-Architecture (decisions in `Ryfter/grimdex-know/projects/coding-agent-orchestrator/decisions/`):
+Architecture (decisions in `Ryfter/grimdex-know/projects/baton/decisions/`):
 - **d018 — conductor, not monolith:** stay a thin conductor; call out to best-of-breed
   harnesses (ruflo for swarm execution, the adversarial-dev Planner/Generator/Evaluator
   pattern for quality, GitHub for coordination) as uniform *callable capabilities*,
@@ -241,7 +241,7 @@ the role/adversarial engine + ruflo call-out. Pick at session start.
 
 1. **Open Claude Code in the repo:**
    ```powershell
-   cd D:\Dev\coding-agent-orchestrator
+   cd D:\Dev\baton    # (folder renamed from coding-agent-orchestrator 2026-06-11)
    claude
    ```
    Memory auto-loads (user profile, project state, brainstorming defaults). The project's `CLAUDE.md` loads automatically — Claude will follow the decision-capture rule.

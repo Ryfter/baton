@@ -3,7 +3,7 @@
 **Last updated:** 2026-06-04
 **Status:** Plans 1–11 shipped + Decision Loop + Cost Ledger. The entire post–Plan-8 backlog is cleared (issues #16–#26). See [`releases/2026-06-04-backlog-clearance.md`](releases/2026-06-04-backlog-clearance.md) for the full batch writeup and reasoning. This document parks remaining ideas so they have a recorded home and aren't carried in conversation memory.
 
-Tracked as GitHub issues on **[Project #5: coding-agent-orchestrator](https://github.com/users/Ryfter/projects/5)**.
+Tracked as GitHub issues on **[Project #5: baton](https://github.com/users/Ryfter/projects/5)**.
 
 ---
 
@@ -42,7 +42,7 @@ The Tier 1–3 backlog (issues #16–#26) is **cleared** — see the Shipped tab
 [`releases/2026-06-04-backlog-clearance.md`](releases/2026-06-04-backlog-clearance.md).
 What remains:
 
-- ~~**Cross-project consolidation sweep.**~~ **Unblocked + verified 2026-06-05.** A second project (`answerbot`) was registered in the knowledge base with its own decision records. `/consolidate-decisions` now promotes patterns shared across ≥2 projects to `universal/decision-guidance.md` — the first promoted rule ("Back up every project to a private GitHub repo", positive in both `coding-agent-orchestrator` and `answerbot`) is live, and re-runs are idempotent. As more projects accrue decisions + feedback, additional shared patterns will promote automatically.
+- ~~**Cross-project consolidation sweep.**~~ **Unblocked + verified 2026-06-05.** A second project (`answerbot`) was registered in the knowledge base with its own decision records. `/consolidate-decisions` now promotes patterns shared across ≥2 projects to `universal/decision-guidance.md` — the first promoted rule ("Back up every project to a private GitHub repo", positive in both `baton` and `answerbot`) is live, and re-runs are idempotent. As more projects accrue decisions + feedback, additional shared patterns will promote automatically.
 - ~~**Wire `decision-detect` as a `Stop` hook.**~~ **Done 2026-06-05** — `scripts/hooks/decision-detect.ps1` is deployed to `~/.claude/hooks` and registered as a `Stop` hook in `~/.claude/settings.json`; bootstrap now deploys + registers it for reproducibility. At end of each turn it scans the final message for decision phrasing and, on a hit, writes a review-ready intake draft to `$TEMP` (advisory — it doesn't auto-create the record; the orchestrator's two-step intake remains authoritative).
 
 ### Housekeeping ideas (no issue tracked yet)
@@ -55,7 +55,7 @@ What remains:
 
 ## Decision records
 
-Every architectural choice this session is captured under `~/.claude/knowledge/projects/coding-agent-orchestrator/decisions/`:
+Every architectural choice this session is captured under `~/.claude/knowledge/projects/baton/decisions/`:
 
 | ID | Topic |
 |---|---|

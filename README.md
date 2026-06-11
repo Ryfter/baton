@@ -1,10 +1,13 @@
-# coding-agent-orchestrator
+# Baton
 
-Claude Code as a command-and-control layer for a fleet of coding LLMs. You direct a
-team of AI models — paid cloud CLIs, free CLIs, and local models on your own machines —
-and the orchestrator tracks what they did, what it cost, what you decided, and what you
-learned. Built on [claude-octopus](https://github.com/nyldn/claude-octopus) as the
-dispatch layer.
+**Pass the baton. Conduct the fleet.**
+
+Baton turns Claude Code into the conductor of a fleet of coding LLMs — paid cloud
+CLIs, free CLIs, and local models on your own machines. You hand each task to the
+right agent (pass the baton), and Baton tracks what they did, what it cost, what
+you decided, and what you learned. Built on
+[claude-octopus](https://github.com/nyldn/claude-octopus) as the dispatch layer
+(recommended companion plugin, not a hard dependency).
 
 **Status:** `v1.2.0-rc1` — *the Fleet Conductor release* (capability routing, cost-optimization,
 Grimdex). **MIT licensed.** An early/experimental personal project, shared in the hope it's
@@ -16,6 +19,15 @@ useful — not a turnkey product.
 - **[Command reference](docs/COMMANDS.md)** — every command and flag, in plain language.
 - **[Decision log](docs/DECISIONS.md)** — every design decision and why.
 - [Roadmap](docs/roadmap.md) — what's shipped and what's parked.
+
+### Install (Claude Code plugin)
+
+```
+claude plugin marketplace add Ryfter/baton
+claude plugin install baton@ryfter
+```
+
+Commands surface as `/baton:<command>` — e.g. `/baton:fleet doctor`, `/baton:route`, `/baton:idea`.
 
 ---
 
@@ -92,14 +104,13 @@ Each feature has a one-line "what it does"; the link goes to its full design spe
 ## Quick start
 
 ```powershell
-# 1. Install the Octopus dispatch plugin (one-time)
+# 1. Install Baton (Claude Code plugin — the primary path)
+claude plugin marketplace add Ryfter/baton
+claude plugin install baton@ryfter
+
+# 2. (recommended) Install the Octopus dispatch plugin
 claude plugin marketplace add https://github.com/nyldn/plugins.git
 claude plugin install octo@nyldn-plugins
-
-# 2. Bootstrap this repo into ~/.claude/ (idempotent — safe to re-run)
-git clone https://github.com/Ryfter/coding-agent-orchestrator.git
-cd coding-agent-orchestrator
-pwsh -NoProfile -File scripts\bootstrap.ps1
 
 # 3. (optional) enable cost tracking — add to your PowerShell profile:
 #    . $HOME\.claude\otel-env.ps1
@@ -109,6 +120,14 @@ python -m uvicorn dashboard.main:app --port 8765   # then open http://localhost:
 
 # 5. Confirm the fleet is healthy
 #    (in Claude Code)  /baton:fleet doctor
+```
+
+Contributing or hacking on Baton itself? Clone and bootstrap instead:
+
+```powershell
+git clone https://github.com/Ryfter/baton.git
+cd baton
+pwsh -NoProfile -File scripts\bootstrap.ps1   # idempotent — safe to re-run
 ```
 
 Full details and a worked example: **[docs/GUIDE.md](docs/GUIDE.md)**.

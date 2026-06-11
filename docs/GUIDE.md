@@ -1,6 +1,6 @@
-# The orchestrator — full guide (start to finish)
+# Baton — full guide (start to finish)
 
-This is the complete walkthrough: what this thing is, how to install it, how to start
+This is the complete walkthrough: what Baton is, how to install it, how to start
 it, and a worked example of using it on a real piece of work — with plain-language
 explanations of what's happening under the hood at each step.
 
@@ -12,9 +12,9 @@ the [**Decision log**](DECISIONS.md).
 
 ## 1. What this is
 
-It's a **control layer for a team ("fleet") of AI coding models**, built on top of
+Baton is a **control layer for a team ("fleet") of AI coding models**, built on top of
 Claude Code. Instead of talking to one AI, you direct several — paid cloud models,
-free CLIs, and local models on your own machine(s) — and the orchestrator keeps track
+free CLIs, and local models on your own machine(s) — and Baton keeps track
 of what they did, what it cost, what you decided, and what you learned.
 
 In one sentence: **Claude Code becomes the conductor, and a fleet of other models
@@ -58,8 +58,8 @@ claude plugin marketplace add https://github.com/nyldn/plugins.git
 claude plugin install octo@nyldn-plugins
 
 # 2. Get this repo
-git clone <this repo> D:\Dev\coding-agent-orchestrator
-cd D:\Dev\coding-agent-orchestrator
+git clone https://github.com/Ryfter/baton.git D:\Dev\baton
+cd D:\Dev\baton
 
 # 3. Bootstrap — copies commands, hooks, scripts, and config into ~/.claude/
 pwsh -NoProfile -File scripts\bootstrap.ps1
@@ -100,7 +100,7 @@ You should see a table of your providers, each marked reachable or not.
 ## 3. Start the dashboard
 
 ```powershell
-cd D:\Dev\coding-agent-orchestrator
+cd D:\Dev\baton
 python -m uvicorn dashboard.main:app --port 8765
 ```
 
