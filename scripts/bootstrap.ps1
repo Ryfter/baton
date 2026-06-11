@@ -4,9 +4,11 @@
   Bootstraps Baton (the orchestrator observation layer) into ~/.claude/.
 
 .DESCRIPTION
-  Idempotent. Re-runnable. Plan 1 scope: deploys hook, OTel env config, slash
-  commands, catalog seed, journal seed. Verifies backends. Plan 2 will extend
-  with Python venv and dashboard setup.
+  Idempotent. Re-runnable. Deploys lib scripts, OTel env config, slash commands,
+  catalog seed. Verifies backends. Initializes BATON_HOME (default ~/.baton) and
+  runs the one-time marker-gated migration of mutable state from ~/.claude.
+  Hooks now ship inside the plugin (hooks/hooks.json) — bootstrap cleans up any
+  legacy hook registrations from settings.json instead of adding new ones.
 #>
 
 param(
@@ -103,85 +105,80 @@ if ($octoCheck -match 'octo@nyldn-plugins') {
     }
 }
 
-# --- Step 2: Deploy the hooks ---
-Write-Step "Deploying PostToolUse hook"
-$hookSrc = Join-Path $repoRoot 'scripts\hooks\log-tool-call.ps1'
-$hookDst = Join-Path $claudeDir 'hooks\log-tool-call.ps1'
-Copy-WithPrompt $hookSrc $hookDst 'hook script'
-
-# Decision-detect Stop hook: at the end of each turn it scans the final assistant
-# message for decision phrasing and, on a hit, writes a decision-intake draft to
-# TEMP + prints the suggested intake command. Always exits 0 (non-blocking).
-$ddHookSrc = Join-Path $repoRoot 'scripts\hooks\decision-detect.ps1'
-$ddHookDst = Join-Path $claudeDir 'hooks\decision-detect.ps1'
-Copy-WithPrompt $ddHookSrc $ddHookDst 'decision-detect hook'
-
-# Legibility-feed narration hook: appends a plain-English event for the active run
-# on every tool use. No-ops when no current-run.json pointer exists. Always exits 0.
-$runFeedHookSrc = Join-Path $repoRoot 'scripts\hooks\run-feed.ps1'
-$runFeedHookDst = Join-Path $claudeDir 'hooks\run-feed.ps1'
-Copy-WithPrompt $runFeedHookSrc $runFeedHookDst 'run-feed hook'
-
-# --- Step 3: Register hooks in settings.json (PostToolUse + Stop) ---
-Write-Step "Registering hooks in settings.json"
-$settingsPath = Join-Path $claudeDir 'settings.json'
-if (-not (Test-Path $settingsPath)) {
-    if ($DryRun) { Write-Ok "[dry-run] would create $settingsPath" }
-    else { Set-Content $settingsPath '{}' -Encoding utf8; Write-Ok "created empty settings.json" }
+# --- Step 2: Remove legacy deployed hook copies (hooks now ship inside the plugin) ---
+Write-Step "Removing legacy deployed hooks (now plugin-provided via hooks/hooks.json)"
+foreach ($h in @('log-tool-call.ps1', 'decision-detect.ps1', 'run-feed.ps1')) {
+    $dst = Join-Path $claudeDir "hooks\$h"
+    if (Test-Path $dst) {
+        if ($DryRun) { Write-Ok "[dry-run] would remove legacy hook: $h" }
+        else { Remove-Item -Force $dst; Write-Ok "removed legacy hook: $h" }
+    } else { Write-Skip "legacy hook already absent: $h" }
 }
 
-# Ensure an event array contains a hook whose command references $Marker; returns
-# $true if it added one. Idempotent: re-running never duplicates an entry.
-function Add-HookEntry($SettingsObj, $Event, $Command, $Marker) {
-    if (-not $SettingsObj.hooks.$Event) {
-        $SettingsObj.hooks | Add-Member -NotePropertyName $Event -NotePropertyValue @() -Force
-    }
-    foreach ($e in $SettingsObj.hooks.$Event) {
-        foreach ($h in $e.hooks) { if ($h.command -like "*$Marker*") { return $false } }
-    }
-    $SettingsObj.hooks.$Event += @{ matcher = '*'; hooks = @(@{ type = 'command'; command = $Command }) }
+# --- Step 3: Remove legacy hook entries from settings.json (plugin registers them now) ---
+# Plugin hooks and user-settings hooks BOTH fire; leaving the old entries would
+# double-run every hook. Only entries pointing at OUR three scripts are removed —
+# anything else (e.g. pixel-agents, kb-autoindex) is untouched.
+Write-Step "Cleaning legacy hook registrations from settings.json"
+$settingsPath = Join-Path $claudeDir 'settings.json'
+
+function Remove-HookEntry($SettingsObj, $Event, $Marker) {
+    if (-not $SettingsObj.hooks) { return $false }
+    if (-not ($SettingsObj.hooks.PSObject.Properties.Name -contains $Event)) { return $false }
+    $before = @($SettingsObj.hooks.$Event)
+    $kept = @($before | Where-Object {
+        -not (@($_.hooks) | Where-Object { $_.command -like "*$Marker*" })
+    })
+    if ($kept.Count -eq $before.Count) { return $false }
+    $SettingsObj.hooks.$Event = $kept
     return $true
 }
 
-if ($DryRun -and -not (Test-Path $settingsPath)) {
-    # File doesn't exist and we're in dry-run; still surface the would-add message.
-    Write-Ok "[dry-run] would register PostToolUse (log-tool-call) + Stop (decision-detect) hooks"
+if (-not (Test-Path $settingsPath)) {
+    Write-Skip "no settings.json — nothing to clean"
 } else {
-    # Tolerate zero-byte / whitespace-only settings.json (otherwise ConvertFrom-Json throws)
     $raw = Get-Content $settingsPath -Raw
     if ([string]::IsNullOrWhiteSpace($raw)) { $raw = '{}' }
     $settings = $raw | ConvertFrom-Json
-    if (-not $settings.hooks) { $settings | Add-Member -NotePropertyName hooks -NotePropertyValue (New-Object PSObject) -Force }
 
-    $addedPost    = Add-HookEntry $settings 'PostToolUse' "pwsh -NoProfile -File `"$hookDst`"" 'log-tool-call.ps1'
-    $addedStop    = Add-HookEntry $settings 'Stop'        "pwsh -NoProfile -File `"$ddHookDst`"" 'decision-detect.ps1'
-    $addedRunFeed = Add-HookEntry $settings 'PostToolUse' "pwsh -NoProfile -File `"$runFeedHookDst`"" 'run-feed.ps1'
+    $removed = $false
+    foreach ($pair in @(
+        @{ Event = 'PostToolUse'; Marker = 'log-tool-call.ps1' },
+        @{ Event = 'PostToolUse'; Marker = 'run-feed.ps1' },
+        @{ Event = 'Stop';        Marker = 'decision-detect.ps1' }
+    )) {
+        if ($DryRun) {
+            # Report-only in dry-run: detect without mutating the in-memory object's persistence
+            if ($settings.hooks -and ($settings.hooks.PSObject.Properties.Name -contains $pair.Event)) {
+                $hit = @($settings.hooks.($pair.Event)) | Where-Object { @($_.hooks) | Where-Object { $_.command -like "*$($pair.Marker)*" } }
+                if ($hit) { Write-Ok "[dry-run] would remove legacy $($pair.Event) entry: $($pair.Marker)" }
+                else { Write-Skip "no legacy $($pair.Event) entry for $($pair.Marker)" }
+            } else {
+                Write-Skip "no legacy $($pair.Event) entry for $($pair.Marker)"
+            }
+        } elseif (Remove-HookEntry $settings $pair.Event $pair.Marker) {
+            Write-Ok "removed legacy $($pair.Event) entry: $($pair.Marker)"
+            $removed = $true
+        } else {
+            Write-Skip "no legacy $($pair.Event) entry for $($pair.Marker)"
+        }
+    }
 
-    # statusLine: point at the legibility-feed status-line script (idempotent).
+    # statusLine: plugins cannot provide one — keep bootstrap-managed, add only if absent.
     $statusLineDst = Join-Path $claudeDir 'scripts\statusline-feed.ps1'
     $addedStatusLine = $false
     if (-not ($settings.PSObject.Properties.Name -contains 'statusLine') -or
         [string]::IsNullOrEmpty($settings.statusLine)) {
         $settings | Add-Member -NotePropertyName statusLine -NotePropertyValue "pwsh -NoProfile -File `"$statusLineDst`"" -Force
         $addedStatusLine = $true
-    }
+        if ($DryRun) { Write-Ok "[dry-run] would set statusLine (statusline-feed)" }
+    } else { Write-Skip "statusLine already configured (left as-is)" }
 
-    foreach ($r in @(
-        @{ name = 'PostToolUse hook (log-tool-call)';  added = $addedPost },
-        @{ name = 'Stop hook (decision-detect)';        added = $addedStop },
-        @{ name = 'PostToolUse hook (run-feed)';        added = $addedRunFeed },
-        @{ name = 'statusLine (statusline-feed)';       added = $addedStatusLine }
-    )) {
-        if (-not $r.added)  { Write-Skip "$($r.name) already registered" }
-        elseif ($DryRun)    { Write-Ok "[dry-run] would register $($r.name)" }
-    }
-
-    if (($addedPost -or $addedStop -or $addedRunFeed -or $addedStatusLine) -and -not $DryRun) {
-        # Backup before mutating: if write is interrupted, user can recover .bak
+    if (($removed -or $addedStatusLine) -and -not $DryRun) {
         $backupPath = "$settingsPath.bak"
         Copy-Item $settingsPath $backupPath -Force
         $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding utf8
-        Write-Ok "registered hooks in settings.json (backup: $backupPath)"
+        Write-Ok "updated settings.json (backup: $backupPath)"
     }
 }
 
@@ -259,7 +256,7 @@ if (-not (Test-Path $scriptsDst)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $scriptsDst" }
     else { New-Item -ItemType Directory -Force -Path $scriptsDst | Out-Null; Write-Ok "created $scriptsDst" }
 }
-foreach ($script in @('job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'routing-lib.ps1', 'routing-dispatch.ps1', 'routing-learn.ps1', 'routing-calibrate.ps1', 'prime-hours.ps1', 'six-hats-lib.ps1', 'council-lib.ps1', 'code-lib.ps1', 'kb-lib.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1', 'runs-lib.ps1', 'statusline-feed.ps1', 'fleet-runs-bridge.ps1', 'idea-lib.ps1')) {
+foreach ($script in @('baton-home.ps1', 'job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'routing-lib.ps1', 'routing-dispatch.ps1', 'routing-learn.ps1', 'routing-calibrate.ps1', 'prime-hours.ps1', 'six-hats-lib.ps1', 'council-lib.ps1', 'code-lib.ps1', 'kb-lib.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1', 'runs-lib.ps1', 'statusline-feed.ps1', 'fleet-runs-bridge.ps1', 'idea-lib.ps1')) {
     $src = Join-Path $repoRoot "scripts\$script"
     $dst = Join-Path $scriptsDst $script
     Copy-WithPrompt $src $dst "lib script: $script" -Force
@@ -279,28 +276,27 @@ foreach ($hatch in @('lm-studio.ps1')) {
     Copy-WithPrompt $src $dst "fleet hatch: $hatch" -Force
 }
 
-# --- Step 5b3: Deploy fleet.yaml seed ---
-Write-Step "Deploying fleet.yaml seed"
-$fleetSrc = Join-Path $repoRoot 'references\fleet.yaml'
-$fleetDst = Join-Path $claudeDir 'fleet.yaml'
-Copy-WithPrompt $fleetSrc $fleetDst 'fleet registry'
-
-# --- Step 5b4: Deploy tools.yaml seed ---
-Write-Step "Deploying tools.yaml seed"
-$toolsSrc = Join-Path $repoRoot 'references\tools.yaml'
-$toolsDst = Join-Path $claudeDir 'tools.yaml'
-Copy-WithPrompt $toolsSrc $toolsDst 'tools registry'
-
-# --- Deploy prime-hours.yaml seed (don't clobber an existing one) ---
-Write-Step "Deploying prime-hours.yaml seed"
-$primeSrc = Join-Path $repoRoot 'references\prime-hours.yaml'
-$primeDst = Join-Path $claudeDir 'prime-hours.yaml'
-Copy-WithPrompt $primeSrc $primeDst 'prime-hours config'
+# --- Step 5b3: Initialize BATON_HOME (state root) + one-time state migration ---
+Write-Step "Initializing BATON_HOME state root + migrating legacy state"
+. (Join-Path $repoRoot 'scripts\baton-home.ps1')
+$batonHome = Get-BatonHome
+$fleetDst = Join-Path $batonHome 'fleet.yaml'   # fleet doctor (Step 7) verifies this path
+if ($DryRun) {
+    Write-Ok "[dry-run] would ensure $batonHome (jobs/, runs/, logs/) + seed fleet.yaml / tools.yaml / prime-hours.yaml"
+    Write-Ok "[dry-run] would run the one-time ~/.claude -> BATON_HOME migration (marker-gated)"
+} else {
+    $seeded = Initialize-BatonHome -ReferencesDir (Join-Path $repoRoot 'references')
+    foreach ($s in $seeded) { Write-Ok "seeded $s -> $batonHome" }
+    if (-not $seeded -or @($seeded).Count -eq 0) { Write-Skip "configs already present in $batonHome" }
+    $mig = Move-BatonState
+    foreach ($m in @($mig.migrated))  { Write-Ok "migrated $m -> $batonHome" }
+    foreach ($c in @($mig.conflicts)) { Write-Warn "left in place (exists in both ~/.claude and BATON_HOME): $c" }
+    if (@($mig.migrated).Count -eq 0 -and @($mig.conflicts).Count -eq 0) { Write-Skip "migration already done (marker present) or nothing to move" }
+}
 
 # --- Step 5c: Create jobs + knowledge dirs ---
 Write-Step "Creating jobs + knowledge directories"
 $dirsToCreate = @(
-    (Join-Path $claudeDir 'jobs'),
     (Join-Path $claudeDir 'knowledge/universal'),
     (Join-Path $claudeDir 'knowledge/universal/topics'),
     (Join-Path $claudeDir 'knowledge/projects'),
@@ -485,13 +481,14 @@ Write-Host "Next steps:"
 Write-Host "  1. Source the OTel env helper before each session:  . $otelEnvDst"
 Write-Host "  2. Start the live dashboard:"
 Write-Host "       python -m uvicorn dashboard.main:app --port 8765   (then open http://localhost:8765)"
-Write-Host "  3. Fleet: /fleet doctor to health-check providers, then fan out with"
-Write-Host "       /ensemble, /six-hats, or /council across every model at once."
-Write-Host "  4. Code phase: /code-decompose -> /code-parallel -> /code-merge"
+Write-Host "  3. Fleet: /baton:fleet doctor to health-check providers, then fan out with"
+Write-Host "       /baton:ensemble, /baton:six-hats, or /baton:council across every model at once."
+Write-Host "  4. Code phase: /baton:code-decompose -> /baton:code-parallel -> /baton:code-merge"
 Write-Host "       for parallel, worktree-isolated implementation."
-Write-Host "  5. Jobs + KB: /job-start to track work; /kb-index --full then /kb-search"
+Write-Host "  5. Jobs + KB: /baton:job-start to track work; /baton:kb-index --full then /baton:kb-search"
 Write-Host "       to build and query the knowledge base."
-Write-Host "  6. Projects + cost: /projects for the multi-project command center; /cost for the ledger."
-Write-Host "  7. Over time: /consolidate-routing, /consolidate-lessons, /consolidate-decisions"
+Write-Host "  6. Projects + cost: /baton:projects for the multi-project command center; /baton:cost for the ledger."
+Write-Host "  7. State now lives at $batonHome (default ~/.baton). Set BATON_HOME env var to override."
+Write-Host "  8. Over time: /baton:consolidate-routing, /baton:consolidate-lessons, /baton:consolidate-decisions"
 Write-Host "       to tune the catalog and let the system self-improve."
 Write-Host ""
