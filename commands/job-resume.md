@@ -13,7 +13,7 @@ Resume a job by ID. The ID is in `$ARGUMENTS` (e.g.,
 1. **Validate.** If `$ARGUMENTS` is empty, show output of `/baton:job-list --active`
    and ask which one to resume.
 
-2. **Check no other job is active.** Read `~/.claude/current-job.json`. If
+2. **Check no other job is active.** Read `$BATON_HOME/current-job.json`. If
    another job is set, prompt: *"Job `<other>` is active. Switch?"* — wait for
    confirmation.
 
@@ -22,7 +22,7 @@ Resume a job by ID. The ID is in `$ARGUMENTS` (e.g.,
    ```powershell
    . "$HOME/.claude/scripts/job-lib.ps1"
    $jobId = '<JOB_ID>'
-   $jobDir = Join-Path $HOME ".claude/jobs/$jobId"
+   $jobDir = Join-Path (Get-BatonHome) "jobs/$jobId"
    if (-not (Test-Path $jobDir)) {
        Write-Host "No such job: $jobId" -ForegroundColor Red
        return

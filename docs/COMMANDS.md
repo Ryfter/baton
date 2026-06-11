@@ -14,13 +14,14 @@ options for *this* command?"
 - **`<angle brackets>`** = a value **you** supply (required unless noted).
 - **`[square brackets]`** = optional.
 - **`--flag`** = an option; some take a value (`--k 5`), some are on/off (`--apply`).
-- **"Where results land"** tells you which file on disk changed, all under your home
-  folder's `~/.claude/` directory (Windows: `C:\Users\<you>\.claude\`).
+- **"Where results land"** tells you which file on disk changed. State lives under
+  `$BATON_HOME` (default `~/.baton/`, Windows: `C:\Users\<you>\.baton\`); set the
+  `BATON_HOME` environment variable to use a custom location.
 
 ## Shared idea: the "fleet", providers, and tiers
 
 Several commands fan a question out to a **fleet** of AI models. Each model is a
-**provider** listed in `~/.claude/fleet.yaml` (e.g. `claude-cli`, `codex`,
+**provider** listed in `$BATON_HOME/fleet.yaml` (default `~/.baton/fleet.yaml`) (e.g. `claude-cli`, `codex`,
 `gemini-antigravity`, `ollama-local`, `lm-studio`). Every provider has a **cost tier**:
 `paid`, `free`, or `local`.
 
@@ -41,7 +42,7 @@ knowledge base mixed into their prompt before they answer.
 # Jobs — track a piece of work start to finish
 
 A **job** is a tracked unit of work (a feature, a bug, an investigation). It has
-phases (research → design → code → review) and its own folder under `~/.claude/jobs/`.
+phases (research → design → code → review) and its own folder under `$BATON_HOME/jobs/` (default `~/.baton/jobs/`).
 
 ### /baton:job-start
 - **One-liner:** Creates a new job folder and makes it active so your work gets tracked.
@@ -51,8 +52,8 @@ phases (research → design → code → review) and its own folder under `~/.cl
   - `"<brief>"` — short description (required). Becomes the title and the job ID.
   - `--project <id>` — set which project this belongs to. Default: auto-detected from the git remote, else the folder name.
   - `--no-project` — skip project detection entirely.
-- **Under the hood:** Creates `~/.claude/jobs/<id>/` (manifest, brief, phase-log, lessons) and marks it active. Starting phase is always `research`.
-- **Where results land:** `~/.claude/jobs/<id>/`.
+- **Under the hood:** Creates `$BATON_HOME/jobs/<id>/` (manifest, brief, phase-log, lessons) and marks it active. Starting phase is always `research`.
+- **Where results land:** `$BATON_HOME/jobs/<id>/`.
 - **Plain example:** `/baton:job-start "add dark mode toggle"` → creates the job, sets it active at the research phase.
 - **Gotchas:** If a job is already active it asks whether to suspend or resume — it won't silently start a second one.
 
@@ -114,7 +115,7 @@ phases (research → design → code → review) and its own folder under `~/.cl
   - `"<text>"` — the lesson (quoted).
   - `--scope universal|project` — where it should eventually live. Default depends on the category.
 - **Under the hood:** Appends to the job's `lessons.md` and writes a journal line.
-- **Where results land:** `~/.claude/jobs/<id>/lessons.md` + the journal.
+- **Where results land:** `$BATON_HOME/jobs/<id>/lessons.md` + the journal.
 - **Plain example:** `/baton:job-lesson mistake "forgot to mock the clock, tests flaked"`.
 - **Gotchas:** Errors if no job is active.
 
@@ -149,7 +150,7 @@ These send a question to several models and have Claude synthesize the answers. 
   - `"<prompt>"` — the question (required).
   - `--providers` / `--tier` — choose the roster (see [Shared idea](#shared-idea-the-fleet-providers-and-tiers)).
 - **Under the hood:** Resolves a roster, mixes in your top-3 relevant KB snippets, runs each provider in parallel, then Claude writes a synthesis.
-- **Where results land:** `~/.claude/ensembles/ensemble-<timestamp>/` (or the active job's research folder), with one file per model + `synthesis.md`.
+- **Where results land:** `$BATON_HOME/ensembles/ensemble-<timestamp>/` (or the active job's research folder), with one file per model + `synthesis.md`.
 - **Plain example:** `/baton:ensemble "SQLite or Postgres for this app?" --tier local` → your local models answer in parallel; you get one merged write-up.
 - **Gotchas:** A model that errors or times out is skipped and noted; if all fail, it suggests `/baton:fleet doctor`.
 
@@ -159,7 +160,7 @@ These send a question to several models and have Claude synthesize the answers. 
 - **Syntax:** `/baton:research "<question>" [--providers a,b,c] [--tier free,local]`
 - **Arguments & flags:** Same as `/baton:ensemble`.
 - **Under the hood:** Same engine as `/baton:ensemble`, but requires an active job and warns if you're not in the research phase.
-- **Where results land:** `~/.claude/jobs/<id>/phases/research/ensemble-<timestamp>/`.
+- **Where results land:** `$BATON_HOME/jobs/<id>/phases/research/ensemble-<timestamp>/`.
 - **Plain example:** `/baton:research "What auth strategy fits our constraints?"`.
 - **Gotchas:** No active job → it tells you to use `/baton:ensemble` or `/baton:job-start`.
 
@@ -198,7 +199,7 @@ the repo → `/baton:code-merge` reviews the results and folds them back into th
 - **Arguments & flags:**
   - `<path-to-spec>` — the spec file. If omitted, uses the newest `.md` in the job's `phases/design/` folder.
 - **Under the hood:** Claude proposes N subtasks (id, title, files-touched, depends-on); after you confirm, it writes `subtasks.json` and checks for dependency cycles.
-- **Where results land:** `~/.claude/jobs/<id>/phases/<sprint>/subtasks.json`.
+- **Where results land:** `$BATON_HOME/jobs/<id>/phases/<sprint>/subtasks.json`.
 - **Plain example:** `/baton:code-decompose docs/specs/new-login.md` → shows a task table, asks to confirm, then saves.
 - **Gotchas:** Needs an active job. Always asks before writing; dependency cycles are rejected.
 
@@ -209,7 +210,7 @@ the repo → `/baton:code-merge` reviews the results and folds them back into th
 - **Arguments & flags:**
   - `--only <ids>` — build only these task IDs. Default: all of them.
 - **Under the hood:** Sorts tasks by dependency into "waves", gives each its own git worktree + branch, and runs independent ones in parallel.
-- **Where results land:** `~/.claude/jobs/<id>/phases/<sprint>/parallel-<timestamp>/manifest.json` + a journal line.
+- **Where results land:** `$BATON_HOME/jobs/<id>/phases/<sprint>/parallel-<timestamp>/manifest.json` + a journal line.
 - **Plain example:** `/baton:code-parallel --only t1,t2` → two workers run at once; you get a status table.
 - **Gotchas:** Needs `subtasks.json` first. A task whose dependency failed is marked `blocked`, not run.
 
@@ -300,7 +301,7 @@ See the [**Decision log**](DECISIONS.md) for every record in plain language.
 
 # Routing journal & lessons — tuning which model to use
 
-**The routing journal** (`~/.claude/model-routing-log.md`) is an append-only log of how
+**The routing journal** (`$BATON_HOME/model-routing-log.md`) is an append-only log of how
 each model performed. **The model catalog** (`~/.claude/knowledge/universal/routing.md`)
 is the curated "which model for which job" reference. The two commands below move
 observations from the noisy journal into the clean catalog.
@@ -313,7 +314,7 @@ observations from the noisy journal into the clean catalog.
   - `<model>` — the first word: which model the note is about.
   - `<observation>` — everything after: your plain comment.
 - **Under the hood:** Appends a timestamped `note` line to the routing journal.
-- **Where results land:** `~/.claude/model-routing-log.md`.
+- **Where results land:** `$BATON_HOME/model-routing-log.md`.
 - **Plain example:** `/baton:log-routing devstral:24b nailed the multi-file refactor, matched our style`.
 - **Gotchas:** The first word is always taken as the model name. The note alone doesn't change routing — that happens via `/baton:consolidate-routing`.
 

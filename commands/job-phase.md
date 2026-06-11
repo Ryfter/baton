@@ -40,7 +40,7 @@ Manage the active job's phase.
    ```powershell
    . "$HOME/.claude/scripts/job-lib.ps1"
    $state = Read-CurrentJob
-   $jobDir = Join-Path $HOME ".claude/jobs/$($state.job_id)"
+   $jobDir = Join-Path (Get-BatonHome) "jobs/$($state.job_id)"
    $mani = Read-Manifest -JobDir $jobDir
    $oldPhase = $mani.current_phase
    $newPhase = '<RESOLVED_PHASE>'    # from step 2
@@ -71,7 +71,7 @@ Manage the active job's phase.
    # Journal line for the dashboard's phase-transition view
    $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
    $line = "$ts | dashboard | phase-transition | $oldPhase → $newPhase | job:$($state.job_id)"
-   Add-Content -Path (Join-Path $HOME '.claude/model-routing-log.md') -Value $line
+   Add-Content -Path (Join-Path (Get-BatonHome) 'model-routing-log.md') -Value $line
    ```
 
 5. **Prompt for lessons** at `next` and `done` transitions only:

@@ -1,5 +1,5 @@
 ---
-description: Start a new job. Creates ~/.claude/jobs/<id>/ with manifest, brief, phase-log; sets ~/.claude/current-job.json so the hook starts phase-tagging tool calls.
+description: Start a new job. Creates $BATON_HOME/jobs/<id>/ with manifest, brief, phase-log; sets $BATON_HOME/current-job.json so the hook starts phase-tagging tool calls.
 argument-hint: "<brief>" [--project <id> | --no-project]
 ---
 
@@ -10,7 +10,7 @@ You are starting a new orchestrator job. The brief and optional flags are in
 
 ## Steps
 
-1. **Check no job is active.** Read `~/.claude/current-job.json`. If `job_id`
+1. **Check no job is active.** Read `$BATON_HOME/current-job.json`. If `job_id`
    is set, ask the user: *"Job `<id>` is active. Suspend and start new, or
    `/baton:job-resume` and continue?"* — wait for their answer before proceeding.
 
@@ -27,12 +27,12 @@ You are starting a new orchestrator job. The brief and optional flags are in
    $today   = Get-Date -Format 'yyyy-MM-dd'
    $slug    = ConvertTo-JobSlug $brief
    $jobId   = "j-$today-$slug"
-   $jobDir  = Join-Path $HOME ".claude/jobs/$jobId"
+   $jobDir  = Join-Path (Get-BatonHome) "jobs/$jobId"
 
    # Collision handling
    $suffix = 2
    while (Test-Path $jobDir) {
-       $jobDir = Join-Path $HOME ".claude/jobs/$jobId-$suffix"
+       $jobDir = Join-Path (Get-BatonHome) "jobs/$jobId-$suffix"
        $suffix++
    }
    $jobId = Split-Path -Leaf $jobDir

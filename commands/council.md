@@ -35,16 +35,16 @@ Run a two-round LLM Council on a high-stakes question.
    if ($roster.Count -lt 2) { Write-Host "Council needs at least 2 members." -ForegroundColor Red; return }
    ```
 
-3. **Output dir.** Job-bound → `<job>/phases/research/council-<ts>/`; standalone → `~/.claude/ensembles/council-<ts>/`.
+3. **Output dir.** Job-bound → `<job>/phases/research/council-<ts>/`; standalone → `$BATON_HOME/ensembles/council-<ts>/`.
 
    ```powershell
    . "$HOME/.claude/scripts/job-lib.ps1"
    $ts = Get-Date -Format 'yyyy-MM-ddTHH-mm-ss'
    $state = Read-CurrentJob
    if ($state.job_id) {
-       $outDir = Join-Path $HOME ".claude/jobs/$($state.job_id)/phases/research/council-$ts"
+       $outDir = Join-Path (Get-BatonHome) "jobs/$($state.job_id)/phases/research/council-$ts"
    } else {
-       $outDir = Join-Path $HOME ".claude/ensembles/council-$ts"
+       $outDir = Join-Path (Get-BatonHome) "ensembles/council-$ts"
    }
    $r1Dir = Join-Path $outDir 'round1'
    $r2Dir = Join-Path $outDir 'round2'

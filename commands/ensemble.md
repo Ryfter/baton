@@ -36,18 +36,18 @@ Run a concurrent multi-model ensemble and synthesize the results.
    $roster -join ','
    ```
 
-3. **Pick the output dir.** If a job is active (`~/.claude/current-job.json` has
+3. **Pick the output dir.** If a job is active (`$BATON_HOME/current-job.json` has
    a job_id), use `<job>/phases/research/ensemble-<timestamp>/`; else
-   `~/.claude/ensembles/<timestamp>/`. Timestamp format `yyyy-MM-ddTHH-mm-ss`.
+   `$BATON_HOME/ensembles/<timestamp>/`. Timestamp format `yyyy-MM-ddTHH-mm-ss`.
 
    ```powershell
    . "$HOME/.claude/scripts/job-lib.ps1"   # Read-CurrentJob lives in job-lib
    $ts = Get-Date -Format 'yyyy-MM-ddTHH-mm-ss'
    $state = Read-CurrentJob
    if ($state.job_id) {
-       $outDir = Join-Path $HOME ".claude/jobs/$($state.job_id)/phases/research/ensemble-$ts"
+       $outDir = Join-Path (Get-BatonHome) "jobs/$($state.job_id)/phases/research/ensemble-$ts"
    } else {
-       $outDir = Join-Path $HOME ".claude/ensembles/$ts"
+       $outDir = Join-Path (Get-BatonHome) "ensembles/$ts"
    }
    $outDir
    ```

@@ -9,7 +9,7 @@ Recommend **or dispatch** the optimal capability for a need. Reads the `tools.ya
 (capability-specific tools + specialty models) and `fleet.yaml` (general models) registries,
 ranks the candidates that serve `<capability>` cheapest cost-tier first, and breaks ties by
 **learned quality** — a blend of your `--rate` thumbs, an LLM-judge score, and heuristic
-pass-history (`~/.claude/routing-journal.jsonl` + `~/.claude/knowledge/universal/routing-ratings.jsonl`).
+pass-history (`$BATON_HOME/routing-journal.jsonl` + `~/.claude/knowledge/universal/routing-ratings.jsonl`).
 Cost tier always dominates; quality only reorders within a tier. **Without `--run`** it
 recommends. **With `--run "<prompt>"`** it dispatches, verifies, escalates up the cost ladder,
 and logs every attempt. **`--rate good|bad`** records whether the last run's output was good.
@@ -82,7 +82,7 @@ and logs every attempt. **`--rate good|bad`** records whether the last run's out
    autonomous run-loop) skip this prompt because the library already resolves `ask` to its rank
    default for non-interactive dispatch.
 
-   Finish with: *"Logged $($outcome.attempts.Count) attempt(s) to ~/.claude/routing-journal.jsonl."*
+   Finish with: *"Logged $($outcome.attempts.Count) attempt(s) to $BATON_HOME/routing-journal.jsonl."*
 
 4. **With `--rate good|bad [note]` (rating mode):**
 
@@ -132,7 +132,7 @@ and logs every attempt. **`--rate good|bad`** records whether the last run's out
        Write-Host ""
        Write-Host "Rate them (edit good/bad), then run:"
        Write-Host "  /baton:route --calibrate `"<capability>`" --rate `"$names`""
-       Write-Host ("Logged {0} calibration attempt(s) to ~/.claude/routing-journal.jsonl." -f $cal.candidates.Count)
+       Write-Host ("Logged {0} calibration attempt(s) to $BATON_HOME/routing-journal.jsonl." -f $cal.candidates.Count)
    }
    ```
 

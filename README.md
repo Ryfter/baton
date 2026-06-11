@@ -90,7 +90,7 @@ Each feature has a one-line "what it does"; the link goes to its full design spe
   Command: `/baton:route` (`--run`, `--rate`, `--calibrate`, `--rank`).
 - **Cost-Optimization Engine (time-awareness)** — rank-gates paid/frontier dispatch during
   prime-peak hours (rank 1 = spend-worthy … 5 = wait for off-peak) and scales concurrency up
-  during off-peak/weekend surge windows. Config: `~/.claude/prime-hours.yaml`.
+  during off-peak/weekend surge windows. Config: `$BATON_HOME/prime-hours.yaml` (default `~/.baton/prime-hours.yaml`).
 - **`/baton:idea` front door** — turn a raw idea into board-ready GitHub issues with one human gate
   (KB prefetch → research ensemble → council viability debate → concept doc → issues).
 - **Tools registry** — a non-LLM capability registry (`tools.yaml`), co-equal sibling of the

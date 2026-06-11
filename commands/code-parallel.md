@@ -19,7 +19,7 @@ Dispatch the subtasks from `subtasks.json` as parallel Agent subagents in isolat
    . "$HOME/.claude/scripts/job-lib.ps1"
    $state = Read-CurrentJob
    $sprint = if ($state.phase -match '^code\.sprint-\d+$') { $state.phase } else { 'code.sprint-1' }
-   $stPath = Join-Path $HOME ".claude/jobs/$($state.job_id)/phases/$sprint/subtasks.json"
+   $stPath = Join-Path (Get-BatonHome) "jobs/$($state.job_id)/phases/$sprint/subtasks.json"
    if (-not (Test-Path $stPath)) { Write-Host "Run /baton:code-decompose first." -ForegroundColor Red; return }
    $subs = Read-CodeSubtasksFile -Path $stPath
    ```

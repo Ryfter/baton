@@ -4,6 +4,8 @@ How to pick **Baton** back up and use it on its own backlog.
 
 ## ⚑ Parked threads — 2026-06-10 (read first)
 
+**Phase 2 shipped 2026-06-11** — state now at `$BATON_HOME` (default `~/.baton`); hooks ship with the plugin (`hooks/hooks.json`). Phase 3 (Python MCP server) is next.
+
 **THE NEXT BUILD (pick one — each gets its own worktree-isolated session):**
 
 1. **Cost-Optimization Engine — Slice B (draft→finish cascade)** OR the **cost/speed advisor** (parked thread 6 below, slotted "after Slice A" — now unblocked). Slice B (Lever 3) = local/cheap drafts a "good enough" output, a frontier model takes-and-extends; Slice C folds the cascade into the run-loop. The advisor = two dials (cost × speed) + an infra inventory; fast+cheap corner → recommend *expanding cheap capacity* (2nd $20 platform, add a PC) not deepening expensive. Both need their own spec → plan → build. **A→B→C order confirmed.**
@@ -65,7 +67,7 @@ Slice 1 spec `…/2026-06-05-legibility-dashboard-design.md`; plan
 `docs/superpowers/plans/2026-06-06-legibility-dashboard.md`.
 
 **Slice 1 — legibility dashboard: SHIPPED** (merged `0c0f274`). A file-based feed under
-`~/.claude/runs/` (`run.json` + `events.jsonl` + `index.json`) written by PowerShell
+`$BATON_HOME/runs/` (default `~/.baton/runs/`) (`run.json` + `events.jsonl` + `index.json`) written by PowerShell
 (`scripts/runs-lib.ps1`, the `run-feed.ps1` PostToolUse narration hook, and
 `statusline-feed.ps1`) and read by the FastAPI dashboard: a **runs gutter** + **detail
 pane** + **global strip** + a **needs-you** answer queue. Autonomy win shipped too: a
@@ -177,7 +179,7 @@ compounding deliverable.
   `tools.yaml` cli entries, `Invoke-Fleet -NoJournal` for fleet models), grades with
   `Test-RoutingOutputHeuristic` (exit 0 + non-empty + per-capability validator), and escalates
   to the next candidate on failure — terminal `escalate-to-conductor` when all fail. Every
-  attempt is logged to `~/.claude/routing-journal.jsonl` (structured JSONL — the Slice 3 learning
+  attempt is logged to `$BATON_HOME/routing-journal.jsonl` (structured JSONL — the Slice 3 learning
   substrate). `/baton:route --run "<prompt>"` dispatches + prints the ladder walked. **Grader seam:**
   `Invoke-RoutedCapability -Grader <scriptblock>` (contract `(Capability,Result)->{passed,score,
   reason}`) defaults to heuristic; Slice 3 plugs in its judge here — **decision d027**. Gate: 28
@@ -283,7 +285,7 @@ Pick issue **#N** — let's say **#16** (Plan 8.1 auto-index hook). Work it like
    ```
    /baton:job-start "Plan 8.1 — auto-index hook for KB writes (closes #16)"
    ```
-   Creates `~/.claude/jobs/<id>/` and starts in the `research` phase.
+   Creates `$BATON_HOME/jobs/<id>/` and starts in the `research` phase.
 
 9. **Research with the fleet + KB pre-fetch** (Plan 8 RAG fires automatically):
    ```

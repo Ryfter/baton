@@ -6,7 +6,7 @@ argument-hint: <model-or-target> <free-text observation>
 # /baton:log-routing
 
 You are appending a single qualitative note to the model routing journal at
-`~/.claude/model-routing-log.md`. The format is:
+`$BATON_HOME/model-routing-log.md` (default `~/.baton/model-routing-log.md`). The format is:
 
 ```
 <ISO-timestamp> | note | <model-or-target> | "<observation>"
@@ -29,7 +29,7 @@ You are appending a single qualitative note to the model routing journal at
    $target = '<first-token>'
    $obs = '<observation, with double quotes escaped>'
    $line = "$ts | note | $target | `"$obs`""
-   Add-Content -Path "$HOME/.claude/model-routing-log.md" -Value $line
+   Add-Content -Path (Join-Path (Get-BatonHome) 'model-routing-log.md') -Value $line
    ```
 
 4. Confirm to the user: show the exact line that was appended.

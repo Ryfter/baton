@@ -33,7 +33,7 @@ The hook auto-tags every model dispatch with the project name; the dashboard por
 /baton:job-start "rewrite the auth middleware"
 ```
 
-Creates `~/.claude/jobs/<id>/` with `manifest.yaml`, `brief.md`, `phase-log.md`, `lessons.md`. Phase starts at `research`.
+Creates `$BATON_HOME/jobs/<id>/` (default `~/.baton/jobs/<id>/`) with `manifest.yaml`, `brief.md`, `phase-log.md`, `lessons.md`. Phase starts at `research`.
 
 ### 3. Research the problem
 

@@ -1,11 +1,11 @@
 ---
-description: Operate the tools registry (~/.claude/tools.yaml) — the non-LLM capability sibling of /baton:fleet. `doctor` health-checks each tool, `list` shows the registry.
+description: Operate the tools registry ($BATON_HOME/tools.yaml) — the non-LLM capability sibling of /baton:fleet. `doctor` health-checks each tool, `list` shows the registry.
 argument-hint: doctor | list
 ---
 
 # /baton:tools
 
-Operate the tool registry defined in `~/.claude/tools.yaml` — declared, cost-tiered,
+Operate the tool registry defined in `$BATON_HOME/tools.yaml` (default `~/.baton/tools.yaml`) — declared, cost-tiered,
 capability-tagged callable capabilities (e.g. Docling for `pdf-extract`), co-equal with
 the models in `/baton:fleet`.
 

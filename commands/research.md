@@ -9,7 +9,7 @@ Run a research ensemble within the active job's research phase.
 
 ## Steps
 
-1. **Require an active job.** Read `~/.claude/current-job.json` (via
+1. **Require an active job.** Read `$BATON_HOME/current-job.json` (via
    `Read-CurrentJob` from `~/.claude/scripts/job-lib.ps1`). If no `job_id`, stop
    with: *"No active job. Use /baton:ensemble for an ad-hoc run, or /baton:job-start to
    begin a job."*
@@ -42,7 +42,7 @@ Run a research ensemble within the active job's research phase.
    . "$HOME/.claude/scripts/job-lib.ps1"   # Read-CurrentJob + Read-Manifest live in job-lib
    $state = Read-CurrentJob
    $ts = Get-Date -Format 'yyyy-MM-ddTHH-mm-ss'
-   $outDir = Join-Path $HOME ".claude/jobs/$($state.job_id)/phases/research/ensemble-$ts"
+   $outDir = Join-Path (Get-BatonHome) "jobs/$($state.job_id)/phases/research/ensemble-$ts"
    $outDir
    ```
 

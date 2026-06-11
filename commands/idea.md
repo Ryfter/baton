@@ -15,7 +15,7 @@ you approve the concept doc before any issue is created.
    `--providers a,b,c`, `--tier free,local`. Empty idea → stop with:
    *"Usage: /baton:idea \"<raw idea>\" [--no-research] [--providers …] [--tier …]"*.
 
-2. **Create the idea workspace** (job-less; sibling of `~/.claude/ensembles/`):
+2. **Create the idea workspace** (job-less; sibling of `$BATON_HOME/ensembles/`):
 
    ```powershell
    . "$HOME/.claude/scripts/idea-lib.ps1"

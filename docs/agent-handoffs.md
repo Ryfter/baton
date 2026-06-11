@@ -120,9 +120,13 @@ must know:
   (`CAO_REPO_ROOT` still honored as legacy). Default project id in scripts: `baton`.
 - **octo** is a recommended companion plugin, NOT a hard plugin dependency
   (cross-marketplace dependency resolution is unreliable).
-- **Queued next** (spec `docs/superpowers/specs/2026-06-11-baton-rebrand-and-packaging-design.md`):
-  Phase 2 — `hooks/hooks.json` auto-registration + state re-root to `BATON_HOME`
-  (default `~/.baton/`; deliberately NOT `${CLAUDE_PLUGIN_DATA}`, which is
-  Claude-only — state must stay readable by every agent). Phase 3 — Python MCP
-  server exposing `baton_*` tools (route/fleet/kb/job) for Codex (`codex mcp add`),
-  Cursor, and any MCP client. Statusline stays bootstrap-managed (plugins can't own it).
+- **Phase 2 — EXECUTED (2026-06-11):** hooks ship with the plugin (`hooks/hooks.json`),
+  including `log-tool-call` PostToolUse and `baton-init` SessionStart; all mutable state
+  (jobs, runs, ensembles, ideas, current-job.json, routing-journal.jsonl,
+  model-routing-log.md, fleet.yaml, tools.yaml, prime-hours.yaml, logs/) now lives under
+  `BATON_HOME` (default `~/.baton`; env-overridable; NOT `${CLAUDE_PLUGIN_DATA}` — state
+  must stay readable by every agent). One-time marker-gated migration from `~/.claude/`
+  runs on first `baton-init`. KB, cost ledger, and deployed `~/.claude/scripts/` unchanged.
+  `kb-autoindex` stays a user-settings hook. Statusline stays bootstrap-managed.
+- **Queued next:** Phase 3 — Python MCP server exposing `baton_*` tools (route/fleet/kb/job)
+  for Codex (`codex mcp add`), Cursor, and any MCP client.

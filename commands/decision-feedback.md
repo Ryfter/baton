@@ -35,7 +35,7 @@ Append feedback to a decision record at
    ```powershell
    $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
    $line = "$ts | dashboard | decision-flag | $id | urgent feedback: $text"
-   Add-Content -Path (Join-Path $HOME '.claude/model-routing-log.md') -Value $line
+   Add-Content -Path (Join-Path (Get-BatonHome) 'model-routing-log.md') -Value $line
    ```
 
 5. **On error** (unknown id, no project), surface the thrown message and suggest
