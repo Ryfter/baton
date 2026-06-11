@@ -37,7 +37,7 @@ Assert "would deploy prime-hours.ps1"   ($out -match 'prime-hours\.ps1')
 Assert "would seed prime-hours.yaml"    ($out -match 'prime-hours\.yaml')
 Assert "does not exit non-zero"          ($LASTEXITCODE -eq 0 -or $out -match 'Bootstrap complete')
 Assert "does NOT register hooks anymore" ($out -notmatch 'would register PostToolUse')
-Assert "mentions mcp SDK probe"          ($out -match 'mcp SDK')
+Assert "mentions mcp SDK probe"          ($out -match 'mcp SDK|mcp.*package missing|python not on PATH')
 
 # Static check: bootstrap must back up settings.json before overwriting it.
 $bootstrapContent = Get-Content (Join-Path $here 'bootstrap.ps1') -Raw

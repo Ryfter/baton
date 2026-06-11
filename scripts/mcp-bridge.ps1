@@ -13,6 +13,7 @@ param(
     [string]$ArgsPath
 )
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $here = $PSScriptRoot
 function Out-Json($obj) { $obj | ConvertTo-Json -Depth 8 -Compress }
 
@@ -30,6 +31,7 @@ try {
             Out-Json @{ ok = $true; capabilities = @(Get-KnownCapabilities) }
         }
         'route-select' {
+            # Learned-quality ratings read the real ~/.claude/knowledge/universal/routing-ratings.jsonl by design; KB does not move.
             . "$here/routing-lib.ps1"
             $sel = @{ Capability = [string]$a.capability }
             if ($a.max_tier)   { $sel['MaxCostTier']  = [string]$a.max_tier }

@@ -103,18 +103,21 @@ class TestBatonRoute:
             return _ok(status="ok")
 
         monkeypatch.setattr(srv, "run_op", fake_run_op)
+        timeout_s = 120
         srv.baton_route(
             capability="code-gen",
             prompt="hello",
             judge=True,
             rank=3,
-            timeout_s=120,
+            timeout_s=timeout_s,
         )
         op, args, kw = captured[0]
         assert op == "route-dispatch"
         assert args["judge"] is True
         assert args["rank"] == 3
-        assert args["timeout_s"] == 120
+        assert args["timeout_s"] == timeout_s
+        # Verify the run_op timeout kwarg matches the formula: max(timeout_s + 60, 300)
+        assert kw.get("timeout") == max(timeout_s + 60, 300)
 
     def test_with_prompt_judge_rank_timeout_omitted_when_default(self, monkeypatch):
         import baton_mcp.server as srv

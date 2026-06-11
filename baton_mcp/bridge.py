@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -23,6 +24,7 @@ def bridge_script() -> Path:
 
 def run_op(op: str, args: dict | None = None, timeout: int = DEFAULT_TIMEOUT_S) -> dict:
     argpath: str | None = None
+    proc: subprocess.Popen | None = None
     try:
         if args:
             fd, argpath = tempfile.mkstemp(suffix=".json")
@@ -31,16 +33,34 @@ def run_op(op: str, args: dict | None = None, timeout: int = DEFAULT_TIMEOUT_S) 
         cmd = ["pwsh", "-NoProfile", "-File", str(bridge_script()), "-Op", op]
         if argpath:
             cmd += ["-ArgsPath", argpath]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        out = (proc.stdout or "").strip()
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Windows: kill the whole process tree; Unix: fallback to proc.kill()
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    capture_output=True,
+                )
+            else:
+                proc.kill()
+            proc.communicate()
+            return {"ok": False, "error": f"bridge op '{op}' timed out after {timeout}s"}
+        out = (stdout or "").strip()
         if not out:
-            return {"ok": False, "error": f"bridge produced no output (exit {proc.returncode}): {(proc.stderr or '')[-400:]}"}
+            return {"ok": False, "error": f"bridge produced no output (exit {proc.returncode}): {(stderr or '')[-400:]}"}
         try:
             return json.loads(out.splitlines()[-1])
         except json.JSONDecodeError:
             return {"ok": False, "error": f"bridge output was not JSON: {out[:400]}"}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"bridge op '{op}' timed out after {timeout}s"}
     except FileNotFoundError as e:
         return {"ok": False, "error": f"pwsh not found: {e}"}
     finally:
