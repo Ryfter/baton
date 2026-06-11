@@ -75,6 +75,13 @@ try {
     if ($tmp -and (Test-Path $tmp)) { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
 }
 
-# --- Stale-literal regression guard (added in Task 3; keep section here) ---
+# --- Stale-literal regression guard: no script may still default state to ~/.claude ---
+$stalePattern = '\.claude[/\\](jobs|runs|ideas|ensembles|current-job\.json|routing-journal|model-routing-log|fleet\.yaml|tools\.yaml|prime-hours\.yaml)'
+$allowed = @('baton-home.ps1', 'bootstrap.ps1')   # migration source list lives here by design
+$stale = @()
+foreach ($f in (Get-ChildItem $here -Recurse -Filter *.ps1 | Where-Object { $_.Name -notlike 'test-*' -and ($allowed -notcontains $_.Name) })) {
+    if ((Get-Content $f.FullName -Raw) -match $stalePattern) { $stale += $f.Name }
+}
+Assert "no stale ~/.claude state literals in scripts ($($stale -join ', '))" ($stale.Count -eq 0)
 
 if ($failures -gt 0) { exit 1 } else { exit 0 }

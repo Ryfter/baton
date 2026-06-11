@@ -13,7 +13,7 @@
 #>
 
 param(
-    [string]$JobsRoot = (Join-Path $HOME '.claude/jobs'),
+    [string]$JobsRoot = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'jobs' } else { Join-Path $HOME '.baton/jobs' }),
     [string]$KbRoot   = (Join-Path $HOME '.claude/knowledge')
 )
 

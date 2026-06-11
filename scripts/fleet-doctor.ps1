@@ -5,7 +5,7 @@
   Exit 0 if all enabled providers are ok; 1 if any warn/err.
 #>
 param(
-    [string]$Path = (Join-Path $HOME '.claude/fleet.yaml')
+    [string]$Path = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'fleet.yaml' } else { Join-Path $HOME '.baton/fleet.yaml' })
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'fleet-lib.ps1')

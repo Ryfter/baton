@@ -9,7 +9,7 @@
   render as '—'. The 5-hour rate-limit timer is not assumed present (spec §6).
 #>
 param(
-    [string]$RunsRoot    = $(if ($env:ROUTING_RUNS_ROOT) { $env:ROUTING_RUNS_ROOT } else { Join-Path $HOME '.claude/runs' }),
+    [string]$RunsRoot    = $(if ($env:ROUTING_RUNS_ROOT) { $env:ROUTING_RUNS_ROOT } elseif ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'runs' } else { Join-Path $HOME '.baton/runs' }),
     [string]$PointerPath
 )
 $ErrorActionPreference = 'Continue'

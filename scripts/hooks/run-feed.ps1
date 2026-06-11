@@ -2,12 +2,12 @@
 <#
 .SYNOPSIS
   PostToolUse hook: append a plain-English event for the active run to the
-  legibility feed. No-ops unless ~/.claude/current-run.json names a run.
+  legibility feed. No-ops unless $BATON_HOME/runs/current-run.json names a run.
 #>
 param(
-    [string]$RunsRoot    = $(if ($env:ROUTING_RUNS_ROOT) { $env:ROUTING_RUNS_ROOT } else { Join-Path $HOME '.claude/runs' }),
+    [string]$RunsRoot    = $(if ($env:ROUTING_RUNS_ROOT) { $env:ROUTING_RUNS_ROOT } elseif ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'runs' } else { Join-Path $HOME '.baton/runs' }),
     [string]$PointerPath,
-    [string]$ErrorPath   = (Join-Path $HOME '.claude/hooks/run-feed.err.log')
+    [string]$ErrorPath   = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'logs/run-feed.err.log' } else { Join-Path $HOME '.baton/logs/run-feed.err.log' })
 )
 $ErrorActionPreference = 'Continue'  # never crash Claude Code
 if (-not $PointerPath) { $PointerPath = Join-Path $RunsRoot 'current-run.json' }
