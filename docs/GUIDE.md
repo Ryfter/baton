@@ -34,7 +34,8 @@ You interact with it entirely through **slash commands** inside Claude Code (lik
 | **The dashboard** | A live web view of all of the above | `http://localhost:8765` |
 
 > Throughout this guide, `~/.claude/` means your home folder's `.claude` directory —
-> on Windows that's `C:\Users\<you>\.claude\`.
+> on Windows that's `C:\Users\<you>\.claude\` — and `~/.baton/` is the default Baton
+> state root (override it with the `BATON_HOME` environment variable).
 
 ---
 
@@ -61,15 +62,17 @@ claude plugin install octo@nyldn-plugins
 git clone https://github.com/Ryfter/baton.git D:\Dev\baton
 cd D:\Dev\baton
 
-# 3. Bootstrap — copies commands, hooks, scripts, and config into ~/.claude/
+# 3. Bootstrap — deploys scripts into ~/.claude/ and seeds state into ~/.baton/
 pwsh -NoProfile -File scripts\bootstrap.ps1
 
 # 4. (Optional) pull the local search model
 ollama pull nomic-embed-text
 ```
 
-**What bootstrap does:** it deploys all the slash commands, the usage-logging hook, the
-helper scripts, and a starter `fleet.yaml` into `~/.claude/`. It's **idempotent** —
+**What bootstrap does:** it deploys the helper scripts into `~/.claude/scripts/` and
+seeds starter config (`fleet.yaml`, `tools.yaml`, `prime-hours.yaml`) into `$BATON_HOME`
+(default `~/.baton/`), migrating any pre-existing state there one time. Slash commands
+and hooks ship with the plugin itself. It's **idempotent** —
 safe to re-run any time (e.g. after `git pull`) to re-sync. It also prints a
 **version-drift line** at the top so you can see whether `~/.claude/` is behind the repo,
 and finishes with a "Next steps" list.

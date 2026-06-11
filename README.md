@@ -9,8 +9,8 @@ you decided, and what you learned. Built on
 [claude-octopus](https://github.com/nyldn/claude-octopus) as the dispatch layer
 (recommended companion plugin, not a hard dependency).
 
-**Status:** `v1.2.0-rc1` — *the Fleet Conductor release* (capability routing, cost-optimization,
-Grimdex). **MIT licensed.** An early/experimental personal project, shared in the hope it's
+**Status:** `v1.2.0-rc.4` — *the Fleet Conductor release* (capability routing, cost-optimization,
+Grimdex, plugin packaging + MCP server). **MIT licensed.** An early/experimental personal project, shared in the hope it's
 useful — not a turnkey product.
 
 ### 📖 New here? Read these
@@ -136,8 +136,9 @@ Full details and a worked example: **[docs/GUIDE.md](docs/GUIDE.md)**.
 
 ## Architecture
 
-Claude Code *is* the orchestrator (no separate daemon). State lives under `~/.claude/`
-(`jobs/`, `knowledge/`, `fleet.yaml`, the journal). See the
+Claude Code *is* the orchestrator (no separate daemon). Mutable state lives under
+`$BATON_HOME` (default `~/.baton/` — `jobs/`, `runs/`, `fleet.yaml`, `tools.yaml`, the
+journal); the knowledge base stays at `~/.claude/knowledge/`. See the
 [design spec](docs/superpowers/specs/2026-05-22-coding-agent-orchestrator-design.md)
 and the per-feature specs linked above.
 
