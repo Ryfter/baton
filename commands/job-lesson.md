@@ -36,7 +36,7 @@ journal so the dashboard can show it.
        Write-Host "No active job." -ForegroundColor Red
        return
    }
-   $jobDir = Join-Path $HOME ".claude/jobs/$($state.job_id)"
+   $jobDir = Join-Path (Get-BatonHome) "jobs/$($state.job_id)"
 
    # Append to job lessons.md
    Append-LessonToJob -JobDir $jobDir -Phase $state.phase -Category $category -Scope $scope -Text $text
@@ -45,7 +45,7 @@ journal so the dashboard can show it.
    $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
    $safeText = ($text -replace '\|', '¦' -replace "`r?`n", ' ').Trim()
    $journalLine = "$ts | lesson | $category | `"$safeText`" | job:$($state.job_id) | phase:$($state.phase)"
-   Add-Content -Path (Join-Path $HOME '.claude/model-routing-log.md') -Value $journalLine
+   Add-Content -Path (Join-Path (Get-BatonHome) 'model-routing-log.md') -Value $journalLine
 
    Write-Host "Lesson recorded ($category, scope=$scope)." -ForegroundColor Green
    ```

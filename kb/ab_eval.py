@@ -21,6 +21,7 @@ from pathlib import Path
 
 from kb.embedder import DEFAULT_MODEL
 from kb.index import run_index
+from kb.paths import baton_home
 from kb.search import run_search
 
 # Labeled query set keyed to this repo's KB (decision records, cost, routing).
@@ -153,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--models", nargs="+", default=[DEFAULT_MODEL, "mxbai-embed-large"])
     p.add_argument("--k", type=int, default=3)
     p.add_argument("--corpus-root", default=str(Path.home() / ".claude" / "knowledge"))
-    p.add_argument("--jobs-root", default=str(Path.home() / ".claude" / "jobs"))
+    p.add_argument("--jobs-root", default=str(baton_home() / "jobs"))
     p.add_argument("--queries-file", default=None, help="JSON: [{q, expect}, ...] (overrides default set)")
     p.add_argument("--json", action="store_true", help="Emit raw JSON instead of a table")
     args = p.parse_args(argv)

@@ -41,6 +41,7 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $deploy 'scripts') | Out-Null
     Copy-Item $hook (Join-Path $deploy 'hooks/run-feed.ps1')
     Copy-Item (Join-Path $PSScriptRoot 'runs-lib.ps1') (Join-Path $deploy 'scripts/runs-lib.ps1')
+    Copy-Item (Join-Path $PSScriptRoot 'baton-home.ps1') (Join-Path $deploy 'scripts/baton-home.ps1')
     Set-Content -Path $pointer -Value '{"id":"run_deployed"}' -Encoding utf8
     $evt | & pwsh -NoProfile -File (Join-Path $deploy 'hooks/run-feed.ps1') -RunsRoot $root
     Check 'deployed hook finds scripts/runs-lib.ps1' (Test-Path (Join-Path $root 'run_deployed/events.jsonl'))

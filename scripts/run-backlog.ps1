@@ -29,7 +29,7 @@ param(
 
 . (Join-Path $HOME '.claude/scripts/fleet-backlog.ps1')
 
-if (-not $OutputRoot) { $OutputRoot = Join-Path $HOME '.claude/ensembles' }
+if (-not $OutputRoot) { $OutputRoot = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'ensembles' } else { Join-Path $HOME '.baton/ensembles' }) }
 $ts  = (Get-Date).ToString('yyyy-MM-ddTHH-mm-ss')
 $out = Join-Path $OutputRoot "backlog-live-$ts"
 

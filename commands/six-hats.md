@@ -34,16 +34,16 @@ Run Edward de Bono's Six Thinking Hats across the fleet.
    ```
 
 3. **Pick the output dir.** Job-bound → `<job>/phases/research/six-hats-<ts>/`;
-   standalone → `~/.claude/ensembles/six-hats-<ts>/`. Timestamp `yyyy-MM-ddTHH-mm-ss`.
+   standalone → `$BATON_HOME/ensembles/six-hats-<ts>/`. Timestamp `yyyy-MM-ddTHH-mm-ss`.
 
    ```powershell
    . "$HOME/.claude/scripts/job-lib.ps1"
    $ts = Get-Date -Format 'yyyy-MM-ddTHH-mm-ss'
    $state = Read-CurrentJob
    if ($state.job_id) {
-       $outDir = Join-Path $HOME ".claude/jobs/$($state.job_id)/phases/research/six-hats-$ts"
+       $outDir = Join-Path (Get-BatonHome) "jobs/$($state.job_id)/phases/research/six-hats-$ts"
    } else {
-       $outDir = Join-Path $HOME ".claude/ensembles/six-hats-$ts"
+       $outDir = Join-Path (Get-BatonHome) "ensembles/six-hats-$ts"
    }
    ```
 

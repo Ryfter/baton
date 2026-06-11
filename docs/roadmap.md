@@ -13,7 +13,7 @@ Tracked as GitHub issues on **[Project #5: baton](https://github.com/users/Ryfte
 |---|---|---|---|
 | 1 | Observation foundation | hook + OTel + journal + catalog + `/log-routing`, `/consolidate-routing` | — |
 | 2 | Dashboard | FastAPI + Jinja2 live web view at `http://localhost:8765` | — |
-| 3 | Jobs + KB | `~/.claude/jobs/`, `~/.claude/knowledge/`, eight `/job-*` and `/consolidate-lessons` commands | `plan3-complete` |
+| 3 | Jobs + KB | `$BATON_HOME/jobs/`, `~/.claude/knowledge/`, eight `/job-*` and `/consolidate-lessons` commands | `plan3-complete` |
 | 4 | Fleet | `fleet.yaml`, `/fleet doctor|test|list`, multi-provider dispatch | `plan4-complete` |
 | 5 | Research ensemble | `/ensemble`, `/research`, concurrent fan-out + Claude-synthesized output | `plan5-complete` |
 | 5b | Six Thinking Hats | `/six-hats`, role-prefixed preset on the ensemble primitive | `plan5b-shipped` |

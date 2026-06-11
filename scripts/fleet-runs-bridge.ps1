@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Bridge: project one backlog item (id x model x worktree) into the legibility
-# feed (~/.claude/runs/) as a single run, updated across its lifecycle. Called
+# feed ($BATON_HOME/runs/) as a single run, updated across its lifecycle. Called
 # from the PARENT process of the fleet drivers — never the Start-Job worker.
 
 . (Join-Path $PSScriptRoot 'runs-lib.ps1')

@@ -8,13 +8,14 @@ from dataclasses import asdict
 from pathlib import Path
 
 from kb.embedder import DEFAULT_MODEL, embed, EmbedError
+from kb.paths import baton_home
 from kb.store import VectorStore
 
 DEFAULT_ACTIVE_PROJECT_SCORE_BOOST = 0.05
 
 
 def _active_job_project_id(current_job_path: Path | None = None) -> str | None:
-    path = current_job_path or Path.home() / ".claude" / "current-job.json"
+    path = current_job_path or baton_home() / "current-job.json"
     if not path.exists():
         return None
     try:

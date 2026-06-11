@@ -34,7 +34,7 @@ path is required — not an optimization.)
 ```
 
 `base_url` and `model_default` are **per-host** — edit them in your deployed
-`~/.claude/fleet.yaml`. `references/fleet.yaml` carries a working example
+`$BATON_HOME/fleet.yaml` (default `~/.baton/fleet.yaml`). `references/fleet.yaml` carries a working example
 (wraith2). Pick a `model_default` that fits the box's VRAM.
 
 Test it: `/fleet test ollama-box2 "hello"`.

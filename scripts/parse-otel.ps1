@@ -25,7 +25,7 @@
   Defaults to ~/.claude/telemetry/events.jsonl.
 
 .PARAMETER JournalPath
-  Path to the routing journal. Defaults to ~/.claude/model-routing-log.md.
+  Path to the routing journal. Defaults to $BATON_HOME/model-routing-log.md.
 
 .PARAMETER MarkerPath
   Path to the event-count marker. Defaults to ~/.claude/telemetry/.parse-marker.
@@ -37,7 +37,7 @@
 
 param(
     [string]$EventsPath  = (Join-Path $HOME '.claude/telemetry/events.jsonl'),
-    [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md'),
+    [string]$JournalPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'model-routing-log.md' } else { Join-Path $HOME '.baton/model-routing-log.md' }),
     [string]$MarkerPath  = (Join-Path $HOME '.claude/telemetry/.parse-marker'),
     # Plan 3 migrated the catalog into the KB; fall back to the legacy path if the new one isn't there yet (e.g. pre-bootstrap).
     [string]$CatalogPath = $(
@@ -45,7 +45,7 @@ param(
         $old = Join-Path $HOME '.claude/model-routing.md'
         if (Test-Path $new) { $new } else { $old }
     ),
-    [string]$StatePath   = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } else { Join-Path $HOME '.claude/current-job.json' })
+    [string]$StatePath   = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } elseif ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'current-job.json' } else { Join-Path $HOME '.baton/current-job.json' })
 )
 
 $ErrorActionPreference = 'Stop'

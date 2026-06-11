@@ -9,7 +9,7 @@ Decompose a finalized feature spec into a DAG of subtasks for `/baton:code-paral
 
 ## Steps
 
-1. **Require an active job.** Read `~/.claude/current-job.json` via
+1. **Require an active job.** Read `$BATON_HOME/current-job.json` via
    `Read-CurrentJob`. No job → stop with: *"No active job. Run /baton:job-start first."*
 
 2. **Resolve the spec path.**
@@ -42,7 +42,7 @@ Decompose a finalized feature spec into a DAG of subtasks for `/baton:code-paral
    . "$HOME/.claude/scripts/job-lib.ps1"
    $state = Read-CurrentJob
    $sprint = if ($state.phase -match '^code\.sprint-\d+$') { $state.phase } else { 'code.sprint-1' }
-   $path = Join-Path $HOME ".claude/jobs/$($state.job_id)/phases/$sprint/subtasks.json"
+   $path = Join-Path (Get-BatonHome) "jobs/$($state.job_id)/phases/$sprint/subtasks.json"
    $tasks = @(
        @{ id='t1'; title='...'; description='...'; files_touched=@('...'); depends_on=@() },
        # ... one entry per subtask

@@ -78,7 +78,7 @@ Assert "T6 unknown dep throws" $threw
 
 # --- T7: output dir shape ---
 $od = Get-CodeOutputDir -JobId 'j042' -Sprint 'code.sprint-1' -Stamp '2026-05-30T05-30-00'
-Assert "T7 output dir shape" ($od -like "*$([IO.Path]::DirectorySeparatorChar).claude$([IO.Path]::DirectorySeparatorChar)jobs$([IO.Path]::DirectorySeparatorChar)j042$([IO.Path]::DirectorySeparatorChar)phases$([IO.Path]::DirectorySeparatorChar)code.sprint-1$([IO.Path]::DirectorySeparatorChar)parallel-2026-05-30T05-30-00")
+Assert "T7 output dir shape" ($od -like "*$([IO.Path]::DirectorySeparatorChar).baton$([IO.Path]::DirectorySeparatorChar)jobs$([IO.Path]::DirectorySeparatorChar)j042$([IO.Path]::DirectorySeparatorChar)phases$([IO.Path]::DirectorySeparatorChar)code.sprint-1$([IO.Path]::DirectorySeparatorChar)parallel-2026-05-30T05-30-00")
 
 # --- T8: parallel manifest round-trip ---
 $mp = Join-Path $env:TEMP "code-mf-$(Get-Random).json"

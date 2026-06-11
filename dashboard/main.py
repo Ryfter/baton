@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from dashboard.paths import baton_home
 from dashboard.readers.stats import compute_stats
 from dashboard.readers.ensembles import read_ensembles
 from dashboard.routers.api import router as api_router
@@ -16,12 +17,12 @@ from dashboard.routers.controls import router as controls_router
 
 JOURNAL_PATH = Path(
     os.environ.get("ROUTING_JOURNAL", "")
-    or Path.home() / ".claude" / "model-routing-log.md"
+    or baton_home() / "model-routing-log.md"
 )
 
 JOBS_ROOT = Path(
     os.environ.get('ROUTING_JOBS_ROOT', '')
-    or Path.home() / '.claude' / 'jobs'
+    or baton_home() / 'jobs'
 )
 
 KB_ROOT = Path(
@@ -31,12 +32,12 @@ KB_ROOT = Path(
 
 ENSEMBLES_ROOT = Path(
     os.environ.get('ROUTING_ENSEMBLES_ROOT', '')
-    or Path.home() / '.claude' / 'ensembles'
+    or baton_home() / 'ensembles'
 )
 
 RUNS_ROOT = Path(
     os.environ.get('ROUTING_RUNS_ROOT', '')
-    or Path.home() / '.claude' / 'runs'
+    or baton_home() / 'runs'
 )
 
 _HERE = Path(__file__).parent

@@ -55,7 +55,7 @@ the exact pointer-stanza wording, and the script surface), then build. Deliverab
 5. TESTS + bootstrap per project conventions; gate green before any merge.
 
 6. KB HEALTH — `/kb-audit` + rules-mirror (re-homed idea; concept at
-   `~/.claude/ideas/kb-consistency-audit-…/concept.md`):
+   `$BATON_HOME/ideas/kb-consistency-audit-…/concept.md`):
    a. RULES-MIRROR (do this first — closes a LIVE backup gap): copy `~/.claude/rules/*.md`
       (context7, task-group-closeout, post-compact-state-report) into Grimdex
       `universal/claude-rules/`, and have `setup.ps1` redeploy them back to `~/.claude/rules/`

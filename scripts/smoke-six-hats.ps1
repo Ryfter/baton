@@ -20,7 +20,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'fleet-ensemble.ps1')
 
 $ts = Get-Date -Format 'yyyy-MM-ddTHH-mm-ss'
-$outDir = Join-Path $HOME ".claude/ensembles/six-hats-smoke-$ts"
+$smokeRoot = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' })
+$outDir = Join-Path $smokeRoot "ensembles/six-hats-smoke-$ts"
 Write-Host "=== Dispatching 6 hats to: $($Providers -join ', ') ===" -ForegroundColor Cyan
 Write-Host "Question: $Question"
 Write-Host "OutputDir: $outDir"

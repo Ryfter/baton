@@ -2,10 +2,12 @@
 # Library for the /idea front door. Job-less: creates an idea workspace, scaffolds
 # the concept doc, builds GitHub issue payloads (pure), and publishes them via gh.
 
+. "$PSScriptRoot/baton-home.ps1"
+
 function Get-IdeasRoot([string]$IdeasRoot) {
     if ($IdeasRoot) { return $IdeasRoot }
     if ($env:IDEAS_ROOT) { return $env:IDEAS_ROOT }
-    return (Join-Path $HOME '.claude/ideas')
+    return (Join-Path (Get-BatonHome) 'ideas')
 }
 
 function ConvertTo-IdeaSlug([string]$Text) {

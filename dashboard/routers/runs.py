@@ -6,6 +6,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from dashboard.paths import baton_home
 from dashboard.readers.runs import (
     list_runs, read_run_detail, read_global_strip, write_run_answer, read_assignments,
 )
@@ -16,7 +17,7 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
     router = APIRouter()
 
     def _runs_root(req: Request) -> Path:
-        return getattr(req.app.state, "runs_root", Path.home() / ".claude" / "runs")
+        return getattr(req.app.state, "runs_root", baton_home() / "runs")
 
     @router.get("/partials/runs", response_class=HTMLResponse)
     async def partial_runs(request: Request) -> HTMLResponse:

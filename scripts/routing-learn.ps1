@@ -10,6 +10,7 @@
   local. See docs/superpowers/specs/2026-06-08-routing-s3-learning-loop-design.md.
 #>
 
+. "$PSScriptRoot/baton-home.ps1"
 $script:DefaultRatingsPath = (Join-Path $HOME '.claude/knowledge/universal/routing-ratings.jsonl')
 
 function Read-JsonlRows {
@@ -70,7 +71,7 @@ function Get-RoutingStats {
     param(
         [Parameter(Mandatory)][string]$Capability,
         [Parameter(Mandatory)][string]$Candidate,
-        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl'),
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'),
         [string]$RatingsPath = $script:DefaultRatingsPath
     )
     # User ratings
@@ -100,7 +101,7 @@ function Get-CapabilityQualityDetail {
     param(
         [Parameter(Mandatory)][string]$Capability,
         [Parameter(Mandatory)][string]$Candidate,
-        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl'),
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'),
         [string]$RatingsPath = $script:DefaultRatingsPath,
         [double]$Prior = 0.5
     )
@@ -125,7 +126,7 @@ function Get-CapabilityQuality {
     param(
         [Parameter(Mandatory)][string]$Capability,
         [Parameter(Mandatory)][string]$Candidate,
-        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl'),
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'),
         [string]$RatingsPath = $script:DefaultRatingsPath,
         [double]$Prior = 0.5
     )
@@ -135,7 +136,7 @@ function Get-CapabilityQuality {
 function Get-LastRoutedAttempt {
     <# The most recent PASSING attempt in the journal — the winner the user last saw.
        Returns $null when no passing attempt exists. #>
-    param([string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl'))
+    param([string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'))
     $rows = @(Read-JsonlRows -Path $JournalPath)
     for ($i = $rows.Count - 1; $i -ge 0; $i--) {
         if ($rows[$i].passed -eq $true) { return $rows[$i] }
@@ -145,7 +146,7 @@ function Get-LastRoutedAttempt {
 
 function Get-CheapestLocalModel {
     <# Name of the first enabled local ($0) fleet model, or $null. #>
-    param([string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'))
+    param([string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'))
     if (-not (Test-Path $FleetPath)) { return $null }
     $local = @(Read-Fleet -Path $FleetPath | Where-Object { $_.enabled -eq $true -and $_.cost_tier -eq 'local' })
     if ($local.Count -eq 0) { return $null }
@@ -161,7 +162,7 @@ function Invoke-LlmJudge {
         [Parameter(Mandatory)][string]$Capability,
         [Parameter(Mandatory)][string]$Output,
         [Parameter(Mandatory)][string]$JudgeModel,
-        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
         [scriptblock]$Dispatcher
     )
     $rubric = @"
@@ -194,7 +195,7 @@ function Get-LlmJudgeGrader {
     param(
         [string]$JudgeModel,
         [double]$Threshold = 0.6,
-        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
         [scriptblock]$JudgeDispatcher
     )
     $jm = $JudgeModel; $th = $Threshold; $fp = $FleetPath; $jd = $JudgeDispatcher

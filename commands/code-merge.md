@@ -18,7 +18,7 @@ Read the latest `parallel-<ts>/manifest.json`, present a merge plan in dependenc
    . "$HOME/.claude/scripts/job-lib.ps1"
    $state = Read-CurrentJob
    $sprint = if ($state.phase -match '^code\.sprint-\d+$') { $state.phase } else { 'code.sprint-1' }
-   $sprintDir = Join-Path $HOME ".claude/jobs/$($state.job_id)/phases/$sprint"
+   $sprintDir = Join-Path (Get-BatonHome) "jobs/$($state.job_id)/phases/$sprint"
    $latest = Get-ChildItem -Path $sprintDir -Directory -Filter 'parallel-*' | Sort-Object Name -Descending | Select-Object -First 1
    if (-not $latest) { Write-Host "No parallel run found. Run /baton:code-parallel first." -ForegroundColor Red; return }
    $mfPath = Join-Path $latest.FullName 'manifest.json'

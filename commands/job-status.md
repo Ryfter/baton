@@ -16,7 +16,7 @@ if (-not $state.job_id) {
     return
 }
 
-$jobDir = Join-Path $HOME ".claude/jobs/$($state.job_id)"
+$jobDir = Join-Path (Get-BatonHome) "jobs/$($state.job_id)"
 $mani = Read-Manifest -JobDir $jobDir
 $brief = (Get-Content (Join-Path $jobDir 'brief.md') -Raw)
 
@@ -29,7 +29,7 @@ Write-Host "  sprints: $($mani.sprint_count)"
 Write-Host ""
 Write-Host "Recent journal entries (last 10 tagged with this job):" -ForegroundColor Cyan
 
-$journal = Join-Path $HOME '.claude/model-routing-log.md'
+$journal = Join-Path (Get-BatonHome) 'model-routing-log.md'
 if (Test-Path $journal) {
     $tag = "job:$($state.job_id)"
     Get-Content $journal | Where-Object { $_ -like "*$tag*" } | Select-Object -Last 10 | ForEach-Object {

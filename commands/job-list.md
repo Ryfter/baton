@@ -1,11 +1,11 @@
 ---
-description: List jobs under ~/.claude/jobs/, filtered by status.
+description: List jobs under $BATON_HOME/jobs/, filtered by status.
 argument-hint: [--all | --active | --done]
 ---
 
 # /baton:job-list
 
-Show jobs in `~/.claude/jobs/`. Default filter: `--active`.
+Show jobs in `$BATON_HOME/jobs/` (default `~/.baton/jobs/`). Default filter: `--active`.
 
 Parse `$ARGUMENTS` for one of `--all`, `--active`, `--done`. If empty, treat as `--active`.
 
@@ -15,7 +15,7 @@ Run:
 . "$HOME/.claude/scripts/job-lib.ps1"
 
 $filter = '<FILTER>'   # 'all', 'active', or 'done'
-$jobsRoot = Join-Path $HOME '.claude/jobs'
+$jobsRoot = Get-BatonHome | Join-Path -ChildPath 'jobs'
 if (-not (Test-Path $jobsRoot)) {
     Write-Host "No jobs yet."
     return

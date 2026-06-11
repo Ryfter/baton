@@ -17,7 +17,7 @@ You are running the routing consolidation flow. Your job is to:
 
 ### 1. Read the inputs
 
-- Read `~/.claude/model-routing-log.md` (the journal).
+- Read `$BATON_HOME/model-routing-log.md` (the journal).
 - Find the most recent archive marker line (a line of the form
   `<!-- archived through: YYYY-MM-DDTHH:MM:SS -->`). Entries below it are
   "since-last-consolidation." If no marker exists, treat all entries as new.
@@ -67,7 +67,7 @@ After edits are applied, append an archive marker to the journal:
 ```
 
 Then move all entries above the new marker (since the previous marker) to
-`~/.claude/model-routing-log-archive-YYYY-MM.md`, appending if the archive
+`$BATON_HOME/model-routing-log-archive-YYYY-MM.md`, appending if the archive
 file exists.
 
 ### 6. Summarize

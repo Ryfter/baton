@@ -27,9 +27,9 @@ You interact with it entirely through **slash commands** inside Claude Code (lik
 
 | Part | What it is | Where it lives |
 |---|---|---|
-| **The journal** | An automatic log of every AI dispatch (time, cost, tokens) | `~/.claude/model-routing-log.md` |
-| **The fleet** | Your roster of callable AI models | `~/.claude/fleet.yaml` |
-| **Jobs** | Tracked units of work, with phases | `~/.claude/jobs/<id>/` |
+| **The journal** | An automatic log of every AI dispatch (time, cost, tokens) | `$BATON_HOME/model-routing-log.md` (default `~/.baton/model-routing-log.md`) |
+| **The fleet** | Your roster of callable AI models | `$BATON_HOME/fleet.yaml` (default `~/.baton/fleet.yaml`) |
+| **Jobs** | Tracked units of work, with phases | `$BATON_HOME/jobs/<id>/` (default `~/.baton/jobs/<id>/`) |
 | **The knowledge base** | Searchable notes, lessons, and decisions | `~/.claude/knowledge/` |
 | **The dashboard** | A live web view of all of the above | `http://localhost:8765` |
 
@@ -139,7 +139,7 @@ so it shows up in the dashboard portfolio.
 /baton:job-start "rewrite the auth middleware"
 ```
 
-*Under the hood:* creates `~/.claude/jobs/<id>/` (manifest, brief, phase-log, lessons)
+*Under the hood:* creates `$BATON_HOME/jobs/<id>/` (manifest, brief, phase-log, lessons)
 and marks it the active job, starting at the **research** phase. From now on your work
 is tracked against this job.
 

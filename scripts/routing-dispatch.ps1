@@ -12,6 +12,7 @@
 
 # routing-lib.ps1 gives Select-Capability/Read-Tools/Get-CostTierRank and dot-sources
 # fleet-lib.ps1 (Invoke-Fleet, Invoke-Fleet-Cli) transitively.
+. "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/routing-lib.ps1"
 . "$PSScriptRoot/prime-hours.ps1"
 
@@ -55,7 +56,7 @@ function Write-RoutingJournalLine {
         [int]$ExitCode, [int]$DurationS,
         [bool]$Passed, [double]$Score, [string]$Reason,
         [string]$Grader = 'heuristic',
-        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl'),
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'),
         [string]$Timestamp
     )
     if (-not $Timestamp) { $Timestamp = (Get-Date).ToString('o') }
@@ -125,9 +126,9 @@ function Invoke-RoutedCandidate {
         [string]$PrimeHoursConfig,
         [datetime]$GateNow,
         [int]$TimeoutS = 120,
-        [string]$ToolsPath = (Join-Path $HOME '.claude/tools.yaml'),
-        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
-        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl')
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl')
     )
     $c = $Candidate
     # Slice 2 dispatches only cli tools + fleet models. Skip other tool kinds.
@@ -210,9 +211,9 @@ function Invoke-RoutedCapability {
         [int]$Rank = [int]::MinValue,
         [string]$PrimeHoursConfig,
         [datetime]$GateNow,
-        [string]$ToolsPath = (Join-Path $HOME '.claude/tools.yaml'),
-        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
-        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl')
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl')
     )
     $sel = @{ Capability = $Capability; ToolsPath = $ToolsPath; FleetPath = $FleetPath }
     if ($RequireLocal) { $sel['RequireLocal'] = $true }

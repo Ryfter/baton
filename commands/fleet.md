@@ -5,7 +5,7 @@ argument-hint: doctor | test <name> "<prompt>" [--model <m>] | list
 
 # /baton:fleet
 
-Operate the fleet defined in `~/.claude/fleet.yaml`.
+Operate the fleet defined in `$BATON_HOME/fleet.yaml` (default `~/.baton/fleet.yaml`).
 
 ## Steps
 

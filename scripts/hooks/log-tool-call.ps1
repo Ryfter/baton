@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
   Claude Code PostToolUse hook: appends a one-line summary of every model dispatch
-  to ~/.claude/model-routing-log.md.
+  to $BATON_HOME/model-routing-log.md.
 
 .DESCRIPTION
   Reads a JSON event from stdin (Claude Code's hook protocol). Recognizes Bash
@@ -12,20 +12,20 @@
   Note: `copilot` and `gh copilot` are distinct CLIs (separate products from
   GitHub) — both patterns are intentional.
 
-  Errors are written to ~/.claude/hooks/log-tool-call.err.log so a buggy hook
+  Errors are written to $BATON_HOME/logs/log-tool-call.err.log so a buggy hook
   never breaks Claude Code itself.
 
 .PARAMETER JournalPath
-  Override journal path (used by tests). Defaults to ~/.claude/model-routing-log.md.
+  Override journal path (used by tests). Defaults to $BATON_HOME/model-routing-log.md.
 
 .PARAMETER ErrorPath
-  Override error log path (used by tests). Defaults to ~/.claude/hooks/log-tool-call.err.log.
+  Override error log path (used by tests). Defaults to $BATON_HOME/logs/log-tool-call.err.log.
 #>
 
 param(
-    [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md'),
-    [string]$ErrorPath   = (Join-Path $HOME '.claude/hooks/log-tool-call.err.log'),
-    [string]$StatePath   = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } else { Join-Path $HOME '.claude/current-job.json' })
+    [string]$JournalPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'model-routing-log.md' } else { Join-Path $HOME '.baton/model-routing-log.md' }),
+    [string]$ErrorPath   = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'logs/log-tool-call.err.log' } else { Join-Path $HOME '.baton/logs/log-tool-call.err.log' }),
+    [string]$StatePath   = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } elseif ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'current-job.json' } else { Join-Path $HOME '.baton/current-job.json' })
 )
 
 $ErrorActionPreference = 'Continue'  # never crash Claude Code; log and move on

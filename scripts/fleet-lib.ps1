@@ -10,7 +10,8 @@
   each invocation. See docs/superpowers/specs/2026-05-26-plan4-fleet-design.md.
 #>
 
-$script:DefaultFleetPath = (Join-Path $HOME '.claude/fleet.yaml')
+. "$PSScriptRoot/baton-home.ps1"
+$script:DefaultFleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml')
 
 function Set-JsonFileAtomic {
     # Write JSON to a temp sibling then Move-Item -Force, so a concurrent reader
@@ -155,8 +156,8 @@ function Write-FleetJournalLine {
         [Parameter(Mandatory)][int]$DurationS,
         [Parameter(Mandatory)][int]$ExitCode,
         [Parameter(Mandatory)][string]$Prompt,
-        [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md'),
-        [string]$StatePath = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } else { Join-Path $HOME '.claude/current-job.json' }),
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md'),
+        [string]$StatePath = $(if ($env:CAO_STATE_PATH) { $env:CAO_STATE_PATH } else { Join-Path (Get-BatonHome) 'current-job.json' }),
         # Origin host (Plan 9): the machine that DISPATCHED this invocation, so a
         # journal merged across the Tailscale fleet stays attributable per node.
         # Override via CAO_FLEET_HOST; falls back to the OS hostname.
@@ -251,7 +252,7 @@ function Invoke-Fleet {
         [Parameter(Mandatory)][string]$Prompt,
         [string]$Model,
         [string]$Path = $script:DefaultFleetPath,
-        [string]$JournalPath = (Join-Path $HOME '.claude/model-routing-log.md'),
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md'),
         [switch]$NoJournal
     )
     $provider = Get-FleetProvider -Name $Name -Path $Path

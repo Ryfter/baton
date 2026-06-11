@@ -14,6 +14,7 @@ from pathlib import Path
 from kb.chunker import chunk_file
 from kb.embedder import DEFAULT_MODEL, embed, EmbedError
 from kb.extractors import ExtractorUnavailable, ExtractorError
+from kb.paths import baton_home
 from kb.store import VectorStore
 
 
@@ -222,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--scope", default=None, help="all | universal | <project-id>")
     p.add_argument("--file", default=None, help="Index exactly one changed file")
     p.add_argument("--corpus-root", default=str(Path.home() / ".claude" / "knowledge"))
-    p.add_argument("--jobs-root", default=str(Path.home() / ".claude" / "jobs"))
+    p.add_argument("--jobs-root", default=str(baton_home() / "jobs"))
     p.add_argument("--index-dir", default=str(Path.home() / ".claude" / "knowledge" / ".index"))
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--host", default=None)

@@ -8,10 +8,11 @@
   See docs/superpowers/specs/2026-06-07-routing-s1-capability-selector-design.md.
 #>
 
+. "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/fleet-lib.ps1"   # for Read-Fleet + ConvertFrom-FleetValue
 . "$PSScriptRoot/routing-learn.ps1"   # Slice 3 learning loop (ratings + learned quality + judge)
 
-$script:DefaultToolsPath = (Join-Path $HOME '.claude/tools.yaml')
+$script:DefaultToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml')
 
 function Read-Tools {
     <# Parse tools.yaml into an array of tool hashtables. Flat schema (no env blocks). #>
@@ -42,7 +43,7 @@ function Read-Tools {
 function Get-GeneralCapabilities {
     <# Read the top-level `general_capabilities: [a, b, c]` inline list from fleet.yaml.
        Returns string[] (empty if the key is absent). Mirrors Get-FleetResearchDefault. #>
-    param([string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'))
+    param([string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'))
     if (-not (Test-Path $FleetPath)) { return @() }
     foreach ($line in (Get-Content $FleetPath)) {
         if ($line -match '^\s*general_capabilities:\s*\[(.*)\]\s*$') {
@@ -58,7 +59,7 @@ function Get-KnownCapabilities {
     <# Union of every tools.yaml capability + fleet.yaml general_capabilities. #>
     param(
         [string]$ToolsPath = $script:DefaultToolsPath,
-        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml')
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml')
     )
     $caps = [System.Collections.Generic.List[string]]::new()
     if (Test-Path $ToolsPath) {
@@ -88,9 +89,9 @@ function Select-Capability {
         [ValidateSet('local','free','paid')][string]$MaxCostTier,
         [switch]$RequireLocal,
         [string]$ToolsPath = $script:DefaultToolsPath,
-        [string]$FleetPath = (Join-Path $HOME '.claude/fleet.yaml'),
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
         [string]$RatingsPath = (Join-Path $HOME '.claude/knowledge/universal/routing-ratings.jsonl'),
-        [string]$JournalPath = (Join-Path $HOME '.claude/routing-journal.jsonl')
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl')
     )
     $candidates = [System.Collections.ArrayList]@()
 

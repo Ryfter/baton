@@ -1,11 +1,13 @@
 #!/usr/bin/env pwsh
-# Writer library for the legibility feed (~/.claude/runs/). Producers (hooks,
+# Writer library for the legibility feed ($BATON_HOME/runs/). Producers (hooks,
 # status line, fleet dispatch) call these. Reads are done in Python by the dashboard.
+
+. "$PSScriptRoot/baton-home.ps1"
 
 function Get-RunsRoot([string]$RunsRoot) {
     if ($RunsRoot) { return $RunsRoot }
     if ($env:ROUTING_RUNS_ROOT) { return $env:ROUTING_RUNS_ROOT }
-    return (Join-Path $HOME '.claude/runs')
+    return (Join-Path (Get-BatonHome) 'runs')
 }
 
 function Ensure-RunDir([string]$RunsRoot, [string]$Id) {
