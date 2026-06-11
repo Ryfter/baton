@@ -1,9 +1,9 @@
 ---
-description: Per-project cost ledger. Bare /cost prints the current ledger. `/cost <new-total>` appends an entry with auto-computed delta and updates the Current-total header.
+description: Per-project cost ledger. Bare /baton:cost prints the current ledger. `/baton:cost <new-total>` appends an entry with auto-computed delta and updates the Current-total header.
 argument-hint: [<new-total> [--source "<s>"] [--note "<text>"]]
 ---
 
-# /cost
+# /baton:cost
 
 Per-project cost tracking. Stores at `~/.claude/knowledge/projects/<id>/cost.md`.
 Cross-project rollup is deferred to the Plan 7 multi-project command center.
@@ -19,7 +19,7 @@ Cross-project rollup is deferred to the Plan 7 multi-project command center.
    if (Test-Path $path) {
        Get-Content $path -Raw | Write-Host
    } else {
-       Write-Host "No cost ledger yet for this project. Run: /cost <total> --note ""<text>""" -ForegroundColor Yellow
+       Write-Host "No cost ledger yet for this project. Run: /baton:cost <total> --note ""<text>""" -ForegroundColor Yellow
    }
    ```
 

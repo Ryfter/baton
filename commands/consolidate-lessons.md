@@ -3,7 +3,7 @@ description: Walk every job's lessons.md, append entries to the right KB file by
 argument-hint: (no arguments)
 ---
 
-# /consolidate-lessons
+# /baton:consolidate-lessons
 
 Run the consolidation script:
 

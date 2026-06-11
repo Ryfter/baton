@@ -21,7 +21,7 @@ In one sentence: **Claude Code becomes the conductor, and a fleet of other model
 become the orchestra.**
 
 You interact with it entirely through **slash commands** inside Claude Code (like
-`/job-start` or `/ensemble`) plus a **live web dashboard** in your browser.
+`/baton:job-start` or `/baton:ensemble`) plus a **live web dashboard** in your browser.
 
 ### The moving parts
 
@@ -90,7 +90,7 @@ Then restart Claude Code.
 ### Confirm it worked
 
 ```
-/fleet doctor
+/baton:fleet doctor
 ```
 
 You should see a table of your providers, each marked reachable or not.
@@ -136,7 +136,7 @@ so it shows up in the dashboard portfolio.
 ### Step 2 — Start a job
 
 ```
-/job-start "rewrite the auth middleware"
+/baton:job-start "rewrite the auth middleware"
 ```
 
 *Under the hood:* creates `~/.claude/jobs/<id>/` (manifest, brief, phase-log, lessons)
@@ -146,7 +146,7 @@ is tracked against this job.
 ### Step 3 — Research with the whole fleet
 
 ```
-/research "safest way to migrate session tokens without invalidating logins?"
+/baton:research "safest way to migrate session tokens without invalidating logins?"
 ```
 
 *Under the hood:* pulls the top-3 most relevant snippets from your *existing* knowledge
@@ -158,21 +158,21 @@ writes a single `synthesis.md` highlighting agreement, disagreement, and a recom
 For a *decision* rather than open research, use a structured method instead:
 
 ```
-/six-hats "should we adopt sliding-window refresh tokens?"
-/council  "should we adopt sliding-window refresh tokens?" --providers claude-cli,codex
+/baton:six-hats "should we adopt sliding-window refresh tokens?"
+/baton:council  "should we adopt sliding-window refresh tokens?" --providers claude-cli,codex
 ```
 
-- `/six-hats` examines it from six fixed angles (facts, feelings, risks, benefits,
+- `/baton:six-hats` examines it from six fixed angles (facts, feelings, risks, benefits,
   creativity, process).
-- `/council` runs a two-round debate where models refine after seeing each other's answers.
+- `/baton:council` runs a two-round debate where models refine after seeing each other's answers.
 
 ### Step 4 — Capture what you learned
 
 ```
-/job-lesson knowledge "tokens are HS256 today; rotating without invalidating needs a grace window in the validator"
+/baton:job-lesson knowledge "tokens are HS256 today; rotating without invalidating needs a grace window in the validator"
 ```
 
-*Under the hood:* appends the lesson to the job's `lessons.md`. Later, `/consolidate-lessons`
+*Under the hood:* appends the lesson to the job's `lessons.md`. Later, `/baton:consolidate-lessons`
 promotes it into the durable knowledge base.
 
 ### Step 5 — Design
@@ -181,13 +181,13 @@ Write your design spec in conversation with Claude and save it (e.g. to
 `<job>/phases/design/auth-rewrite.md`). When the spec is ready, advance the phase:
 
 ```
-/job-phase next        # research → design → code.sprint-1
+/baton:job-phase next        # research → design → code.sprint-1
 ```
 
 ### Step 6 — Build it in parallel
 
 ```
-/code-decompose docs/specs/auth-rewrite.md
+/baton:code-decompose docs/specs/auth-rewrite.md
 ```
 
 *Under the hood:* Claude proposes a list of small subtasks (each with the files it'll
@@ -195,7 +195,7 @@ touch and what it depends on), shows you the plan, and on your confirmation writ
 `subtasks.json`.
 
 ```
-/code-parallel
+/baton:code-parallel
 ```
 
 *Under the hood:* each subtask is handed to its own AI worker running in an **isolated
@@ -203,8 +203,8 @@ copy of the repo** (a git worktree), so they can't collide. Independent tasks ru
 same time; dependent ones wait their turn.
 
 ```
-/code-merge            # preview the integration plan + likely conflicts
-/code-merge --apply    # actually fold the finished branches into your main branch
+/baton:code-merge            # preview the integration plan + likely conflicts
+/baton:code-merge --apply    # actually fold the finished branches into your main branch
 ```
 
 *Under the hood:* it flags tasks that touched the same files (likely conflicts), then
@@ -214,8 +214,8 @@ conflict so you can resolve it.
 ### Step 7 — Wrap up
 
 ```
-/job-phase done        # closes the job, prompts for retro feedback on its decisions
-/cost 187.42           # log your new running billing total
+/baton:job-phase done        # closes the job, prompts for retro feedback on its decisions
+/baton:cost 187.42           # log your new running billing total
 ```
 
 ---
@@ -227,15 +227,15 @@ exhaust into durable guidance:
 
 | Run periodically | What it does |
 |---|---|
-| `/consolidate-lessons` | Files your per-job lessons into the knowledge base |
-| `/consolidate-decisions` | Rolls decision records + their verdicts into guidance docs |
-| `/consolidate-routing` | Turns notes about model performance into a "which model for what" catalog |
+| `/baton:consolidate-lessons` | Files your per-job lessons into the knowledge base |
+| `/baton:consolidate-decisions` | Rolls decision records + their verdicts into guidance docs |
+| `/baton:consolidate-routing` | Turns notes about model performance into a "which model for what" catalog |
 
 **Decisions** are special. Whenever a significant choice is made, it's captured as a
 record (what was chosen, the alternatives, the reasoning). Later you attach a verdict:
 
 ```
-/decision-feedback d011 "the A/B held up; smaller model is fine" --outcome worked
+/baton:decision-feedback d011 "the A/B held up; smaller model is fine" --outcome worked
 ```
 
 A `worked` verdict moves the decision into **Established patterns**; `didnt`/`mixed`
@@ -262,8 +262,8 @@ lessons learned in one project quietly improve your defaults everywhere.
 
 | Symptom | Fix |
 |---|---|
-| A model shows as unreachable | `/fleet doctor` to re-probe; check the CLI is installed / the machine is on |
-| Search returns nothing | `/kb-index --full` (and `ollama pull nomic-embed-text` if needed) |
+| A model shows as unreachable | `/baton:fleet doctor` to re-probe; check the CLI is installed / the machine is on |
+| Search returns nothing | `/baton:kb-index --full` (and `ollama pull nomic-embed-text` if needed) |
 | `~/.claude/` looks out of date | re-run `pwsh scripts\bootstrap.ps1 -Force` (idempotent) |
 | Want to confirm nothing's broken | `python -m pytest dashboard kb -q` + the `scripts\test-*.ps1` suites |
 | Stop auto-capturing decisions | create `~/.claude/decisions-off` (global) or a per-project `decisions-off` |

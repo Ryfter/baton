@@ -1,19 +1,19 @@
 ---
-description: Operate the tools registry (~/.claude/tools.yaml) — the non-LLM capability sibling of /fleet. `doctor` health-checks each tool, `list` shows the registry.
+description: Operate the tools registry (~/.claude/tools.yaml) — the non-LLM capability sibling of /baton:fleet. `doctor` health-checks each tool, `list` shows the registry.
 argument-hint: doctor | list
 ---
 
-# /tools
+# /baton:tools
 
 Operate the tool registry defined in `~/.claude/tools.yaml` — declared, cost-tiered,
 capability-tagged callable capabilities (e.g. Docling for `pdf-extract`), co-equal with
-the models in `/fleet`.
+the models in `/baton:fleet`.
 
 ## Steps
 
 1. **Parse `$ARGUMENTS`.** The first whitespace-delimited token is the subcommand:
    `doctor` or `list`. If it's neither (or empty), print usage and stop:
-   *"Usage: /tools doctor | list"*.
+   *"Usage: /baton:tools doctor | list"*.
 
 2. **Dispatch by subcommand** (run from the repo root so `python -m tools.*` resolves):
 

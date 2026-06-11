@@ -3,7 +3,7 @@ description: Semantic top-k search over the embedded KB. Scope = universal | <pr
 argument-hint: "<query>" [--k N] [--scope universal|<project-id>|all] [--decisions-only]
 ---
 
-# /kb-search
+# /baton:kb-search
 
 Query the embedded KB. Returns top-k chunks with scores + source paths + snippets.
 
@@ -22,7 +22,7 @@ Query the embedded KB. Returns top-k chunks with scores + source paths + snippet
    ```
 
 3. **Empty index?** If `Invoke-KbSearch` returns `@()` *and* the index is
-   empty, suggest `/kb-index --full` (and `ollama pull nomic-embed-text`
+   empty, suggest `/baton:kb-index --full` (and `ollama pull nomic-embed-text`
    if that's not pulled yet).
 
 4. **Empty query?** Ask the user for a non-empty query string.

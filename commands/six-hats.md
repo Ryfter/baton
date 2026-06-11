@@ -3,7 +3,7 @@ description: Six Thinking Hats preset on the ensemble primitive. Runs six role-p
 argument-hint: "<question>" [--providers a,b,c] [--tier free,local]
 ---
 
-# /six-hats
+# /baton:six-hats
 
 Run Edward de Bono's Six Thinking Hats across the fleet.
 
@@ -12,11 +12,11 @@ Run Edward de Bono's Six Thinking Hats across the fleet.
 1. **Parse `$ARGUMENTS`:** the quoted string is the question; optional
    `--providers a,b,c` and `--tier free,local`.
 
-2. **Resolve the roster** (same precedence as `/ensemble`):
+2. **Resolve the roster** (same precedence as `/baton:ensemble`):
    - if `--providers` given → that list (drop unknown/disabled with a warning)
    - else if `--tier` given → all enabled providers whose `cost_tier` is in the list
    - else → `Get-FleetResearchDefault`
-   Empty → stop with the same message as `/ensemble`.
+   Empty → stop with the same message as `/baton:ensemble`.
 
    ```powershell
    . "$HOME/.claude/scripts/fleet-lib.ps1"
@@ -85,7 +85,7 @@ Run Edward de Bono's Six Thinking Hats across the fleet.
    - **Creative directions** — most promising Green Hat ideas
    - **Recommended next move** — your Blue Hat conclusion
    Skip any hat whose file starts with `[ENSEMBLE ERROR]` or `[ENSEMBLE TIMEOUT]`,
-   but note the gap. If ALL hats failed, skip synthesis and suggest `/fleet doctor`.
+   but note the gap. If ALL hats failed, skip synthesis and suggest `/baton:fleet doctor`.
    When KB hits were prepended, mention which sources were used in the synthesis
    preamble.
 

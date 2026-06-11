@@ -3,7 +3,7 @@ description: Attach human feedback to a decision record. Outcome worked|didnt|mi
 argument-hint: <id> "<text>" [--outcome worked|didnt|mixed] [--urgent]
 ---
 
-# /decision-feedback
+# /baton:decision-feedback
 
 Append feedback to a decision record at
 `~/.claude/knowledge/projects/<project>/decisions/<id>-*.md`.

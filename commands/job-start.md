@@ -3,7 +3,7 @@ description: Start a new job. Creates ~/.claude/jobs/<id>/ with manifest, brief,
 argument-hint: "<brief>" [--project <id> | --no-project]
 ---
 
-# /job-start
+# /baton:job-start
 
 You are starting a new orchestrator job. The brief and optional flags are in
 `$ARGUMENTS`.
@@ -12,7 +12,7 @@ You are starting a new orchestrator job. The brief and optional flags are in
 
 1. **Check no job is active.** Read `~/.claude/current-job.json`. If `job_id`
    is set, ask the user: *"Job `<id>` is active. Suspend and start new, or
-   `/job-resume` and continue?"* — wait for their answer before proceeding.
+   `/baton:job-resume` and continue?"* — wait for their answer before proceeding.
 
 2. **Parse arguments.** The brief is the quoted string (or first arg if
    unquoted). Flags: `--project <id>` (override), `--no-project` (skip

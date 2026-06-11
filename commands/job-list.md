@@ -3,7 +3,7 @@ description: List jobs under ~/.claude/jobs/, filtered by status.
 argument-hint: [--all | --active | --done]
 ---
 
-# /job-list
+# /baton:job-list
 
 Show jobs in `~/.claude/jobs/`. Default filter: `--active`.
 

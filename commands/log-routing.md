@@ -3,7 +3,7 @@ description: Append a one-line qualitative note about a model's recent performan
 argument-hint: <model-or-target> <free-text observation>
 ---
 
-# /log-routing
+# /baton:log-routing
 
 You are appending a single qualitative note to the model routing journal at
 `~/.claude/model-routing-log.md`. The format is:

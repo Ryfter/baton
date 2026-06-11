@@ -3,7 +3,7 @@ description: Distill decision records + feedback into two-layer guidance docs (p
 argument-hint: (no arguments)
 ---
 
-# /consolidate-decisions
+# /baton:consolidate-decisions
 
 Run the consolidation script:
 

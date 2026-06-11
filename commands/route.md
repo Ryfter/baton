@@ -3,7 +3,7 @@ description: Recommend OR dispatch the optimal capability (tool or model) for a 
 argument-hint: "<capability>" [--max-tier local|free|paid] [--local] [--run "<prompt>"] [--rank <1-5>] [--judge] | --rate good|bad [note] | --calibrate "<capability>" "<prompt>" | --calibrate "<capability>" --rate "<cand>=good|bad ..."
 ---
 
-# /route
+# /baton:route
 
 Recommend **or dispatch** the optimal capability for a need. Reads the `tools.yaml`
 (capability-specific tools + specialty models) and `fleet.yaml` (general models) registries,
@@ -19,7 +19,7 @@ and logs every attempt. **`--rate good|bad`** records whether the last run's out
 1. **Parse `$ARGUMENTS`:** the first token is `<capability>`; optional `--max-tier local|free|paid`,
    `--local`, `--rank <1-5>` (paid-dispatch priority for the prime-hours gate, default `3`), and
    `--run "<prompt>"`. Empty capability → stop with:
-   *"Usage: /route \"<capability>\" [--max-tier local|free|paid] [--local] [--rank <1-5>] [--run \"<prompt>\"]"*.
+   *"Usage: /baton:route \"<capability>\" [--max-tier local|free|paid] [--local] [--rank <1-5>] [--run \"<prompt>\"]"*.
 
 2. **Without `--run` (recommendation mode, unchanged):**
 
@@ -90,7 +90,7 @@ and logs every attempt. **`--rate good|bad`** records whether the last run's out
    . "$HOME/.claude/scripts/routing-dispatch.ps1"
    $last = Get-LastRoutedAttempt
    if (-not $last) {
-       Write-Host "No completed /route --run with a winning candidate to rate yet."
+       Write-Host "No completed /baton:route --run with a winning candidate to rate yet."
    } else {
        Add-CapabilityRating -Capability $last.capability -Candidate $last.candidate `
            -Source $last.source -Rating '<good|bad>' -Note '<note>'
@@ -131,7 +131,7 @@ and logs every attempt. **`--rate good|bad`** records whether the last run's out
        $names = ($cal.candidates | ForEach-Object { "$($_.candidate)=good" }) -join ' '
        Write-Host ""
        Write-Host "Rate them (edit good/bad), then run:"
-       Write-Host "  /route --calibrate `"<capability>`" --rate `"$names`""
+       Write-Host "  /baton:route --calibrate `"<capability>`" --rate `"$names`""
        Write-Host ("Logged {0} calibration attempt(s) to ~/.claude/routing-journal.jsonl." -f $cal.candidates.Count)
    }
    ```

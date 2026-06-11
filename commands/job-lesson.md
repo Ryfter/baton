@@ -3,7 +3,7 @@ description: Capture a lesson into the active job's lessons.md and the journal. 
 argument-hint: <category> "<text>" [--scope universal|project]
 ---
 
-# /job-lesson
+# /baton:job-lesson
 
 Append a lesson to the active job's `lessons.md` + write a `lesson` line to the
 journal so the dashboard can show it.
@@ -16,7 +16,7 @@ journal so the dashboard can show it.
 2. **Validate category.** If invalid, show the valid list and stop.
 
 3. **Confirm active job.** If no active job, error: *"No active job — use
-   /job-resume."*
+   /baton:job-resume."*
 
 4. **Run:**
 

@@ -3,7 +3,7 @@ description: Show the active job's manifest plus recent journal entries tagged w
 argument-hint: (no arguments)
 ---
 
-# /job-status
+# /baton:job-status
 
 You are showing the user the current job's status. Run:
 
@@ -12,7 +12,7 @@ You are showing the user the current job's status. Run:
 
 $state = Read-CurrentJob
 if (-not $state.job_id) {
-    Write-Host "No active job. Use /job-resume <id> or /job-list to see available jobs." -ForegroundColor Yellow
+    Write-Host "No active job. Use /baton:job-resume <id> or /baton:job-list to see available jobs." -ForegroundColor Yellow
     return
 }
 

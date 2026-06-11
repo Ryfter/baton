@@ -3,14 +3,14 @@ description: Resume a previously-started job. Reads its manifest, sets the curre
 argument-hint: <job-id>
 ---
 
-# /job-resume
+# /baton:job-resume
 
 Resume a job by ID. The ID is in `$ARGUMENTS` (e.g.,
 `j-2026-05-26-feature-flags`).
 
 ## Steps
 
-1. **Validate.** If `$ARGUMENTS` is empty, show output of `/job-list --active`
+1. **Validate.** If `$ARGUMENTS` is empty, show output of `/baton:job-list --active`
    and ask which one to resume.
 
 2. **Check no other job is active.** Read `~/.claude/current-job.json`. If

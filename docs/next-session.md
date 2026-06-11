@@ -11,12 +11,12 @@ How to pick the orchestrator back up and use it on its own backlog.
 
 **SHIPPED this spurt:**
 
-0. **Cost-Optimization Engine — Slice A (time-awareness): SHIPPED** (merged `e584e7b`, 2026-06-10). New pure lib `scripts/prime-hours.ps1` — `Test-PrimeHoursGate -Rank -CostTier [-Now] [-ConfigPath] → @{decision;default;reason;window}` and `Get-CapacityProfile → @{concurrency_factor;surge;window}`, reading `~/.claude/prime-hours.yaml` (`-Now` injectable → clock-independent tests). Gate guards ONLY the paid tier in a `peak` window; rank policy 1=ask/run, 2=ask/defer, 3-5=defer, unranked=default_rank(3); reserved rows 0/6 (undocumented); fail-open on missing/garbage config/tz. `Get-CapacityProfile` → surge×factor (default 2) in a `surge` window. Wiring: routing paid-tier gate is **opt-in via `-Rank`** (sentinel `[int]::MinValue` → 32 original dispatch checks untouched); backlog `Get-EffectiveRanks` (min(own, transitive dependents) — prereqs inherit an urgent dependent's rank) + ascending dispatch + per-item gate (deferred → `Write-ItemLive -State deferred`, never silently dropped); bootstrap deploys lib+seed; `/route --rank`. **Invariant held: rank ≠ tier** (the optimizer still picks the cheapest capable model; the gate only governs premium-spend-now). Gate: all 8 PS suites exit 0 + live deploy smoke; adversarial review SHIP (one clock-dependency BLOCK fixed: `-GateNow` injected in the routing gate tests, `532f156`). 7 TDD task commits `d9d7a11`→`16a3ef2` + the review fix. Spec/plan: `docs/superpowers/specs/2026-06-10-cost-optimization-engine-design.md`, `docs/superpowers/plans/2026-06-10-cost-optimization-engine-slice-a.md`.
+0. **Cost-Optimization Engine — Slice A (time-awareness): SHIPPED** (merged `e584e7b`, 2026-06-10). New pure lib `scripts/prime-hours.ps1` — `Test-PrimeHoursGate -Rank -CostTier [-Now] [-ConfigPath] → @{decision;default;reason;window}` and `Get-CapacityProfile → @{concurrency_factor;surge;window}`, reading `~/.claude/prime-hours.yaml` (`-Now` injectable → clock-independent tests). Gate guards ONLY the paid tier in a `peak` window; rank policy 1=ask/run, 2=ask/defer, 3-5=defer, unranked=default_rank(3); reserved rows 0/6 (undocumented); fail-open on missing/garbage config/tz. `Get-CapacityProfile` → surge×factor (default 2) in a `surge` window. Wiring: routing paid-tier gate is **opt-in via `-Rank`** (sentinel `[int]::MinValue` → 32 original dispatch checks untouched); backlog `Get-EffectiveRanks` (min(own, transitive dependents) — prereqs inherit an urgent dependent's rank) + ascending dispatch + per-item gate (deferred → `Write-ItemLive -State deferred`, never silently dropped); bootstrap deploys lib+seed; `/baton:route --rank`. **Invariant held: rank ≠ tier** (the optimizer still picks the cheapest capable model; the gate only governs premium-spend-now). Gate: all 8 PS suites exit 0 + live deploy smoke; adversarial review SHIP (one clock-dependency BLOCK fixed: `-GateNow` injected in the routing gate tests, `532f156`). 7 TDD task commits `d9d7a11`→`16a3ef2` + the review fix. Spec/plan: `docs/superpowers/specs/2026-06-10-cost-optimization-engine-design.md`, `docs/superpowers/plans/2026-06-10-cost-optimization-engine-slice-a.md`.
 
    **Slice A deferred follow-ups (non-blocking nits from final review, tracked not done):**
    - **Capacity surge is computed but not consumed in the serial `Invoke-Backlog`** (`$cap = Get-CapacityProfile` is a dead assignment there) — the spec's "on surge raise max-parallel + drain deferred" belongs to the concurrent driver / Slice B/C. Wire it when the concurrent path lands, or drop the call until then.
    - **`$script:__lastGateDecision` module-scoped carry** in `routing-dispatch.ps1` is correct for serial dispatch but a latent race if surge ever drives parallel candidate dispatch — thread a local instead when that happens.
-   - **Interactive rank-1 `ask` confirms AFTER the spend, not before** (`ask`→`run`→dispatch happens in the library; `/route` only sees `gate='ask'` post-dispatch). Unattended semantics are correct; the "confirm before premium peak spend" promise in `route.md` is unenforceable for rank-1 through this channel. If true pre-spend confirmation is wanted, the gate must surface `ask` as a *non-dispatching* status the command layer resolves then re-dispatches — a design change, flag to Kevin.
+   - **Interactive rank-1 `ask` confirms AFTER the spend, not before** (`ask`→`run`→dispatch happens in the library; `/baton:route` only sees `gate='ask'` post-dispatch). Unattended semantics are correct; the "confirm before premium peak spend" promise in `route.md` is unenforceable for rank-1 through this channel. If true pre-spend confirmation is wanted, the gate must surface `ask` as a *non-dispatching* status the command layer resolves then re-dispatches — a design change, flag to Kevin.
    - Minor: `Test-InWindow` treats a window with only `start` OR only `end` as all-day; `concurrency_factor: 0` is falsy → silently 2.0. Both harmless with the seed config; one-time warn would be tidier.
 
 2. **Grimdex — SHIPPED, SPLIT & PUBLIC.** The KB is the standalone **Grimdex** app at `D:\Dev\Grimdex`; `~/.claude/knowledge` is a directory junction → it. **Engine/data split executed 2026-06-10 (d037, via rename):** the private data repo is **`Ryfter/grimdex-know`** (all `universal/` + `projects/` + `config/`, full history, `pre-split-backup` tag — the junction's remote already points here); the **engine** is a fresh-history repo **`Ryfter/Grimdex`** (scripts + convention + skeleton + exemplars, MIT) that is **now PUBLIC** (https://github.com/Ryfter/Grimdex). Engine work happens in the Grimdex home thread; this repo's `CLAUDE.md` is wired with the `<!-- grimdex:start -->` pointer stanza. ⚠️ Any stale remote pointing at `Ryfter/Grimdex.git` for the *KB* must move to `grimdex-know`. Decisions **d032/d033** (standalone, tool-agnostic, file-first; graceful degradation). **Grimdex-side rules (its d002):** project-tier writes (d-records/guidance/ratings) go *direct* to `projects/<id>/`; cross-project/universal rule proposals go to `universal/promotions/<id>.md` (do NOT hand-edit `GRIMDEX.md`) — a **daily 5:30am sweep** auto-inscribes clean additions, defers conflicts to Kevin; **`git pull --rebase` before writing, push after** (shared repo). Naming family: Grimdex = coding now; **Grimlore** reserved for a future general "second-brain" KB.
@@ -43,7 +43,7 @@ offline. Tests: `kb dashboard` 116 passed.
 
 Open follow-up (optional, not blocking): capture a screenshot of an *active*
 fleet run, and consider real browser-driven fleet controls (provider roster,
-`/fleet doctor`, `/ensemble` launch, backlog approval) as a separate feature.
+`/baton:fleet doctor`, `/baton:ensemble` launch, backlog approval) as a separate feature.
 
 ## 0b. Fleet Conductor — vision + Slice 1 SHIPPED (2026-06-06)
 
@@ -88,7 +88,7 @@ cannot orchestrate a local fleet, so we build the local backbone and ride GitHub
 drivers (parent-process, best-effort try/catch) so real dispatched agents now appear in the
 legibility feed; a per-agent **assignment view** (`read_assignments` + `partials/assignments.html`)
 with active/queued/**parked-for-human** lanes; and **current-run** wiring (`Set-CurrentRun`/
-`Clear-CurrentRun` + `/job-start`/`/job-phase done`) so the conductor's own session narrates
+`Clear-CurrentRun` + `/baton:job-start`/`/baton:job-phase done`) so the conductor's own session narrates
 in. Decision **d022** = wire the calls inside the existing markdown command PS blocks. Gate:
 154 Python + 5 PowerShell suites + bootstrap smoke; adversarial review verdict SHIP.
 Spec/plan: `docs/superpowers/specs/2026-06-06-sp2-coordination-backbone-design.md`,
@@ -102,10 +102,10 @@ Spec/plan: `docs/superpowers/specs/2026-06-06-sp2-coordination-backbone-design.m
 - The Slice 1 deferrals still stand: stale-run auto-idle (spec §5) and a `frontend-design`
   styling pass for the gutter/assignment board/sprites.
 
-**SP3 — `/idea` front door: SHIPPED** (merged `b348855`, 2026-06-07). One command turns a
+**SP3 — `/baton:idea` front door: SHIPPED** (merged `b348855`, 2026-06-07). One command turns a
 raw idea into board-ready GitHub Issues with a single human gate (concept-doc approval).
-Job-less stitch (Approach A) of existing primitives — KB prefetch → `/research` ensemble →
-`/council` two-round viability debate → a conductor-written concept doc → Issues on Project
+Job-less stitch (Approach A) of existing primitives — KB prefetch → `/baton:research` ensemble →
+`/baton:council` two-round viability debate → a conductor-written concept doc → Issues on Project
 #5 — backed by one new tested lib `scripts/idea-lib.ps1` (`New-IdeaWorkspace`,
 `New-IdeaConceptDoc`, pure `Build-IdeaIssues`, `gh` `Publish-IdeaIssues` with auth pre-flight
 + per-issue isolation + `--body-file` for the 965-byte rule) and `commands/idea.md`. End
@@ -118,7 +118,7 @@ boundary = issues on the board; dispatch stays a separate human act (decision **
 - Add `gh project item-add` wiring if `gh issue create --project` doesn't place issues on
   Project #5 directly (the command passes `-Project`; local `gh issue create --help`
   confirms `--project` is supported and requires the `project` scope).
-- First real `/idea` run is still the acceptance test for project placement. The
+- First real `/baton:idea` run is still the acceptance test for project placement. The
   issue publisher now preflights auth and ensures generated labels (`from:idea`,
   `Tier-*`, extras) before creating issues, so a fresh repo's default-label state
   should not block the run.
@@ -141,14 +141,14 @@ PDF→Docling via a **lazy/optional** import gated by the registry); the chunker
 a pure `chunk_text` + an extractor-fed `chunk_file`; the indexer now discovers `*.pdf` and
 counts `extractor_skips`/`extractor_errors`. A PDF is **never silently zero-chunked** — no
 tool / not-installed → counted skip, corrupt → error, `.md` pipeline never breaks. New
-`tools/` Python package (`registry`/`doctor`/`list`) + `/tools list|doctor` command, deployed
+`tools/` Python package (`registry`/`doctor`/`list`) + `/baton:tools list|doctor` command, deployed
 via bootstrap. Gate: 176 Python + 8 PowerShell suites + bootstrap smoke; review verdict SHIP.
 Spec/plan: `docs/superpowers/specs/2026-06-07-tools-registry-docling-design.md`,
 `docs/superpowers/plans/2026-06-07-tools-registry-docling.md`.
 
 **Tools-registry deferred follow-ups (tracked, not done):**
 - Real end-to-end acceptance: `pip install docling`, drop a real PDF under the corpus, run
-  `python -m kb.index`, confirm `/kb-search` returns a hit. The Docling shell path is only
+  `python -m kb.index`, confirm `/baton:kb-search` returns a hit. The Docling shell path is only
   stub/monkeypatch-tested in CI (optional heavy dep — same posture as SP3's `gh`).
 - `import sys` in `tools/doctor.py` is unused (harmless; left to avoid a churn commit).
 - DOCX/PPTX/scan extractors are trivial to add (extractor keyed by extension) — not built.
@@ -164,7 +164,7 @@ compounding deliverable.
 - **Slice 1 — selector + data model: SHIPPED** (merged `82be1b9`, 2026-06-08). PowerShell
   `Select-Capability` (`scripts/routing-lib.ps1`) over `tools.yaml` + `fleet.yaml` returns an
   explainable, **cheapest-tier-first** ranked candidate list (`local`<`free`<`paid`; quality an
-  unrated neutral-0.5 slot); `/route <capability> [--max-tier] [--local]` shows the pick + why
+  unrated neutral-0.5 slot); `/baton:route <capability> [--max-tier] [--local]` shows the pick + why
   (recommendation only). Specialty models (commit-msg/struct-extract/ocr) migrated from
   `routing.md` prose into `tools.yaml` as `kind:cli` entries; `fleet.yaml` gained a top-level
   `general_capabilities: [code-gen, reasoning, summarize]`. Gate: 26 routing checks + 176 Python
@@ -178,7 +178,7 @@ compounding deliverable.
   `Test-RoutingOutputHeuristic` (exit 0 + non-empty + per-capability validator), and escalates
   to the next candidate on failure — terminal `escalate-to-conductor` when all fail. Every
   attempt is logged to `~/.claude/routing-journal.jsonl` (structured JSONL — the Slice 3 learning
-  substrate). `/route --run "<prompt>"` dispatches + prints the ladder walked. **Grader seam:**
+  substrate). `/baton:route --run "<prompt>"` dispatches + prints the ladder walked. **Grader seam:**
   `Invoke-RoutedCapability -Grader <scriptblock>` (contract `(Capability,Result)->{passed,score,
   reason}`) defaults to heuristic; Slice 3 plugs in its judge here — **decision d027**. Gate: 28
   routing-dispatch checks + routing-lib regression + fleet + bootstrap smoke + 165 Python; review
@@ -196,9 +196,9 @@ compounding deliverable.
   gate first (no judge call on broken output), cheap/local judge scores passing output, falls
   back to heuristic on error/no-model. `Invoke-RoutedCapability` stays pure (heuristic default =
   Slice 2); a `-Judge` switch opts in; the auto-on decision (local judge → on, else `--judge`)
-  lives in `/route`. Ratings persist to `~/.claude/knowledge/universal/routing-ratings.jsonl`
-  (GitHub-backed, universal); the journal stays local. `/route --rate good|bad [note]` captures
-  the last winner's rating; `/route <cap>` shows a learned-quality provenance column. Decisions
+  lives in `/baton:route`. Ratings persist to `~/.claude/knowledge/universal/routing-ratings.jsonl`
+  (GitHub-backed, universal); the journal stays local. `/baton:route --rate good|bad [note]` captures
+  the last winner's rating; `/baton:route <cap>` shows a learned-quality provenance column. Decisions
   **d028** (blend), **d029** (ratings→repo / journal-local split), **d030** (judge free-gate +
   command-layer auto-on). Gate: 11 suites green (routing-learn 43, routing-dispatch 31,
   routing-lib 27, bootstrap 15, all fleet suites) + live deploy smoke; review verdict SHIP.
@@ -206,11 +206,11 @@ compounding deliverable.
   `docs/superpowers/plans/2026-06-08-routing-s3-learning-loop.md`.
 
 - **Slice 4 — calibration mode: SHIPPED** (merged `b88b12b`, closes #36, 2026-06-10). The
-  **exploration** twin of S3's exploitation. `/route --calibrate "<cap>" "<prompt>"` fans out
+  **exploration** twin of S3's exploitation. `/baton:route --calibrate "<cap>" "<prompt>"` fans out
   across **all** candidates (within a tier cap), judge-scores each, journals one row per candidate
   (`grader=llm-judge` — signal with zero human effort), and shows a side-by-side table
   (candidate · tier · judge · learned-quality provenance · output excerpt) plus a **pre-filled**
-  Phase-2 rate command. Phase 2 — `/route --calibrate "<cap>" --rate "qwen=good devstral=bad …"`
+  Phase-2 rate command. Phase 2 — `/baton:route --calibrate "<cap>" --rate "qwen=good devstral=bad …"`
   — records a verdict per candidate to the GitHub-backed ratings store (human thumbs Wu 1.0
   dominate the judge seed). Cost-safe by default: caps at `--max-tier free`; paid candidates need
   explicit `--max-tier paid`; a preview line announces the dispatch count. Architecture: a shared
@@ -252,14 +252,14 @@ the role/adversarial engine + ruflo call-out. Pick at session start.
    ```
 
 3. **Health check** (run these in chat):
-   - `/fleet doctor` — confirm 5+ providers are reachable
-   - `/kb-search "ensemble"` — confirm the index has hits
+   - `/baton:fleet doctor` — confirm 5+ providers are reachable
+   - `/baton:kb-search "ensemble"` — confirm the index has hits
    - In a second terminal: `python -m dashboard.main` → open `http://localhost:8765` for the portfolio + KB search panel
 
 4. **If anything is off:**
    - `pwsh scripts\bootstrap.ps1 -Force` — re-deploy everything; idempotent
-   - `ollama pull nomic-embed-text` — if `/kb-search` says the model is missing
-   - `/kb-index --full` — rebuild the vector index from scratch
+   - `ollama pull nomic-embed-text` — if `/baton:kb-search` says the model is missing
+   - `/baton:kb-index --full` — rebuild the vector index from scratch
 
 ## B. Pick the next plan from the backlog
 
@@ -270,7 +270,7 @@ the role/adversarial engine + ruflo call-out. Pick at session start.
 6. **What's left (no open issues — file one when you pick these up):**
    - ~~**Wire `decision-detect` as a `Stop` hook**~~ — **DONE** (verified 2026-06-10): registered in `~/.claude/settings.json` Stop hook + deployed by `bootstrap.ps1:112-116`. Auto-decision-capture is live.
    - **Cross-project consolidation sweep** — blocked until a second project exists (universal guidance stays empty with one project).
-   - **Attach decision feedback** — `/decision-feedback <id> worked|didnt|mixed` over d001–d013 to graduate "Open / under-feedback" entries into "Established patterns".
+   - **Attach decision feedback** — `/baton:decision-feedback <id> worked|didnt|mixed` over d001–d013 to graduate "Open / under-feedback" entries into "Established patterns".
    - **New capability** — brainstorm the next plan; capture the decision, open an issue, run the loop below.
 
 7. **Read the issue body.** Each carries a Tier label, scope, and any noted risks/mitigations. `docs/roadmap.md` has the same content.
@@ -281,50 +281,50 @@ Pick issue **#N** — let's say **#16** (Plan 8.1 auto-index hook). Work it like
 
 8. **Open a job:**
    ```
-   /job-start "Plan 8.1 — auto-index hook for KB writes (closes #16)"
+   /baton:job-start "Plan 8.1 — auto-index hook for KB writes (closes #16)"
    ```
    Creates `~/.claude/jobs/<id>/` and starts in the `research` phase.
 
 9. **Research with the fleet + KB pre-fetch** (Plan 8 RAG fires automatically):
    ```
-   /research "best pattern for a debounced PostToolUse hook in PowerShell that re-runs python -m kb.index --scope ... on touched files only"
+   /baton:research "best pattern for a debounced PostToolUse hook in PowerShell that re-runs python -m kb.index --scope ... on touched files only"
    ```
    Synthesis lands at `<job>/phases/research/ensemble-<ts>/synthesis.md`.
 
 10. **For architectural decisions, run a council or hats:**
     ```
-    /six-hats "should the auto-index hook be synchronous or async/debounced?"
-    /council "should we debounce by file-path or by time-window?" --providers claude-cli,codex
+    /baton:six-hats "should the auto-index hook be synchronous or async/debounced?"
+    /baton:council "should we debounce by file-path or by time-window?" --providers claude-cli,codex
     ```
 
 11. **Capture lessons as you go:**
     ```
-    /job-lesson knowledge "PostToolUse hooks fire after every Write/Edit; KB-scoped path filter is essential"
+    /baton:job-lesson knowledge "PostToolUse hooks fire after every Write/Edit; KB-scoped path filter is essential"
     ```
 
-12. **Advance to design** (write the spec by hand or via `/six-hats` synthesis):
+12. **Advance to design** (write the spec by hand or via `/baton:six-hats` synthesis):
     ```
-    /job-phase next
+    /baton:job-phase next
     ```
     Author `docs/superpowers/specs/2026-MM-DD-plan8.1-design.md`. Capture any architectural decision via the file-based intake (see `CLAUDE.md`).
 
 13. **Advance to code phase:**
     ```
-    /job-phase next     # design → code.sprint-1
-    /code-decompose docs/superpowers/specs/2026-MM-DD-plan8.1-design.md
+    /baton:job-phase next     # design → code.sprint-1
+    /baton:code-decompose docs/superpowers/specs/2026-MM-DD-plan8.1-design.md
     ```
     Claude reads the spec, proposes N subtasks (`files_touched`, `depends_on`), confirms, writes `<job>/phases/code.sprint-1/subtasks.json`.
 
 14. **Dispatch parallel implementations:**
     ```
-    /code-parallel
+    /baton:code-parallel
     ```
     One Agent subagent per task in `isolation: worktree`. Independents fire concurrently; dependents wait.
 
 15. **Review the merge plan, then apply:**
     ```
-    /code-merge              # see plan + likely conflicts
-    /code-merge --apply      # cherry-pick in dep order; stops on first conflict
+    /baton:code-merge              # see plan + likely conflicts
+    /baton:code-merge --apply      # cherry-pick in dep order; stops on first conflict
     ```
 
 16. **Push + PR + merge** (deliberate manual gate):
@@ -340,43 +340,43 @@ Pick issue **#N** — let's say **#16** (Plan 8.1 auto-index hook). Work it like
 
 17. **Wrap the job:**
     ```
-    /job-phase done
+    /baton:job-phase done
     ```
     Closes the job, prompts for retro feedback on decisions captured during it.
 
 18. **Update cost** (when your Anthropic billing dashboard refreshes):
     ```
-    /cost <new-total>
+    /baton:cost <new-total>
     ```
 
 19. **Re-index the KB** to absorb the new spec + lessons + decisions:
     ```
-    /kb-index               # incremental — milliseconds if nothing changed
+    /baton:kb-index               # incremental — milliseconds if nothing changed
     ```
 
 ## D. Repeat
 
-Steps 8–19 are the loop. Each backlog issue → one job → one PR → one closed issue. The orchestrator gets better at advising you on its own design as the KB grows (Plan 8 RAG kicks in on every `/research`).
+Steps 8–19 are the loop. Each backlog issue → one job → one PR → one closed issue. The orchestrator gets better at advising you on its own design as the KB grows (Plan 8 RAG kicks in on every `/baton:research`).
 
 ## E. Bootstrap a new project (someday)
 
 When you bring the orchestrator to a different repo:
 
 1. `cd path\to\other\repo` and `claude` (memory auto-loads, project gets its own KB layer at `~/.claude/knowledge/projects/<id>/`)
-2. `/project-init` — surfaces universal decision guidance and prompts for per-project overrides
-3. Skip to step 8 above (`/job-start "..."`)
+2. `/baton:project-init` — surfaces universal decision guidance and prompts for per-project overrides
+3. Skip to step 8 above (`/baton:job-start "..."`)
 
 Every project gets its own row in the dashboard's Portfolio panel.
 
 ## Quick reference — the 17 slash commands
 
-**Routing/observability:** `/log-routing`, `/consolidate-routing`
-**Jobs:** `/job-start`, `/job-status`, `/job-list`, `/job-phase`, `/job-resume`, `/job-lesson`, `/consolidate-lessons`
-**Fleet:** `/fleet` (doctor/test/list)
-**Research:** `/ensemble`, `/research`, `/six-hats`, `/council`
-**Code phase:** `/code-decompose`, `/code-parallel`, `/code-merge`
-**KB:** `/kb-index`, `/kb-search`
-**Decision loop:** (rule in `CLAUDE.md`), `/decision-feedback`, `/consolidate-decisions`, `/project-init`
-**Cost:** `/cost`
+**Routing/observability:** `/baton:log-routing`, `/baton:consolidate-routing`
+**Jobs:** `/baton:job-start`, `/baton:job-status`, `/baton:job-list`, `/baton:job-phase`, `/baton:job-resume`, `/baton:job-lesson`, `/baton:consolidate-lessons`
+**Fleet:** `/baton:fleet` (doctor/test/list)
+**Research:** `/baton:ensemble`, `/baton:research`, `/baton:six-hats`, `/baton:council`
+**Code phase:** `/baton:code-decompose`, `/baton:code-parallel`, `/baton:code-merge`
+**KB:** `/baton:kb-index`, `/baton:kb-search`
+**Decision loop:** (rule in `CLAUDE.md`), `/baton:decision-feedback`, `/baton:consolidate-decisions`, `/baton:project-init`
+**Cost:** `/baton:cost`
 
 All deployed to `~/.claude/commands/`. Re-deploy with `pwsh scripts\bootstrap.ps1 -Force`.

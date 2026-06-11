@@ -3,7 +3,7 @@ description: Manage and invoke the LLM fleet. `doctor` health-checks providers, 
 argument-hint: doctor | test <name> "<prompt>" [--model <m>] | list
 ---
 
-# /fleet
+# /baton:fleet
 
 Operate the fleet defined in `~/.claude/fleet.yaml`.
 
@@ -58,7 +58,7 @@ Operate the fleet defined in `~/.claude/fleet.yaml`.
    Echo the response to the user.
 
 3. **On any error** (unknown/disabled provider, missing fleet.yaml), surface the
-   thrown message clearly and suggest `/fleet list` or `/fleet doctor`.
+   thrown message clearly and suggest `/baton:fleet list` or `/baton:fleet doctor`.
 
 ## Arguments
 

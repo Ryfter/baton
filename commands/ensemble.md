@@ -3,7 +3,7 @@ description: Fan a prompt out to multiple fleet members concurrently, then synth
 argument-hint: "<prompt>" [--providers a,b,c] [--tier free,local]
 ---
 
-# /ensemble
+# /baton:ensemble
 
 Run a concurrent multi-model ensemble and synthesize the results.
 
@@ -87,7 +87,7 @@ Run a concurrent multi-model ensemble and synthesize the results.
    direction. Do not use a rigid template — structure it to fit the content.
    Skip any provider whose file starts with `[ENSEMBLE ERROR]` or
    `[ENSEMBLE TIMEOUT]`, but note the gap. If ALL failed, skip synthesis and
-   suggest `/fleet doctor`. When KB hits were prepended, mention which sources
+   suggest `/baton:fleet doctor`. When KB hits were prepended, mention which sources
    were used in the synthesis preamble.
 
 7. **Present** the synthesis to the user and report which providers

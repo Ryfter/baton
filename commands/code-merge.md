@@ -1,9 +1,9 @@
 ---
-description: Review and (optionally) apply the merge plan from /code-parallel. Surfaces likely conflicts via files_touched overlap before applying.
+description: Review and (optionally) apply the merge plan from /baton:code-parallel. Surfaces likely conflicts via files_touched overlap before applying.
 argument-hint: "[--apply] [--from t3]"
 ---
 
-# /code-merge
+# /baton:code-merge
 
 Read the latest `parallel-<ts>/manifest.json`, present a merge plan in dependency order, and (with `--apply`) execute it.
 
@@ -20,7 +20,7 @@ Read the latest `parallel-<ts>/manifest.json`, present a merge plan in dependenc
    $sprint = if ($state.phase -match '^code\.sprint-\d+$') { $state.phase } else { 'code.sprint-1' }
    $sprintDir = Join-Path $HOME ".claude/jobs/$($state.job_id)/phases/$sprint"
    $latest = Get-ChildItem -Path $sprintDir -Directory -Filter 'parallel-*' | Sort-Object Name -Descending | Select-Object -First 1
-   if (-not $latest) { Write-Host "No parallel run found. Run /code-parallel first." -ForegroundColor Red; return }
+   if (-not $latest) { Write-Host "No parallel run found. Run /baton:code-parallel first." -ForegroundColor Red; return }
    $mfPath = Join-Path $latest.FullName 'manifest.json'
    $mf = Read-CodeParallelManifest -Path $mfPath
    $stPath = Join-Path $sprintDir 'subtasks.json'
@@ -71,7 +71,7 @@ Read the latest `parallel-<ts>/manifest.json`, present a merge plan in dependenc
    # Cherry-pick is default — clean linear history per task
    & git cherry-pick "$branch~$($r._live_ahead)..$branch"
    if ($LASTEXITCODE -ne 0) {
-       Write-Host "[CONFLICT] task '$($r.task_id)' — resolve manually, then rerun /code-merge --apply --from $($r.task_id)" -ForegroundColor Yellow
+       Write-Host "[CONFLICT] task '$($r.task_id)' — resolve manually, then rerun /baton:code-merge --apply --from $($r.task_id)" -ForegroundColor Yellow
        return
    }
    ```

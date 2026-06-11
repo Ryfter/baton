@@ -3,14 +3,14 @@ description: Dispatch one Agent subagent per subtask in isolated git worktrees. 
 argument-hint: "[--only t1,t2]"
 ---
 
-# /code-parallel
+# /baton:code-parallel
 
 Dispatch the subtasks from `subtasks.json` as parallel Agent subagents in isolated worktrees.
 
 ## Steps
 
 1. **Require an active job.** Read state; resolve sprint (same logic as
-   `/code-decompose`).
+   `/baton:code-decompose`).
 
 2. **Read subtasks.json.**
 
@@ -20,7 +20,7 @@ Dispatch the subtasks from `subtasks.json` as parallel Agent subagents in isolat
    $state = Read-CurrentJob
    $sprint = if ($state.phase -match '^code\.sprint-\d+$') { $state.phase } else { 'code.sprint-1' }
    $stPath = Join-Path $HOME ".claude/jobs/$($state.job_id)/phases/$sprint/subtasks.json"
-   if (-not (Test-Path $stPath)) { Write-Host "Run /code-decompose first." -ForegroundColor Red; return }
+   if (-not (Test-Path $stPath)) { Write-Host "Run /baton:code-decompose first." -ForegroundColor Red; return }
    $subs = Read-CodeSubtasksFile -Path $stPath
    ```
 
@@ -98,7 +98,7 @@ Dispatch the subtasks from `subtasks.json` as parallel Agent subagents in isolat
    $results | Format-Table task_id, status, commits_ahead, files_changed -AutoSize
    ```
 
-10. **Hand off.** Print: *"Run /code-merge to review the integration plan."*
+10. **Hand off.** Print: *"Run /baton:code-merge to review the integration plan."*
 
 ## Arguments
 

@@ -3,7 +3,7 @@ description: LLM Council — two-round deliberation where each member answers, t
 argument-hint: "<question>" [--providers a,b,c] [--tier free,local]
 ---
 
-# /council
+# /baton:council
 
 Run a two-round LLM Council on a high-stakes question.
 
@@ -11,7 +11,7 @@ Run a two-round LLM Council on a high-stakes question.
 
 1. **Parse `$ARGUMENTS`:** quoted question + optional `--providers a,b,c` and `--tier free,local`.
 
-2. **Resolve roster** (same precedence as `/ensemble`):
+2. **Resolve roster** (same precedence as `/baton:ensemble`):
    - if `--providers` given → that list (drop unknown/disabled with a warning)
    - else if `--tier` given → all enabled providers whose `cost_tier` is in the list
    - else → `Get-FleetResearchDefault`
@@ -61,7 +61,7 @@ Run a two-round LLM Council on a high-stakes question.
 
 5. **Quorum check.** If fewer than 2 members survived R1 (`status -eq 'ok'`),
    abort: print `[COUNCIL ABORT] insufficient quorum` and skip R2 + synthesis.
-   Suggest the user inspect `$r1Dir`, run `/fleet doctor`, or retry with a
+   Suggest the user inspect `$r1Dir`, run `/baton:fleet doctor`, or retry with a
    different roster.
 
    ```powershell

@@ -1,9 +1,9 @@
 ---
-description: The idea front door. Turns a raw idea into board-ready GitHub Issues via research + a /council viability debate + a reviewable concept doc, with one human gate. Job-less.
+description: The idea front door. Turns a raw idea into board-ready GitHub Issues via research + a /baton:council viability debate + a reviewable concept doc, with one human gate. Job-less.
 argument-hint: "<raw idea>" [--no-research] [--providers a,b,c] [--tier free,local]
 ---
 
-# /idea
+# /baton:idea
 
 Turn a raw idea into board-ready GitHub Issues. Job-less — this runs *before* you
 commit to a job; its output (issues) becomes the backlog. Exactly one human gate:
@@ -13,7 +13,7 @@ you approve the concept doc before any issue is created.
 
 1. **Parse `$ARGUMENTS`:** the quoted raw idea + optional `--no-research`,
    `--providers a,b,c`, `--tier free,local`. Empty idea → stop with:
-   *"Usage: /idea \"<raw idea>\" [--no-research] [--providers …] [--tier …]"*.
+   *"Usage: /baton:idea \"<raw idea>\" [--no-research] [--providers …] [--tier …]"*.
 
 2. **Create the idea workspace** (job-less; sibling of `~/.claude/ensembles/`):
 
@@ -34,7 +34,7 @@ you approve the concept doc before any issue is created.
 
 4. **Research (skip if `--no-research`).** Run a research ensemble on the idea,
    writing into the workspace's `research/` dir, then synthesize. Resolve the
-   roster and run exactly as `/research` does (explicit `--providers` > `--tier` >
+   roster and run exactly as `/baton:research` does (explicit `--providers` > `--tier` >
    `Get-FleetResearchDefault`), but the output dir is the idea workspace, not a
    job phase:
 
@@ -42,13 +42,13 @@ you approve the concept doc before any issue is created.
    . "$HOME/.claude/scripts/fleet-lib.ps1"
    . "$HOME/.claude/scripts/fleet-ensemble.ps1"
    $outDir = Join-Path $ws.path 'research'
-   # roster resolution + Invoke-FleetEnsemble + synthesis.md exactly as /research steps 3-6,
+   # roster resolution + Invoke-FleetEnsemble + synthesis.md exactly as /baton:research steps 3-6,
    # prepending the KB hits from step 3 as a "Relevant prior knowledge" block.
    ```
 
    Write `research/synthesis.md`.
 
-5. **Viability debate.** Run a two-round `/council` on the framed question
+5. **Viability debate.** Run a two-round `/baton:council` on the framed question
    *"Is this worth building, and what is the strongest version of it?"*, seeded
    with the research synthesis, writing into the workspace's `council/` dir:
 
@@ -56,7 +56,7 @@ you approve the concept doc before any issue is created.
    . "$HOME/.claude/scripts/council-lib.ps1"
    $outDir = Join-Path $ws.path 'council'
    # roster + Build-CouncilR1Tasks/Build-CouncilR2Tasks + Invoke-FleetEnsembleTasks
-   # exactly as /council steps 2-7, writing round1/, round2/, and synthesis.md.
+   # exactly as /baton:council steps 2-7, writing round1/, round2/, and synthesis.md.
    ```
 
    **Quorum abort is non-fatal here.** If the council can't reach quorum, do NOT

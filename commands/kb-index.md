@@ -3,7 +3,7 @@ description: Build (or update) the KB embedding index. Default is incremental by
 argument-hint: "[--full] [--scope universal|<project-id>|all]"
 ---
 
-# /kb-index
+# /baton:kb-index
 
 Build or update the embedding index over `~/.claude/knowledge/` (+ job lessons).
 
@@ -33,7 +33,7 @@ Build or update the embedding index over `~/.claude/knowledge/` (+ job lessons).
    ollama pull nomic-embed-text
    ```
 
-   then `/kb-index --full` to retry.
+   then `/baton:kb-index --full` to retry.
 
 ## Arguments
 

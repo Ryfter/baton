@@ -25,37 +25,37 @@ Each feature has a one-line "what it does"; the link goes to its full design spe
 
 - **Automatic usage tracking** — every AI dispatch is logged with time, cost, and token
   counts to a journal, plus a catalog of each model's strengths and pricing.
-  Commands: `/log-routing`, `/consolidate-routing`.
+  Commands: `/baton:log-routing`, `/baton:consolidate-routing`.
 - **Live web dashboard** — a browser view at `http://localhost:8765` showing real-time
   activity, today's spend, a model leaderboard, and controls to stop local models. Runs
   fully offline. ([spec](docs/superpowers/specs/2026-05-22-coding-agent-orchestrator-design.md))
 - **A dispatchable fleet of AI models** — one registry of paid CLIs, free CLIs, and
   local models, all callable from a single command. Adding a model is a few lines of
-  config. Commands: `/fleet doctor|list|test`.
+  config. Commands: `/baton:fleet doctor|list|test`.
   ([spec](docs/superpowers/specs/2026-05-26-plan4-fleet-design.md))
 - **Cross-machine fleet** — pull models running on *other* machines into the fleet over
   a private network (Tailscale), so a beefier desktop's local models are usable from your
   laptop.
 - **Job tracking with phases** — track a unit of work from research → design → code →
   review, each job in its own folder with a brief, a phase log, and captured lessons.
-  Commands: `/job-start`, `/job-status`, `/job-list`, `/job-phase`, `/job-resume`, `/job-lesson`.
+  Commands: `/baton:job-start`, `/baton:job-status`, `/baton:job-list`, `/baton:job-phase`, `/baton:job-resume`, `/baton:job-lesson`.
   ([spec](docs/superpowers/specs/2026-05-26-plan3-job-scaffold-design.md))
 - **A searchable knowledge base** — your lessons and decisions become a meaning-based
-  (semantic) search index, fully local — no cloud, no cost. Commands: `/kb-index`,
-  `/kb-search`. ([spec](docs/superpowers/specs/2026-05-30-plan8-kb-embeddings-design.md))
+  (semantic) search index, fully local — no cloud, no cost. Commands: `/baton:kb-index`,
+  `/baton:kb-search`. ([spec](docs/superpowers/specs/2026-05-30-plan8-kb-embeddings-design.md))
 - **Multi-model research ensembles** — ask one question to several models at once and
   get a single synthesis of where they agree, differ, and what's uniquely useful.
-  Commands: `/ensemble`, `/research`.
+  Commands: `/baton:ensemble`, `/baton:research`.
   ([spec](docs/superpowers/specs/2026-05-29-plan5-research-ensemble-design.md))
 - **Six Thinking Hats** — examine a question from six fixed angles (facts, feelings,
-  risks, benefits, creativity, process), then a synthesized conclusion. Command: `/six-hats`.
+  risks, benefits, creativity, process), then a synthesized conclusion. Command: `/baton:six-hats`.
   ([spec](docs/superpowers/specs/2026-05-30-plan5b-six-hats-design.md))
 - **LLM Council** — a two-round deliberation where models answer, then refine after
-  seeing each other's answers; Claude chairs the verdict. Command: `/council`.
+  seeing each other's answers; Claude chairs the verdict. Command: `/baton:council`.
   ([spec](docs/superpowers/specs/2026-05-30-plan5c-council-design.md))
 - **Parallel code implementation** — turn a finished spec into working code: slice it
   into independent tasks, build them concurrently in isolated repo copies, then merge
-  with conflict detection. Commands: `/code-decompose`, `/code-parallel`, `/code-merge`.
+  with conflict detection. Commands: `/baton:code-decompose`, `/baton:code-parallel`, `/baton:code-merge`.
   ([spec](docs/superpowers/specs/2026-05-30-plan6-code-phase-design.md))
 - **Multi-project portfolio** — one screen showing cost, active jobs, decisions, and
   last activity across *every* project you've worked on, with per-project drill-in.
@@ -64,10 +64,10 @@ Each feature has a one-line "what it does"; the link goes to its full design spe
   model's status, duration, and partial answer appear the moment it finishes.
 - **A self-improving decision log** — every significant choice is captured (decision,
   alternatives, reasoning); you attach outcomes, and proven patterns roll up into
-  per-project and cross-project guidance. Commands: `/decision-feedback`,
-  `/consolidate-decisions`, `/project-init`. See the [Decision log](docs/DECISIONS.md).
+  per-project and cross-project guidance. Commands: `/baton:decision-feedback`,
+  `/baton:consolidate-decisions`, `/baton:project-init`. See the [Decision log](docs/DECISIONS.md).
   ([spec](docs/superpowers/specs/2026-05-29-decision-loop-design.md))
-- **Per-project cost ledger** — a simple running spend record per project. Command: `/cost`.
+- **Per-project cost ledger** — a simple running spend record per project. Command: `/baton:cost`.
 
 ### New in v1.2.0 — the Fleet Conductor release
 
@@ -75,14 +75,14 @@ Each feature has a one-line "what it does"; the link goes to its full design spe
   models + tools: it picks the *optimal* (not most-powerful) capability, dispatches, verifies,
   and escalates up the cost ladder on failure — then **learns** which model/tool wins each
   capability from your ratings + an LLM judge, and supports a fan-out **calibration** mode.
-  Command: `/route` (`--run`, `--rate`, `--calibrate`, `--rank`).
+  Command: `/baton:route` (`--run`, `--rate`, `--calibrate`, `--rank`).
 - **Cost-Optimization Engine (time-awareness)** — rank-gates paid/frontier dispatch during
   prime-peak hours (rank 1 = spend-worthy … 5 = wait for off-peak) and scales concurrency up
   during off-peak/weekend surge windows. Config: `~/.claude/prime-hours.yaml`.
-- **`/idea` front door** — turn a raw idea into board-ready GitHub issues with one human gate
+- **`/baton:idea` front door** — turn a raw idea into board-ready GitHub issues with one human gate
   (KB prefetch → research ensemble → council viability debate → concept doc → issues).
 - **Tools registry** — a non-LLM capability registry (`tools.yaml`), co-equal sibling of the
-  model fleet; first entry is Docling for PDF extraction. Command: `/tools list|doctor`.
+  model fleet; first entry is Docling for PDF extraction. Command: `/baton:tools list|doctor`.
 - **Grimdex integration** — the knowledge base is now its own standalone, tool-agnostic project
   ([Ryfter/Grimdex](https://github.com/Ryfter/Grimdex)). This repo wires into it via a pointer
   stanza and works with or without it (graceful degradation).
@@ -108,7 +108,7 @@ pwsh -NoProfile -File scripts\bootstrap.ps1
 python -m uvicorn dashboard.main:app --port 8765   # then open http://localhost:8765
 
 # 5. Confirm the fleet is healthy
-#    (in Claude Code)  /fleet doctor
+#    (in Claude Code)  /baton:fleet doctor
 ```
 
 Full details and a worked example: **[docs/GUIDE.md](docs/GUIDE.md)**.

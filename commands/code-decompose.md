@@ -3,14 +3,14 @@ description: Decompose a feature spec into independent subtasks for parallel imp
 argument-hint: "[<path-to-spec>]"
 ---
 
-# /code-decompose
+# /baton:code-decompose
 
-Decompose a finalized feature spec into a DAG of subtasks for `/code-parallel`.
+Decompose a finalized feature spec into a DAG of subtasks for `/baton:code-parallel`.
 
 ## Steps
 
 1. **Require an active job.** Read `~/.claude/current-job.json` via
-   `Read-CurrentJob`. No job → stop with: *"No active job. Run /job-start first."*
+   `Read-CurrentJob`. No job → stop with: *"No active job. Run /baton:job-start first."*
 
 2. **Resolve the spec path.**
    - If `$ARGUMENTS` is non-empty and points to an existing file → use it.
@@ -61,7 +61,7 @@ Decompose a finalized feature spec into a DAG of subtasks for `/code-parallel`.
    $ordered | Select-Object id, title | Format-Table -AutoSize
    ```
 
-8. **Hand off.** Print: *"Decomposition ready. Run /code-parallel to dispatch."*
+8. **Hand off.** Print: *"Decomposition ready. Run /baton:code-parallel to dispatch."*
 
 ## Arguments
 

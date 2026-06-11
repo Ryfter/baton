@@ -3,19 +3,19 @@ description: Show or transition the current job's phase. `next` advances along r
 argument-hint: (no arg | next | back | done | <explicit-phase-name>)
 ---
 
-# /job-phase
+# /baton:job-phase
 
 Manage the active job's phase.
 
 ## Steps
 
-1. **Read state.** If no active job, print *"No active job. Use /job-resume or
-   /job-list."* and stop.
+1. **Read state.** If no active job, print *"No active job. Use /baton:job-resume or
+   /baton:job-list."* and stop.
 
 2. **Parse `$ARGUMENTS`:**
    - empty → show current phase + what `next` would resolve to. Stop.
    - `next`  → compute next phase via `Get-NextPhase`. If current is `review`,
-     prompt: *"Start `code.sprint-N+1` or `/job-phase done`?"* and wait for
+     prompt: *"Start `code.sprint-N+1` or `/baton:job-phase done`?"* and wait for
      answer before transitioning.
    - `back`  → compute prev phase via `Get-PrevPhase`. If null (already at
      `research`), error: *"Already at the first phase."*
@@ -75,7 +75,7 @@ Manage the active job's phase.
    ```
 
 5. **Prompt for lessons** at `next` and `done` transitions only:
-   *"Any lessons to record before moving on? (use `/job-lesson <category>
+   *"Any lessons to record before moving on? (use `/baton:job-lesson <category>
    \"<text>\"`)"*. Don't block — just remind.
 
 6. **Decision retro** (for `done` transitions only): list the decisions this job
@@ -95,7 +95,7 @@ Manage the active job's phase.
            $flagNote = if ($d.flag -ne 'null') { " [$($d.flag)]" } else { '' }
            Write-Host "  $($d.id) ($($d.confidence)) — $($d.title)$flagNote"
        }
-       Write-Host "Any retro feedback? Use /decision-feedback <id> ""<text>"" --outcome worked|didnt|mixed." -ForegroundColor Yellow
+       Write-Host "Any retro feedback? Use /baton:decision-feedback <id> ""<text>"" --outcome worked|didnt|mixed." -ForegroundColor Yellow
        Write-Host "(Silence = they worked.)" -ForegroundColor DarkGray
    }
    ```

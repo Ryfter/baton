@@ -3,7 +3,7 @@ description: Research-phase ensemble. Requires an active job; fans out to the ro
 argument-hint: "<question>" [--providers a,b,c] [--tier free,local]
 ---
 
-# /research
+# /baton:research
 
 Run a research ensemble within the active job's research phase.
 
@@ -11,14 +11,14 @@ Run a research ensemble within the active job's research phase.
 
 1. **Require an active job.** Read `~/.claude/current-job.json` (via
    `Read-CurrentJob` from `~/.claude/scripts/job-lib.ps1`). If no `job_id`, stop
-   with: *"No active job. Use /ensemble for an ad-hoc run, or /job-start to
+   with: *"No active job. Use /baton:ensemble for an ad-hoc run, or /baton:job-start to
    begin a job."*
 
 2. **Phase check.** If the job's `current_phase` (from its manifest, via
    `Read-Manifest`) is not `research`, warn: *"Current phase is <x>; running
    research anyway."* Proceed.
 
-3. **Resolve the roster** exactly as `/ensemble` does (explicit `--providers` >
+3. **Resolve the roster** exactly as `/baton:ensemble` does (explicit `--providers` >
    `--tier` > `Get-FleetResearchDefault`). Empty → stop with the same message.
 
    ```powershell
@@ -67,14 +67,14 @@ Run a research ensemble within the active job's research phase.
    }
    ```
 
-6. **Run the ensemble + synthesize** exactly as `/ensemble` steps 4-6 (call
+6. **Run the ensemble + synthesize** exactly as `/baton:ensemble` steps 4-6 (call
    `Invoke-FleetEnsemble` from `~/.claude/scripts/fleet-ensemble.ps1` with the
    `$augmented` prompt, write `synthesis.md`, present it, report
    successes/failures). When KB hits were prepended, mention which sources
    were used in the synthesis preamble.
 
 7. **Prompt for a lesson** (non-blocking): *"Capture a lesson from this
-   research? e.g. `/job-lesson knowledge \"<takeaway>\"`."*
+   research? e.g. `/baton:job-lesson knowledge \"<takeaway>\"`."*
 
 ## Arguments
 

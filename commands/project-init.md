@@ -3,7 +3,7 @@ description: Calibrate universal decision guidance for the current project — s
 argument-hint: [--re-calibrate]
 ---
 
-# /project-init
+# /baton:project-init
 
 Initialize (or re-calibrate) per-project decision guidance from the universal layer.
 
@@ -20,7 +20,7 @@ Initialize (or re-calibrate) per-project decision guidance from the universal la
 
 2. **Check state:** the "already initialised" guard must check for the calibration
    marker (`<!-- calibrated YYYY-MM-DD from universal -->`) — NOT just file
-   existence — because `/consolidate-decisions` also writes `$projGuide` and would
+   existence — because `/baton:consolidate-decisions` also writes `$projGuide` and would
    otherwise trip a false-positive "already initialised" message.
    - If `$projGuide` exists AND contains the calibration marker AND `--re-calibrate`
      is NOT in `$ARGUMENTS`: stop with
@@ -65,13 +65,13 @@ Initialize (or re-calibrate) per-project decision guidance from the universal la
    <!-- calibrated <YYYY-MM-DD> from universal -->
 
    ## Established patterns
-   _Populated by /consolidate-decisions._
+   _Populated by /baton:consolidate-decisions._
 
    ## Known mistakes
-   _Populated by /consolidate-decisions._
+   _Populated by /baton:consolidate-decisions._
 
    ## Open / under-feedback
-   _Populated by /consolidate-decisions._
+   _Populated by /baton:consolidate-decisions._
 
    ## Deviations from universal
 

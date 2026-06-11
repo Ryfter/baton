@@ -3,7 +3,7 @@ description: Review recent model-routing journal entries, propose updates to the
 argument-hint: (no arguments)
 ---
 
-# /consolidate-routing
+# /baton:consolidate-routing
 
 You are running the routing consolidation flow. Your job is to:
 
