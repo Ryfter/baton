@@ -108,6 +108,9 @@ and logs every attempt. **`--rate good|bad`** records whether the last run's out
    }
    ```
 
+   Judging is always on in cascade mode (the short-circuit needs scored verdicts); a bare
+   `--judge` flag is accepted but redundant here.
+
    Then report by `$out.status`, always closing with the cost line:
    - `draft-sufficient` → *"Draft from `<winner>` scored ≥ the good-enough bar — shipped as-is."* Show `$out.result.stdout`. Cost line: **`frontier spend: none (draft-sufficient)`**.
    - `finished` → *"`<winner>` finished the best draft."* Show `$out.result.stdout`. Cost line: **`frontier spend: 1 finisher pass (<winner>)`**.

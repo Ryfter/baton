@@ -154,6 +154,7 @@ providers:
         -Grader $allBad -Dispatcher $echoName @common
     Check 'finisher fails -> escalate'       ($f3.status -eq 'escalate-to-conductor')
     Check 'escalate still spent frontier'    ($f3.frontier_spent -eq $true)
+    Check 'escalate salvages usable draft'   (-not [string]::IsNullOrWhiteSpace([string]$f3.result.stdout))
 
     # -RequireLocal -> no paid candidates -> no finisher-eligible -> no-finisher,
     # best passing draft returned.
@@ -184,6 +185,14 @@ windows:
     Check 'deferred keeps best draft'        ($f5.winner -eq 'local-a')
     Check 'deferred zero frontier'           ($f5.frontier_spent -eq $false)
     Check 'deferred finish_attempt gated'    ($f5.finish_attempt.gate -in @('defer','ask'))
+    Check 'deferred result is the draft'     ($f5.result.stdout -match 'local-a')
+
+    # Deferred finisher with ALL drafts failing but emitting text -> salvage non-passing draft.
+    $f6 = Invoke-CapabilityCascade -Capability 'code-gen' -Prompt 'x' `
+        -Grader $allBad -Dispatcher $echoName `
+        -Rank 3 -PrimeHoursConfig $phCfg -GateNow ([datetime]'2026-06-10T12:00:00') `
+        -DraftCount 2 @common
+    Check 'deferred salvages failed draft'   ($f6.status -eq 'finisher-deferred' -and -not [string]::IsNullOrWhiteSpace([string]$f6.result.stdout))
 
     # Journal rows carry stage=finish for finisher dispatches.
     $finRows = @(Get-Content $journal | ForEach-Object { ($_ | ConvertFrom-Json).stage } | Where-Object { $_ -eq 'finish' })

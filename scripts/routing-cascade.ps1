@@ -120,6 +120,11 @@ function Invoke-CapabilityCascade {
     # ── Finisher stage ──
     $bestPassedName   = if ($best -and $best.attempt.passed) { $best.attempt.candidate } else { $null }
     $bestPassedResult = if ($best -and $best.attempt.passed) { $best.result } else { $null }
+    # Salvage pair for the deferred/escalate paths: spec steps 7-8 return the best
+    # USABLE draft (non-empty stdout), passing or not — work is never lost. The
+    # no-finisher path stays passing-only (spec step 5 says "best passing draft").
+    $bestUsableName   = if ($best -and -not [string]::IsNullOrWhiteSpace([string]$best.result.stdout)) { $best.attempt.candidate } else { $null }
+    $bestUsableResult = if ($best -and -not [string]::IsNullOrWhiteSpace([string]$best.result.stdout)) { $best.result } else { $null }
     if ($finishers.Count -eq 0) {
         return [pscustomobject]@{ status='no-finisher'; capability=$Capability
                                   winner=$bestPassedName; result=$bestPassedResult
@@ -133,16 +138,18 @@ function Invoke-CapabilityCascade {
     if ($frc.attempt.reason -match '^deferred: prime-hours') {
         # Slice A gate deferred the paid step. Best draft is the provisional result.
         return [pscustomobject]@{ status='finisher-deferred'; capability=$Capability
-                                  winner=$bestPassedName; result=$bestPassedResult
+                                  winner=$bestUsableName; result=$bestUsableResult
                                   draft_attempts=$draftAttempts.ToArray(); finish_attempt=$frc.attempt; frontier_spent=$false }
     }
     $spent = ($f.cost_tier -eq 'paid')   # it dispatched; pass or fail, paid was spent
+    # NOTE: frontier_spent tracks the FINISHER only; a paid drafter (explicit role) can
+    # spend without setting it — the advisor must read the journal for total paid spend.
     if ($frc.attempt.passed) {
         return [pscustomobject]@{ status='finished'; capability=$Capability
                                   winner=$f.name; result=$frc.result
                                   draft_attempts=$draftAttempts.ToArray(); finish_attempt=$frc.attempt; frontier_spent=$spent }
     }
     return [pscustomobject]@{ status='escalate-to-conductor'; capability=$Capability
-                              winner=$null; result=$bestPassedResult
+                              winner=$null; result=$bestUsableResult
                               draft_attempts=$draftAttempts.ToArray(); finish_attempt=$frc.attempt; frontier_spent=$spent }
 }
