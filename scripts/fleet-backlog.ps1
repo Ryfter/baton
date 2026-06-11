@@ -24,6 +24,7 @@
 . (Join-Path $PSScriptRoot 'fleet-ensemble.ps1')
 . (Join-Path $PSScriptRoot 'fleet-runs-bridge.ps1')
 . (Join-Path $PSScriptRoot 'prime-hours.ps1')   # Test-PrimeHoursGate, Get-CapacityProfile, Get-FleetProvider chain
+. (Join-Path $PSScriptRoot 'routing-cascade.ps1')   # Invoke-CapabilityCascade (Slice C)
 
 function script:Publish-ItemRunSafe {
     # NB: parameter is $Splat, not $Args — $Args is a PowerShell automatic
@@ -86,6 +87,55 @@ function Get-EffectiveRanks {
     }
     foreach ($t in $Tasks) { [void](script:__effOf $t.id $own $dependents $eff @()) }
     return $eff
+}
+
+function Get-BacklogCascadeMode {
+    <# 'full' = cascade+output_file (text deliverable, full draft->finish cascade);
+       'advisory' = cascade only (draft injected into the agentic prompt); 'none'. #>
+    param([Parameter(Mandatory)]$Item)
+    if (-not $Item.cascade) { return 'none' }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Item.output_file)) { return 'full' }
+    return 'advisory'
+}
+
+function Get-AdvisoryPrompt {
+    <# Single source of truth for the advisory draft->finisher prompt (test-asserted).
+       The concurrent worker receives this with placeholder tokens (see AdvisoryJobWorker). #>
+    param(
+        [Parameter(Mandatory)][string]$Prompt,
+        [Parameter(Mandatory)][string]$Draft
+    )
+    return @"
+$Prompt
+
+A cheaper model produced this DRAFT. Verify it independently; keep what is
+correct, fix what is not, and complete the task:
+
+$Draft
+"@
+}
+
+function Copy-BacklogItem {
+    <# Shallow item copy as a hashtable: items arrive as hashtables (tests/dashboard)
+       or PSCustomObjects (run-backlog via ConvertFrom-Json); advisory mode mutates
+       prompt on a copy, never the caller's object. #>
+    param([Parameter(Mandatory)]$Item)
+    $h = @{}
+    if ($Item -is [hashtable]) { foreach ($k in $Item.Keys) { $h[$k] = $Item[$k] } }
+    else { foreach ($p in $Item.PSObject.Properties) { $h[$p.Name] = $p.Value } }
+    return $h
+}
+
+function Get-EffectiveMaxParallel {
+    <# Surge consumption (parent spec A.2): an explicit cap is multiplied by the
+       surge concurrency_factor; 0 = unbounded stays unbounded (back-compat). #>
+    param(
+        [Parameter(Mandatory)][int]$MaxParallel,
+        [Parameter(Mandatory)]$Capacity
+    )
+    if ($MaxParallel -le 0) { return 0 }
+    if ($Capacity.surge) { return [int][math]::Ceiling($MaxParallel * [double]$Capacity.concurrency_factor) }
+    return $MaxParallel
 }
 
 function Write-ItemLive {

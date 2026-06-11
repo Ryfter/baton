@@ -45,6 +45,32 @@ Assert ($eff['a'] -eq 1) 'prereq inherits dependent rank'
 Assert ($eff['c'] -eq 4) 'own rank kept when no urgent dependent'
 Assert ($eff['b'] -eq 1) 'urgent task keeps its rank'
 
+# ===== Slice C: pure helpers =====
+Write-Host "`n[cascade helpers]" -ForegroundColor Cyan
+Assert ((Get-BacklogCascadeMode -Item @{ cascade=$true; output_file='docs/x.md' }) -eq 'full')     'mode: full'
+Assert ((Get-BacklogCascadeMode -Item @{ cascade=$true })                          -eq 'advisory') 'mode: advisory'
+Assert ((Get-BacklogCascadeMode -Item @{ id='x' })                                 -eq 'none')     'mode: none (no field)'
+Assert ((Get-BacklogCascadeMode -Item @{ cascade=$false; output_file='y' })        -eq 'none')     'mode: none (cascade false)'
+Assert ((Get-BacklogCascadeMode -Item ([pscustomobject]@{ cascade=$true; output_file='d.md' })) -eq 'full') 'mode: full (pscustomobject)'
+
+$adv = Get-AdvisoryPrompt -Prompt 'ORIGINAL TASK' -Draft 'DRAFT BODY'
+Assert ($adv -like '*ORIGINAL TASK*' -and $adv -like '*DRAFT BODY*') 'advisory prompt embeds both'
+Assert ($adv.IndexOf('ORIGINAL TASK') -lt $adv.IndexOf('DRAFT BODY')) 'original precedes draft'
+Assert ($adv -like '*Verify it independently*') 'advisory prompt carries the verify framing'
+
+$cp = Copy-BacklogItem -Item @{ id='a'; prompt='p'; rank=2 }
+$cp.prompt = 'changed'
+Assert ($cp.id -eq 'a' -and $cp.rank -eq 2) 'hashtable copy keeps fields'
+$src = [pscustomobject]@{ id='b'; prompt='orig' }
+$cp2 = Copy-BacklogItem -Item $src
+$cp2.prompt = 'changed'
+Assert ($src.prompt -eq 'orig' -and $cp2.id -eq 'b') 'pscustomobject copy does not mutate source'
+
+Assert ((Get-EffectiveMaxParallel -MaxParallel 0 -Capacity @{ surge=$true;  concurrency_factor=2 }) -eq 0) 'cap: 0 stays unbounded'
+Assert ((Get-EffectiveMaxParallel -MaxParallel 2 -Capacity @{ surge=$false; concurrency_factor=2 }) -eq 2) 'cap: no surge -> unchanged'
+Assert ((Get-EffectiveMaxParallel -MaxParallel 2 -Capacity @{ surge=$true;  concurrency_factor=2 }) -eq 4) 'cap: surge multiplies'
+Assert ((Get-EffectiveMaxParallel -MaxParallel 3 -Capacity @{ surge=$true;  concurrency_factor=1.5 }) -eq 5) 'cap: ceil(3*1.5)=5'
+
 # --- end-to-end driver test on a throwaway repo ---
 Write-Host "`n[backlog driver e2e]" -ForegroundColor Cyan
 $root = Join-Path $env:TEMP ("cao-bk-" + [guid]::NewGuid().ToString('N').Substring(0,8))
