@@ -126,6 +126,24 @@ function Copy-BacklogItem {
     return $h
 }
 
+$script:DefaultCascadeInvoker = {
+    # Contract: param($Item, $EffRank, $NoFinisher, $Opts) -> Invoke-CapabilityCascade result.
+    # $Opts keys (all optional): FleetPath, ToolsPath, PrimeHoursConfig, GateNow, JournalPath.
+    param($Item, $EffRank, $NoFinisher, $Opts)
+    $a = @{ Capability = $(if ($Item.capability) { [string]$Item.capability } else { 'code-gen' })
+            Prompt     = [string]$Item.prompt }
+    if ($null -ne $EffRank)        { $a.Rank = [int]$EffRank }
+    if ($NoFinisher)               { $a.NoFinisher = $true }
+    if ($Opts) {
+        if ($Opts.FleetPath)        { $a.FleetPath        = $Opts.FleetPath }
+        if ($Opts.ToolsPath)        { $a.ToolsPath        = $Opts.ToolsPath }
+        if ($Opts.PrimeHoursConfig) { $a.PrimeHoursConfig = $Opts.PrimeHoursConfig }
+        if ($null -ne $Opts.GateNow){ $a.GateNow          = $Opts.GateNow }
+        if ($Opts.JournalPath)      { $a.JournalPath      = $Opts.JournalPath }
+    }
+    Invoke-CapabilityCascade @a
+}
+
 function Get-EffectiveMaxParallel {
     <# Surge consumption (parent spec A.2): an explicit cap is multiplied by the
        surge concurrency_factor; 0 = unbounded stays unbounded (back-compat). #>
@@ -163,20 +181,108 @@ function New-CodexImplementer {
 }
 
 function Invoke-BacklogItem {
-    <# One item: worktree -> implement -> gate -> merge-or-block. Emits live status. #>
+    <# One item: worktree -> implement -> gate -> merge-or-block. Emits live status.
+       For cascade mode 'full': no agentic implementer; cascade produces the file content.
+       For cascade mode 'advisory': run cascade (NoFinisher) first, inject draft into prompt. #>
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
-        [Parameter(Mandatory)][hashtable]$Item,
-        [Parameter(Mandatory)][scriptblock]$Implementer,
+        [Parameter(Mandatory)]$Item,
+        [scriptblock]$Implementer,
         [string]$Integration = 'integration/backlog',
         [string]$OutputDir,
-        [string]$WorktreeRoot
+        [string]$WorktreeRoot,
+        [int]$EffectiveRank = 3,
+        [scriptblock]$CascadeInvoker,
+        [hashtable]$CascadeOpts
     )
-    $id = $Item.id; $model = $Item.model
-    $allowed = if ($Item.allowed_paths) { @($Item.allowed_paths) } else { @('*') }
+    $id      = $Item.id
+    $mode    = Get-BacklogCascadeMode -Item $Item
+    $model   = if ($mode -eq 'full' -and [string]::IsNullOrWhiteSpace([string]$Item.model)) { 'cascade' } else { [string]$Item.model }
+    $invoker = if ($CascadeInvoker) { $CascadeInvoker } else { $script:DefaultCascadeInvoker }
+    $allowed  = if ($Item.allowed_paths) { @($Item.allowed_paths) } else { @('*') }
     $maxFiles = if ($Item.max_files) { [int]$Item.max_files } else { 20 }
     $testCmd  = $Item.test_command
 
+    # ── mode 'full': cascade produces the file; no agentic implementer ──────────
+    if ($mode -eq 'full') {
+        $of = [string]$Item.output_file
+        # Traversal guard: absolute path or any '..' segment → blocked
+        if ([System.IO.Path]::IsPathRooted($of) -or $of -match '\.\.') {
+            $reasons = @("output_file traversal guard: '$of' is not a relative path inside the repo")
+            if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State 'blocked' -Extra @{ reasons = $reasons; cascade = 'full' } }
+            Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'blocked'; Reasons = $reasons }
+            return [pscustomobject]@{ id = $id; model = $model; merged = $false; reasons = $reasons; changed = @() }
+        }
+        if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State 'running' -Extra @{ cascade = 'full' } }
+        Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'running' }
+
+        $cres = $null; $cascadeErr = $null
+        try { $cres = & $invoker $Item $EffectiveRank $false $CascadeOpts } catch { $cascadeErr = $_.Exception.Message }
+
+        if ($cascadeErr -or $null -eq $cres) {
+            $reasons = @("cascade-error: $(if ($cascadeErr) { $cascadeErr } else { 'no result' })")
+            if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State 'blocked' -Extra @{ reasons = $reasons; cascade = 'full' } }
+            Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'blocked'; Reasons = $reasons }
+            return [pscustomobject]@{ id = $id; model = $model; merged = $false; reasons = $reasons; changed = @() }
+        }
+
+        if ($cres.status -eq 'finisher-deferred') {
+            $reasons = @("deferred: cascade finisher gated until off-peak")
+            if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State 'deferred' -Extra @{ reasons = $reasons; cascade = 'full'; cascade_status = $cres.status } }
+            Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'deferred'; Reasons = $reasons }
+            return [pscustomobject]@{ id = $id; model = $model; merged = $false; deferred = $true; reasons = $reasons; changed = @() }
+        }
+
+        if ($cres.status -notin @('draft-sufficient','finished')) {
+            $reasons = @("cascade: $($cres.status)")
+            if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State 'blocked' -Extra @{ reasons = $reasons; cascade = 'full'; cascade_status = $cres.status } }
+            Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'blocked'; Reasons = $reasons }
+            return [pscustomobject]@{ id = $id; model = $model; merged = $false; reasons = $reasons; changed = @(); cascade_status = $cres.status }
+        }
+
+        # Success: write output_file into a fresh worktree, then gate + merge
+        $wt = New-ItemWorktree -RepoRoot $RepoRoot -ItemId $id -Model $model -Base $Integration -WorktreeRoot $WorktreeRoot
+        $outPath = Join-Path $wt.path $of
+        $outDir2 = Split-Path $outPath -Parent
+        if (-not (Test-Path $outDir2)) { New-Item -ItemType Directory -Force -Path $outDir2 | Out-Null }
+        Set-Content -LiteralPath $outPath -Value ([string]$cres.result.stdout) -Encoding utf8NoBOM
+
+        $res = Merge-ItemToIntegration -RepoRoot $RepoRoot -WorktreePath $wt.path -Branch $wt.branch `
+            -Integration $Integration -AllowedPathPatterns $allowed -MaxChangedFiles $maxFiles `
+            -TestCommand $testCmd -WorktreeRoot $WorktreeRoot -AutoCommit
+
+        $reasons = @($res.gate.reasons)
+        $state = if ($res.merged) { 'done' } else { 'blocked' }
+        if ($OutputDir) {
+            Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State $state `
+                -Extra @{ branch = $wt.branch; merged = $res.merged; reasons = $reasons; changed = @($res.gate.changed)
+                           cascade = 'full'; cascade_status = $cres.status; winner = $cres.winner; frontier_spent = [bool]$cres.frontier_spent }
+        }
+        if ($res.merged) {
+            Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'done'; Branch = $wt.branch }
+        } else {
+            Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'blocked'; Branch = $wt.branch; Reasons = $reasons }
+        }
+        return [pscustomobject]@{
+            id = $id; model = $model; branch = $wt.branch; path = $wt.path
+            merged = $res.merged; reasons = $reasons; changed = @($res.gate.changed)
+            cascade_status = $cres.status; winner = $cres.winner; frontier_spent = [bool]$cres.frontier_spent
+        }
+    }
+
+    # ── mode 'advisory': run cascade (NoFinisher) before the agentic implementer ─
+    if ($mode -eq 'advisory') {
+        try {
+            $d = & $invoker $Item $EffectiveRank $true $CascadeOpts
+            if ($d -and $d.winner -and $d.result -and -not [string]::IsNullOrWhiteSpace([string]$d.result.stdout)) {
+                $Item = Copy-BacklogItem -Item $Item
+                $Item.prompt = Get-AdvisoryPrompt -Prompt ([string]$Item.prompt) -Draft ([string]$d.result.stdout)
+                $Item.advisory_draft_winner = $d.winner
+            }
+        } catch { Write-Verbose "advisory cascade failed (fail-open): $_" }
+    }
+
+    # ── agentic implementer flow (mode 'none' or 'advisory') ────────────────────
     $wt = New-ItemWorktree -RepoRoot $RepoRoot -ItemId $id -Model $model -Base $Integration -WorktreeRoot $WorktreeRoot
     if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $model -State 'running' -Extra @{ branch = $wt.branch } }
     Publish-ItemRunSafe @{ Id = $id; Model = $model; State = 'running'; Branch = $wt.branch }
@@ -209,8 +315,9 @@ function Invoke-BacklogItem {
 function Invoke-Backlog {
     <#
     .SYNOPSIS  Drive the whole backlog in dependency order through the gate.
-    .PARAMETER Tasks         @( @{ id; model; prompt; allowed_paths; test_command; max_files; depends_on } )
-    .PARAMETER Implementers  @{ '<model>' = <scriptblock(param($wtPath,$item))> }
+    .PARAMETER Tasks           @( @{ id; model; prompt; allowed_paths; test_command; max_files; depends_on } )
+    .PARAMETER Implementers    @{ '<model>' = <scriptblock(param($wtPath,$item))> }
+    .PARAMETER CascadeInvoker  Injected cascade dispatcher (tests); defaults to DefaultCascadeInvoker.
     .OUTPUTS     @( per-item result objects ) with .merged / .reasons
     #>
     param(
@@ -223,7 +330,10 @@ function Invoke-Backlog {
         [string]$WorktreeRoot,
         [string]$FleetPath,
         [string]$PrimeHoursConfig,
-        [datetime]$GateNow
+        [datetime]$GateNow,
+        [scriptblock]$CascadeInvoker,
+        [string]$ToolsPath,
+        [string]$JournalPath
     )
     if ($OutputDir -and -not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null }
     Initialize-IntegrationBranch -RepoRoot $RepoRoot -Base $IntegrationBase -Name $Integration | Out-Null
@@ -235,10 +345,13 @@ function Invoke-Backlog {
     $eff = Get-EffectiveRanks -Tasks $Tasks
     $topo = $order
     $order = @($order | Sort-Object @{ e = { $eff[$_] } }, @{ e = { [array]::IndexOf($topo, $_) } })
-    $capArgs = @{}
-    if ($PSBoundParameters.ContainsKey('GateNow'))          { $capArgs.Now = $GateNow }
-    if ($PSBoundParameters.ContainsKey('PrimeHoursConfig')) { $capArgs.ConfigPath = $PrimeHoursConfig }
-    $cap = Get-CapacityProfile @capArgs
+
+    $cascadeOpts = @{}
+    if ($FleetPath)                                         { $cascadeOpts.FleetPath        = $FleetPath }
+    if ($ToolsPath)                                         { $cascadeOpts.ToolsPath        = $ToolsPath }
+    if ($PSBoundParameters.ContainsKey('PrimeHoursConfig')) { $cascadeOpts.PrimeHoursConfig = $PrimeHoursConfig }
+    if ($PSBoundParameters.ContainsKey('GateNow'))          { $cascadeOpts.GateNow          = $GateNow }
+    if ($JournalPath)                                       { $cascadeOpts.JournalPath      = $JournalPath }
 
     if ($OutputDir) {
         $metaTasks = @($Tasks | ForEach-Object { @{ label = $_.id; provider = $_.model } })
@@ -253,6 +366,7 @@ function Invoke-Backlog {
     $results = @(); $blocked = @{}
     foreach ($id in $order) {
         $item = $byId[$id]
+        $mode = Get-BacklogCascadeMode -Item $item
         # dep-block: if any dependency failed to merge, skip this item.
         $deadDep = @(@($item.depends_on) | Where-Object { $_ -and $blocked[$_] })
         if ($deadDep.Count -gt 0) {
@@ -262,34 +376,39 @@ function Invoke-Backlog {
             $results += [pscustomobject]@{ id = $id; model = $item.model; merged = $false; reasons = @("dep-blocked: $($deadDep -join ', ')"); changed = @() }
             continue
         }
-        $impl = $Implementers[[string]$item.model]
-        if (-not $impl) {
+        $impl = if ($mode -ne 'full') { $Implementers[[string]$item.model] } else { $null }
+        if ($mode -ne 'full' -and -not $impl) {
             $blocked[$id] = $true
             if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $item.model -State 'blocked' -Extra @{ reasons = @("no-implementer: '$($item.model)' cannot edit a worktree") } }
             Publish-ItemRunSafe @{ Id = $id; Model = $item.model; State = 'blocked'; Reasons = @("no-implementer: '$($item.model)'") }
             $results += [pscustomobject]@{ id = $id; model = $item.model; merged = $false; reasons = @("no-implementer: '$($item.model)'"); changed = @() }
             continue
         }
-        # Prime-hours gate (unattended): only paid providers in a peak window are gated.
+        # Prime-hours gate (unattended): only paid providers in a non-full-cascade peak window are gated.
+        # Full-cascade items skip the driver gate (the cascade gates its own finisher).
         # Fail-open: an absent fleet.yaml or unknown model -> no provider -> no gating.
-        $provArgs = @{ Name = [string]$item.model }
-        if ($FleetPath) { $provArgs.Path = $FleetPath }
-        $prov = try { Get-FleetProvider @provArgs } catch { $null }
-        if ($prov -and $prov.cost_tier -eq 'paid') {
-            $gateArgs = @{ Rank = [int]$eff[$id]; CostTier = 'paid' }
-            if ($PSBoundParameters.ContainsKey('GateNow'))          { $gateArgs.Now = $GateNow }
-            if ($PSBoundParameters.ContainsKey('PrimeHoursConfig')) { $gateArgs.ConfigPath = $PrimeHoursConfig }
-            $gate = Test-PrimeHoursGate @gateArgs
-            $eff2 = if ($gate.decision -eq 'ask') { $gate.default } else { $gate.decision }
-            if ($eff2 -eq 'defer') {
-                if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $item.model -State 'deferred' -Extra @{ reasons = @("deferred until off-peak: $($gate.reason)") } }
-                Publish-ItemRunSafe @{ Id = $id; Model = $item.model; State = 'deferred'; Reasons = @("deferred until off-peak: $($gate.reason)") }
-                $results += [pscustomobject]@{ id = $id; model = $item.model; merged = $false; deferred = $true; reasons = @("deferred until off-peak: $($gate.reason)"); changed = @() }
-                continue
+        if ($mode -ne 'full') {
+            $provArgs = @{ Name = [string]$item.model }
+            if ($FleetPath) { $provArgs.Path = $FleetPath }
+            $prov = try { Get-FleetProvider @provArgs } catch { $null }
+            if ($prov -and $prov.cost_tier -eq 'paid') {
+                $gateArgs = @{ Rank = [int]$eff[$id]; CostTier = 'paid' }
+                if ($PSBoundParameters.ContainsKey('GateNow'))          { $gateArgs.Now = $GateNow }
+                if ($PSBoundParameters.ContainsKey('PrimeHoursConfig')) { $gateArgs.ConfigPath = $PrimeHoursConfig }
+                $gate = Test-PrimeHoursGate @gateArgs
+                $eff2 = if ($gate.decision -eq 'ask') { $gate.default } else { $gate.decision }
+                if ($eff2 -eq 'defer') {
+                    $blocked[$id] = $true
+                    if ($OutputDir) { Write-ItemLive -OutputDir $OutputDir -Id $id -Model $item.model -State 'deferred' -Extra @{ reasons = @("deferred until off-peak: $($gate.reason)") } }
+                    Publish-ItemRunSafe @{ Id = $id; Model = $item.model; State = 'deferred'; Reasons = @("deferred until off-peak: $($gate.reason)") }
+                    $results += [pscustomobject]@{ id = $id; model = $item.model; merged = $false; deferred = $true; reasons = @("deferred until off-peak: $($gate.reason)"); changed = @() }
+                    continue
+                }
             }
         }
         $r = Invoke-BacklogItem -RepoRoot $RepoRoot -Item $item -Implementer $impl `
-            -Integration $Integration -OutputDir $OutputDir -WorktreeRoot $WorktreeRoot
+            -Integration $Integration -OutputDir $OutputDir -WorktreeRoot $WorktreeRoot `
+            -EffectiveRank ([int]$eff[$id]) -CascadeInvoker $CascadeInvoker -CascadeOpts $cascadeOpts
         if (-not $r.merged) { $blocked[$id] = $true }
         $results += $r
     }
