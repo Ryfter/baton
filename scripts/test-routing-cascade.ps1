@@ -197,6 +197,41 @@ windows:
     # Journal rows carry stage=finish for finisher dispatches.
     $finRows = @(Get-Content $journal | ForEach-Object { ($_ | ConvertFrom-Json).stage } | Where-Object { $_ -eq 'finish' })
     Check 'journal has stage=finish rows'    ($finRows.Count -ge 1)
+
+    # ===== [no-finisher mode] =====
+    # Recording dispatcher: tracks whether the finisher candidate was called.
+    $script:nfFinisherCalled = $false
+    $nfRecorder = {
+        param($cand,$prompt)
+        if ($cand.name -eq 'frontier') { $script:nfFinisherCalled = $true }
+        @{ stdout=$cand.name; stderr=''; exit_code=0; duration_s=1 }
+    }
+
+    # n1: -NoFinisher + judge score >=0.9 still short-circuits -> draft-sufficient, frontier not spent.
+    $script:nfFinisherCalled = $false
+    $n1 = Invoke-CapabilityCascade -Capability 'code-gen' -Prompt 'do x' `
+        -NoFinisher -Grader $judgeGrader -Dispatcher $nfRecorder @common
+    Check 'n1: NoFinisher + passing judge still short-circuits'  ($n1.status -eq 'draft-sufficient')
+    Check 'n1: NoFinisher short-circuit frontier_spent false'    ($n1.frontier_spent -eq $false)
+
+    # n2-n6: -NoFinisher + below-threshold -> drafts-only with best usable draft.
+    # Use lowJudge (all drafts score <0.9) and nfRecorder to verify finisher never called.
+    $script:nfFinisherCalled = $false
+    $n2 = Invoke-CapabilityCascade -Capability 'code-gen' -Prompt 'do x' `
+        -NoFinisher -Grader $lowJudge -Dispatcher $nfRecorder @common
+    Check 'n2: NoFinisher below-threshold -> drafts-only'        ($n2.status -eq 'drafts-only')
+    Check 'n3: NoFinisher winner = best usable draft'            ($n2.winner -in @('local-a','local-b','cheap-paid-draft','bulk-paid'))
+    Check 'n4: NoFinisher result carries winner stdout'          (-not [string]::IsNullOrWhiteSpace([string]$n2.result.stdout))
+    Check 'n5: NoFinisher finish_attempt is null'                ($null -eq $n2.finish_attempt)
+    Check 'n6: NoFinisher frontier_spent false'                  ($n2.frontier_spent -eq $false)
+    Check 'n6b: NoFinisher finisher never dispatched'            ($script:nfFinisherCalled -eq $false)
+
+    # n7: all drafts emit empty stdout -> drafts-only with winner $null and result $null.
+    $emptyDispatch = { param($cand,$prompt) @{ stdout=''; stderr=''; exit_code=0; duration_s=1 } }
+    $n7 = Invoke-CapabilityCascade -Capability 'code-gen' -Prompt 'do x' `
+        -NoFinisher -Grader $lowJudge -Dispatcher $emptyDispatch @common
+    Check 'n7: all empty stdout -> drafts-only winner null'      ($null -eq $n7.winner)
+    Check 'n7: all empty stdout -> drafts-only result null'      ($null -eq $n7.result)
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
