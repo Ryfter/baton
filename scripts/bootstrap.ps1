@@ -223,8 +223,9 @@ if (-not (Test-Path $telDir)) {
 
 Write-Warn "Manual step: dot-source $otelEnvDst from your PowerShell profile, or run before each Claude Code session."
 
-# --- Step 5: Deploy slash commands ---
-Write-Step "Deploying slash commands"
+# --- Step 5: Install the Baton plugin (replaces legacy flat command copies) ---
+Write-Step "Installing Baton plugin"
+# Remove legacy flat copies so /fleet and /baton:fleet don't coexist.
 foreach ($cmd in @(
     'log-routing.md','consolidate-routing.md',
     'job-start.md','job-status.md','job-list.md','job-phase.md',
@@ -235,9 +236,20 @@ foreach ($cmd in @(
     'decision-feedback.md','consolidate-decisions.md','project-init.md',
     'cost.md'
 )) {
-    $src = Join-Path $repoRoot "commands\$cmd"
     $dst = Join-Path $claudeDir "commands\$cmd"
-    Copy-WithPrompt $src $dst "command: $cmd" -Force
+    if (Test-Path $dst) {
+        if ($DryRun) { Write-Ok "[dry-run] would remove legacy flat command: $cmd" }
+        else { Remove-Item -Force $dst; Write-Ok "removed legacy flat command: $cmd" }
+    }
+}
+if ($DryRun) {
+    Write-Ok "[dry-run] would register marketplace 'ryfter' and install plugin baton@ryfter"
+} else {
+    $mkts = & claude plugin marketplace list 2>$null
+    if ($mkts -match 'ryfter') { & claude plugin marketplace update ryfter }
+    else { & claude plugin marketplace add $repoRoot }
+    & claude plugin install baton@ryfter
+    Write-Ok "Baton plugin installed — commands are /baton:<name>"
 }
 
 # --- Step 5b: Deploy Plan 3 library scripts ---

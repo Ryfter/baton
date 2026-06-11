@@ -19,20 +19,18 @@ $out = & pwsh -NoProfile -File $bootstrap -DryRun -NonInteractive 2>&1 | Out-Str
 
 Assert "mentions hook deployment"        ($out -match 'PostToolUse hook')
 Assert "mentions OTel env helper"        ($out -match 'OTel env')
-Assert "mentions slash commands"         ($out -match 'slash commands')
+Assert "mentions Baton plugin"           ($out -match 'Baton plugin')
 Assert "mentions catalog deployment"     ($out -match 'catalog')
 Assert "mentions backend verification"   ($out -match 'Verifying backends')
 Assert "would deploy idea-lib.ps1"        ($out -match 'idea-lib\.ps1')
-Assert "would deploy idea.md"             ($out -match 'idea\.md')
+Assert "would install baton plugin"       ($out -match 'baton@ryfter')
 Assert "would deploy tools.yaml"          ($out -match 'tools\.yaml')
-Assert "would deploy tools.md"            ($out -match 'tools\.md')
 Assert "would deploy routing-lib.ps1"     ($out -match 'routing-lib\.ps1')
 Assert "would deploy routing-dispatch.ps1" ($out -match 'routing-dispatch\.ps1')
 Assert "would deploy routing-learn.ps1"   ($out -match 'routing-learn\.ps1')
 Assert "would deploy routing-calibrate.ps1" ($out -match 'routing-calibrate\.ps1')
 Assert "would deploy prime-hours.ps1"   ($out -match 'prime-hours\.ps1')
 Assert "would deploy prime-hours.yaml"  ($out -match 'prime-hours\.yaml')
-Assert "would deploy route.md"            ($out -match 'route\.md')
 Assert "does not exit non-zero"          ($LASTEXITCODE -eq 0 -or $out -match 'Bootstrap complete')
 
 # Static check: bootstrap must back up settings.json before overwriting it.
