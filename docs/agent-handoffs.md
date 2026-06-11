@@ -99,3 +99,30 @@ Decision records (like this) and project tiers are DATA. Engine changes are made
 home thread, then synced to the public repo. Decision: `d037-grimdex-goes-public-as-engine.md`;
 historical plan (now executed via rename): `docs/go-public-hardening.md`. His knowledge stays
 backed up in private `Ryfter/grimdex-know` (with the `pre-split-backup` tag preserving pre-split history).
+
+## Baton rebrand + plugin packaging (2026-06-11, decision d038) — EXECUTED
+
+The project was fully rebranded **coding-agent-orchestrator → Baton** ("Pass the
+baton. Conduct the fleet.") and packaged as a Claude Code plugin. What every agent
+must know:
+
+- **Repo:** `Ryfter/baton` (GitHub rename; old URLs redirect). Local working dir:
+  **`D:\Dev\baton`** (renamed from `D:\Dev\coding-agent-orchestrator`).
+- **Install (Claude Code):** `claude plugin marketplace add Ryfter/baton` +
+  `claude plugin install baton@ryfter`. The repo is its own marketplace
+  (`.claude-plugin/plugin.json` + `marketplace.json`).
+- **Commands are namespaced:** every slash command is now `/baton:<name>`
+  (`/baton:fleet`, `/baton:route`, `/baton:job-start`, …). Flat `/fleet`-style
+  copies in `~/.claude/commands` are removed by bootstrap — don't reference them.
+- **KB tier renamed:** decision records + project knowledge now live under
+  `projects/baton/` in `Ryfter/grimdex-know` (all d-records moved as git renames).
+- **Env var:** `BATON_REPO_ROOT` is the preferred repo-root override
+  (`CAO_REPO_ROOT` still honored as legacy). Default project id in scripts: `baton`.
+- **octo** is a recommended companion plugin, NOT a hard plugin dependency
+  (cross-marketplace dependency resolution is unreliable).
+- **Queued next** (spec `docs/superpowers/specs/2026-06-11-baton-rebrand-and-packaging-design.md`):
+  Phase 2 — `hooks/hooks.json` auto-registration + state re-root to `BATON_HOME`
+  (default `~/.baton/`; deliberately NOT `${CLAUDE_PLUGIN_DATA}`, which is
+  Claude-only — state must stay readable by every agent). Phase 3 — Python MCP
+  server exposing `baton_*` tools (route/fleet/kb/job) for Codex (`codex mcp add`),
+  Cursor, and any MCP client. Statusline stays bootstrap-managed (plugins can't own it).
