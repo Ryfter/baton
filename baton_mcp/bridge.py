@@ -17,7 +17,11 @@ DEFAULT_TIMEOUT_S = 240
 
 def bridge_script() -> Path:
     override = os.environ.get("BATON_MCP_BRIDGE", "")
-    if override:
+    # An override containing "${" is an unexpanded template variable (e.g.
+    # ${CLAUDE_PLUGIN_ROOT} when the host app didn't substitute it) — ignore it
+    # and fall back to the package-sibling path, which is correct in both the
+    # repo and plugin-cache layouts.
+    if override and not ("${" in override and not Path(override).is_file()):
         return Path(override)
     return Path(__file__).resolve().parent.parent / "scripts" / "mcp-bridge.ps1"
 
