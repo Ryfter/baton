@@ -10,7 +10,7 @@
   - Octopus's `/octo:auto` would pick a generic model but a specialty model fits better (commit messages, OCR, structured extraction).
   - You need to know which Ollama/LM Studio model is currently warm.
   - You need to know whether a cloud provider's quota is tight.
-- **Consolidation flow (`/consolidate-routing`):** appends/edits sections here based on journal patterns.
+- **Consolidation flow (`/baton:consolidate-routing`):** appends/edits sections here based on journal patterns.
 
 ## Specialty models (invoke directly via Bash, bypass Octopus)
 

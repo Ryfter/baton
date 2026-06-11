@@ -11,13 +11,13 @@ This page is the human-readable index so you never have to decode a bare ID like
 ## How a decision graduates (the lifecycle)
 
 A record starts life as **unproven**. When you later learn how it turned out, you
-attach a verdict with [`/decision-feedback`](COMMANDS.md#decision-feedback):
+attach a verdict with [`/baton:decision-feedback`](COMMANDS.md#decision-feedback):
 
 - `worked` → the record moves to **Established patterns** in the guidance.
 - `didnt` / `mixed` → it moves to **Known mistakes** and the record is flagged for review.
 - *(no verdict yet)* → it sits under **Open / under-feedback**.
 
-`/consolidate-decisions` then rolls all records into two guidance docs:
+`/baton:consolidate-decisions` then rolls all records into two guidance docs:
 - **Per-project** — `knowledge/projects/<id>/decision-guidance.md`
 - **Universal** — `knowledge/universal/decision-guidance.md` (a pattern only promotes
   here once it has a `worked` verdict in **2+ projects**).
