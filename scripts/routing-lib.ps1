@@ -55,6 +55,24 @@ function Get-GeneralCapabilities {
     return @()
 }
 
+function Get-CapabilityFloors {
+    <# Top-level `capability_floors:` block map (capability -> min context tokens).
+       A claim is filtered when the provider's loaded context is KNOWN and below
+       the floor; unknown context never disqualifies. Returns hashtable. #>
+    param([string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'))
+    $floors = @{}
+    if (-not (Test-Path $FleetPath)) { return $floors }
+    $inBlock = $false
+    foreach ($line in (Get-Content $FleetPath)) {
+        if ($line -match '^capability_floors:\s*$') { $inBlock = $true; continue }
+        if (-not $inBlock) { continue }
+        if ([string]::IsNullOrWhiteSpace($line) -or $line -match '^\s*#') { continue }
+        if ($line -match '^\s+([\w.-]+):\s*(\d+)') { $floors[$matches[1]] = [int]$matches[2]; continue }
+        $inBlock = $false   # dedented to the next top-level key — block over
+    }
+    return $floors
+}
+
 function Get-KnownCapabilities {
     <# Union of every tools.yaml capability + fleet.yaml general_capabilities. #>
     param(
@@ -87,6 +105,7 @@ function Select-Capability {
     param(
         [Parameter(Mandatory)][string]$Capability,
         [ValidateSet('local','free','paid')][string]$MaxCostTier,
+        [ValidateSet('economy','champion')][string]$SelectionMode = 'economy',
         [switch]$RequireLocal,
         [string]$ToolsPath = $script:DefaultToolsPath,
         [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
@@ -112,19 +131,32 @@ function Select-Capability {
         }
     }
 
-    # 2. General candidates from fleet.yaml when the capability is a general one
+    # 2. Fleet candidates — claims-aware. A provider WITH a `capabilities:` list is
+    #    a candidate for exactly those (even non-general ones, e.g. judge); a provider
+    #    WITHOUT the field keeps the blanket general_capabilities grant (frontier CLIs).
+    #    Context floors filter claims whose loaded context is known-too-small.
     $general = Get-GeneralCapabilities -FleetPath $FleetPath
-    if ($general -contains $Capability -and (Test-Path $FleetPath)) {
+    $floors  = Get-CapabilityFloors -FleetPath $FleetPath
+    if (Test-Path $FleetPath) {
         foreach ($p in (Read-Fleet -Path $FleetPath)) {
             if ($p.enabled -ne $true) { continue }
+            $claims = $p.capabilities
+            $isCandidate = if ($null -ne $claims) { @($claims) -contains $Capability }
+                           else { $general -contains $Capability }
+            if (-not $isCandidate) { continue }
+            if ($floors.ContainsKey($Capability) -and $p.context) {
+                if ([int]$p.context -lt $floors[$Capability]) { continue }
+            }
             $prior = if ($null -ne $p.quality) { [double]$p.quality } else { 0.5 }
             $detail = Get-CapabilityQualityDetail -Capability $Capability -Candidate ([string]$p.name) -Prior $prior -JournalPath $JournalPath -RatingsPath $RatingsPath
+            $why = if ($null -ne $claims) { "claims $Capability ($($p.cost_tier) tier)" }
+                   else { "general model for $Capability ($($p.cost_tier) tier)" }
             [void]$candidates.Add([pscustomobject]@{
                 name = [string]$p.name; kind = [string]$p.kind; source = 'fleet'
                 cost_tier = [string]$p.cost_tier; quality = $detail.quality
                 quality_detail = $detail
-                role = $p.role; platform = $p.platform   # Slice B passthrough (null when absent)
-                why = "general model for $Capability ($($p.cost_tier) tier)"
+                role = $p.role; platform = $p.platform
+                why = $why
             })
         }
     }
@@ -136,9 +168,16 @@ function Select-Capability {
         $c
     }
 
-    # 4. Rank: cost tier asc, then quality desc, then name. Attach a numeric score.
-    $ranked = $filtered |
-        Select-Object *, @{n='score'; e={ (Get-CostTierRank $_.cost_tier) - ($_.quality * 0.001) }} |
-        Sort-Object @{e='score'}, @{e={ -$_.quality }}, @{e='name'}
+    # 4. Rank. economy: cost tier asc, quality desc ("smallest that clears the bar").
+    #    champion: quality desc, cost tier asc tiebreak ("just the best" — BoB slot).
+    if ($SelectionMode -eq 'champion') {
+        $ranked = $filtered |
+            Select-Object *, @{n='score'; e={ -$_.quality + ((Get-CostTierRank $_.cost_tier) * 0.001) }} |
+            Sort-Object @{e={ -$_.quality }}, @{e={ Get-CostTierRank $_.cost_tier }}, @{e='name'}
+    } else {
+        $ranked = $filtered |
+            Select-Object *, @{n='score'; e={ (Get-CostTierRank $_.cost_tier) - ($_.quality * 0.001) }} |
+            Sort-Object @{e='score'}, @{e={ -$_.quality }}, @{e='name'}
+    }
     return ,([object[]]$ranked)
 }
