@@ -66,6 +66,15 @@ function Read-Fleet {
             $inEnv = $false
             continue
         }
+        # A new top-level key (no indentation) ends the providers block — stop
+        # absorbing indented children (e.g. capability_floors entries) into the
+        # last provider. `providers:` itself is skipped above.
+        if ($current -and $rawLine -match '^[\w.-]+:') {
+            [void]$providers.Add($current)
+            $current = $null
+            $inEnv = $false
+            continue
+        }
         if (-not $current) { continue }
 
         $indent = ($rawLine -replace '\S.*$', '').Length
@@ -95,7 +104,15 @@ function Read-Fleet {
             $val = $matches[2]
             # Skip env key when it has no value (already handled above); value would be empty
             if ($key -eq 'env' -and $val -eq '') { continue }
-            $current[$key] = (ConvertFrom-FleetValue $val)
+            $parsed = ConvertFrom-FleetValue $val
+            # Inline YAML list value: 'capabilities: [a, b]' -> string[].
+            if ($parsed -is [string] -and $parsed -match '^\[(.*)\]$') {
+                $inner = $matches[1].Trim()
+                $parsed = if ($inner) {
+                    @($inner -split ',' | ForEach-Object { $_.Trim().Trim('"', "'") } | Where-Object { $_ })
+                } else { @() }
+            }
+            $current[$key] = $parsed
         }
     }
     if ($current) { [void]$providers.Add($current) }
@@ -117,6 +134,22 @@ function Get-FleetResearchDefault {
     if (-not (Test-Path $Path)) { return @() }
     foreach ($line in (Get-Content $Path)) {
         if ($line -match '^\s*research_default:\s*\[(.*)\]\s*$') {
+            $inner = $matches[1].Trim()
+            if (-not $inner) { return @() }
+            return @($inner -split ',' | ForEach-Object { $_.Trim().Trim('"', "'") } | Where-Object { $_ })
+        }
+    }
+    return @()
+}
+
+function Get-FleetKeepList {
+    <# Top-level `keep_list: ['*heretic*', ...]` glob list (models Kevin keeps for
+       personal use — inventory tags them, recommendations never propose culling).
+       Returns string[] (empty if the key or file is absent). #>
+    param([string]$Path = $script:DefaultFleetPath)
+    if (-not (Test-Path $Path)) { return @() }
+    foreach ($line in (Get-Content $Path)) {
+        if ($line -match '^\s*keep_list:\s*\[(.*)\]\s*$') {
             $inner = $matches[1].Trim()
             if (-not $inner) { return @() }
             return @($inner -split ',' | ForEach-Object { $_.Trim().Trim('"', "'") } | Where-Object { $_ })
