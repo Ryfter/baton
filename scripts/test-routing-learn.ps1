@@ -205,6 +205,43 @@ tools:
     Check 'local learned quality low'  (($cands | Where-Object { $_.name -eq 'tool-local' }).quality -lt 0.3)
     Check 'quality_detail attached'    ($null -ne ($cands[0].quality_detail))
     Check 'quality_detail user n'      (($cands | Where-Object { $_.name -eq 'tool-paid' }).quality_detail.user.n -eq 5)
+
+    # ===== models-as-tools: judge resolved by claim, not file order =====
+    $judgeYaml = @"
+general_capabilities: [code-gen]
+
+providers:
+  - name: first-local-drafter
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://x'
+  - name: claimed-judge
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://x'
+    capabilities: [judge]
+"@
+    $judgeFleet = Join-Path $tmp 'judge-fleet.yaml'
+    Set-Content -Path $judgeFleet -Value $judgeYaml -Encoding utf8
+    $jmNoR = Join-Path $tmp 'jm-no-ratings.jsonl'; $jmNoJ = Join-Path $tmp 'jm-no-journal.jsonl'
+    Check 'judge: claim beats file order' ((Get-JudgeModel -FleetPath $judgeFleet -ToolsPath (Join-Path $tmp 'no-tools.yaml') -RatingsPath $jmNoR -JournalPath $jmNoJ) -eq 'claimed-judge')
+
+    $bareYaml = @"
+general_capabilities: [code-gen]
+
+providers:
+  - name: only-local
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://x'
+"@
+    $bareFleet = Join-Path $tmp 'bare-fleet.yaml'
+    Set-Content -Path $bareFleet -Value $bareYaml -Encoding utf8
+    Check 'judge: no claim -> first-local fallback' ((Get-JudgeModel -FleetPath $bareFleet -ToolsPath (Join-Path $tmp 'no-tools.yaml') -RatingsPath $jmNoR -JournalPath $jmNoJ) -eq 'only-local')
+    Check 'judge: no locals -> null' ($null -eq (Get-JudgeModel -FleetPath (Join-Path $tmp 'no-such.yaml') -ToolsPath (Join-Path $tmp 'no-tools.yaml') -RatingsPath $jmNoR -JournalPath $jmNoJ))
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

@@ -153,6 +153,25 @@ function Get-CheapestLocalModel {
     return [string]$local[0].name
 }
 
+function Get-JudgeModel {
+    <# Resolve the judge via capability claims: best enabled LOCAL provider claiming
+       'judge' (Select-Capability ranking). Falls back to the first enabled local
+       (Get-CheapestLocalModel) when nobody claims judge, or when this lib is loaded
+       standalone without routing-lib (Select-Capability absent). Replaces the
+       file-order pick that dialed an offline box on 2026-06-11. #>
+    param(
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [string]$RatingsPath = $script:DefaultRatingsPath,
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl')
+    )
+    if (Get-Command Select-Capability -ErrorAction SilentlyContinue) {
+        $c = @(Select-Capability -Capability 'judge' -RequireLocal -FleetPath $FleetPath -ToolsPath $ToolsPath -RatingsPath $RatingsPath -JournalPath $JournalPath | Where-Object { $null -ne $_ })
+        if ($c.Count -gt 0) { return [string]$c[0].name }
+    }
+    return Get-CheapestLocalModel -FleetPath $FleetPath
+}
+
 function Invoke-LlmJudge {
     <# Ask a cheap model to score an output 0..1 for a capability. Returns @{score;reason}.
        -Dispatcher (param: model, prompt -> raw string) is injected in tests; otherwise the
@@ -205,7 +224,7 @@ function Get-LlmJudgeGrader {
         if (-not $h.passed) {
             return @{ passed = $false; score = $h.score; reason = $h.reason; grader = 'heuristic' }
         }
-        $model = if ($jm) { $jm } else { Get-CheapestLocalModel -FleetPath $fp }
+        $model = if ($jm) { $jm } else { Get-JudgeModel -FleetPath $fp }
         if (-not $model) {
             return @{ passed = $h.passed; score = $h.score; reason = "$($h.reason) (judge unavailable: no local model)"; grader = 'heuristic' }
         }
