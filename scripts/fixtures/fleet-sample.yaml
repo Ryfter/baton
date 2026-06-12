@@ -46,3 +46,10 @@ providers:
     enabled: true
     cost_tier: free
     command_template: 'pwsh -NoProfile -Command "Start-Sleep -Seconds 10; Write-Output slow-{{prompt}}"'
+
+  - name: stub-tight
+    kind: cli
+    enabled: true
+    cost_tier: local
+    usage_class: tight
+    command_template: 'pwsh -NoProfile -Command "Write-Output tight-{{prompt}}"'

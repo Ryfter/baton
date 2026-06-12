@@ -256,7 +256,7 @@ if (-not (Test-Path $scriptsDst)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $scriptsDst" }
     else { New-Item -ItemType Directory -Force -Path $scriptsDst | Out-Null; Write-Ok "created $scriptsDst" }
 }
-foreach ($script in @('baton-home.ps1', 'job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'routing-lib.ps1', 'routing-dispatch.ps1', 'routing-learn.ps1', 'routing-calibrate.ps1', 'routing-cascade.ps1', 'prime-hours.ps1', 'six-hats-lib.ps1', 'council-lib.ps1', 'code-lib.ps1', 'kb-lib.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1', 'runs-lib.ps1', 'statusline-feed.ps1', 'fleet-runs-bridge.ps1', 'fleet-orchestrate.ps1', 'fleet-backlog.ps1', 'run-backlog.ps1', 'idea-lib.ps1')) {
+foreach ($script in @('baton-home.ps1', 'job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'routing-lib.ps1', 'routing-dispatch.ps1', 'routing-learn.ps1', 'routing-calibrate.ps1', 'routing-cascade.ps1', 'prime-hours.ps1', 'six-hats-lib.ps1', 'council-lib.ps1', 'code-lib.ps1', 'kb-lib.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1', 'runs-lib.ps1', 'statusline-feed.ps1', 'fleet-runs-bridge.ps1', 'fleet-orchestrate.ps1', 'fleet-backlog.ps1', 'run-backlog.ps1', 'fleet-models.ps1', 'idea-lib.ps1')) {
     $src = Join-Path $repoRoot "scripts\$script"
     $dst = Join-Path $scriptsDst $script
     Copy-WithPrompt $src $dst "lib script: $script" -Force

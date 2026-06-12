@@ -18,6 +18,17 @@
 #                     identity; journaled now, consumed by the cost/speed advisor later.
 #   timeout_s         (http only, optional) per-request timeout; default 300 in the
 #                     lm-studio hatch (large pinned models cold-load before generating).
+#   capabilities      (optional) explicit capability claims — a provider WITH this
+#                     list is a candidate for ONLY those capabilities; without it,
+#                     the blanket general_capabilities grant applies (frontier CLIs).
+#                     Canonical taxonomy (matches Gauntlet battery names):
+#                     code-gen, code-transform, commit-msg, extract-json,
+#                     summarize-short, summarize-long, synthesize, write-personal,
+#                     write-scientific, write-formal, ocr, embed, judge, reasoning, vision
+#   context           (optional) loaded context of the pinned profile (tokens);
+#                     claims below a capability_floors entry are filtered out
+#   usage_class       (optional) tight (small specialist, fine while Kevin is active)
+#                     | broad (15GB+ generalist, idle-gated in a later slice)
 #
 # VRAM rule (d043): run ONE model-serving process per box — e.g. never enable
 # ollama AND lm-studio on the same machine; they cannot see each other's VRAM
@@ -30,6 +41,15 @@ research_default: [claude-cli, codex, ollama-local]
 # Broad capabilities served by the general (conversational) models below.
 # The router treats every ENABLED provider as a candidate for these.
 general_capabilities: [code-gen, reasoning, summarize]
+
+# Min context (tokens) a provider must declare to claim a capability.
+capability_floors:
+  summarize-long: 65536
+  judge: 4096
+
+# Personal/keep models (globs): inventory tags them, recommendations never
+# propose culling them, the router can never claim them (they're unregistered).
+keep_list: ['*heretic*']
 
 providers:
   - name: claude-cli
@@ -92,6 +112,7 @@ providers:
     platform: local
     model_default: 'dolphin3:8b'
     base_url: 'http://100.115.71.9:11434'   # wraith2 over Tailscale
+    usage_class: tight
 
   - name: lm-studio
     kind: http
@@ -101,3 +122,21 @@ providers:
     platform: local
     base_url: 'http://localhost:1234'
     model_default: 'auto'
+    capabilities: [code-gen, code-transform, summarize-short, synthesize]
+    context: 32768
+    usage_class: broad
+
+  # Small/judge specialist on the same LM Studio server as lm-studio above.
+  # The explicit `judge` claim in capabilities drives selection — no file-order
+  # dependency needed.
+  - name: lm-studio-small
+    kind: http
+    enabled: true
+    cost_tier: local
+    role: draft
+    platform: local
+    base_url: 'http://localhost:1234'
+    model_default: 'auto'
+    capabilities: [judge, commit-msg, extract-json, summarize-short]
+    context: 16384
+    usage_class: tight

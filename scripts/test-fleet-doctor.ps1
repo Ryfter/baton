@@ -21,5 +21,11 @@ Assert "stub-disabled marked skip" ($out -match 'stub-disabled\s+skip')
 Assert "stub-http marked err (unreachable)" ($out -match 'stub-http\s+err')
 Assert "exit code 1 because an enabled provider errored" ($exit -eq 1)
 
+# usage_class surfaced in -Json output
+$jsonOut = & pwsh -NoProfile -File $doctor -Path $fixture -Json 2>&1 | Out-String
+$parsed  = $jsonOut | ConvertFrom-Json
+$tightRow = @($parsed | Where-Object { $_.NAME -eq 'stub-tight' })
+Assert "doctor -Json carries class:tight for stub-tight" ($tightRow.Count -eq 1 -and $tightRow[0].class -eq 'tight')
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green
