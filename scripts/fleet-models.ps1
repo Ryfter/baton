@@ -138,7 +138,8 @@ function Get-InventoryRecommendations {
             continue
         }
         $ids = @($boxEntry.models | ForEach-Object { $_.id })
-        foreach ($p in @($fleet | Where-Object { $boxEntry.providers -contains $_.name -and $_.model_default })) {
+        # 'auto' = unpinned sentinel — nothing concrete to verify; skip it.
+        foreach ($p in @($fleet | Where-Object { $boxEntry.providers -contains $_.name -and $_.model_default -and $_.model_default -ne 'auto' })) {
             if ($ids -notcontains [string]$p.model_default) {
                 [void]$recs.Add("MISSING PIN: provider '$($p.name)' pins '$($p.model_default)' but it is not installed on $($boxEntry.base_url)")
             }
@@ -180,12 +181,14 @@ if ($Import) {
 
 $inv = Get-ModelInventory -FleetPath $FleetPath
 $inv = Add-InventoryTags -Inventory $inv -FleetPath $FleetPath
-if ($Box) { $inv = [pscustomobject]@{ generated_at = $inv.generated_at; boxes = @($inv.boxes | Where-Object { $_.providers -contains $Box }) } }
+# Write the FULL inventory snapshot first — --box is a display-only filter and must
+# not corrupt the canonical snapshot with a one-box subset.
 $snapshot = $inv | ConvertTo-Json -Depth 8
 Set-JsonFileAtomic -Path $SnapshotPath -Json $snapshot
+$view = if ($Box) { [pscustomobject]@{ generated_at = $inv.generated_at; boxes = @($inv.boxes | Where-Object { $_.providers -contains $Box }) } } else { $inv }
 if ($Json) { Write-Output $snapshot; exit 0 }
 
-foreach ($boxEntry in @($inv.boxes)) {
+foreach ($boxEntry in @($view.boxes)) {
     Write-Host "`n== $($boxEntry.base_url) [$($boxEntry.enrich)] providers: $($boxEntry.providers -join ', ') ==" -ForegroundColor Cyan
     if (-not $boxEntry.reachable) { Write-Host "  OFFLINE: $($boxEntry.error)" -ForegroundColor Yellow; continue }
     $boxEntry.models | Sort-Object { -([long]($_.size_bytes ?? 0)) } |
@@ -194,7 +197,7 @@ foreach ($boxEntry in @($inv.boxes)) {
                      @{n='pins';e={$_.pinned_by -join ','}}, @{n='claims';e={$_.claims -join ','}},
                      @{n='keep';e={$_.keep}} -AutoSize | Out-Host
 }
-$recs = @(Get-InventoryRecommendations -Inventory $inv -FleetPath $FleetPath)
+$recs = @(Get-InventoryRecommendations -Inventory $view -FleetPath $FleetPath)
 Write-Host "`n-- recommendations ($($recs.Count)) --" -ForegroundColor Cyan
 foreach ($r in $recs) { Write-Host "  * $r" }
 Write-Host "`nsnapshot: $SnapshotPath"

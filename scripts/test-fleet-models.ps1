@@ -30,6 +30,14 @@ providers:
     model_default: 'phi-4'
     capabilities: [judge, extract-json]
     usage_class: tight
+  - name: lm-studio-auto
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://localhost:1234'
+    model_default: 'auto'
+    capabilities: [summarize-short]
+    usage_class: tight
   - name: ollama-box2
     kind: http
     enabled: true
@@ -81,7 +89,7 @@ providers:
     $inv = Get-ModelInventory -FleetPath $fleetPath -Prober $prober
     Check 'inv: one probe per box'      (@($script:probed).Count -eq 2)
     Check 'inv: lm box reachable'       (@($inv.boxes | Where-Object { $_.base_url -eq 'http://localhost:1234' })[0].reachable -eq $true)
-    Check 'inv: providers grouped'      (@(@($inv.boxes | Where-Object { $_.base_url -eq 'http://localhost:1234' })[0].providers).Count -eq 2)
+    Check 'inv: providers grouped'      (@(@($inv.boxes | Where-Object { $_.base_url -eq 'http://localhost:1234' })[0].providers).Count -eq 3)
     Check 'inv: offline box marked'     (@($inv.boxes | Where-Object { $_.base_url -like '*11434*' })[0].reachable -eq $false)
     Check 'inv: cli providers ignored'  (@($inv.boxes | Where-Object { $_.providers -contains 'claude-cli' }).Count -eq 0)
 
@@ -101,6 +109,7 @@ providers:
     Check 'rec: unregistered specialist'      (@($recs | Where-Object { $_ -match 'UNREGISTERED SPECIALIST.*qwen3-embedding-8b' }).Count -eq 1)
     Check 'rec: offline box noted'            (@($recs | Where-Object { $_ -match 'offline.*ollama-box2' }).Count -eq 1)
     Check 'rec: keep never culled'            (@($recs | Where-Object { $_ -match 'heretic' }).Count -eq 0)
+    Check 'rec: auto sentinel not flagged'    (@($recs | Where-Object { $_ -match 'MISSING PIN.*auto' }).Count -eq 0)
 
     # --- Missing pin: registry pins a model the box doesn't have ---
     $fleet2 = $fleetYaml.Replace("model_default: 'phi-4'", "model_default: 'phi-9-imaginary'")

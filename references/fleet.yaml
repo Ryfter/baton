@@ -121,7 +121,7 @@ providers:
     role: draft
     platform: local
     base_url: 'http://localhost:1234'
-    model_default: 'auto'
+    model_default: 'qwen/qwen3-coder-30b'   # explicit pin per d043 — never 'auto'
     capabilities: [code-gen, code-transform, summarize-short, synthesize]
     context: 32768
     usage_class: broad
@@ -136,7 +136,7 @@ providers:
     role: draft
     platform: local
     base_url: 'http://localhost:1234'
-    model_default: 'auto'
+    model_default: 'phi-4'                  # explicit pin per d043 — never 'auto'
     capabilities: [judge, commit-msg, extract-json, summarize-short]
     context: 16384
     usage_class: tight
