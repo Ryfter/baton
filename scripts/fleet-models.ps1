@@ -22,19 +22,38 @@ $ErrorActionPreference = 'Stop'
 
 function ConvertFrom-LmStudioModels {
     <# Normalize LM Studio native GET /api/v1/models JSON to inventory rows.
+       The live shape (LM Studio 0.3.x, verified 2026-06-11): top key `models`,
+       model id in `key`, `architecture`, `quantization` an OBJECT {name,...},
+       `capabilities` an OBJECT of booleans (vision/reasoning/...), loadedness in
+       `loaded_instances[]`. Older/OpenAI-ish variants (`data`, `id`, string
+       quant, string-array capabilities, `state`) still accepted.
        Tolerant: absent fields -> $null/empty, never throws on shape drift. #>
     param([Parameter(Mandatory)][string]$RawJson)
     $o = $RawJson | ConvertFrom-Json -ErrorAction Stop
-    return @(foreach ($m in @($o.data)) {
+    $list = if ($null -ne $o.models) { @($o.models) } else { @($o.data) }
+    return @(foreach ($m in $list) {
+        $quant = if ($m.quantization -is [string]) { [string]$m.quantization }
+                 elseif ($m.quantization.name)     { [string]$m.quantization.name }
+                 else { $null }
+        # capabilities: object of booleans -> names of the true ones; legacy
+        # string array passes through. 'reasoning' lands here either way.
+        $flags = @()
+        if ($m.capabilities -is [System.Management.Automation.PSCustomObject]) {
+            $flags = @($m.capabilities.PSObject.Properties | Where-Object { $_.Value -eq $true } | ForEach-Object { [string]$_.Name })
+        } elseif ($null -ne $m.capabilities) {
+            $flags = @(@($m.capabilities) | ForEach-Object { [string]$_ })
+        }
+        $loaded = if ($null -ne $m.loaded_instances) { @($m.loaded_instances).Count -gt 0 }
+                  else { ($m.state -eq 'loaded') }
         [pscustomobject]@{
-            id          = [string]$m.id
+            id          = $(if ($m.key) { [string]$m.key } else { [string]$m.id })
             type        = $(if ($m.type) { [string]$m.type } else { 'llm' })
-            quant       = [string]$m.quantization
+            quant       = $quant
             max_context = $(if ($m.max_context_length) { [int]$m.max_context_length } else { $null })
             size_bytes  = $(if ($m.size_bytes) { [long]$m.size_bytes } else { $null })
-            flags       = @(@($m.capabilities) | ForEach-Object { [string]$_ })
-            loaded      = ($m.state -eq 'loaded')
-            family      = [string]$m.arch
+            flags       = $flags
+            loaded      = $loaded
+            family      = $(if ($m.architecture) { [string]$m.architecture } else { [string]$m.arch })
         }
     })
 }
