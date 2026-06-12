@@ -66,6 +66,52 @@ function Add-CapabilityRating {
     }
 }
 
+function Import-GauntletScorecard {
+    <# Import a Gauntlet scorecard (the spec'd contract: run{id,date}, cells[]) into
+       the ratings store as source='gauntlet' rows. Idempotent by run id. A cell whose
+       model id matches a provider's model_default is recorded under the PROVIDER name
+       (the routing candidate); unmapped cells keep the raw model id (future pins make
+       them retroactively useful). Cells missing model/capability/quality are skipped
+       and counted. Returns @{imported; skipped; unmapped; already; run_id}. #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$RatingsPath = $script:DefaultRatingsPath,
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml')
+    )
+    if (-not (Test-Path $Path)) { throw "scorecard not found: $Path" }
+    $sc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -ErrorAction Stop
+    if (-not $sc.run -or -not $sc.run.id) { throw "scorecard missing run.id: $Path" }
+    if ($null -eq $sc.cells) { throw "scorecard missing cells[]: $Path" }
+    $runId = [string]$sc.run.id
+    if (@(Read-JsonlRows -Path $RatingsPath | Where-Object { $_.run_id -eq $runId }).Count -gt 0) {
+        return @{ imported = 0; skipped = 0; unmapped = 0; already = $true; run_id = $runId }
+    }
+    $pinMap = @{}
+    if (Test-Path $FleetPath) {
+        foreach ($p in (Read-Fleet -Path $FleetPath)) {
+            if ($p.model_default) { $pinMap[[string]$p.model_default] = [string]$p.name }
+        }
+    }
+    $imported = 0; $skipped = 0; $unmapped = 0
+    $ts = if ($sc.run.date) { [string]$sc.run.date } else { (Get-Date).ToString('o') }
+    $dir = Split-Path -Parent $RatingsPath
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    foreach ($cell in @($sc.cells)) {
+        if (-not $cell.model -or -not $cell.capability -or $null -eq $cell.quality) { $skipped++; continue }
+        $candidate = if ($pinMap.ContainsKey([string]$cell.model)) { $pinMap[[string]$cell.model] }
+                     else { $unmapped++; [string]$cell.model }
+        $row = [ordered]@{
+            ts = $ts; capability = [string]$cell.capability; candidate = $candidate
+            source = 'gauntlet'; score = [double]$cell.quality
+            n_cases = $(if ($cell.cases) { [int]$cell.cases } else { 1 })
+            run_id = $runId
+        }
+        Add-Content -LiteralPath $RatingsPath -Value ($row | ConvertTo-Json -Compress) -Encoding utf8NoBOM
+        $imported++
+    }
+    return @{ imported = $imported; skipped = $skipped; unmapped = $unmapped; already = $false; run_id = $runId }
+}
+
 function Get-RoutingStats {
     <# Per-(capability,candidate) signal stats from ratings + journal. Internal. #>
     param(
@@ -74,11 +120,23 @@ function Get-RoutingStats {
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'),
         [string]$RatingsPath = $script:DefaultRatingsPath
     )
-    # User ratings
-    $rt = Get-CapabilityRatings -Capability $Capability -Candidate $Candidate -RatingsPath $RatingsPath
+    # User ratings (exclude scorecard rows — they carry score, not good/bad; without
+    # this filter gauntlet rows would silently DRAG DOWN the user rate).
+    $rtAll = Get-CapabilityRatings -Capability $Capability -Candidate $Candidate -RatingsPath $RatingsPath
+    $rt = @($rtAll | Where-Object { $_.rating -eq 'good' -or $_.rating -eq 'bad' })
     $nu = @($rt).Count
     $gu = @($rt | Where-Object { $_.rating -eq 'good' }).Count
     $ru = if ($nu -gt 0) { [double]$gu / $nu } else { 0.0 }
+
+    # Gauntlet scorecard cells: calibration-grade evidence. Each cell contributes its
+    # case count capped at 10 (one bench run must not drown live signals forever).
+    $gc = @($rtAll | Where-Object { $_.source -eq 'gauntlet' -and $null -ne $_.score })
+    $ng = 0; $gsum = 0.0
+    foreach ($g in $gc) {
+        $w = [Math]::Min([int]$(if ($g.n_cases) { $g.n_cases } else { 1 }), 10)
+        $ng += $w; $gsum += $w * [double]$g.score
+    }
+    $rg = if ($ng -gt 0) { $gsum / $ng } else { 0.0 }
 
     # Journal rows for this pair
     $rows = @(Read-JsonlRows -Path $JournalPath | Where-Object { $_.capability -eq $Capability -and $_.candidate -eq $Candidate })
@@ -91,6 +149,7 @@ function Get-RoutingStats {
 
     return @{
         user      = @{ rate = $ru; n = [int]$nu }
+        gauntlet  = @{ rate = $rg; n = [int]$ng }
         judge     = @{ rate = $rj; n = [int]$nj }
         heuristic = @{ rate = $rh; n = [int]$nh }
     }
@@ -106,9 +165,9 @@ function Get-CapabilityQualityDetail {
         [double]$Prior = 0.5
     )
     $s  = Get-RoutingStats -Capability $Capability -Candidate $Candidate -JournalPath $JournalPath -RatingsPath $RatingsPath
-    $k  = 2.0; $Wu = 1.0; $Wj = 0.5; $Wh = 0.25
-    $numer = ($Prior * $k) + ($Wu * $s.user.n * $s.user.rate) + ($Wj * $s.judge.n * $s.judge.rate) + ($Wh * $s.heuristic.n * $s.heuristic.rate)
-    $denom = $k + ($Wu * $s.user.n) + ($Wj * $s.judge.n) + ($Wh * $s.heuristic.n)
+    $k  = 2.0; $Wu = 1.0; $Wg = 0.75; $Wj = 0.5; $Wh = 0.25
+    $numer = ($Prior * $k) + ($Wu * $s.user.n * $s.user.rate) + ($Wg * $s.gauntlet.n * $s.gauntlet.rate) + ($Wj * $s.judge.n * $s.judge.rate) + ($Wh * $s.heuristic.n * $s.heuristic.rate)
+    $denom = $k + ($Wu * $s.user.n) + ($Wg * $s.gauntlet.n) + ($Wj * $s.judge.n) + ($Wh * $s.heuristic.n)
     $q = if ($denom -gt 0) { $numer / $denom } else { $Prior }
     if ($q -lt 0.0) { $q = 0.0 }
     if ($q -gt 1.0) { $q = 1.0 }
@@ -116,6 +175,7 @@ function Get-CapabilityQualityDetail {
         quality   = [double]$q
         prior     = [double]$Prior
         user      = $s.user
+        gauntlet  = $s.gauntlet
         judge     = $s.judge
         heuristic = $s.heuristic
     }
@@ -151,6 +211,25 @@ function Get-CheapestLocalModel {
     $local = @(Read-Fleet -Path $FleetPath | Where-Object { $_.enabled -eq $true -and $_.cost_tier -eq 'local' })
     if ($local.Count -eq 0) { return $null }
     return [string]$local[0].name
+}
+
+function Get-JudgeModel {
+    <# Resolve the judge via capability claims: best enabled LOCAL provider claiming
+       'judge' (Select-Capability ranking). Falls back to the first enabled local
+       (Get-CheapestLocalModel) when nobody claims judge, or when this lib is loaded
+       standalone without routing-lib (Select-Capability absent). Replaces the
+       file-order pick that dialed an offline box on 2026-06-11. #>
+    param(
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [string]$RatingsPath = $script:DefaultRatingsPath,
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl')
+    )
+    if (Get-Command Select-Capability -ErrorAction SilentlyContinue) {
+        $c = @(Select-Capability -Capability 'judge' -RequireLocal -FleetPath $FleetPath -ToolsPath $ToolsPath -RatingsPath $RatingsPath -JournalPath $JournalPath | Where-Object { $null -ne $_ })
+        if ($c.Count -gt 0) { return [string]$c[0].name }
+    }
+    return Get-CheapestLocalModel -FleetPath $FleetPath
 }
 
 function Invoke-LlmJudge {
@@ -205,7 +284,7 @@ function Get-LlmJudgeGrader {
         if (-not $h.passed) {
             return @{ passed = $false; score = $h.score; reason = $h.reason; grader = 'heuristic' }
         }
-        $model = if ($jm) { $jm } else { Get-CheapestLocalModel -FleetPath $fp }
+        $model = if ($jm) { $jm } else { Get-JudgeModel -FleetPath $fp }
         if (-not $model) {
             return @{ passed = $h.passed; score = $h.score; reason = "$($h.reason) (judge unavailable: no local model)"; grader = 'heuristic' }
         }

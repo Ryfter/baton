@@ -12,7 +12,7 @@ function Assert($label, $cond) {
 
 # --- Read-Fleet ---
 $fleet = Read-Fleet -Path $fixture
-Assert "Read-Fleet returns 7 providers" ($fleet.Count -eq 7)
+Assert "Read-Fleet returns 8 providers" ($fleet.Count -eq 8)
 Assert "first provider name is stub-cli" ($fleet[0].name -eq 'stub-cli')
 Assert "stub-cli kind is cli" ($fleet[0].kind -eq 'cli')
 Assert "stub-cli enabled is boolean true" ($fleet[0].enabled -eq $true)
@@ -124,6 +124,39 @@ Set-Content -Path $noRdFixture -Value "providers:`n  - name: x`n    kind: cli`n 
 $rdEmpty = Get-FleetResearchDefault -Path $noRdFixture
 Assert "absent research_default → empty array" ($rdEmpty.Count -eq 0)
 Remove-Item $noRdFixture -ErrorAction SilentlyContinue
+
+# ===== models-as-tools: inline lists, top-level hardening, keep_list =====
+$tmp = Join-Path $env:TEMP "baton-mat-$(Get-Random)"
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+try {
+    $matYaml = @"
+keep_list: ['*heretic*', '*swahili*']
+
+providers:
+  - name: big-local
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://localhost:1234'
+    capabilities: [code-gen, synthesize]
+    context: 32768
+    usage_class: broad
+
+capability_floors:
+  summarize-long: 65536
+"@
+    $matPath = Join-Path $tmp 'mat-fleet.yaml'
+    Set-Content -Path $matPath -Value $matYaml -Encoding utf8
+    $matProviders = Read-Fleet -Path $matPath
+    $bl = $matProviders | Where-Object { $_.name -eq 'big-local' }
+    Assert 'inline list parses to array'      ($bl.capabilities -is [array] -and @($bl.capabilities).Count -eq 2 -and $bl.capabilities[1] -eq 'synthesize')
+    Assert 'scalar fields still parse'        ($bl.context -eq '32768' -and $bl.usage_class -eq 'broad')
+    Assert 'top-level key after providers not absorbed' (-not $bl.ContainsKey('summarize-long'))
+    Assert 'keep_list reader'                 (@(Get-FleetKeepList -Path $matPath).Count -eq 2 -and (Get-FleetKeepList -Path $matPath)[0] -eq '*heretic*')
+    Assert 'keep_list absent -> empty'        (@(Get-FleetKeepList -Path (Join-Path $tmp 'no-such.yaml')).Count -eq 0)
+} finally {
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+}
 
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green

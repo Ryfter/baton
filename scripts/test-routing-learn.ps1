@@ -205,6 +205,90 @@ tools:
     Check 'local learned quality low'  (($cands | Where-Object { $_.name -eq 'tool-local' }).quality -lt 0.3)
     Check 'quality_detail attached'    ($null -ne ($cands[0].quality_detail))
     Check 'quality_detail user n'      (($cands | Where-Object { $_.name -eq 'tool-paid' }).quality_detail.user.n -eq 5)
+
+    # ===== models-as-tools: judge resolved by claim, not file order =====
+    $judgeYaml = @"
+general_capabilities: [code-gen]
+
+providers:
+  - name: first-local-drafter
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://x'
+  - name: claimed-judge
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://x'
+    capabilities: [judge]
+"@
+    $judgeFleet = Join-Path $tmp 'judge-fleet.yaml'
+    Set-Content -Path $judgeFleet -Value $judgeYaml -Encoding utf8
+    $jmNoR = Join-Path $tmp 'jm-no-ratings.jsonl'; $jmNoJ = Join-Path $tmp 'jm-no-journal.jsonl'
+    Check 'judge: claim beats file order' ((Get-JudgeModel -FleetPath $judgeFleet -ToolsPath (Join-Path $tmp 'no-tools.yaml') -RatingsPath $jmNoR -JournalPath $jmNoJ) -eq 'claimed-judge')
+
+    $bareYaml = @"
+general_capabilities: [code-gen]
+
+providers:
+  - name: only-local
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://x'
+"@
+    $bareFleet = Join-Path $tmp 'bare-fleet.yaml'
+    Set-Content -Path $bareFleet -Value $bareYaml -Encoding utf8
+    Check 'judge: no claim -> first-local fallback' ((Get-JudgeModel -FleetPath $bareFleet -ToolsPath (Join-Path $tmp 'no-tools.yaml') -RatingsPath $jmNoR -JournalPath $jmNoJ) -eq 'only-local')
+    Check 'judge: no locals -> null' ($null -eq (Get-JudgeModel -FleetPath (Join-Path $tmp 'no-such.yaml') -ToolsPath (Join-Path $tmp 'no-tools.yaml') -RatingsPath $jmNoR -JournalPath $jmNoJ))
+
+    # ===== models-as-tools: Gauntlet scorecard import =====
+    $scorecard = @{
+        run = @{ id = 'run-001'; date = '2026-06-11T00:00:00Z'; gauntlet_version = '0.1' }
+        cells = @(
+            @{ model = 'phi-4'; capability = 'extract-json'; quality = 0.91; cases = 14 },
+            @{ model = 'phi-4'; capability = 'judge'; quality = 0.85; cases = 20 },
+            @{ model = 'unknown-model'; capability = 'ocr'; quality = 0.7; cases = 5 },
+            @{ capability = 'broken-cell-no-model'; quality = 0.5 }
+        )
+    } | ConvertTo-Json -Depth 5
+    $scPath = Join-Path $tmp 'scorecard.json'
+    Set-Content -Path $scPath -Value $scorecard -Encoding utf8
+    $scFleetYaml = @"
+providers:
+  - name: lm-studio-small
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://x'
+    model_default: 'phi-4'
+"@
+    $scFleet = Join-Path $tmp 'sc-fleet.yaml'
+    Set-Content -Path $scFleet -Value $scFleetYaml -Encoding utf8
+    $scRatings = Join-Path $tmp 'sc-ratings.jsonl'
+
+    $imp = Import-GauntletScorecard -Path $scPath -RatingsPath $scRatings -FleetPath $scFleet
+    Check 'import: cell count'      ($imp.imported -eq 3 -and $imp.skipped -eq 1 -and $imp.already -eq $false)
+    Check 'import: unmapped counted' ($imp.unmapped -eq 1)
+    $scRows = @(Read-JsonlRows -Path $scRatings)
+    Check 'import: pin maps to provider' (@($scRows | Where-Object { $_.candidate -eq 'lm-studio-small' }).Count -eq 2)
+    Check 'import: unmapped keeps raw id' (@($scRows | Where-Object { $_.candidate -eq 'unknown-model' }).Count -eq 1)
+    Check 'import: source tagged'   (@($scRows | Where-Object { $_.source -eq 'gauntlet' }).Count -eq 3)
+    $imp2 = Import-GauntletScorecard -Path $scPath -RatingsPath $scRatings -FleetPath $scFleet
+    Check 'import: idempotent by run id' ($imp2.already -eq $true -and $imp2.imported -eq 0 -and @(Read-JsonlRows -Path $scRatings).Count -eq 3)
+
+    # Quality blend: gauntlet evidence moves quality off the prior; user bucket unpolluted.
+    $qd = Get-CapabilityQualityDetail -Capability 'extract-json' -Candidate 'lm-studio-small' -RatingsPath $scRatings -JournalPath (Join-Path $tmp 'sc-no-journal.jsonl')
+    Check 'blend: gauntlet bucket present' ($qd.gauntlet.n -eq 10)   # min(14 cases, 10)
+    Check 'blend: quality pulled toward 0.91' ($qd.quality -gt 0.7)
+    Check 'blend: user bucket unpolluted' ($qd.user.n -eq 0)
+
+    # Malformed scorecards: named errors.
+    Set-Content -Path (Join-Path $tmp 'bad-sc.json') -Value '{"cells": []}' -Encoding utf8
+    $threw = $false
+    try { Import-GauntletScorecard -Path (Join-Path $tmp 'bad-sc.json') -RatingsPath $scRatings -FleetPath $scFleet | Out-Null } catch { $threw = $_.Exception.Message -match 'run.id' }
+    Check 'import: missing run.id throws named' $threw
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

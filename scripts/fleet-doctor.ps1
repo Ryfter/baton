@@ -62,13 +62,13 @@ foreach ($p in $fleet) {
     }
 
     if ($status -eq 'err' -or $status -eq 'warn') { $anyBad = $true }
-    $rows += [pscustomobject]@{ NAME = $p.name; STATUS = $status; DETAIL = $detail }
+    $rows += [pscustomobject]@{ NAME = $p.name; STATUS = $status; DETAIL = $detail; class = $(if ($p.usage_class) { [string]$p.usage_class } else { '' }) }
 }
 
 if ($Json) {
     ConvertTo-Json -InputObject @($rows) -Depth 4
 } else {
-    $rows | Format-Table -AutoSize | Out-String | Write-Host
+    $rows | Format-Table NAME, STATUS, class, DETAIL -AutoSize | Out-String | Write-Host
     $enabled = @($fleet | Where-Object { $_.enabled -eq $true }).Count
     Write-Host "$enabled enabled provider(s)."
 }

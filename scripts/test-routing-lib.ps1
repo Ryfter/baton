@@ -179,4 +179,98 @@ providers:
 }
 finally { Remove-Item -Recurse -Force $tmpB -ErrorAction SilentlyContinue }
 
+# ===== models-as-tools: claims, floors, champion mode =====
+$tmpC = Join-Path ([System.IO.Path]::GetTempPath()) ("routing-claims-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $tmpC | Out-Null
+try {
+    $claimsYaml = @"
+general_capabilities: [code-gen, reasoning, summarize]
+capability_floors:
+  summarize-long: 65536
+  judge: 4096
+
+providers:
+  - name: frontier
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    command_template: 'claude -p "{{prompt}}"'
+  - name: big-local
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://localhost:1234'
+    capabilities: [code-gen, summarize-long]
+    context: 32768
+  - name: small-local
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://localhost:1234'
+    capabilities: [judge, commit-msg, summarize-long]
+    context: 131072
+    quality: 0.4
+"@
+    $claimsFleet = Join-Path $tmpC 'claims-fleet.yaml'
+    Set-Content -Path $claimsFleet -Value $claimsYaml -Encoding utf8
+    $noRatings = Join-Path $tmpC 'no-ratings.jsonl'; $noJournal = Join-Path $tmpC 'no-journal.jsonl'
+    # A minimal tools.yaml with no entries — avoids throw on missing file for these fleet-only tests
+    $claimsToolsYaml = "tools:`n"
+    $toolsPath = Join-Path $tmpC 'tools.yaml'
+    Set-Content -Path $toolsPath -Value $claimsToolsYaml -Encoding utf8
+
+    Check 'floors reader' ((Get-CapabilityFloors -FleetPath $claimsFleet)['summarize-long'] -eq 65536)
+    Check 'floors absent -> empty' ((Get-CapabilityFloors -FleetPath (Join-Path $tmpC 'no-such.yaml')).Count -eq 0)
+
+    # Claims GRANT beyond the general list: judge is not a general capability.
+    $cJudge = @(Select-Capability -Capability 'judge' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal)
+    Check 'claim grants non-general cap' (@($cJudge | Where-Object { $_.name -eq 'small-local' }).Count -eq 1)
+    # Claims RESTRICT: big-local declares a list without 'reasoning', so it is out;
+    # field-less frontier keeps the blanket grant.
+    $cReason = @(Select-Capability -Capability 'reasoning' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal)
+    Check 'claim list restricts'   (@($cReason | Where-Object { $_.name -eq 'big-local' }).Count -eq 0)
+    Check 'no-field keeps blanket' (@($cReason | Where-Object { $_.name -eq 'frontier' }).Count -eq 1)
+    # Context floor: big-local claims summarize-long but 32768 < 65536 -> filtered;
+    # small-local (131072) survives.
+    $cLong = @(Select-Capability -Capability 'summarize-long' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal)
+    Check 'floor filters short context' (@($cLong | Where-Object { $_.name -eq 'big-local' }).Count -eq 0)
+    Check 'floor passes long context'   (@($cLong | Where-Object { $_.name -eq 'small-local' }).Count -eq 1)
+    # Economy ranking unchanged: local outranks paid for code-gen.
+    $cEco = @(Select-Capability -Capability 'code-gen' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal)
+    Check 'economy: local outranks paid' ($cEco[0].cost_tier -eq 'local')
+    $cChamp = @(Select-Capability -Capability 'judge' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal -SelectionMode champion)
+    Check 'champion mode returns ranked' (@($cChamp).Count -eq 1 -and $cChamp[0].name -eq 'small-local')
+
+    # Champion vs economy with a real quality gap:
+    $champYaml = @"
+general_capabilities: []
+
+providers:
+  - name: cheap-ok
+    kind: http
+    enabled: true
+    cost_tier: local
+    base_url: 'http://x'
+    capabilities: [extract-json]
+    quality: 0.55
+  - name: paid-great
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    command_template: 'x "{{prompt}}"'
+    capabilities: [extract-json]
+    quality: 0.95
+"@
+    $champFleet = Join-Path $tmpC 'champ-fleet.yaml'
+    Set-Content -Path $champFleet -Value $champYaml -Encoding utf8
+    # empty-tools.yaml: a valid but empty tools list so Read-Tools does not throw
+    $emptyTools = Join-Path $tmpC 'empty-tools.yaml'
+    Set-Content -Path $emptyTools -Value "tools:`n" -Encoding utf8
+    $e = @(Select-Capability -Capability 'extract-json' -ToolsPath $emptyTools -FleetPath $champFleet -RatingsPath $noRatings -JournalPath $noJournal)
+    $h = @(Select-Capability -Capability 'extract-json' -ToolsPath $emptyTools -FleetPath $champFleet -RatingsPath $noRatings -JournalPath $noJournal -SelectionMode champion)
+    Check 'economy: cheapest first'  ($e[0].name -eq 'cheap-ok')
+    Check 'champion: best first'     ($h[0].name -eq 'paid-great')
+}
+finally { Remove-Item -Recurse -Force $tmpC -ErrorAction SilentlyContinue }
+
 if ($fail -gt 0) { Write-Host "`n$fail FAILED"; exit 1 } else { Write-Host "`nALL PASS"; exit 0 }
