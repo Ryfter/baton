@@ -24,7 +24,9 @@
 #                     Canonical taxonomy (matches Gauntlet battery names):
 #                     code-gen, code-transform, commit-msg, extract-json,
 #                     summarize-short, summarize-long, synthesize, write-personal,
-#                     write-scientific, write-formal, ocr, embed, judge, reasoning, vision
+#                     write-scientific, write-formal, ocr, embed, judge, reasoning,
+#                     vision, triage, classify
+#   triage / classify  — structured task classification (issue → type/priority/risk)
 #   context           (optional) loaded context of the pinned profile (tokens);
 #                     claims below a capability_floors entry are filtered out
 #   usage_class       (optional) tight (small specialist, fine while Kevin is active)
@@ -83,6 +85,27 @@ providers:
     role: bulk
     platform: github
     command_template: 'gh copilot suggest "{{prompt}}"'
+
+  # ── Triage workers (Sprint 1): explicit model pins for the triage role. ──
+  # stdin: true so the JSON-schema-heavy triage prompt is piped, never
+  # interpolated through Invoke-Expression (which would mangle quotes/braces).
+  - name: claude-haiku
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    stdin: true
+    capabilities: [triage, classify, summarize-short]
+    model_default: 'claude-haiku-4-5-20251001'
+    command_template: 'claude -p --model claude-haiku-4-5-20251001'
+
+  - name: claude-sonnet
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    stdin: true
+    capabilities: [triage, code-gen, reasoning, summarize]
+    model_default: 'claude-sonnet-4-6'
+    command_template: 'claude -p --model claude-sonnet-4-6'
 
   - name: opencode
     kind: cli
