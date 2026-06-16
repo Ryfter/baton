@@ -76,3 +76,38 @@ try {
     $all = Get-AllWorkerStates -UsagePath $U3b -Now $T0
     $names = @($all | ForEach-Object { $_.worker }) | Sort-Object
     Check 'T14 all-states covers every journal worker (excl. conserve *)' ("$($names -join ',')" -eq 'aaa,bbb')
+
+    # ---- Task 4: ticks + budget + forecast ----
+    $U4 = Join-Path $tmp 'u4.jsonl'
+    Add-UsageTick -Worker 'fc' -Count 10 -UsagePath $U4 -Timestamp $T0.ToString('o')
+    $oneRow = (Read-UsageJournal -Path $U4)[0]
+    Check 'T15 tick default unit is requests' ($oneRow.event -eq 'tick' -and $oneRow.unit -eq 'requests')
+
+    Check 'T16 <2 days of ticks -> insufficient_data' ((Get-UsageForecast -Worker 'fc' -UsagePath $U4 -FleetPath $missing -Now $T0.AddHours(1)).status -eq 'insufficient_data')
+
+    # two days of ticks: day0=10, day1=20 -> run_rate 15
+    Add-UsageTick -Worker 'fc' -Count 20 -UsagePath $U4 -Timestamp $T0.AddDays(1).ToString('o')
+    $f17 = Get-UsageForecast -Worker 'fc' -UsagePath $U4 -FleetPath $missing -Now $T0.AddDays(1).AddHours(1)
+    Check 'T17 ticks, no budget -> rate_only + run_rate 15' ($f17.status -eq 'rate_only' -and [double]$f17.run_rate -eq 15)
+
+    # budget from a stub fleet: worker fc, budget 300 -> consumed 30, remaining 270, /15 = 18 days
+    $stubFleet = @"
+providers:
+  - name: fc
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    budget: 300
+"@
+    $fleet4 = Join-Path $tmp 'fleet4.yaml'; Set-Content -Path $fleet4 -Value $stubFleet -Encoding utf8
+    $f18 = Get-UsageForecast -Worker 'fc' -UsagePath $U4 -FleetPath $fleet4 -Now $T0.AddDays(1).AddHours(1)
+    Check 'T18 budget -> ok + days_to_exhaustion 18' ($f18.status -eq 'ok' -and [double]$f18.days_to_exhaustion -eq 18)
+    Check 'T26 Get-WorkerBudget reads field; absent -> null' ((Get-WorkerBudget -Worker 'fc' -FleetPath $fleet4) -eq 300 -and $null -eq (Get-WorkerBudget -Worker 'nope' -FleetPath $fleet4))
+
+    # run_rate averages over days-with-data, not calendar days (2 days, not 7)
+    Check 'T19 run_rate over days-with-data' ([double](Get-UsageForecast -Worker 'fc' -UsagePath $U4 -FleetPath $missing -Now $T0.AddDays(1).AddHours(1)).run_rate -eq 15)
+}
+finally {
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+}
+if ($script:fail -gt 0) { Write-Host "`n$($script:fail) FAILED"; exit 1 } else { Write-Host "`nALL PASS"; exit 0 }

@@ -201,3 +201,70 @@ function Get-AllWorkerStates {
     $out = foreach ($w in $workers) { Get-WorkerState -Worker $w -Now $Now -Rows $rows }
     return ,([object[]]$out)
 }
+
+function Get-WorkerBudget {
+    <# Optional per-worker budget (int) from the fleet entry; absent -> $null. #>
+    param([Parameter(Mandatory)][string]$Worker,
+          [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'))
+    if (-not (Test-Path $FleetPath)) { return $null }
+    if (-not (Get-Command Read-Fleet -ErrorAction SilentlyContinue)) { return $null }
+    foreach ($p in (Read-Fleet -Path $FleetPath)) {
+        if ([string]$p.name -eq $Worker) {
+            if ($null -ne $p.budget) { return [int]$p.budget }
+            return $null
+        }
+    }
+    return $null
+}
+
+function Get-UsageForecast {
+    <# Best-effort linear forecast. status: insufficient_data (<2 days), rate_only (no budget),
+       or ok (budget + >=2 days). Honest — never fabricates an exhaustion date. #>
+    param(
+        [Parameter(Mandatory)][string]$Worker, [int]$Days = 7,
+        [datetime]$Now = [datetime]::UtcNow,
+        [string]$UsagePath = $script:DefaultUsagePath,
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml')
+    )
+    $nowUtc = $Now.ToUniversalTime()
+    $cutoff = $nowUtc.AddDays(-$Days)
+    $rows = Read-UsageJournal -Path $UsagePath
+    $ticks = @($rows | Where-Object {
+        $_.event -eq 'tick' -and $_.worker -eq $Worker -and (ConvertTo-UsageDateTime ([string]$_.ts)) -ge $cutoff
+    })
+    $unit = if ($ticks.Count -gt 0 -and $ticks[0].unit) { [string]$ticks[0].unit } else { 'requests' }
+    $byDay = @{}
+    foreach ($t in $ticks) {
+        $day = (ConvertTo-UsageDateTime ([string]$t.ts)).ToString('yyyy-MM-dd')
+        if (-not $byDay.ContainsKey($day)) { $byDay[$day] = 0 }
+        $byDay[$day] += [int]$t.count
+    }
+    $daysWithData = $byDay.Keys.Count
+    $result = [ordered]@{ worker = $Worker; unit = $unit; days_with_data = $daysWithData; run_rate = 0.0; status = 'insufficient_data' }
+    if ($daysWithData -lt 2) {
+        if ($daysWithData -eq 1) { $result.run_rate = [double](@($byDay.Values)[0]) }
+        return $result
+    }
+    $total = 0; foreach ($v in $byDay.Values) { $total += $v }
+    $result.run_rate = [math]::Round($total / $daysWithData, 2)
+    $budget = Get-WorkerBudget -Worker $Worker -FleetPath $FleetPath
+    if ($null -eq $budget) { $result.status = 'rate_only'; return $result }
+    # window start = latest lockout/clear boundary at/under Now, else the range cutoff
+    $bounds = @($rows | Where-Object {
+        $_.worker -eq $Worker -and $_.event -in @('lockout','clear') -and (ConvertTo-UsageDateTime ([string]$_.ts)) -le $nowUtc
+    })
+    $windowStart = $cutoff
+    if ($bounds.Count -gt 0) {
+        $windowStart = ConvertTo-UsageDateTime ([string](($bounds | Sort-Object { ConvertTo-UsageDateTime ([string]$_.ts) } | Select-Object -Last 1).ts))
+    }
+    $consumed = 0
+    foreach ($t in $ticks) {
+        if ((ConvertTo-UsageDateTime ([string]$t.ts)) -ge $windowStart) { $consumed += [int]$t.count }
+    }
+    $remaining = [math]::Max(0, $budget - $consumed)
+    $result.budget = $budget
+    $result.consumed_window = $consumed
+    $result.days_to_exhaustion = if ($result.run_rate -gt 0) { [math]::Round($remaining / $result.run_rate, 2) } else { $null }
+    $result.status = 'ok'
+    return $result
+}
