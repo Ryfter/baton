@@ -148,6 +148,20 @@ providers:
 
     $r25 = Select-Capability @common5 -UsagePath (Join-Path $tmp 'none.jsonl')   # direct assign: see T23 note
     Check 'T25 absent usage path -> no-op (both candidates present)' ($r25.Count -eq 2)
+
+    # ---- Task 6: CLI ----
+    $cli = Join-Path $PSScriptRoot 'fleet-usage.ps1'
+    $U6 = Join-Path $tmp 'u6.jsonl'
+    Set-WorkerLockout -Worker 'claude-sonnet' -UsagePath $U6 -Timestamp $T0.ToString('o')
+    $statusJson = & $cli 'status' -UsagePath $U6 -FleetPath $missing -Json | Out-String
+    $parsed = $statusJson | ConvertFrom-Json
+    Check 'T27 CLI status --json parses + lists worker' (@($parsed.workers).Count -ge 1 -and ($parsed.workers | Where-Object { $_.worker -eq 'claude-sonnet' }))
+
+    $U6b = Join-Path $tmp 'u6b.jsonl'
+    & $cli 'lockout' 'claude-sonnet' -Reset '+5h' -UsagePath $U6b | Out-Null
+    $after = (& $cli 'status' -UsagePath $U6b -FleetPath $missing -Json | Out-String | ConvertFrom-Json)
+    $row = $after.workers | Where-Object { $_.worker -eq 'claude-sonnet' }
+    Check 'T28 CLI lockout --reset +5h -> waiting_for_reset' ($row.state -eq 'waiting_for_reset')
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
