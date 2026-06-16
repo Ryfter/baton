@@ -39,7 +39,10 @@ switch ($Subcommand) {
     'cooldown' { Set-WorkerCooldown -Worker $Worker -Until (ConvertTo-UsageInstant -When $Until) -UsagePath $UsagePath }
     'clear'    { Clear-Worker -Worker $Worker -UsagePath $UsagePath }
     'conserve' { Set-ConserveMode -On ($Worker -eq 'on') -UsagePath $UsagePath }
-    'tick'     { Add-UsageTick -Worker $Worker -Count $Count -Unit $Unit -UsagePath $UsagePath }
+    'tick'     {
+        if ($Count -le 0) { Write-Error "tick requires --count greater than 0 (a 0-count tick would dilute the forecast)"; exit 2 }
+        Add-UsageTick -Worker $Worker -Count $Count -Unit $Unit -UsagePath $UsagePath
+    }
     'forecast' {
         $targets = if ($Worker) { ,$Worker } else { @(Get-AllWorkerStates -UsagePath $UsagePath -FleetPath $FleetPath | ForEach-Object { $_.worker }) }
         $fc = foreach ($w in $targets) { Get-UsageForecast -Worker $w -UsagePath $UsagePath -FleetPath $FleetPath }

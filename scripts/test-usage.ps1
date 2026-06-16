@@ -162,6 +162,12 @@ providers:
     $after = (& $cli 'status' -UsagePath $U6b -FleetPath $missing -Json | Out-String | ConvertFrom-Json)
     $row = $after.workers | Where-Object { $_.worker -eq 'claude-sonnet' }
     Check 'T28 CLI lockout --reset +5h -> waiting_for_reset' ($row.state -eq 'waiting_for_reset')
+
+    # T29: a 0-count tick is rejected (non-zero exit) and writes no event (review nit N1).
+    # Run in a CHILD process so the CLI's `exit 2` / Write-Error can't abort this suite.
+    $U6c = Join-Path $tmp 'u6c.jsonl'
+    pwsh -NoProfile -File $cli 'tick' 'claude-haiku' -Count 0 -UsagePath $U6c *> $null
+    Check 'T29 CLI tick --count 0 rejected, no event written' ($LASTEXITCODE -ne 0 -and -not (Test-Path $U6c))
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
