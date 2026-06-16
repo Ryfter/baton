@@ -7,6 +7,7 @@ function Check($n,$c){ if($c){Write-Host "PASS: $n"} else {Write-Host "FAIL: $n"
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("routing-learn-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+$noUsage = Join-Path $tmp 'no-usage.jsonl'   # Sprint 2: keep Select-Capability usage filter a no-op
 
 try {
     # ===== Task 1: ratings store =====
@@ -199,7 +200,7 @@ tools:
     1..5 | ForEach-Object { Add-CapabilityRating -Capability 'commit-msg' -Candidate 'tool-paid' -Source 'tools' -Rating 'good' -RatingsPath $t6ratings -Timestamp "2026-02-01T00:00:0$_Z" }
     1..5 | ForEach-Object { Add-CapabilityRating -Capability 'commit-msg' -Candidate 'tool-local' -Source 'tools' -Rating 'bad' -RatingsPath $t6ratings -Timestamp "2026-02-01T00:01:0$_Z" }
 
-    $cands = Select-Capability -Capability 'commit-msg' -ToolsPath $t6tools -FleetPath $t6fleet -RatingsPath $t6ratings -JournalPath $t6journal
+    $cands = Select-Capability -Capability 'commit-msg' -ToolsPath $t6tools -FleetPath $t6fleet -RatingsPath $t6ratings -JournalPath $t6journal -UsagePath $noUsage
     Check 'cost tier still dominates' ($cands[0].name -eq 'tool-local')
     Check 'paid learned quality high'  (($cands | Where-Object { $_.name -eq 'tool-paid' }).quality -gt 0.7)
     Check 'local learned quality low'  (($cands | Where-Object { $_.name -eq 'tool-local' }).quality -lt 0.3)

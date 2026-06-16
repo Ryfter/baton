@@ -106,6 +106,48 @@ providers:
 
     # run_rate averages over days-with-data, not calendar days (2 days, not 7)
     Check 'T19 run_rate over days-with-data' ([double](Get-UsageForecast -Worker 'fc' -UsagePath $U4 -FleetPath $missing -Now $T0.AddDays(1).AddHours(1)).run_rate -eq 15)
+
+    # ---- Task 5: Select-Capability usage filter ----
+    . "$PSScriptRoot/routing-lib.ps1"
+    $noRate = Join-Path $tmp 'no-ratings.jsonl'
+    $noJrnl = Join-Path $tmp 'no-journal.jsonl'
+    $capFleet = @"
+general_capabilities: [code-gen, reasoning, summarize]
+providers:
+  - name: alpha
+    kind: cli
+    enabled: true
+    cost_tier: paid
+  - name: beta
+    kind: cli
+    enabled: true
+    cost_tier: paid
+"@
+    $cf = Join-Path $tmp 'capfleet.yaml'; Set-Content -Path $cf -Value $capFleet -Encoding utf8
+    $noTools = Join-Path $tmp 'no-tools.yaml'
+    $common5 = @{ Capability = 'code-gen'; FleetPath = $cf; ToolsPath = $noTools; RatingsPath = $noRate; JournalPath = $noJrnl }
+
+    $U5 = Join-Path $tmp 'u5.jsonl'
+    Set-WorkerLockout -Worker 'alpha' -UsagePath $U5 -Timestamp $T0.ToString('o')   # exhausted
+    $r21 = @(Select-Capability @common5 -UsagePath $U5 | ForEach-Object { $_.name })
+    Check 'T21 exhausted worker excluded' ($r21 -notcontains 'alpha' -and $r21 -contains 'beta')
+
+    $U5b = Join-Path $tmp 'u5b.jsonl'
+    Set-WorkerCooldown -Worker 'alpha' -Until $T0.AddYears(50).ToString('o') -UsagePath $U5b -Timestamp $T0.ToString('o')
+    Check 'T22 cooling_down worker excluded' (@(Select-Capability @common5 -UsagePath $U5b | ForEach-Object { $_.name }) -notcontains 'alpha')
+
+    $U5c = Join-Path $tmp 'u5c.jsonl'
+    Set-WorkerLimited -Worker 'alpha' -UsagePath $U5c -Timestamp $T0.ToString('o')
+    $r23 = Select-Capability @common5 -UsagePath $U5c   # direct assign: function returns an [object[]] (unary-comma idiom)
+    $alpha23 = $r23 | Where-Object { $_.name -eq 'alpha' }
+    $beta23  = $r23 | Where-Object { $_.name -eq 'beta' }
+    Check 'T23 limited kept but ranked below healthy peer' ($alpha23 -and ([double]$alpha23.quality -lt [double]$beta23.quality))
+
+    Set-ConserveMode -On $true -UsagePath $U5c -Timestamp $T0.AddMinutes(1).ToString('o')
+    Check 'T24 conserve on -> limited excluded' (@(Select-Capability @common5 -UsagePath $U5c | ForEach-Object { $_.name }) -notcontains 'alpha')
+
+    $r25 = Select-Capability @common5 -UsagePath (Join-Path $tmp 'none.jsonl')   # direct assign: see T23 note
+    Check 'T25 absent usage path -> no-op (both candidates present)' ($r25.Count -eq 2)
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

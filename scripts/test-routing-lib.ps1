@@ -7,6 +7,7 @@ function Check($n,$c){ if($c){Write-Host "PASS: $n"} else {Write-Host "FAIL: $n"
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("routing-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+$noUsage = Join-Path $tmp 'no-usage.jsonl'   # Sprint 2: keep Select-Capability usage filter a no-op
 $nopath = Join-Path ([System.IO.Path]::GetTempPath()) ("rl-none-" + [guid]::NewGuid().ToString('N'))
 
 try {
@@ -98,7 +99,7 @@ providers:
     $common = @{ ToolsPath = $toolsPath; FleetPath = $fleetPath }
 
     # specialized capability → the one enabled tool, source=tools
-    $cm = Select-Capability -Capability 'commit-msg' @common -RatingsPath $nopath -JournalPath $nopath
+    $cm = Select-Capability -Capability 'commit-msg' @common -RatingsPath $nopath -JournalPath $nopath -UsagePath $noUsage
     Check 'commit-msg one candidate'   ($cm.Count -eq 1)
     Check 'commit-msg picks tool'      ($cm[0].name -eq 'git-commit-message')
     Check 'commit-msg source tools'    ($cm[0].source -eq 'tools')
@@ -106,25 +107,25 @@ providers:
     Check 'disabled tool excluded'     (-not ($cm | Where-Object { $_.name -eq 'off-tool' }))
 
     # cheapest-tier-first: ocr has a local and a paid tool → local first
-    $ocr = Select-Capability -Capability 'ocr' @common -RatingsPath $nopath -JournalPath $nopath
+    $ocr = Select-Capability -Capability 'ocr' @common -RatingsPath $nopath -JournalPath $nopath -UsagePath $noUsage
     Check 'ocr two candidates'         ($ocr.Count -eq 2)
     Check 'ocr local ranks first'      ($ocr[0].name -eq 'local-ocr')
     Check 'ocr paid ranks last'        ($ocr[1].name -eq 'paid-ocr')
 
     # general capability → enabled fleet providers, source=fleet, cheapest first
-    $cg = Select-Capability -Capability 'code-gen' @common -RatingsPath $nopath -JournalPath $nopath
+    $cg = Select-Capability -Capability 'code-gen' @common -RatingsPath $nopath -JournalPath $nopath -UsagePath $noUsage
     Check 'code-gen from fleet'        ($cg[0].source -eq 'fleet')
     Check 'code-gen local first'       ($cg[0].name -eq 'ollama-local')
     Check 'code-gen excludes disabled' (-not ($cg | Where-Object { $_.name -eq 'off-model' }))
 
     # constraints
-    $cgLocal = Select-Capability -Capability 'code-gen' -RequireLocal @common -RatingsPath $nopath -JournalPath $nopath
+    $cgLocal = Select-Capability -Capability 'code-gen' -RequireLocal @common -RatingsPath $nopath -JournalPath $nopath -UsagePath $noUsage
     Check 'RequireLocal drops paid'    (-not ($cgLocal | Where-Object { $_.cost_tier -eq 'paid' }))
-    $ocrFree = Select-Capability -Capability 'ocr' -MaxCostTier 'free' @common -RatingsPath $nopath -JournalPath $nopath
+    $ocrFree = Select-Capability -Capability 'ocr' -MaxCostTier 'free' @common -RatingsPath $nopath -JournalPath $nopath -UsagePath $noUsage
     Check 'MaxCostTier free drops paid' (-not ($ocrFree | Where-Object { $_.cost_tier -eq 'paid' }))
 
     # unknown capability → empty
-    $none = Select-Capability -Capability 'nonexistent' @common -RatingsPath $nopath -JournalPath $nopath
+    $none = Select-Capability -Capability 'nonexistent' @common -RatingsPath $nopath -JournalPath $nopath -UsagePath $noUsage
     Check 'unknown cap empty'          ($none.Count -eq 0)
 }
 finally { if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp } }
@@ -165,7 +166,7 @@ providers:
     $fpB = Join-Path $tmpB 'fleet.yaml';  Set-Content -Path $fpB -Value $fleetB -Encoding utf8
     $jpB = Join-Path $tmpB 'j.jsonl'
 
-    $cB = Select-Capability -Capability 'cap-b' -ToolsPath $tpB -FleetPath $fpB -JournalPath $jpB -RatingsPath $nopath
+    $cB = Select-Capability -Capability 'cap-b' -ToolsPath $tpB -FleetPath $fpB -JournalPath $jpB -RatingsPath $nopath -UsagePath $noUsage
     $annoTool = @($cB | Where-Object { $_.name -eq 'anno-tool' })[0]
     $annoPaid = @($cB | Where-Object { $_.name -eq 'anno-paid' })[0]
     $bare     = @($cB | Where-Object { $_.name -eq 'bare-local' })[0]
@@ -223,22 +224,22 @@ providers:
     Check 'floors absent -> empty' ((Get-CapabilityFloors -FleetPath (Join-Path $tmpC 'no-such.yaml')).Count -eq 0)
 
     # Claims GRANT beyond the general list: judge is not a general capability.
-    $cJudge = @(Select-Capability -Capability 'judge' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal)
+    $cJudge = @(Select-Capability -Capability 'judge' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal -UsagePath $noUsage)
     Check 'claim grants non-general cap' (@($cJudge | Where-Object { $_.name -eq 'small-local' }).Count -eq 1)
     # Claims RESTRICT: big-local declares a list without 'reasoning', so it is out;
     # field-less frontier keeps the blanket grant.
-    $cReason = @(Select-Capability -Capability 'reasoning' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal)
+    $cReason = @(Select-Capability -Capability 'reasoning' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal -UsagePath $noUsage)
     Check 'claim list restricts'   (@($cReason | Where-Object { $_.name -eq 'big-local' }).Count -eq 0)
     Check 'no-field keeps blanket' (@($cReason | Where-Object { $_.name -eq 'frontier' }).Count -eq 1)
     # Context floor: big-local claims summarize-long but 32768 < 65536 -> filtered;
     # small-local (131072) survives.
-    $cLong = @(Select-Capability -Capability 'summarize-long' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal)
+    $cLong = @(Select-Capability -Capability 'summarize-long' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal -UsagePath $noUsage)
     Check 'floor filters short context' (@($cLong | Where-Object { $_.name -eq 'big-local' }).Count -eq 0)
     Check 'floor passes long context'   (@($cLong | Where-Object { $_.name -eq 'small-local' }).Count -eq 1)
     # Economy ranking unchanged: local outranks paid for code-gen.
-    $cEco = @(Select-Capability -Capability 'code-gen' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal)
+    $cEco = @(Select-Capability -Capability 'code-gen' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal -UsagePath $noUsage)
     Check 'economy: local outranks paid' ($cEco[0].cost_tier -eq 'local')
-    $cChamp = @(Select-Capability -Capability 'judge' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal -SelectionMode champion)
+    $cChamp = @(Select-Capability -Capability 'judge' -ToolsPath $toolsPath -FleetPath $claimsFleet -RatingsPath $noRatings -JournalPath $noJournal -SelectionMode champion -UsagePath $noUsage)
     Check 'champion mode returns ranked' (@($cChamp).Count -eq 1 -and $cChamp[0].name -eq 'small-local')
 
     # Champion vs economy with a real quality gap:
@@ -266,8 +267,8 @@ providers:
     # empty-tools.yaml: a valid but empty tools list so Read-Tools does not throw
     $emptyTools = Join-Path $tmpC 'empty-tools.yaml'
     Set-Content -Path $emptyTools -Value "tools:`n" -Encoding utf8
-    $e = @(Select-Capability -Capability 'extract-json' -ToolsPath $emptyTools -FleetPath $champFleet -RatingsPath $noRatings -JournalPath $noJournal)
-    $h = @(Select-Capability -Capability 'extract-json' -ToolsPath $emptyTools -FleetPath $champFleet -RatingsPath $noRatings -JournalPath $noJournal -SelectionMode champion)
+    $e = @(Select-Capability -Capability 'extract-json' -ToolsPath $emptyTools -FleetPath $champFleet -RatingsPath $noRatings -JournalPath $noJournal -UsagePath $noUsage)
+    $h = @(Select-Capability -Capability 'extract-json' -ToolsPath $emptyTools -FleetPath $champFleet -RatingsPath $noRatings -JournalPath $noJournal -SelectionMode champion -UsagePath $noUsage)
     Check 'economy: cheapest first'  ($e[0].name -eq 'cheap-ok')
     Check 'champion: best first'     ($h[0].name -eq 'paid-great')
 }

@@ -11,6 +11,7 @@
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/fleet-lib.ps1"   # for Read-Fleet + ConvertFrom-FleetValue
 . "$PSScriptRoot/routing-learn.ps1"   # Slice 3 learning loop (ratings + learned quality + judge)
+. "$PSScriptRoot/usage-lib.ps1"   # Sprint 2: Get-WorkerState/Get-ConserveMode for route-around
 
 $script:DefaultToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml')
 
@@ -110,7 +111,8 @@ function Select-Capability {
         [string]$ToolsPath = $script:DefaultToolsPath,
         [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
         [string]$RatingsPath = (Join-Path $HOME '.claude/knowledge/universal/routing-ratings.jsonl'),
-        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl')
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'),
+        [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl')
     )
     $candidates = [System.Collections.ArrayList]@()
 
@@ -166,6 +168,27 @@ function Select-Capability {
         if ($RequireLocal -and $c.cost_tier -ne 'local') { continue }
         if ($MaxCostTier -and (Get-CostTierRank $c.cost_tier) -gt (Get-CostTierRank $MaxCostTier)) { continue }
         $c
+    }
+
+    # 3b. Usage governance (Sprint 2): drop hard-stopped fleet workers, honor conserve.
+    #     Absent journal -> no-op (every worker available); standalone/tests unaffected.
+    if (Get-Command Get-WorkerState -ErrorAction SilentlyContinue) {
+        $usageRows = Read-UsageJournal -Path $UsagePath
+        if (@($usageRows).Count -gt 0) {
+            $conserve = Get-ConserveMode -Rows $usageRows
+            $hardOut  = @('exhausted','cooling_down','waiting_for_reset')
+            $filtered = foreach ($c in $filtered) {
+                if ($c.source -ne 'fleet') { $c; continue }
+                $st = (Get-WorkerState -Worker $c.name -Rows $usageRows).state
+                if ($hardOut -contains $st) { continue }
+                if ($st -eq 'limited') {
+                    if ($conserve) { continue }
+                    $c.quality = [double]$c.quality * 0.5   # soft down-rank
+                }
+                $c
+            }
+            if ($conserve) { $SelectionMode = 'economy' }
+        }
     }
 
     # 4. Rank. economy: cost tier asc, quality desc ("smallest that clears the bar").
