@@ -108,6 +108,14 @@ Here you go:
     Check 'T7b parses confidence'  ([double]$t7.confidence -eq 0.84)
     Check 'T7c not escalated'      (-not $t7.escalated)
 
+    # T7d: the task text actually reaches the dispatcher (guards the $Input
+    # automatic-variable shadowing bug — canned dispatchers above ignore the
+    # prompt, so without this the binding could silently break).
+    $script:capturedPrompt = $null
+    $dispCapture = { param($cand,$prompt) $script:capturedPrompt = $prompt; @{ stdout = $goodJson; stderr=''; exit_code = 0; duration_s = 1 } }
+    $null = Invoke-TriageAgent -Input 'UNIQUE-TASK-MARKER-42' -FleetPath $stubFleetPath -ToolsPath (Join-Path $tmp 'no-tools.yaml') -Dispatcher $dispCapture
+    Check 'T7d task text reaches dispatcher' ($script:capturedPrompt -match 'UNIQUE-TASK-MARKER-42')
+
     # T8: malformed JSON -> deterministic fallback
     $dispBad = { param($cand,$prompt) @{ stdout = 'sorry, I cannot do that'; stderr=''; exit_code = 0; duration_s = 1 } }
     $t8 = Invoke-TriageAgent -Input 'whatever' -FleetPath $stubFleetPath -ToolsPath (Join-Path $tmp 'no-tools.yaml') -Dispatcher $dispBad
