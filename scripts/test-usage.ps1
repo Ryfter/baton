@@ -61,3 +61,18 @@ try {
     Clear-Worker -Worker 'w-ord' -UsagePath $U2 -Timestamp $T0.AddMinutes(5).ToString('o')
     Set-WorkerLockout -Worker 'w-ord' -UsagePath $U2 -Timestamp $T0.AddMinutes(10).ToString('o')
     Check 'T12 latest-event-by-ts wins' ((Get-WorkerState -Worker 'w-ord' -UsagePath $U2 -Now $T0.AddMinutes(20)).state -eq 'exhausted')
+
+    # ---- Task 3: conserve + aggregate ----
+    $U3 = Join-Path $tmp 'u3.jsonl'
+    Check 'T13a conserve defaults off' ((Get-ConserveMode -UsagePath $U3 -Now $T0) -eq $false)
+    Set-ConserveMode -On $true  -UsagePath $U3 -Timestamp $T0.ToString('o')
+    Set-ConserveMode -On $false -UsagePath $U3 -Timestamp $T0.AddMinutes(1).ToString('o')
+    Set-ConserveMode -On $true  -UsagePath $U3 -Timestamp $T0.AddMinutes(2).ToString('o')
+    Check 'T13b conserve latest-wins -> on' ((Get-ConserveMode -UsagePath $U3 -Now $T0.AddMinutes(5)) -eq $true)
+
+    $U3b = Join-Path $tmp 'u3b.jsonl'
+    Set-WorkerLockout -Worker 'aaa' -UsagePath $U3b -Timestamp $T0.ToString('o')
+    Add-UsageTick -Worker 'bbb' -Count 1 -UsagePath $U3b -Timestamp $T0.ToString('o')
+    $all = Get-AllWorkerStates -UsagePath $U3b -Now $T0
+    $names = @($all | ForEach-Object { $_.worker }) | Sort-Object
+    Check 'T14 all-states covers every journal worker (excl. conserve *)' ("$($names -join ',')" -eq 'aaa,bbb')

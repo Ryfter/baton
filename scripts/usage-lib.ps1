@@ -157,3 +157,47 @@ function Clear-Worker {
           [string]$UsagePath = $script:DefaultUsagePath, [string]$Timestamp)
     Add-UsageEvent -Kind 'clear' -Worker $Worker -Path $UsagePath -Timestamp $Timestamp
 }
+
+function Add-UsageTick {
+    param([Parameter(Mandatory)][string]$Worker, [Parameter(Mandatory)][int]$Count,
+          [string]$Unit = 'requests', [string]$UsagePath = $script:DefaultUsagePath, [string]$Timestamp)
+    Add-UsageEvent -Kind 'tick' -Worker $Worker -Fields @{ count = $Count; unit = $Unit } -Path $UsagePath -Timestamp $Timestamp
+}
+
+function Set-ConserveMode {
+    param([Parameter(Mandatory)][bool]$On,
+          [string]$UsagePath = $script:DefaultUsagePath, [string]$Timestamp)
+    Add-UsageEvent -Kind 'conserve' -Worker '*' -Fields @{ on = $On } -Path $UsagePath -Timestamp $Timestamp
+}
+
+function Get-ConserveMode {
+    param([datetime]$Now = [datetime]::UtcNow,
+          [string]$UsagePath = $script:DefaultUsagePath, [object[]]$Rows)
+    if (-not $PSBoundParameters.ContainsKey('Rows')) { $Rows = Read-UsageJournal -Path $UsagePath }
+    $evts = @($Rows | Where-Object { $_.event -eq 'conserve' })
+    if ($evts.Count -eq 0) { return $false }
+    $latest = $evts | Sort-Object { ConvertTo-UsageDateTime ([string]$_.ts) } | Select-Object -Last 1
+    return [bool]$latest.on
+}
+
+function Get-AllWorkerStates {
+    <# State record for every distinct worker in the journal (excluding the '*' conserve
+       sentinel), plus any enabled fleet worker not yet seen (-> available) when -FleetPath
+       is supplied and Read-Fleet is in scope. #>
+    param([datetime]$Now = [datetime]::UtcNow,
+          [string]$UsagePath = $script:DefaultUsagePath, [string]$FleetPath)
+    $rows = Read-UsageJournal -Path $UsagePath
+    $workers = [System.Collections.Generic.List[string]]::new()
+    foreach ($r in $rows) {
+        $w = [string]$r.worker
+        if ($w -and $w -ne '*' -and -not $workers.Contains($w)) { [void]$workers.Add($w) }
+    }
+    if ($FleetPath -and (Test-Path $FleetPath) -and (Get-Command Read-Fleet -ErrorAction SilentlyContinue)) {
+        foreach ($p in (Read-Fleet -Path $FleetPath)) {
+            $n = [string]$p.name
+            if ($p.enabled -eq $true -and $n -and -not $workers.Contains($n)) { [void]$workers.Add($n) }
+        }
+    }
+    $out = foreach ($w in $workers) { Get-WorkerState -Worker $w -Now $Now -Rows $rows }
+    return ,([object[]]$out)
+}
