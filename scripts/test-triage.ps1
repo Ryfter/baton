@@ -71,3 +71,29 @@ try {
     Check 'T3a prompt contains the task text'  ($prompt -match 'Add retry logic to dispatch')
     Check 'T3b prompt contains the schema key' ($prompt -match '"confidence"' -and $prompt -match '"recommended_model"')
     Check 'T3c prompt demands JSON-only'       ($prompt -match 'ONLY valid JSON')
+
+    # T4: low confidence escalates
+    Check 'T4 escalate when confidence 0.65' `
+        (Test-TriageEscalationNeeded -Triage @{ confidence = 0.65; risk = 'low'; ambiguity = 'low' })
+
+    # T5: confident + medium risk does NOT escalate
+    Check 'T5 no escalate at conf 0.85 risk medium' `
+        (-not (Test-TriageEscalationNeeded -Triage @{ confidence = 0.85; risk = 'medium'; ambiguity = 'low' }))
+
+    # T6: high risk escalates regardless of confidence
+    Check 'T6 escalate when risk high' `
+        (Test-TriageEscalationNeeded -Triage @{ confidence = 0.99; risk = 'high'; ambiguity = 'low' })
+
+    # T6b: high ambiguity escalates
+    Check 'T6b escalate when ambiguity high' `
+        (Test-TriageEscalationNeeded -Triage @{ confidence = 0.99; risk = 'low'; ambiguity = 'high' })
+
+    # T6c: Get-TriageJsonBlock extracts the JSON object from a fenced/prose reply
+    $fenced = @'
+Here you go:
+```json
+{ "type": "bug" }
+```
+'@
+    Check 'T6c Get-TriageJsonBlock extracts JSON from fenced reply' `
+        ((Get-TriageJsonBlock -Raw $fenced).Trim() -match '^\{\s*"type"\s*:\s*"bug"\s*\}$')

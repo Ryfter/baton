@@ -70,3 +70,24 @@ Task:
 $TaskText
 "@
 }
+
+function Test-TriageEscalationNeeded {
+    <# True when the triage result warrants a second-pass on a stronger model:
+       confidence below 0.70, OR risk high, OR ambiguity high. #>
+    param([Parameter(Mandatory)][hashtable]$Triage)
+    $conf = if ($null -ne $Triage.confidence) { [double]$Triage.confidence } else { 0.0 }
+    if ($conf -lt 0.70) { return $true }
+    if ([string]$Triage.risk -eq 'high') { return $true }
+    if ([string]$Triage.ambiguity -eq 'high') { return $true }
+    return $false
+}
+
+function Get-TriageJsonBlock {
+    <# Extract the JSON object from a model reply that may be fenced or prose-wrapped:
+       take the substring from the first '{' to the last '}'. Returns '' when none. #>
+    param([Parameter(Mandatory)][string]$Raw)
+    $open  = $Raw.IndexOf('{')
+    $close = $Raw.LastIndexOf('}')
+    if ($open -lt 0 -or $close -lt $open) { return '' }
+    return $Raw.Substring($open, $close - $open + 1)
+}
