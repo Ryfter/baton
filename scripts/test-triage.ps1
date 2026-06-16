@@ -129,3 +129,33 @@ Here you go:
     Check 'T10a escalated flag set'      ($t10.escalated -eq $true)
     Check 'T10b escalated_from haiku'    ($t10.escalated_from -eq 'claude-haiku')
     Check 'T10c authoritative = sonnet result' ([double]$t10.confidence -eq 0.88 -and $t10.area -eq 'parser')
+
+    # T13: --Text run prints YAML with type + confidence (stub dispatcher via env)
+    $env:BATON_TRIAGE_TEST_FLEET = $stubFleetPath
+    $env:BATON_TRIAGE_TEST_JSON  = $goodJson
+    $runner = Join-Path $PSScriptRoot 'fleet-triage.ps1'
+    $yamlOut = (& pwsh -NoProfile -File $runner -Text 'Plan the work' 2>&1 | Out-String)
+    Check 'T13a YAML output has type:'       ($yamlOut -match 'type:\s*plan')
+    Check 'T13b YAML output has confidence:'  ($yamlOut -match 'confidence:\s*0\.84')
+
+    # T14: --Json run emits valid JSON with required fields
+    $jsonOut = (& pwsh -NoProfile -File $runner -Text 'Plan the work' -Json 2>&1 | Out-String)
+    $parsed = $jsonOut | ConvertFrom-Json
+    Check 'T14a JSON parses'         ($null -ne $parsed)
+    Check 'T14b JSON has type/conf'  ($parsed.type -eq 'plan' -and [double]$parsed.confidence -eq 0.84)
+    Remove-Item env:BATON_TRIAGE_TEST_FLEET, env:BATON_TRIAGE_TEST_JSON -ErrorAction SilentlyContinue
+
+    # T15: url-family input still triages (the url path is gh-shell; covered structurally)
+    $t15 = Invoke-TriageAgent -Input (Read-TriageInput -Text 'url-path-covered-by-T2-family') -FleetPath $stubFleetPath -ToolsPath (Join-Path $tmp 'no-tools.yaml') -Dispatcher $dispGood
+    Check 'T15 url-family input still triages' ($t15.type -eq 'plan')
+}
+catch {
+    Write-Host "FAIL: unhandled exception — $($_.Exception.Message)"
+    $script:fail++
+}
+finally {
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+}
+
+if ($script:fail -gt 0) { Write-Host "`n$($script:fail) FAILED"; exit 1 }
+Write-Host "`nALL PASS"; exit 0
