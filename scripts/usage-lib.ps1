@@ -72,3 +72,88 @@ function ConvertTo-UsageDateTime {
     try { return ([datetimeoffset]::Parse($Ts, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal)).UtcDateTime }
     catch { return [datetime]::MinValue }
 }
+
+function Get-UsageEtaHuman {
+    <# "in 4h 55m" style relative ETA. Days suppress the minutes term for brevity. #>
+    param([datetime]$From, [datetime]$To)
+    $span = $To - $From
+    if ($span.TotalSeconds -le 0) { return 'now' }
+    $parts = @()
+    if ($span.Days -gt 0) { $parts += "$($span.Days)d" }
+    if ($span.Hours -gt 0) { $parts += "$($span.Hours)h" }
+    if ($span.Minutes -gt 0 -and $span.Days -eq 0) { $parts += "$($span.Minutes)m" }
+    if ($parts.Count -eq 0) { $parts += '<1m' }
+    return 'in ' + ($parts -join ' ')
+}
+
+function Get-WorkerState {
+    <# Fold the journal to the worker's current state. Time-expiry applied against -Now. #>
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        [datetime]$Now = [datetime]::UtcNow,
+        [string]$UsagePath = $script:DefaultUsagePath,
+        [object[]]$Rows
+    )
+    if (-not $PSBoundParameters.ContainsKey('Rows')) { $Rows = Read-UsageJournal -Path $UsagePath }
+    $result = [ordered]@{ worker = $Worker; state = 'available'; reset_at = $null; eta_human = $null; reason = $null }
+    $evts = @($Rows | Where-Object { $_.worker -eq $Worker -and $_.event -in @('lockout','limited','cooldown','clear') })
+    if ($evts.Count -eq 0) { return $result }
+    $latest = $evts | Sort-Object { ConvertTo-UsageDateTime ([string]$_.ts) } | Select-Object -Last 1
+    $nowUtc = $Now.ToUniversalTime()
+    switch ($latest.event) {
+        'clear' { return $result }
+        'cooldown' {
+            $until = ConvertTo-UsageDateTime ([string]$latest.until)
+            if ($nowUtc -ge $until) { return $result }
+            $result.state = 'cooling_down'; $result.reset_at = [string]$latest.until
+            $result.eta_human = Get-UsageEtaHuman -From $nowUtc -To $until
+            return $result
+        }
+        'limited' {
+            if ($latest.reset_at) {
+                $r = ConvertTo-UsageDateTime ([string]$latest.reset_at)
+                if ($nowUtc -ge $r) { return $result }
+                $result.reset_at = [string]$latest.reset_at
+                $result.eta_human = Get-UsageEtaHuman -From $nowUtc -To $r
+            }
+            $result.state = 'limited'; $result.reason = [string]$latest.reason
+            return $result
+        }
+        'lockout' {
+            if ($latest.reset_at) {
+                $r = ConvertTo-UsageDateTime ([string]$latest.reset_at)
+                if ($nowUtc -ge $r) { return $result }
+                $result.state = 'waiting_for_reset'; $result.reset_at = [string]$latest.reset_at
+                $result.eta_human = Get-UsageEtaHuman -From $nowUtc -To $r
+            } else {
+                $result.state = 'exhausted'
+            }
+            $result.reason = [string]$latest.reason
+            return $result
+        }
+    }
+    return $result
+}
+
+function Set-WorkerLockout {
+    param([Parameter(Mandatory)][string]$Worker, [string]$ResetAt, [string]$Reason,
+          [string]$UsagePath = $script:DefaultUsagePath, [string]$Timestamp)
+    $f = @{}; if ($ResetAt) { $f.reset_at = $ResetAt }; if ($Reason) { $f.reason = $Reason }
+    Add-UsageEvent -Kind 'lockout' -Worker $Worker -Fields $f -Path $UsagePath -Timestamp $Timestamp
+}
+function Set-WorkerLimited {
+    param([Parameter(Mandatory)][string]$Worker, [string]$ResetAt, [string]$Reason,
+          [string]$UsagePath = $script:DefaultUsagePath, [string]$Timestamp)
+    $f = @{}; if ($ResetAt) { $f.reset_at = $ResetAt }; if ($Reason) { $f.reason = $Reason }
+    Add-UsageEvent -Kind 'limited' -Worker $Worker -Fields $f -Path $UsagePath -Timestamp $Timestamp
+}
+function Set-WorkerCooldown {
+    param([Parameter(Mandatory)][string]$Worker, [Parameter(Mandatory)][string]$Until,
+          [string]$UsagePath = $script:DefaultUsagePath, [string]$Timestamp)
+    Add-UsageEvent -Kind 'cooldown' -Worker $Worker -Fields @{ until = $Until } -Path $UsagePath -Timestamp $Timestamp
+}
+function Clear-Worker {
+    param([Parameter(Mandatory)][string]$Worker,
+          [string]$UsagePath = $script:DefaultUsagePath, [string]$Timestamp)
+    Add-UsageEvent -Kind 'clear' -Worker $Worker -Path $UsagePath -Timestamp $Timestamp
+}
