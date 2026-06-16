@@ -49,3 +49,19 @@ try {
     $cands = Select-Capability -Capability triage -FleetPath $stubFleetPath -ToolsPath (Join-Path $tmp 'no-tools.yaml')
     Check 'T12 Select-Capability triage -> claude-haiku first' `
         (@($cands).Count -ge 1 -and $cands[0].name -eq 'claude-haiku')
+
+    # T1: --Text passthrough
+    Check 'T1 Read-TriageInput text passthrough' `
+        ((Read-TriageInput -Text 'Add retry logic') -eq 'Add retry logic')
+
+    # T2: --File reads content
+    $taskFile = Join-Path $tmp 'task.md'
+    Set-Content -Path $taskFile -Value "# Fix the parser`nIt drops quoted commas." -Encoding utf8
+    $fromFile = Read-TriageInput -File $taskFile
+    Check 'T2 Read-TriageInput file read' `
+        ($fromFile -match 'Fix the parser' -and $fromFile -match 'quoted commas')
+
+    # Read-TriageInput requires exactly one source
+    $threw = $false
+    try { Read-TriageInput } catch { $threw = $true }
+    Check 'T2b Read-TriageInput with no source throws' $threw
