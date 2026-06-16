@@ -97,3 +97,35 @@ Here you go:
 '@
     Check 'T6c Get-TriageJsonBlock extracts JSON from fenced reply' `
         ((Get-TriageJsonBlock -Raw $fenced).Trim() -match '^\{\s*"type"\s*:\s*"bug"\s*\}$')
+
+    # A dispatcher that returns canned JSON keyed by provider name.
+    $goodJson = '{ "type":"plan","priority":"P2","estimate":"S","risk":"medium","research_required":false,"recommended_platform":"Claude","recommended_model":"Sonnet","agent_type":"Planning","pipeline":["spec_review","implementation_plan","review"],"area":"registry","next_action":"Write the plan.","confidence":0.84,"ambiguity":"low" }'
+    $dispGood = { param($cand,$prompt) @{ stdout = $goodJson; stderr=''; exit_code = 0; duration_s = 1 } }
+
+    # T7: clean JSON -> parsed triage hashtable, no escalation
+    $t7 = Invoke-TriageAgent -Input 'Plan the registry work' -FleetPath $stubFleetPath -ToolsPath (Join-Path $tmp 'no-tools.yaml') -Dispatcher $dispGood
+    Check 'T7a parses type'        ($t7.type -eq 'plan')
+    Check 'T7b parses confidence'  ([double]$t7.confidence -eq 0.84)
+    Check 'T7c not escalated'      (-not $t7.escalated)
+
+    # T8: malformed JSON -> deterministic fallback
+    $dispBad = { param($cand,$prompt) @{ stdout = 'sorry, I cannot do that'; stderr=''; exit_code = 0; duration_s = 1 } }
+    $t8 = Invoke-TriageAgent -Input 'whatever' -FleetPath $stubFleetPath -ToolsPath (Join-Path $tmp 'no-tools.yaml') -Dispatcher $dispBad
+    Check 'T8a fallback type unknown'  ($t8.type -eq 'unknown')
+    Check 'T8b fallback confidence'    ([double]$t8.confidence -eq 0.40)
+    Check 'T8c fallback escalation flag'($t8.escalation_needed -eq $true)
+
+    # T9: no candidates -> deterministic fallback
+    $emptyFleet = Join-Path $tmp 'empty-fleet.yaml'
+    Set-Content -Path $emptyFleet -Value "providers:`n  - name: nobody`n    kind: cli`n    enabled: false`n    cost_tier: paid" -Encoding utf8
+    $t9 = Invoke-TriageAgent -Input 'x' -FleetPath $emptyFleet -ToolsPath (Join-Path $tmp 'no-tools.yaml') -Dispatcher $dispGood
+    Check 'T9 no-candidates fallback' ($t9.type -eq 'unknown' -and [double]$t9.confidence -eq 0.40)
+
+    # T10: low-confidence first pass escalates to the OTHER candidate (Sonnet)
+    $lowJson  = '{ "type":"bug","priority":"P1","estimate":"M","risk":"medium","research_required":false,"recommended_platform":"Claude","recommended_model":"Haiku","agent_type":"Triage","pipeline":["review"],"area":null,"next_action":"Look closer.","confidence":0.55,"ambiguity":"high" }'
+    $highJson = '{ "type":"bug","priority":"P1","estimate":"M","risk":"medium","research_required":false,"recommended_platform":"Claude","recommended_model":"Sonnet","agent_type":"Planning","pipeline":["spec_review","review"],"area":"parser","next_action":"Add a failing test.","confidence":0.88,"ambiguity":"low" }'
+    $dispEsc = { param($cand,$prompt) if ($cand.name -eq 'claude-haiku') { @{ stdout=$lowJson; stderr=''; exit_code=0; duration_s=1 } } else { @{ stdout=$highJson; stderr=''; exit_code=0; duration_s=1 } } }
+    $t10 = Invoke-TriageAgent -Input 'ambiguous bug' -FleetPath $stubFleetPath -ToolsPath (Join-Path $tmp 'no-tools.yaml') -Dispatcher $dispEsc
+    Check 'T10a escalated flag set'      ($t10.escalated -eq $true)
+    Check 'T10b escalated_from haiku'    ($t10.escalated_from -eq 'claude-haiku')
+    Check 'T10c authoritative = sonnet result' ([double]$t10.confidence -eq 0.88 -and $t10.area -eq 'parser')

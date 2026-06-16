@@ -91,3 +91,86 @@ function Get-TriageJsonBlock {
     if ($open -lt 0 -or $close -lt $open) { return '' }
     return $Raw.Substring($open, $close - $open + 1)
 }
+
+function New-TriageFallback {
+    <# Deterministic low-confidence object used when no model is available or the
+       reply can't be parsed. The caller decides whether to retry. #>
+    param([string]$Reason = 'unparseable')
+    return @{
+        type='unknown'; priority='P3'; estimate='M'; risk='medium'
+        research_required=$true; recommended_platform='Human'; recommended_model='Sonnet'
+        agent_type='Triage'; pipeline=@('human_review'); area=$null
+        next_action="Manual triage needed ($Reason)."
+        confidence=0.40; ambiguity='high'
+        escalation_needed=$true; escalated=$false; escalated_from=$null
+    }
+}
+
+function ConvertTo-TriageHashtable {
+    <# Parse the model's JSON reply into a normalized triage hashtable, or $null
+       when the reply has no valid JSON object. #>
+    param([Parameter(Mandatory)][string]$RawStdout)
+    $block = Get-TriageJsonBlock -Raw $RawStdout
+    if (-not $block) { return $null }
+    try { $o = $block | ConvertFrom-Json -ErrorAction Stop } catch { return $null }
+    $h = @{}
+    foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = $p.Value }
+    if (-not $h.ContainsKey('escalated'))      { $h['escalated'] = $false }
+    if (-not $h.ContainsKey('escalated_from')) { $h['escalated_from'] = $null }
+    if (-not $h.ContainsKey('escalation_needed')) {
+        $h['escalation_needed'] = (Test-TriageEscalationNeeded -Triage $h)
+    }
+    return $h
+}
+
+function Invoke-TriageAgent {
+    <# Classify a task. Routes through Select-Capability (role=triage; Haiku
+       preferred), dispatches the cheapest candidate, parses strict JSON, and
+       escalates to a champion-ranked second candidate on low confidence / high
+       risk. -Dispatcher injects dispatch for tests; real path uses Invoke-Fleet. #>
+    param(
+        [Parameter(Mandatory)][string]$Input,
+        [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [scriptblock]$Dispatcher
+    )
+    $dispatch = {
+        param($cand, $prompt)
+        if ($Dispatcher) { return (& $Dispatcher $cand $prompt) }
+        return Invoke-Fleet -Name $cand.name -Prompt $prompt -Path $FleetPath -NoJournal
+    }
+
+    $cands = Select-Capability -Capability triage -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
+    if ($null -eq $cands -or @($cands | Where-Object { $null -ne $_ }).Count -lt 1) {
+        return (New-TriageFallback -Reason 'no triage-capable worker available')
+    }
+
+    # $Input is an automatic variable (pipeline enumerator) in PowerShell — read via
+    # $PSBoundParameters to get the value bound to the -Input parameter.
+    $taskText = [string]$PSBoundParameters['Input']
+    $prompt = Build-TriagePrompt -TaskText $taskText
+    $pick   = $cands[0]
+    $res    = & $dispatch $pick $prompt
+    if ([int]$res.exit_code -ne 0) { return (New-TriageFallback -Reason "dispatch exit $([int]$res.exit_code)") }
+
+    $triage = ConvertTo-TriageHashtable -RawStdout ([string]$res.stdout)
+    if ($null -eq $triage) { return (New-TriageFallback -Reason 'model returned no valid JSON') }
+
+    if (Test-TriageEscalationNeeded -Triage $triage) {
+        $champs = Select-Capability -Capability triage -MaxCostTier $MaxCostTier -SelectionMode champion -FleetPath $FleetPath -ToolsPath $ToolsPath
+        $esc = @($champs | Where-Object { $_.name -ne $pick.name }) | Select-Object -First 1
+        if ($esc) {
+            $res2 = & $dispatch $esc $prompt
+            if ([int]$res2.exit_code -eq 0) {
+                $triage2 = ConvertTo-TriageHashtable -RawStdout ([string]$res2.stdout)
+                if ($null -ne $triage2) {
+                    $triage2['escalated'] = $true
+                    $triage2['escalated_from'] = $pick.name
+                    return $triage2
+                }
+            }
+        }
+    }
+    return $triage
+}
