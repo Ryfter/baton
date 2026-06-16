@@ -33,3 +33,40 @@ function Read-TriageInput {
     }
     return $Text.Trim()
 }
+
+function Build-TriagePrompt {
+    <# Compose the triage instruction: role + strict-JSON schema + the task text.
+       Temperature is left to the provider default; the prompt enforces JSON-only. #>
+    param([Parameter(Mandatory)][string]$TaskText)
+    $schema = @'
+{
+  "type": "bug|plan|spec|coding|test|review|polish|chore|docs|research",
+  "priority": "P0|P1|P2|P3|P4",
+  "estimate": "XS|S|M|L|XL",
+  "risk": "low|medium|high",
+  "research_required": true,
+  "recommended_platform": "Claude|Codex|Copilot|Gemini|Local|Human",
+  "recommended_model": "Haiku|Sonnet|Opus|Codex|Copilot|local/<name>",
+  "agent_type": "Triage|Planning|Implementation|Review|Research|Polish",
+  "pipeline": ["<stage>", "..."],
+  "area": "<repo/component area or null>",
+  "next_action": "<one sentence: the next concrete step>",
+  "confidence": 0.0,
+  "ambiguity": "low|medium|high"
+}
+'@
+    return @"
+You are a software task triage agent. Classify the task below and respond with
+ONLY valid JSON matching this schema exactly. No prose, no markdown fences.
+
+Schema:
+$schema
+
+Guidance: confidence is your 0.0-1.0 certainty in the classification. Set
+ambiguity to high when the task lacks the context needed to classify it.
+pipeline is the ordered list of phases the work should pass through.
+
+Task:
+$TaskText
+"@
+}

@@ -65,3 +65,9 @@ try {
     $threw = $false
     try { Read-TriageInput } catch { $threw = $true }
     Check 'T2b Read-TriageInput with no source throws' $threw
+
+    # T3: prompt embeds the task text and the JSON schema contract
+    $prompt = Build-TriagePrompt -TaskText 'Add retry logic to dispatch'
+    Check 'T3a prompt contains the task text'  ($prompt -match 'Add retry logic to dispatch')
+    Check 'T3b prompt contains the schema key' ($prompt -match '"confidence"' -and $prompt -match '"recommended_model"')
+    Check 'T3c prompt demands JSON-only'       ($prompt -match 'ONLY valid JSON')
