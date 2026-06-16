@@ -7,6 +7,12 @@ function Check($n,$c){ if($c){Write-Host "PASS: $n"} else {Write-Host "FAIL: $n"
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("routing-disp-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+$noUsage = Join-Path $tmp 'no-usage.jsonl'   # Sprint 2: keep Select-Capability usage filter a no-op
+# Hermetic isolation: route Get-BatonHome defaults (notably the usage-journal read by
+# Select-Capability's default -UsagePath in Invoke-RoutedCapability) into the empty temp
+# dir, so a live lockout / conserve_mode never perturbs this suite. Restored below.
+$savedBatonHome = $env:BATON_HOME
+$env:BATON_HOME = $tmp
 
 try {
     # ===== Task 1: heuristic grader =====
@@ -195,7 +201,7 @@ windows:
     # Invoke-RoutedCandidate: -Stage flows to the journal; attempt carries the grader tag.
     $noRatings = Join-Path $tmp 'no-ratings.jsonl'
     # Select-Capability returns ,([object[]]) (NoEnumerate) — index the returned array directly.
-    $candS = (Select-Capability -Capability 'code-gen' -ToolsPath $toolsPath -FleetPath $fleetPath -RatingsPath $noRatings -JournalPath $journalS)[0]
+    $candS = (Select-Capability -Capability 'code-gen' -ToolsPath $toolsPath -FleetPath $fleetPath -RatingsPath $noRatings -JournalPath $journalS -UsagePath $noUsage)[0]
     $journalS2 = Join-Path $tmp 'stage-journal2.jsonl'
     $rcS = Invoke-RoutedCandidate -Capability 'code-gen' -Candidate $candS -Prompt 'x' `
         -Dispatcher $dispAllPass -ToolsPath $toolsPath -FleetPath $fleetPath `
@@ -205,6 +211,8 @@ windows:
     Check 'attempt carries grader tag'       ($rcS.attempt.grader -eq 'heuristic')
 }
 finally {
+    if ($null -eq $savedBatonHome) { Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue }
+    else { $env:BATON_HOME = $savedBatonHome }
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 

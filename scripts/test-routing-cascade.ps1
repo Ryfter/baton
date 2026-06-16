@@ -8,6 +8,12 @@ function Check($n,$c){ if($c){Write-Host "PASS: $n"} else {Write-Host "FAIL: $n"
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("routing-casc-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
+# Hermetic isolation: route Get-BatonHome defaults (notably the Usage Governor's
+# usage-journal.jsonl, read by Select-Capability's default -UsagePath) into the empty
+# temp dir, so a live lockout / conserve_mode never perturbs this suite. Restored below.
+$savedBatonHome = $env:BATON_HOME
+$env:BATON_HOME = $tmp
+
 try {
     # Fixture: 2 locals (draft by inference), 1 cheap-paid explicitly role:draft,
     # 1 paid explicitly bulk (draft-eligible), 1 paid finisher (by inference).
@@ -234,6 +240,8 @@ windows:
     Check 'n7: all empty stdout -> drafts-only result null'      ($null -eq $n7.result)
 }
 finally {
+    if ($null -eq $savedBatonHome) { Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue }
+    else { $env:BATON_HOME = $savedBatonHome }
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 
