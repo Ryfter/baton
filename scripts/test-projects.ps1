@@ -6,6 +6,8 @@ $script:fail = 0
 function Check($n,$c){ if($c){Write-Host "PASS: $n"} else {Write-Host "FAIL: $n"; $script:fail++} }
 
 try {
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("proj-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
     # ---- Task 1: pure mapping ----
     $decisive = @{ type='bug'; priority='P1'; estimate='M'; risk='medium'; area='routing'
                    recommended_platform='Codex'; confidence=0.9 }
@@ -154,8 +156,25 @@ try {
     $r31 = $res2 | Where-Object { $_.number -eq 31 }
     Check 'T36 failing issue recorded in failed' (@($r30.failed).Count -ge 1)
     Check 'T37 batch continues after a failure' (@($r31.applied | Where-Object { $_ -like 'labels:*' }).Count -eq 1)
+
+    # ---- Task 5: CLI (child-process so its exit never aborts this suite) ----
+    $cli = Join-Path $PSScriptRoot 'fleet-projects.ps1'
+    Check 'T38 CLI file exists' (Test-Path $cli)
+
+    $callLog = Join-Path $tmpDir 'ghcalls.txt'
+    $env:BATON_PROJECTS_TEST_GH = $callLog
+    if (Test-Path $callLog) { Remove-Item $callLog -Force }
+    & pwsh -NoProfile -File $cli 'sync' '--owner' '@me' '--project' '7' *> $null
+    $dryOk = $true
+    if (Test-Path $callLog) {
+        $mut = Get-Content $callLog | Where-Object { $_ -match 'issue edit|item-add|item-edit|field-create' }
+        $dryOk = (@($mut).Count -eq 0)
+    }
+    Check 'T39 dry-run emits zero mutating gh calls' $dryOk
+    Remove-Item Env:\BATON_PROJECTS_TEST_GH -ErrorAction SilentlyContinue
 }
 finally {
+    if ($tmpDir -and (Test-Path $tmpDir)) { Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue }
     Write-Host ""
     if ($script:fail -gt 0) { Write-Host "FAILED: $script:fail check(s)"; exit 1 } else { Write-Host "ALL CHECKS PASS"; exit 0 }
 }

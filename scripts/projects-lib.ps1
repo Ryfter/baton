@@ -234,3 +234,15 @@ function Invoke-SyncPlan {
     }
     return ,([object[]]$results.ToArray())
 }
+
+function Resolve-ProjectId {
+    # Project node id (needed by item-edit). Read-only.
+    param(
+        [Parameter(Mandatory)][string]$Owner, [Parameter(Mandatory)][int]$ProjectNumber,
+        [scriptblock]$GhInvoker = { param($argv) & gh @argv }
+    )
+    $argv = @('project','view',"$ProjectNumber",'--owner',$Owner,'--format','json')
+    $json = ((& $GhInvoker $argv) | Out-String).Trim()
+    if (-not $json) { return $null }
+    return [string]($json | ConvertFrom-Json).id
+}
