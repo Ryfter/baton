@@ -115,3 +115,77 @@ function Build-SyncPlan {
     }
     return ,([object[]]$plan.ToArray())
 }
+
+function Test-GhAuth {
+    # Preflight: is gh authenticated? Default invoker shells real gh and sets $LASTEXITCODE.
+    param([scriptblock]$GhInvoker = { param($argv) & gh @argv })
+    try { & $GhInvoker @('auth','status') *> $null; return ($LASTEXITCODE -eq 0) }
+    catch { return $false }
+}
+
+function Get-RepoIssues {
+    param(
+        [string]$Repo, [int]$Limit = 200,
+        [scriptblock]$GhInvoker = { param($argv) & gh @argv }
+    )
+    $argv = @('issue','list','--state','open','--limit',"$Limit",'--json','number,title,body,labels,assignees,url')
+    if ($Repo) { $argv += @('--repo',$Repo) }
+    $json = ((& $GhInvoker $argv) | Out-String).Trim()
+    if (-not $json) { return ,([object[]]@()) }
+    return ,([object[]]@($json | ConvertFrom-Json))
+}
+
+function Resolve-ProjectFields {
+    param(
+        [Parameter(Mandatory)][string]$Owner, [Parameter(Mandatory)][int]$ProjectNumber,
+        [scriptblock]$GhInvoker = { param($argv) & gh @argv }
+    )
+    $argv = @('project','field-list',"$ProjectNumber",'--owner',$Owner,'--format','json','--limit','100')
+    $json = ((& $GhInvoker $argv) | Out-String).Trim()
+    if (-not $json) { return @{} }
+    $obj = $json | ConvertFrom-Json
+    $map = @{}
+    foreach ($f in @($obj.fields)) {
+        $entry = @{ id=[string]$f.id; type=[string]$f.type; options=@{} }
+        foreach ($o in @($f.options)) { if ($o.name) { $entry.options[[string]$o.name] = [string]$o.id } }
+        if ($f.name) { $map[[string]$f.name] = $entry }
+    }
+    return $map
+}
+
+function Ensure-ProjectFields {
+    param(
+        [Parameter(Mandatory)][string]$Owner, [Parameter(Mandatory)][int]$ProjectNumber,
+        [hashtable]$FieldMap,
+        [scriptblock]$GhInvoker = { param($argv) & gh @argv }
+    )
+    if ($null -eq $FieldMap) { $FieldMap = @{} }
+    if (-not $FieldMap.ContainsKey('Priority')) {
+        $argv = @('project','field-create',"$ProjectNumber",'--owner',$Owner,'--name','Priority','--data-type','SINGLE_SELECT','--single-select-options','P0,P1,P2,P3,P4')
+        & $GhInvoker $argv | Out-Null
+    }
+    return (Resolve-ProjectFields -Owner $Owner -ProjectNumber $ProjectNumber -GhInvoker $GhInvoker)
+}
+
+function Resolve-ProjectItems {
+    param(
+        [Parameter(Mandatory)][string]$Owner, [Parameter(Mandatory)][int]$ProjectNumber,
+        [scriptblock]$GhInvoker = { param($argv) & gh @argv }
+    )
+    $argv = @('project','item-list',"$ProjectNumber",'--owner',$Owner,'--format','json','--limit','200')
+    $json = ((& $GhInvoker $argv) | Out-String).Trim()
+    if (-not $json) { return @{} }
+    $obj = $json | ConvertFrom-Json
+    $map = @{}
+    foreach ($it in @($obj.items)) {
+        $n = $null
+        if ($it.content -and $it.content.number) { $n = [int]$it.content.number }
+        elseif ($it.number) { $n = [int]$it.number }
+        if ($null -eq $n) { continue }
+        $cur = @{}
+        if ($it.status)   { $cur['Status']   = [string]$it.status }
+        if ($it.priority) { $cur['Priority'] = [string]$it.priority }
+        $map["$n"] = @{ item_id=[string]$it.id; fields=$cur }
+    }
+    return $map
+}

@@ -71,6 +71,51 @@ try {
     $triFb = @{ '10' = @{ type='unknown'; priority='P3'; confidence=0.4 } }
     $pFb = (Build-SyncPlan -Issues @($issues[0]) -Triages $triFb -FieldMap $fieldMap) | Where-Object { $_.number -eq 10 }
     Check 'T22 fallback -> needs-triage label, no fields' (($pFb.add_labels -contains 'needs-triage') -and (@($pFb.set_fields).Count -eq 0))
+
+    # ---- Task 3: gh I/O (stubbed gh) ----
+    $script:ghCalls = @()
+    $ghStub = {
+        param($argv)
+        $script:ghCalls += ,(@($argv))
+        $global:LASTEXITCODE = 0
+        $join = ($argv -join ' ')
+        if ($join -like 'auth status*') { return }
+        if ($join -like 'project field-list*') {
+            return '{"fields":[{"id":"PF_sta","name":"Status","type":"ProjectV2SingleSelectField","options":[{"id":"oT","name":"Todo"},{"id":"oP","name":"In Progress"}]},{"id":"PF_pri","name":"Priority","type":"ProjectV2SingleSelectField","options":[{"id":"o1","name":"P1"}]}]}'
+        }
+        if ($join -like 'project field-create*') { return '{"id":"PF_new"}' }
+        if ($join -like 'project item-list*') {
+            return '{"items":[{"id":"IT_11","content":{"type":"Issue","number":11},"status":"Todo","priority":"P2"}]}'
+        }
+        if ($join -like 'issue list*') {
+            return '[{"number":11,"title":"t","body":"b","url":"https://x/11","labels":[{"name":"type:bug"}],"assignees":[]}]'
+        }
+        return ''
+    }
+
+    Check 'T23 Test-GhAuth true when authed' (Test-GhAuth -GhInvoker $ghStub)
+    $ghUnauth = { param($argv) $global:LASTEXITCODE = 1 }
+    Check 'T24 Test-GhAuth false when unauth' (-not (Test-GhAuth -GhInvoker $ghUnauth))
+
+    $fm = Resolve-ProjectFields -Owner '@me' -ProjectNumber 7 -GhInvoker $ghStub
+    Check 'T25 Resolve-ProjectFields maps Priority option id' ($fm['Priority'].options['P1'] -eq 'o1')
+    Check 'T26 Resolve-ProjectFields maps Status field id' ($fm['Status'].id -eq 'PF_sta')
+
+    $script:ghCalls = @()
+    Ensure-ProjectFields -Owner '@me' -ProjectNumber 7 -FieldMap $fm -GhInvoker $ghStub | Out-Null
+    Check 'T27 Ensure no-op when Priority present' (-not (@($script:ghCalls | Where-Object { ($_ -join ' ') -like 'project field-create*' }).Count))
+
+    $script:ghCalls = @()
+    Ensure-ProjectFields -Owner '@me' -ProjectNumber 7 -FieldMap @{ Status=@{id='PF_sta';options=@{Todo='oT'}} } -GhInvoker $ghStub | Out-Null
+    $cre = @($script:ghCalls | Where-Object { ($_ -join ' ') -like 'project field-create*' })
+    Check 'T28 Ensure creates Priority with options' (@($cre).Count -eq 1 -and (($cre[0] -join ' ') -match 'P0,P1,P2,P3,P4'))
+
+    $items = Resolve-ProjectItems -Owner '@me' -ProjectNumber 7 -GhInvoker $ghStub
+    Check 'T29 Resolve-ProjectItems maps number->item id' ($items['11'].item_id -eq 'IT_11')
+    Check 'T30 Resolve-ProjectItems captures current field' ($items['11'].fields['Priority'] -eq 'P2')
+
+    $iss = Get-RepoIssues -GhInvoker $ghStub
+    Check 'T31 Get-RepoIssues returns parsed issues' (@($iss).Count -eq 1 -and $iss[0].number -eq 11)
 }
 finally {
     Write-Host ""
