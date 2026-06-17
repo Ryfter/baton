@@ -189,3 +189,48 @@ function Resolve-ProjectItems {
     }
     return $map
 }
+
+function Invoke-SyncPlan {
+    # APPLY: execute a plan via gh. Best-effort per issue — one failure never aborts the batch.
+    param(
+        [Parameter(Mandatory)][object[]]$Plan,
+        [Parameter(Mandatory)][string]$Owner, [Parameter(Mandatory)][int]$ProjectNumber,
+        [string]$ProjectId, [string]$Repo,
+        [hashtable]$ProjectItemIds = @{},
+        [scriptblock]$GhInvoker = { param($argv) & gh @argv }
+    )
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($entry in @($Plan)) {
+        $num = [int]$entry.number
+        $applied = @(); $failed = @(); $err = $null
+        $itemId = if ($ProjectItemIds.ContainsKey("$num")) { [string]$ProjectItemIds["$num"] } else { $null }
+        try {
+            if (@($entry.add_labels).Count -gt 0) {
+                $argv = @('issue','edit',"$num")
+                foreach ($l in @($entry.add_labels)) { $argv += @('--add-label',$l) }
+                if ($Repo) { $argv += @('--repo',$Repo) }
+                & $GhInvoker $argv | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "gh issue edit failed for #$num" }
+                $applied += "labels: $($entry.add_labels -join ',')"
+            }
+            if ($entry.add_to_project) {
+                $argv = @('project','item-add',"$ProjectNumber",'--owner',$Owner,'--format','json')
+                if ($entry.url) { $argv += @('--url',[string]$entry.url) }
+                $out = & $GhInvoker $argv
+                if ($LASTEXITCODE -ne 0) { throw "gh project item-add failed for #$num" }
+                $applied += "added to project"
+                $j = ($out | Out-String).Trim()
+                if ($j) { try { $itemId = [string]($j | ConvertFrom-Json).id } catch {} }
+            }
+            foreach ($sf in @($entry.set_fields)) {
+                if (-not $itemId) { $failed += "field $($sf.field): no item id"; continue }
+                $argv = @('project','item-edit','--id',$itemId,'--project-id',$ProjectId,'--field-id',[string]$sf.field_id,'--single-select-option-id',[string]$sf.option_id)
+                & $GhInvoker $argv | Out-Null
+                if ($LASTEXITCODE -ne 0) { $failed += "field $($sf.field) edit failed"; continue }
+                $applied += "field $($sf.field)=$($sf.value)"
+            }
+        } catch { $err = "$_"; $failed += $err }
+        $results.Add([pscustomobject]@{ number=$num; applied=$applied; failed=$failed; error=$err })
+    }
+    return ,([object[]]$results.ToArray())
+}

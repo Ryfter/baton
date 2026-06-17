@@ -116,6 +116,44 @@ try {
 
     $iss = Get-RepoIssues -GhInvoker $ghStub
     Check 'T31 Get-RepoIssues returns parsed issues' (@($iss).Count -eq 1 -and $iss[0].number -eq 11)
+
+    # ---- Task 4: Invoke-SyncPlan (apply, stubbed gh) ----
+    $script:applyCalls = @()
+    $applyStub = {
+        param($argv)
+        $script:applyCalls += ,(@($argv))
+        $global:LASTEXITCODE = 0
+        if (($argv -join ' ') -like 'project item-add*') { return '{"id":"IT_NEW"}' }
+        return ''
+    }
+    $applyPlan = @(
+        [pscustomobject]@{ number=20; url='https://x/20'; add_labels=@('type:bug','route:Codex'); add_to_project=$true
+                           set_fields=@(@{ field='Priority'; field_id='PF_pri'; value='P1'; option_id='o1' }); skips=@() }
+    )
+    $res = Invoke-SyncPlan -Plan $applyPlan -Owner '@me' -ProjectNumber 7 -ProjectId 'PVT_x' -GhInvoker $applyStub
+    Check 'T32 apply edits labels' (@($script:applyCalls | Where-Object { ($_ -join ' ') -match 'issue edit 20.*--add-label type:bug' }).Count -eq 1)
+    Check 'T33 apply adds item to project' (@($script:applyCalls | Where-Object { ($_ -join ' ') -like 'project item-add 7*' }).Count -eq 1)
+    Check 'T34 apply edits field with new item id' (@($script:applyCalls | Where-Object { ($_ -join ' ') -match 'item-edit .*--id IT_NEW.*--single-select-option-id o1' }).Count -eq 1)
+    Check 'T35 apply records success' (@($res[0].applied).Count -ge 3 -and -not $res[0].error)
+
+    $script:applyCalls = @()
+    $failStub = {
+        param($argv)
+        $script:applyCalls += ,(@($argv))
+        if (($argv -join ' ') -like 'issue edit 30*') { $global:LASTEXITCODE = 1; return }
+        $global:LASTEXITCODE = 0
+        if (($argv -join ' ') -like 'project item-add*') { return '{"id":"IT_X"}' }
+        return ''
+    }
+    $plan2 = @(
+        [pscustomobject]@{ number=30; url='u30'; add_labels=@('type:bug'); add_to_project=$false; set_fields=@(); skips=@() }
+        [pscustomobject]@{ number=31; url='u31'; add_labels=@('type:docs'); add_to_project=$false; set_fields=@(); skips=@() }
+    )
+    $res2 = Invoke-SyncPlan -Plan $plan2 -Owner '@me' -ProjectNumber 7 -ProjectId 'PVT_x' -GhInvoker $failStub
+    $r30 = $res2 | Where-Object { $_.number -eq 30 }
+    $r31 = $res2 | Where-Object { $_.number -eq 31 }
+    Check 'T36 failing issue recorded in failed' (@($r30.failed).Count -ge 1)
+    Check 'T37 batch continues after a failure' (@($r31.applied | Where-Object { $_ -like 'labels:*' }).Count -eq 1)
 }
 finally {
     Write-Host ""
