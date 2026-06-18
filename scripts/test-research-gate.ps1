@@ -26,6 +26,45 @@ try {
     Check 'T11 fallback is inconclusive' ($fb.recommendation -eq 'inconclusive')
     Check 'T12 fallback has no options' (@($fb.options).Count -eq 0)
     Check 'T13 fallback flagged for escalation' ($fb.escalation_needed -eq $true)
+
+    # ---- Task 2: evidence / prompt / memo (pure) ----
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "rg-test-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    $toolsYaml = @"
+tools:
+  - name: docling
+    enabled: true
+    cost_tier: local
+    capability: pdf-extract
+  - name: disabled-tool
+    enabled: false
+    cost_tier: local
+    capability: ocr
+"@
+    $tmpTools = Join-Path $tmpDir 'tools.yaml'
+    Set-Content -Path $tmpTools -Value $toolsYaml -Encoding utf8NoBOM
+    $reg = Get-ToolsRegistrySummary -Path $tmpTools
+    Check 'T14 registry lists enabled tool' ($reg -contains 'docling — pdf-extract (local)')
+    Check 'T15 registry omits disabled tool' (-not (@($reg) | Where-Object { $_ -like 'disabled-tool*' }))
+
+    $jobDir = Join-Path $tmpDir 'job1'
+    $ensDir = Join-Path $jobDir 'phases/research/ensemble-2026-06-18T10-00-00'
+    New-Item -ItemType Directory -Force -Path $ensDir | Out-Null
+    Set-Content -Path (Join-Path $ensDir 'synthesis.md') -Value 'PRIOR FINDINGS HERE' -Encoding utf8NoBOM
+    Check 'T16 ensemble synthesis found' ((Get-EnsembleSynthesis -JobDir $jobDir) -match 'PRIOR FINDINGS')
+    Check 'T17 no job dir -> empty synthesis' ((Get-EnsembleSynthesis -JobDir (Join-Path $tmpDir 'nojob')) -eq '')
+
+    $prompt = Build-GatePrompt -TaskText 'convert pdfs to markdown' -RegistryLines $reg -EnsembleText 'PRIOR FINDINGS' -KbHits @() -SearchEvidence @()
+    Check 'T18 prompt includes task' ($prompt -match 'convert pdfs to markdown')
+    Check 'T19 prompt includes registry evidence' ($prompt -match 'docling')
+    Check 'T20 prompt includes verdict schema' ($prompt -match 'build\|adopt\|adapt\|inconclusive')
+
+    $memo = Format-GateMemo -Verdict @{ recommendation='adopt'; confidence=0.8; risk_if_wrong='low'
+        options=@([pscustomobject]@{ name='markitdown'; kind='library'; fit='strong'; note='doc->md' })
+        rationale='exists already'; next_action='spike it'; escalated=$false }
+    Check 'T21 memo shows recommendation' ($memo -match 'ADOPT')
+    Check 'T22 memo lists option' ($memo -match 'markitdown')
+    Check 'T23 memo shows next action' ($memo -match 'spike it')
 }
 finally {
     if ($script:fail -gt 0) { Write-Host "`n$($script:fail) FAILED" -ForegroundColor Red; exit 1 }

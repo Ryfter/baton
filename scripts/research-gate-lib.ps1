@@ -65,3 +65,97 @@ function ConvertTo-GateHashtable {
     }
     return $h
 }
+
+function Get-ToolsRegistrySummary {
+    <# Compact "name — capability (cost_tier)" lines for enabled tools — the local
+       'do we already have it wired?' grounding. Returns string[]; '' inputs -> @(). #>
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path $Path)) { return ,([string[]]@()) }
+    $lines = foreach ($t in (Read-Tools -Path $Path)) {
+        if ($t.enabled -ne $true) { continue }
+        "$($t.name) — $($t.capability) ($($t.cost_tier))"
+    }
+    return ,([string[]]$lines)
+}
+
+function Get-EnsembleSynthesis {
+    <# Newest phases/research/ensemble-*/synthesis.md under a job dir, or '' when
+       there is no job / no prior ensemble. Reads files only — no network. #>
+    param([string]$JobDir)
+    if (-not $JobDir -or -not (Test-Path $JobDir)) { return '' }
+    $researchDir = Join-Path $JobDir 'phases/research'
+    if (-not (Test-Path $researchDir)) { return '' }
+    $hit = Get-ChildItem -Path $researchDir -Recurse -Filter 'synthesis.md' -File -ErrorAction SilentlyContinue |
+           Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $hit) { return '' }
+    return (Get-Content -LiteralPath $hit.FullName -Raw).Trim()
+}
+
+function Build-GatePrompt {
+    <# Compose the gate instruction: role + strict-JSON verdict schema + an evidence
+       block (local registry, prior ensemble, KB, live search) + the task text. #>
+    param(
+        [Parameter(Mandatory)][string]$TaskText,
+        [string[]]$RegistryLines = @(),
+        [string]$EnsembleText = '',
+        [array]$KbHits = @(),
+        [array]$SearchEvidence = @()
+    )
+    $schema = @'
+{
+  "recommendation": "build|adopt|adapt|inconclusive",
+  "options": [
+    { "name": "<tool/lib/service/internal>", "kind": "library|tool|service|internal",
+      "fit": "strong|partial|weak", "note": "<one line: what it is + why it fits or not>" }
+  ],
+  "rationale": "<why this recommendation>",
+  "next_action": "<one concrete next step>",
+  "confidence": 0.0,
+  "risk_if_wrong": "low|medium|high"
+}
+'@
+    $evidence = "## Evidence`n"
+    if ($RegistryLines.Count) { $evidence += "`nTools already wired locally:`n" + (($RegistryLines | ForEach-Object { "- $_" }) -join "`n") + "`n" }
+    else { $evidence += "`nTools already wired locally: (none)`n" }
+    if ($EnsembleText)  { $evidence += "`nPrior research ensemble synthesis:`n$EnsembleText`n" }
+    if ($KbHits.Count)  { $evidence += "`nRelevant prior knowledge (KB):`n" + (($KbHits | ForEach-Object { "- $($_.source): $((""$($_.text)"" -replace '\s+',' ').Trim())" }) -join "`n") + "`n" }
+    if ($SearchEvidence.Count) { $evidence += "`nLive web/registry search results:`n" + (($SearchEvidence | ForEach-Object { "- $($_.title) ($($_.url)): $($_.snippet)" }) -join "`n") + "`n" }
+
+    return @"
+You are a software research gate. Decide whether the task below should be built
+from scratch, or whether something already exists to adopt or adapt. Use the
+Evidence. Respond with ONLY valid JSON matching this schema exactly — no prose,
+no markdown fences.
+
+Schema:
+$schema
+
+Guidance: prefer adopt/adapt when a strong/partial-fit option exists; recommend
+build only when nothing fits; recommend inconclusive when the evidence is too thin
+to decide. confidence is your 0.0-1.0 certainty. List concrete options with honest
+fit ratings.
+
+$evidence
+
+## Task
+$TaskText
+"@
+}
+
+function Format-GateMemo {
+    <# Human-readable markdown memo from a verdict hashtable. #>
+    param([Parameter(Mandatory)][hashtable]$Verdict)
+    $rec  = ([string]$Verdict.recommendation).ToUpperInvariant()
+    $conf = if ($null -ne $Verdict.confidence) { '{0:0.00}' -f [double]$Verdict.confidence } else { 'n/a' }
+    $risk = [string]$Verdict.risk_if_wrong
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine("RESEARCH GATE — recommendation: $rec  (confidence $conf, risk-if-wrong $risk)")
+    if ($Verdict.escalated -eq $true) { [void]$sb.AppendLine("(escalated from $($Verdict.escalated_from))") }
+    [void]$sb.AppendLine("Options:")
+    foreach ($o in @($Verdict.options)) {
+        [void]$sb.AppendLine("  • $($o.name) ($($o.kind), $($o.fit)) — $($o.note)")
+    }
+    [void]$sb.AppendLine("Rationale: $($Verdict.rationale)")
+    [void]$sb.AppendLine("Next action: $($Verdict.next_action)")
+    return $sb.ToString().TrimEnd()
+}
