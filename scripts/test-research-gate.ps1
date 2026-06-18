@@ -65,6 +65,17 @@ tools:
     Check 'T21 memo shows recommendation' ($memo -match 'ADOPT')
     Check 'T22 memo lists option' ($memo -match 'markitdown')
     Check 'T23 memo shows next action' ($memo -match 'spike it')
+
+    # ---- Task 3: seamed evidence search ----
+    $script:searchCalls = 0
+    $stubSearcher = { param($q) $script:searchCalls++; @(
+        [pscustomobject]@{ source='web'; title='markitdown'; snippet='doc to md'; url='https://x/md' }) }
+    Check 'T24 offline makes zero searcher calls' (
+        ((Invoke-EvidenceSearch -Query 'q' -Searcher $stubSearcher).Count -eq 0) -and ($script:searchCalls -eq 0))
+    $ev = Invoke-EvidenceSearch -Query 'q' -Searcher $stubSearcher -Deep
+    Check 'T25 deep gathers normalized evidence' ((@($ev).Count -eq 1) -and ($ev[0].title -eq 'markitdown') -and ($script:searchCalls -eq 1))
+    $throwSearcher = { param($q) throw 'network down' }
+    Check 'T26 searcher throw degrades to empty (no throw)' ((Invoke-EvidenceSearch -Query 'q' -Searcher $throwSearcher -Deep).Count -eq 0)
 }
 finally {
     if ($script:fail -gt 0) { Write-Host "`n$($script:fail) FAILED" -ForegroundColor Red; exit 1 }

@@ -159,3 +159,41 @@ function Format-GateMemo {
     [void]$sb.AppendLine("Next action: $($Verdict.next_action)")
     return $sb.ToString().TrimEnd()
 }
+
+function Invoke-EvidenceSearch {
+    <# Gather external evidence via the -Searcher seam (default: real web +
+       package-registry search). Only runs under -Deep; offline returns @() with
+       ZERO searcher calls. Normalizes each result to @{source;title;snippet;url}.
+       A searcher error degrades to @() — never throws (graceful degradation). #>
+    param(
+        [Parameter(Mandatory)][string]$Query,
+        [scriptblock]$Searcher = { param($q) Invoke-RealEvidenceSearch -Query $q },
+        [switch]$Deep
+    )
+    if (-not $Deep) { return ,(@()) }
+    try {
+        $raw = & $Searcher $Query
+    } catch {
+        Write-Debug "Invoke-EvidenceSearch: $($_.Exception.Message)"
+        return ,(@())
+    }
+    $norm = foreach ($r in @($raw)) {
+        [pscustomobject]@{
+            source  = [string]$r.source
+            title   = [string]$r.title
+            snippet = [string]$r.snippet
+            url     = [string]$r.url
+        }
+    }
+    return ,(@($norm))
+}
+
+function Invoke-RealEvidenceSearch {
+    <# Default searcher: a single web/registry search round. Best-effort and
+       box-private — returns @() if no search tool is wired. Replace/extend per box.
+       Kept tiny on purpose: -Deep surfaces candidates; it does NOT verify existence. #>
+    param([Parameter(Mandatory)][string]$Query)
+    # No hard dependency on a specific search tool in the seed. A box wires its own
+    # (e.g. a firecrawl/WebSearch shim) by overriding the -Searcher seam from the CLI.
+    return @()
+}
