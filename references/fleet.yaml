@@ -97,7 +97,7 @@ providers:
     enabled: true
     cost_tier: paid
     stdin: true
-    capabilities: [triage, classify, summarize-short]
+    capabilities: [triage, classify, research, summarize-short]
     model_default: 'claude-haiku-4-5-20251001'
     command_template: 'claude -p --model claude-haiku-4-5-20251001'
 
@@ -106,7 +106,7 @@ providers:
     enabled: true
     cost_tier: paid
     stdin: true
-    capabilities: [triage, code-gen, reasoning, summarize]
+    capabilities: [triage, research, code-gen, reasoning, summarize]
     model_default: 'claude-sonnet-4-6'
     command_template: 'claude -p --model claude-sonnet-4-6'
     # budget: 0   # example only — set a real per-window budget in live ~/.baton/fleet.yaml

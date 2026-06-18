@@ -125,8 +125,34 @@ providers:
     Check 'T33 offline run makes zero searcher calls' ($script:deepCalls -eq 0)
     [void](Invoke-ResearchGate -Task 't' -FleetPath $tmpFleet -ToolsPath $tmpTools -NoKb -Dispatcher $okDisp -Searcher $deepSearcher -Deep)
     Check 'T34 deep run invokes searcher' ($script:deepCalls -eq 1)
+
+    # ---- Task 5: CLI (child process; zero network) ----
+    $cli = Join-Path $PSScriptRoot 'fleet-research-gate.ps1'
+    $env:BATON_RG_TEST_JSON  = $adoptReply
+    $env:BATON_RG_TEST_FLEET = $tmpFleet
+    $env:BATON_RG_TEST_TOOLS = $tmpTools
+    $env:BATON_HOME = $tmpDir   # no current-job.json here -> standalone path
+    $stdout = & pwsh -NoProfile -File $cli -Text 'convert pdfs to markdown' 2>&1 | Out-String
+    Check 'T35 CLI standalone prints memo to stdout' ($stdout -match 'RESEARCH GATE' -and $stdout -match 'ADOPT')
+    $jsonStdout = & pwsh -NoProfile -File $cli -Text 'x' -Json 2>&1 | Out-String
+    Check 'T36 CLI --json emits json' ($jsonStdout -match '"recommendation"')
+    $outFile = Join-Path $tmpDir 'memo.md'
+    & pwsh -NoProfile -File $cli -Text 'x' -Out $outFile 2>&1 | Out-Null
+    Check 'T37 CLI --out writes file' ((Test-Path $outFile) -and ((Get-Content $outFile -Raw) -match 'RESEARCH GATE'))
+
+    # Active-job path: writes into phases/research/
+    $jobId = 'rgjob'
+    $jobHome = Join-Path $tmpDir 'jobhome'
+    New-Item -ItemType Directory -Force -Path (Join-Path $jobHome "jobs/$jobId") | Out-Null
+    Set-Content -Path (Join-Path $jobHome 'current-job.json') -Value (@{ job_id=$jobId; phase='research' } | ConvertTo-Json) -Encoding utf8NoBOM
+    $env:BATON_HOME = $jobHome
+    & pwsh -NoProfile -File $cli -Text 'convert pdfs' 2>&1 | Out-Null
+    $gateFiles = Get-ChildItem -Path (Join-Path $jobHome "jobs/$jobId/phases/research") -Filter 'gate-*.md' -ErrorAction SilentlyContinue
+    Check 'T38 CLI within a job writes gate memo to research phase' (@($gateFiles).Count -ge 1)
+    Remove-Item Env:\BATON_RG_TEST_JSON, Env:\BATON_RG_TEST_FLEET, Env:\BATON_RG_TEST_TOOLS, Env:\BATON_HOME -ErrorAction SilentlyContinue
 }
 finally {
+    if ($tmpDir -and (Test-Path $tmpDir)) { Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }
     if ($script:fail -gt 0) { Write-Host "`n$($script:fail) FAILED" -ForegroundColor Red; exit 1 }
     Write-Host "`nALL CHECKS PASS" -ForegroundColor Green
 }
