@@ -76,6 +76,55 @@ tools:
     Check 'T25 deep gathers normalized evidence' ((@($ev).Count -eq 1) -and ($ev[0].title -eq 'markitdown') -and ($script:searchCalls -eq 1))
     $throwSearcher = { param($q) throw 'network down' }
     Check 'T26 searcher throw degrades to empty (no throw)' ((Invoke-EvidenceSearch -Query 'q' -Searcher $throwSearcher -Deep).Count -eq 0)
+
+    # ---- Task 4: orchestration (stubbed dispatcher + searcher) ----
+    $fleetYaml = @"
+providers:
+  - name: rg-haiku
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    capabilities: [research]
+    command_template: 'echo'
+  - name: rg-sonnet
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    capabilities: [research]
+    command_template: 'echo'
+"@
+    $tmpFleet = Join-Path $tmpDir 'fleet.yaml'
+    Set-Content -Path $tmpFleet -Value $fleetYaml -Encoding utf8NoBOM
+
+    $adoptReply = '{"recommendation":"adopt","options":[{"name":"markitdown","kind":"library","fit":"strong","note":"x"}],"rationale":"r","next_action":"n","confidence":0.85,"risk_if_wrong":"low"}'
+    $okDisp = { param($c,$p) @{ stdout=$adoptReply; stderr=''; exit_code=0; duration_s=1 } }
+    $rg = Invoke-ResearchGate -Task 'convert pdfs' -FleetPath $tmpFleet -ToolsPath $tmpTools -NoKb -Dispatcher $okDisp
+    Check 'T27 adopt verdict returned' ($rg.recommendation -eq 'adopt')
+    Check 'T28 not escalated when confident' (-not ($rg.escalated -eq $true))
+
+    $lowReply  = '{"recommendation":"adopt","options":[],"rationale":"r","next_action":"n","confidence":0.5,"risk_if_wrong":"low"}'
+    $highReply = '{"recommendation":"adopt","options":[{"name":"pandoc","kind":"tool","fit":"strong","note":"y"}],"rationale":"r2","next_action":"n2","confidence":0.9,"risk_if_wrong":"low"}'
+    $script:dispN = 0
+    $escDisp = { param($c,$p) $script:dispN++; if ($script:dispN -eq 1) { @{ stdout=$lowReply; exit_code=0 } } else { @{ stdout=$highReply; exit_code=0 } } }
+    $rg2 = Invoke-ResearchGate -Task 't' -FleetPath $tmpFleet -ToolsPath $tmpTools -NoKb -Dispatcher $escDisp
+    Check 'T29 low confidence triggers escalation' (($rg2.escalated -eq $true) -and ($rg2.confidence -eq 0.9))
+    Check 'T30 escalated_from records first pick' ($null -ne $rg2.escalated_from)
+
+    $failDisp = { param($c,$p) @{ stdout=''; stderr='boom'; exit_code=1 } }
+    $rg3 = Invoke-ResearchGate -Task 't' -FleetPath $tmpFleet -ToolsPath $tmpTools -NoKb -Dispatcher $failDisp
+    Check 'T31 dispatch failure -> fallback inconclusive' ($rg3.recommendation -eq 'inconclusive')
+
+    $emptyFleet = Join-Path $tmpDir 'empty-fleet.yaml'
+    Set-Content -Path $emptyFleet -Value "providers: []" -Encoding utf8NoBOM
+    $rg4 = Invoke-ResearchGate -Task 't' -FleetPath $emptyFleet -ToolsPath $tmpTools -NoKb -Dispatcher $okDisp
+    Check 'T32 no worker -> fallback inconclusive' ($rg4.recommendation -eq 'inconclusive')
+
+    $script:deepCalls = 0
+    $deepSearcher = { param($q) $script:deepCalls++; @() }
+    [void](Invoke-ResearchGate -Task 't' -FleetPath $tmpFleet -ToolsPath $tmpTools -NoKb -Dispatcher $okDisp -Searcher $deepSearcher)
+    Check 'T33 offline run makes zero searcher calls' ($script:deepCalls -eq 0)
+    [void](Invoke-ResearchGate -Task 't' -FleetPath $tmpFleet -ToolsPath $tmpTools -NoKb -Dispatcher $okDisp -Searcher $deepSearcher -Deep)
+    Check 'T34 deep run invokes searcher' ($script:deepCalls -eq 1)
 }
 finally {
     if ($script:fail -gt 0) { Write-Host "`n$($script:fail) FAILED" -ForegroundColor Red; exit 1 }

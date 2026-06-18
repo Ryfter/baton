@@ -197,3 +197,68 @@ function Invoke-RealEvidenceSearch {
     # (e.g. a firecrawl/WebSearch shim) by overriding the -Searcher seam from the CLI.
     return @()
 }
+
+function Invoke-ResearchGate {
+    <# Produce a build/adopt/adapt/inconclusive verdict for a task. Assembles
+       evidence (local registry + prior ensemble + KB + optional live search),
+       routes synthesis through Select-Capability (role=research; cheap floor,
+       governed: route-around-exhausted + budget filter), dispatches the cheapest
+       candidate, parses strict JSON, and escalates to a champion-ranked second
+       candidate on low confidence / high risk / inconclusive. -Dispatcher and
+       -Searcher inject for tests; real path uses Invoke-Fleet. #>
+    param(
+        [Parameter(Mandatory)][string]$Task,
+        [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
+        [string]$JobDir,
+        [switch]$Deep,
+        [switch]$NoKb,
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [scriptblock]$Searcher = { param($q) Invoke-RealEvidenceSearch -Query $q },
+        [scriptblock]$Dispatcher
+    )
+    $dispatch = {
+        param($cand, $prompt)
+        if ($Dispatcher) { return (& $Dispatcher $cand $prompt) }
+        return Invoke-Fleet -Name $cand.name -Prompt $prompt -Path $FleetPath -NoJournal
+    }
+
+    # 1. Assemble evidence (no model spend yet).
+    $registry = Get-ToolsRegistrySummary -Path $ToolsPath
+    $ensemble = Get-EnsembleSynthesis -JobDir $JobDir
+    $kb = @()
+    if (-not $NoKb) {
+        try { $kb = @(Invoke-KbSearch -Query $Task -K 3 -SnippetChars 600) } catch { $kb = @() }
+    }
+    $search = Invoke-EvidenceSearch -Query $Task -Searcher $Searcher -Deep:$Deep
+
+    # 2. Route + dispatch the cheapest research-capable worker.
+    $cands = Select-Capability -Capability research -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
+    if ($null -eq $cands -or @($cands | Where-Object { $null -ne $_ }).Count -lt 1) {
+        return (New-GateFallback -Reason 'no research-capable worker available')
+    }
+    $prompt = Build-GatePrompt -TaskText $Task -RegistryLines $registry -EnsembleText $ensemble -KbHits $kb -SearchEvidence $search
+    $pick = $cands[0]
+    $res  = & $dispatch $pick $prompt
+    if ([int]$res.exit_code -ne 0) { return (New-GateFallback -Reason "dispatch exit $([int]$res.exit_code)") }
+    $verdict = ConvertTo-GateHashtable -RawStdout ([string]$res.stdout)
+    if ($null -eq $verdict) { return (New-GateFallback -Reason 'model returned no valid JSON') }
+
+    # 3. Escalate on low confidence / high risk / inconclusive.
+    if (Test-GateEscalationNeeded -Verdict $verdict) {
+        $champs = Select-Capability -Capability research -MaxCostTier $MaxCostTier -SelectionMode champion -FleetPath $FleetPath -ToolsPath $ToolsPath
+        $esc = @($champs | Where-Object { $_.name -ne $pick.name }) | Select-Object -First 1
+        if ($esc) {
+            $res2 = & $dispatch $esc $prompt
+            if ([int]$res2.exit_code -eq 0) {
+                $verdict2 = ConvertTo-GateHashtable -RawStdout ([string]$res2.stdout)
+                if ($null -ne $verdict2) {
+                    $verdict2['escalated'] = $true
+                    $verdict2['escalated_from'] = $pick.name
+                    return $verdict2
+                }
+            }
+        }
+    }
+    return $verdict
+}
