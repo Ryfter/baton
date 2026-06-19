@@ -54,3 +54,52 @@ function ConvertTo-PlanObject {
         tasks      = @($tasks)
     }
 }
+
+function Resolve-TaskOrder {
+    <# Stable topological order via Kahn's algorithm. Throws on a dependency cycle
+       or a dependency on an unknown id. Ready tasks are emitted in original order. #>
+    param([Parameter(Mandatory)][array]$Tasks)
+    $byId = @{}; foreach ($t in $Tasks) { if ($t.id) { $byId[$t.id] = $t } }
+    $indeg = @{}; foreach ($t in $Tasks) { $indeg[$t.id] = 0 }
+    foreach ($t in $Tasks) {
+        foreach ($d in @($t.depends_on)) {
+            if (-not $byId.ContainsKey($d)) { throw "Task '$($t.id)' depends on unknown id '$d'." }
+            $indeg[$t.id]++
+        }
+    }
+    $ordered = [System.Collections.ArrayList]@()
+    $ready   = [System.Collections.ArrayList]@()
+    foreach ($t in $Tasks) { if ($indeg[$t.id] -eq 0) { [void]$ready.Add($t.id) } }
+    while ($ready.Count -gt 0) {
+        $id = $ready[0]; $ready.RemoveAt(0)
+        [void]$ordered.Add($byId[$id])
+        foreach ($t in $Tasks) {
+            if (@($t.depends_on) -contains $id) {
+                $indeg[$t.id]--
+                if ($indeg[$t.id] -eq 0) { [void]$ready.Add($t.id) }
+            }
+        }
+    }
+    if ($ordered.Count -ne $Tasks.Count) { throw 'Plan has a dependency cycle.' }
+    return ,([array]$ordered)
+}
+
+function Get-TaskCostEstimate {
+    <# Coarse v1 estimate: paid -> per-call figure; local/free/unknown -> 0. #>
+    param([Parameter(Mandatory)][string]$Tier, [double]$PaidPerCall = 0.05)
+    if ($Tier -eq 'paid') { return $PaidPerCall }
+    return 0.0
+}
+
+function Test-BudgetExceeded {
+    <# True when cumulative + this task's estimate would cross the cap. Null cap -> never. #>
+    param([double]$CumulativeSpend, [double]$TaskEstimate, $BudgetCap)
+    if ($null -eq $BudgetCap) { return $false }
+    return (($CumulativeSpend + $TaskEstimate) -gt [double]$BudgetCap)
+}
+
+function Test-TaskDestructive {
+    <# A node tagged reversible:false always interrupts. #>
+    param([Parameter(Mandatory)]$Task)
+    return ($Task.reversible -eq $false)
+}
