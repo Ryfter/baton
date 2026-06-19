@@ -194,3 +194,73 @@ function Format-RunReport {
     }
     return $sb.ToString().TrimEnd()
 }
+
+function Build-PlannerPrompt {
+    <# Instruct a model to decompose the goal into a task DAG (strict JSON). #>
+    param([Parameter(Mandatory)][string]$Goal, [string[]]$RegistryLines = @())
+    $schema = @'
+{
+  "run_id": "<id>",
+  "goal": "<the goal>",
+  "budget_cap": null,
+  "tasks": [
+    { "id": "t1", "desc": "<what>", "command": "<baton command or empty>",
+      "capability": "<capability or empty>", "model_pick": "<model or empty>",
+      "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true }
+  ]
+}
+'@
+    $evi = if ($RegistryLines.Count) {
+        "Tools already wired locally:`n" + (($RegistryLines | ForEach-Object { "- $_" }) -join "`n")
+    } else { 'Tools already wired locally: (none)' }
+    return @"
+You are a planning orchestrator for an autonomous software conductor. Break the
+GOAL into an ordered task DAG that sequences existing Baton building blocks
+(triage, research-gate, code-decompose, code-parallel, code-merge) and fleet
+capabilities. Respond with ONLY valid JSON matching this schema — no prose, no fences.
+
+Schema:
+$schema
+
+Rules: give each task a unique id; use depends_on to order; set reversible=false
+ONLY for steps that commit to master, force-push, delete outside a worktree, or
+publish externally; prefer the cheapest est_cost_tier that can do the job. Use the
+evidence to avoid planning work that already exists.
+
+$evi
+
+## Goal
+$Goal
+"@
+}
+
+function Invoke-PlanPhase {
+    <# Route the goal to a reasoning-capable worker, parse its task DAG. Returns a
+       plan hashtable or $null. -Dispatcher injects for tests; real path uses Invoke-Fleet. #>
+    param(
+        [Parameter(Mandatory)][string]$Goal,
+        [string]$RunId,
+        $BudgetCap = $null,
+        [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [string[]]$RegistryLines = @(),
+        [scriptblock]$Dispatcher
+    )
+    $dispatch = {
+        param($cand, $prompt)
+        if ($Dispatcher) { return (& $Dispatcher $cand $prompt) }
+        return Invoke-Fleet -Name $cand.name -Prompt $prompt -Path $FleetPath -NoJournal
+    }
+    $cands = Select-Capability -Capability reasoning -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
+    if ($null -eq $cands -or @($cands | Where-Object { $null -ne $_ }).Count -lt 1) { return $null }
+    $prompt = Build-PlannerPrompt -Goal $Goal -RegistryLines $RegistryLines
+    $res = & $dispatch $cands[0] $prompt
+    if ([int]$res.exit_code -ne 0) { return $null }
+    $plan = ConvertTo-PlanObject -RawStdout ([string]$res.stdout)
+    if ($null -eq $plan) { return $null }
+    if ($RunId) { $plan.run_id = $RunId }
+    $plan.goal = $Goal
+    if ($null -ne $BudgetCap) { $plan.budget_cap = [double]$BudgetCap }
+    return $plan
+}

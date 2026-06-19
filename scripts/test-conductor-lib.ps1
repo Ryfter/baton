@@ -83,5 +83,27 @@ try {
 
     Remove-Item -Recurse -Force $tmpHome -ErrorAction SilentlyContinue
 
+    # ---- Task 4: planner prompt + seamed plan phase ----
+    $pp = Build-PlannerPrompt -Goal 'convert pdfs to markdown' -RegistryLines @('docling — pdf-extract (local)')
+    Check 'T36 planner prompt includes goal' ($pp -match 'convert pdfs to markdown')
+    Check 'T37 planner prompt includes registry evidence' ($pp -match 'docling')
+    Check 'T38 planner prompt includes schema + reversible rule' (($pp -match '"tasks"') -and ($pp -match 'reversible'))
+
+    $refFleet = Join-Path $PSScriptRoot '../references/fleet.yaml'
+    $tmpTools = Join-Path ([System.IO.Path]::GetTempPath()) "cond-tools-$([System.IO.Path]::GetRandomFileName()).yaml"
+    Set-Content -Path $tmpTools -Value 'tools: []' -Encoding utf8NoBOM
+    $cannedPlan = '{"tasks":[{"id":"t1","desc":"research","command":"research-gate","capability":"research","depends_on":[],"est_cost_tier":"free","reversible":true}]}'
+    $disp = { param($c,$p) @{ stdout = $cannedPlan; stderr=''; exit_code = 0; duration_s = 1 } }
+    $plan = Invoke-PlanPhase -Goal 'convert pdfs' -RunId 'go-unit-2' -FleetPath $refFleet -ToolsPath $tmpTools -Dispatcher $disp
+    Check 'T39 plan phase returns a plan' ($null -ne $plan)
+    Check 'T40 plan phase stamps run id' ($plan.run_id -eq 'go-unit-2')
+    Check 'T41 plan phase stamps goal' ($plan.goal -eq 'convert pdfs')
+    Check 'T42 plan phase parsed the task' (@($plan.tasks).Count -eq 1)
+
+    $dispBad = { param($c,$p) @{ stdout = 'not json'; stderr=''; exit_code = 0; duration_s = 1 } }
+    Check 'T43 unparseable planner reply -> null' ($null -eq (Invoke-PlanPhase -Goal 'x' -FleetPath $refFleet -ToolsPath $tmpTools -Dispatcher $dispBad))
+
+    Remove-Item -Force $tmpTools -ErrorAction SilentlyContinue
+
 } catch { Write-Host "ERROR: $($_.Exception.Message)"; exit 1 }
 Write-Host ""; if ($script:fail -gt 0) { Write-Host "$script:fail FAILED"; exit 1 } else { Write-Host 'ALL PASS'; exit 0 }
