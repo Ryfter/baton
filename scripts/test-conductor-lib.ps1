@@ -51,5 +51,37 @@ try {
     Check 'T23 reversible:false is destructive' (Test-TaskDestructive -Task (& $mk 'x' @() 'free' $false))
     Check 'T24 reversible:true is not destructive' (-not (Test-TaskDestructive -Task (& $mk 'x' @() 'free' $true)))
 
+    # ---- Task 3: ledgers, run dir, report (pure + IO) ----
+    $tmpHome = Join-Path ([System.IO.Path]::GetTempPath()) "cond-test-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $tmpHome | Out-Null
+    $runDir = Initialize-RunDir -RunId 'go-unit-1' -Root $tmpHome
+    Check 'T25 run dir created' (Test-Path $runDir)
+    Check 'T26 run dir named for run id' ((Split-Path $runDir -Leaf) -eq 'go-unit-1')
+
+    $ev = New-RunEvent -TaskId 't1' -Kind 'started' -Message 'hello'
+    Check 'T27 event has utc ts and kind' (($ev.kind -eq 'started') -and ($ev.ts -match 'Z$'))
+    Add-RunEvent -RunDir $runDir -EventObj $ev
+    Add-RunEvent -RunDir $runDir -EventObj (New-RunEvent -TaskId 't1' -Kind 'finished')
+    $evLines = Get-Content -LiteralPath (Join-Path $runDir 'events.jsonl')
+    Check 'T28 two events appended as jsonl' (@($evLines).Count -eq 2)
+    Check 'T29 event line is valid json' ((($evLines[0] | ConvertFrom-Json).kind) -eq 'started')
+
+    $dec = New-RunDecision -TaskId 't1' -Chose 'docling' -Alternatives @('markitdown') -Why 'already wired' -CostTier 'local'
+    Check 'T30 decision records choice + alts' (($dec.chose -eq 'docling') -and (@($dec.alternatives) -contains 'markitdown'))
+    Add-RunDecision -RunDir $runDir -Decision $dec
+    Check 'T31 decision appended' ((Get-Content -LiteralPath (Join-Path $runDir 'decisions.jsonl') | Measure-Object -Line).Lines -ge 1)
+
+    $plan = @{ run_id='go-unit-1'; goal='convert pdfs'; budget_cap=$null; tasks=@(
+        [pscustomobject]@{ id='t1'; desc='research'; command='research-gate'; capability='research'; model_pick=''; depends_on=@(); est_cost_tier='free'; reversible=$true }
+    ) }
+    $report = Format-RunReport -Plan $plan -Decisions @($dec) -Spend 0.0 -Status 'completed'
+    Check 'T32 report names the goal' ($report -match 'convert pdfs')
+    Check 'T33 report shows status' ($report -match 'completed')
+    Check 'T34 report lists the decision' ($report -match 'docling')
+    $reportI = Format-RunReport -Plan $plan -Status 'interrupted-budget' -PendingTaskId 't1'
+    Check 'T35 interrupted report names paused task' ($reportI -match 't1')
+
+    Remove-Item -Recurse -Force $tmpHome -ErrorAction SilentlyContinue
+
 } catch { Write-Host "ERROR: $($_.Exception.Message)"; exit 1 }
 Write-Host ""; if ($script:fail -gt 0) { Write-Host "$script:fail FAILED"; exit 1 } else { Write-Host 'ALL PASS'; exit 0 }

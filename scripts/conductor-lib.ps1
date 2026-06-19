@@ -103,3 +103,94 @@ function Test-TaskDestructive {
     param([Parameter(Mandatory)]$Task)
     return ($Task.reversible -eq $false)
 }
+
+function New-RunEvent {
+    <# Pure factory for an events.jsonl record. ($EventObj, not $Event: $Event is a
+       PowerShell automatic variable.) #>
+    param(
+        [string]$TaskId = '',
+        [Parameter(Mandatory)][string]$Kind,
+        [string]$Message = '',
+        [string]$Level = 'info',
+        [datetime]$Now = (Get-Date)
+    )
+    return [ordered]@{
+        ts      = $Now.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        level   = $Level
+        task_id = $TaskId
+        kind    = $Kind
+        message = $Message
+    }
+}
+
+function New-RunDecision {
+    <# Pure factory for a decisions.jsonl record (an autonomous guess + alternatives). #>
+    param(
+        [string]$TaskId = '',
+        [Parameter(Mandatory)][string]$Chose,
+        [string[]]$Alternatives = @(),
+        [string]$Why = '',
+        [string]$CostTier = '',
+        [datetime]$Now = (Get-Date)
+    )
+    return [ordered]@{
+        ts           = $Now.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        task_id      = $TaskId
+        chose        = $Chose
+        alternatives = @($Alternatives)
+        why          = $Why
+        cost_tier    = $CostTier
+    }
+}
+
+function Add-RunEvent {
+    param([Parameter(Mandatory)][string]$RunDir, [Parameter(Mandatory)]$EventObj)
+    $line = ($EventObj | ConvertTo-Json -Compress -Depth 6)
+    Add-Content -LiteralPath (Join-Path $RunDir 'events.jsonl') -Value $line -Encoding utf8NoBOM
+}
+
+function Add-RunDecision {
+    param([Parameter(Mandatory)][string]$RunDir, [Parameter(Mandatory)]$Decision)
+    $line = ($Decision | ConvertTo-Json -Compress -Depth 6)
+    Add-Content -LiteralPath (Join-Path $RunDir 'decisions.jsonl') -Value $line -Encoding utf8NoBOM
+}
+
+function Initialize-RunDir {
+    param([string]$RunId = (New-RunId), [string]$Root)
+    if (-not $Root) { $Root = Join-Path (Get-BatonHome) 'runs' }
+    $dir = Join-Path $Root $RunId
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    return $dir
+}
+
+function Format-RunReport {
+    <# Plain-English run report rendered from the plan + decision ledger. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Plan,
+        [array]$Decisions = @(),
+        [double]$Spend = 0.0,
+        [string]$Status = 'completed',
+        [string]$PendingTaskId = ''
+    )
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine("# Conductor run — $($Plan.run_id)")
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine("**Goal:** $($Plan.goal)")
+    [void]$sb.AppendLine("**Status:** $Status")
+    if (($Status -ne 'completed') -and $PendingTaskId) { [void]$sb.AppendLine("**Paused at:** $PendingTaskId") }
+    [void]$sb.AppendLine(("**Spend:** {0:0.00}" -f $Spend))
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('## Tasks')
+    foreach ($t in @($Plan.tasks)) {
+        $tag = if ($t.capability) { "$($t.command)/$($t.capability)" } else { $t.command }
+        [void]$sb.AppendLine("- $($t.id): $($t.desc) [$tag] ($($t.est_cost_tier))")
+    }
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('## Decisions')
+    if (@($Decisions).Count -eq 0) { [void]$sb.AppendLine('(none recorded)') }
+    foreach ($d in @($Decisions)) {
+        $alt = if (@($d.alternatives).Count) { " (alts: $((@($d.alternatives)) -join ', '))" } else { '' }
+        [void]$sb.AppendLine("- $($d.task_id): chose **$($d.chose)** — $($d.why)$alt")
+    }
+    return $sb.ToString().TrimEnd()
+}
