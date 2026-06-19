@@ -146,5 +146,27 @@ try {
 
     Remove-Item -Recurse -Force $tmpHome2 -ErrorAction SilentlyContinue
 
-} catch { Write-Host "ERROR: $($_.Exception.Message)"; exit 1 }
-Write-Host ""; if ($script:fail -gt 0) { Write-Host "$script:fail FAILED"; exit 1 } else { Write-Host 'ALL PASS'; exit 0 }
+    # ---- Task 6: CLI child-process (zero network) ----
+    $cli = Join-Path $PSScriptRoot 'fleet-go.ps1'
+    Check 'T56 fleet-go.ps1 exists' (Test-Path $cli)
+    $cliHome = Join-Path ([System.IO.Path]::GetTempPath()) "cond-cli-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $cliHome | Out-Null
+    $env:BATON_HOME = $cliHome
+    $env:BATON_GO_TEST_PLAN = '{"tasks":[{"id":"t1","desc":"research","command":"research-gate","capability":"research","depends_on":[],"est_cost_tier":"free","reversible":true}]}'
+    $env:BATON_GO_TEST_SPAWN = '1'
+    $out = & pwsh -NoProfile -File $cli -Goal 'convert pdfs' -Json 2>&1 | Out-String
+    Check 'T57 CLI exits cleanly and reports completed' ($out -match 'completed')
+    $runRoot = Join-Path $cliHome 'runs'
+    $made = @(Get-ChildItem -Path $runRoot -Directory -ErrorAction SilentlyContinue)
+    Check 'T58 CLI created a run dir' (@($made).Count -ge 1)
+    Check 'T59 CLI wrote report.md' (Test-Path (Join-Path $made[0].FullName 'report.md'))
+    Remove-Item Env:\BATON_HOME, Env:\BATON_GO_TEST_PLAN, Env:\BATON_GO_TEST_SPAWN -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $cliHome -ErrorAction SilentlyContinue
+
+    Write-Host ""
+    if ($script:fail -gt 0) { Write-Host "$script:fail CHECK(S) FAILED"; exit 1 } else { Write-Host "ALL CHECKS PASS"; exit 0 }
+} catch {
+    Write-Host "ERROR: $($_.Exception.Message)"
+    Write-Host $_.ScriptStackTrace
+    exit 1
+}
