@@ -105,5 +105,46 @@ try {
 
     Remove-Item -Force $tmpTools -ErrorAction SilentlyContinue
 
+    # ---- Task 5: the conductor loop (seamed) ----
+    $tmpHome2 = Join-Path ([System.IO.Path]::GetTempPath()) "cond-loop-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $tmpHome2 | Out-Null
+    $mkTask = { param($id,$deps,$tier='free',$rev=$true) [pscustomobject]@{ id=$id; desc="do $id"; command='x'; capability='reasoning'; model_pick=''; depends_on=@($deps); est_cost_tier=$tier; reversible=$rev } }
+
+    # Happy path: 3 tasks, all reversible, under budget.
+    $planner = { param($goal) @{ run_id='ignored'; goal=$goal; budget_cap=$null; tasks=@( (& $mkTask 't1' @()), (& $mkTask 't2' @('t1')), (& $mkTask 't3' @('t2')) ) } }
+    $seen = [System.Collections.ArrayList]@()
+    $spawner = { param($task) [void]$seen.Add($task.id); @{ ok=$true; spend=0.0; chose='claude-haiku'; why="ran $($task.id)"; alternatives=@('local-x') } }
+    $run1 = Join-Path $tmpHome2 'go-loop-1'
+    $r1 = Invoke-Conductor -Goal 'do the thing' -RunDir $run1 -Planner $planner -Spawner $spawner
+    Check 'T44 completed status' ($r1.status -eq 'completed')
+    Check 'T45 tasks ran in dependency order' (($seen[0] -eq 't1') -and ($seen[2] -eq 't3'))
+    Check 'T46 plan.json written' (Test-Path (Join-Path $run1 'plan.json'))
+    Check 'T47 report.md written' (Test-Path (Join-Path $run1 'report.md'))
+    Check 'T48 decisions logged for each task' ((Get-Content -LiteralPath (Join-Path $run1 'decisions.jsonl') | Measure-Object -Line).Lines -eq 3)
+    Check 'T49 events include finished' ((Get-Content -LiteralPath (Join-Path $run1 'events.jsonl') -Raw) -match 'finished')
+
+    # Budget interrupt: a paid task that would cross a tiny cap halts BEFORE running.
+    $seenB = [System.Collections.ArrayList]@()
+    $spawnerB = { param($task) [void]$seenB.Add($task.id); @{ ok=$true; spend=0.0; chose='m'; why=''; alternatives=@() } }
+    $plannerB = { param($goal) @{ run_id='x'; goal=$goal; budget_cap=0.01; tasks=@( (& $mkTask 't1' @() 'free'), (& $mkTask 't2' @('t1') 'paid') ) } }
+    $r2 = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $tmpHome2 'go-loop-2') -BudgetCap 0.01 -PaidPerCall 0.05 -Planner $plannerB -Spawner $spawnerB
+    Check 'T50 budget interrupt status' ($r2.status -eq 'interrupted-budget')
+    Check 'T51 budget interrupt names pending task' ($r2.pending_task_id -eq 't2')
+    Check 'T52 paid task did NOT run' (-not ($seenB -contains 't2'))
+
+    # Destructive interrupt: a reversible:false task halts before running.
+    $seenD = [System.Collections.ArrayList]@()
+    $spawnerD = { param($task) [void]$seenD.Add($task.id); @{ ok=$true; spend=0.0; chose='m'; why=''; alternatives=@() } }
+    $plannerD = { param($goal) @{ run_id='x'; goal=$goal; budget_cap=$null; tasks=@( (& $mkTask 't1' @()), (& $mkTask 't2' @('t1') 'free' $false) ) } }
+    $r3 = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $tmpHome2 'go-loop-3') -Planner $plannerD -Spawner $spawnerD
+    Check 'T53 destructive interrupt status' ($r3.status -eq 'interrupted-destructive')
+    Check 'T54 destructive task did NOT run' (-not ($seenD -contains 't2'))
+
+    # Plan failure: planner returns null.
+    $r4 = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $tmpHome2 'go-loop-4') -Planner { param($goal) $null } -Spawner $spawner
+    Check 'T55 plan-failed status' ($r4.status -eq 'plan-failed')
+
+    Remove-Item -Recurse -Force $tmpHome2 -ErrorAction SilentlyContinue
+
 } catch { Write-Host "ERROR: $($_.Exception.Message)"; exit 1 }
 Write-Host ""; if ($script:fail -gt 0) { Write-Host "$script:fail FAILED"; exit 1 } else { Write-Host 'ALL PASS'; exit 0 }

@@ -264,3 +264,113 @@ function Invoke-PlanPhase {
     if ($null -ne $BudgetCap) { $plan.budget_cap = [double]$BudgetCap }
     return $plan
 }
+
+function Invoke-TaskViaFleet {
+    <# Default executor when no -Spawner is injected: route the task's capability
+       through the fleet (a model call). Non-destructive by construction — it never
+       touches the repo; real code/merge execution is wired by a box via -Spawner. #>
+    param(
+        [Parameter(Mandatory)]$Task,
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
+        [scriptblock]$Dispatcher
+    )
+    $cap = if ($Task.capability) { $Task.capability } else { 'reasoning' }
+    $cands = Select-Capability -Capability $cap -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
+    if ($null -eq $cands -or @($cands | Where-Object { $null -ne $_ }).Count -lt 1) {
+        return @{ ok = $false; spend = 0.0; chose = ''; why = "no candidate for capability '$cap'"; alternatives = @() }
+    }
+    $pick = $cands[0]
+    $prompt = "Task: $($Task.desc)"
+    $res = if ($Dispatcher) { & $Dispatcher $pick $prompt } else { Invoke-Fleet -Name $pick.name -Prompt $prompt -Path $FleetPath -NoJournal }
+    $alts = @($cands | Select-Object -Skip 1 | ForEach-Object { $_.name })
+    return @{ ok = ([int]$res.exit_code -eq 0); spend = 0.0; chose = $pick.name; why = "routed $cap -> $($pick.name)"; alternatives = $alts }
+}
+
+function Complete-Run {
+    <# Render report.md and return the terminal status hashtable. #>
+    param(
+        [Parameter(Mandatory)][string]$RunDir,
+        [Parameter(Mandatory)][hashtable]$Plan,
+        [array]$Decisions = @(),
+        [double]$Spend = 0.0,
+        [string]$Status = 'completed',
+        [string]$PendingTaskId = ''
+    )
+    $report = Format-RunReport -Plan $Plan -Decisions @($Decisions) -Spend $Spend -Status $Status -PendingTaskId $PendingTaskId
+    Set-Content -LiteralPath (Join-Path $RunDir 'report.md') -Value $report -Encoding utf8NoBOM
+    return @{ status = $Status; run_id = $Plan.run_id; run_dir = $RunDir; spend = $Spend; pending_task_id = $PendingTaskId; report = $report }
+}
+
+function Invoke-Conductor {
+    <# Full-auto engine: plan, then walk the DAG under the two interrupt guards,
+       logging events/decisions, and render a report. -Planner/-Spawner/-Dispatcher
+       inject for tests; real path uses Invoke-PlanPhase + Invoke-TaskViaFleet. #>
+    param(
+        [Parameter(Mandatory)][string]$Goal,
+        [string]$RunDir,
+        $BudgetCap = $null,
+        [double]$PaidPerCall = 0.05,
+        [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [scriptblock]$Planner,
+        [scriptblock]$Spawner,
+        [scriptblock]$Dispatcher
+    )
+    if (-not $RunDir) { $RunDir = Initialize-RunDir }
+    else { New-Item -ItemType Directory -Force -Path $RunDir | Out-Null }
+    $runId = Split-Path $RunDir -Leaf
+
+    # 1. Plan phase.
+    $plan = if ($Planner) { & $Planner $Goal }
+            else { Invoke-PlanPhase -Goal $Goal -RunId $runId -BudgetCap $BudgetCap -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath -Dispatcher $Dispatcher }
+    if ($null -eq $plan) {
+        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'error' -Level 'error' -Message 'planning failed')
+        $empty = @{ run_id = $runId; goal = $Goal; budget_cap = $BudgetCap; tasks = @() }
+        return (Complete-Run -RunDir $RunDir -Plan $empty -Status 'plan-failed')
+    }
+    $plan.run_id = $runId
+    ($plan | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'plan.json') -Encoding utf8NoBOM
+    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'started' -Message "plan: $(@($plan.tasks).Count) tasks")
+
+    # 2. Order the DAG.
+    try { $order = Resolve-TaskOrder -Tasks @($plan.tasks) }
+    catch {
+        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'error' -Level 'error' -Message $_.Exception.Message)
+        return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-invalid')
+    }
+
+    # 3. Guarded walk.
+    $spend = 0.0
+    $decisions = [System.Collections.ArrayList]@()
+    foreach ($task in $order) {
+        $est = Get-TaskCostEstimate -Tier $task.est_cost_tier -PaidPerCall $PaidPerCall
+        if (Test-BudgetExceeded -CumulativeSpend $spend -TaskEstimate $est -BudgetCap $BudgetCap) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'interrupt' -Level 'warn' -Message "budget: would cross cap at $($task.id)")
+            return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status 'interrupted-budget' -PendingTaskId $task.id)
+        }
+        if (Test-TaskDestructive -Task $task) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'interrupt' -Level 'warn' -Message "destructive: $($task.id) is reversible:false")
+            return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status 'interrupted-destructive' -PendingTaskId $task.id)
+        }
+        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'started' -Message $task.desc)
+        $r = if ($Spawner) { & $Spawner $task }
+             else { Invoke-TaskViaFleet -Task $task -FleetPath $FleetPath -ToolsPath $ToolsPath -MaxCostTier $MaxCostTier -Dispatcher $Dispatcher }
+        $tspend = if ($null -ne $r.spend) { [double]$r.spend } else { $est }
+        $spend += $tspend
+        if ($r.chose) {
+            $dec = New-RunDecision -TaskId $task.id -Chose ([string]$r.chose) -Alternatives (@($r.alternatives)) -Why ([string]$r.why) -CostTier $task.est_cost_tier
+            Add-RunDecision -RunDir $RunDir -Decision $dec
+            [void]$decisions.Add($dec)
+        }
+        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'spent' -Message ("{0:0.00}" -f $tspend))
+        $kind = if ($r.ok) { 'finished' } else { 'error' }
+        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind $kind -Message $task.desc)
+        if (-not $r.ok) {
+            return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status 'failed' -PendingTaskId $task.id)
+        }
+    }
+    return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status 'completed')
+}
