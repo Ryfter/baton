@@ -67,6 +67,11 @@ already record attempt+outcome, so Conductor-ledger ingest is the named next
   pre-task loop is deferred to a Conductor follow-up.
 - **Semantic backend beyond the KB index.** `-Deep` reuses the existing KB
   embedding search (`Invoke-KbSearch`); no new embedding store is built.
+- **Scope/kind-driven write-target routing.** `scope` (project|universal) is
+  captured on every row, but v1's promotion writer appends to a single box-private
+  lessons file regardless of scope/kind. Routing a `universal` promotion to a
+  universal target — or a decision-kind promotion to `decisions-lib.ps1` — is
+  deferred; it plugs in behind the same `-Writer` seam without touching the rest.
 
 ## 2. Decisions
 
@@ -175,9 +180,10 @@ capture).
       (`manual` built-in; default scriptblock builds a row from CLI args). Named
       seam for future Conductor-ledger ingest.
     - `Invoke-MemoryPromote` — given a candidate (from watch) or an `id`/signature
-      (from flag): `Format-PromotionMemo` → write a Grimdex lesson via the lessons
-      path or a decision via `decisions-lib.ps1` (by `scope`/kind) → stamp source
-      rows `promoted`. A `-Writer` seam stands in for the Grimdex write in tests.
+      (from flag): `Format-PromotionMemo` → write the memo to the box-private Grimdex
+      lessons file via the `-Writer` seam → stamp source rows `promoted`. (Scope/kind
+      then routing to a universal target or `decisions-lib.ps1` is deferred — see §1;
+      the seam makes it a drop-in later.) A `-Writer` seam stands in for the write in tests.
 - **`scripts/fleet-memory.ps1`** — CLI dispatching three subcommands:
   `remember` (capture), `recall` (warn), `promote` (watch list / flag one).
 - **`commands/remember.md`, `commands/recall.md`, `commands/memory-promote.md`** —
@@ -289,5 +295,7 @@ PROMOTION CANDIDATE: this signature has failed 2× — consider /baton:memory-pr
   Mitigation: memory is advisory, shows the original context, and records
   `pass` outcomes too — a later success outweighs an old failure in the report.
 - **Scope leakage.** A project-specific memory promoted as `universal` pollutes
-  the global constitution. Mitigation: `scope` is explicit on the row and drives
-  the promotion target; promotion is operator-confirmed.
+  the global constitution. Mitigation: `scope` is explicit on every row, and
+  promotion is operator-confirmed and box-private (nothing leaves the box). v1
+  writes one box-private lessons file; once scope/kind-driven routing lands (§1),
+  `scope` selects the target so a `universal` promotion reaches the universal file.
