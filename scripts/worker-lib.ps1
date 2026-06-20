@@ -82,3 +82,96 @@ function Format-WorkerReport {
     if ($Result.exit -ne 0) { $lines += "exit:     $($Result.exit) (dispatch error)" }
     return ($lines -join "`n")
 }
+
+function Invoke-Worker {
+    <# Dispatch a worker through the fleet, auto-metering adapter-backed workers.
+       The dispatch is injected via -Dispatcher (default: Invoke-Fleet) so tests
+       never touch gh/network. Advisory: never throws on a rate-limit. #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Prompt,
+        [string]$Model,
+        [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl'),
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [scriptblock]$Dispatcher,
+        [switch]$Dry
+    )
+    if (-not $Dispatcher) {
+        $Dispatcher = { param($n, $p, $m) Invoke-Fleet -Name $n -Prompt $p -Model $m -Path $FleetPath }
+    }
+    $provider = Get-FleetProvider -Name $Name -Path $FleetPath
+    $adapter  = Test-WorkerAdapter -Provider $provider
+
+    $disp = & $Dispatcher $Name $Prompt $Model
+    $exit = [int]$disp.exit_code
+    $combined = ([string]$disp.stdout) + "`n" + ([string]$disp.stderr)
+    $result = [ordered]@{
+        name = $Name; model = $Model; output = $disp.stdout; exit = $exit
+        metered = $false; adapter = $adapter; tick = 0; state = 'available'; until = $null; reason = $null
+    }
+    if (-not $adapter) { return $result }
+    $parser = Get-AdapterParser -Adapter $adapter
+    if (-not $parser) { return $result }
+
+    $limit = & $parser $combined $exit
+    if (-not (Test-WorkerApiHit -ExitCode $exit -LimitState $limit)) {
+        $result.reason = 'dispatch error (not counted)'
+        return $result
+    }
+    $result.metered = $true
+    $result.tick    = 1
+    $result.state   = $limit.state
+    $result.reason  = $limit.reason
+    if (-not $Dry) { Add-UsageTick -Worker $Name -Count 1 -Unit 'requests' -UsagePath $UsagePath }
+
+    if ($limit.state -ne 'available') {
+        $until = if ($limit.until) { ConvertTo-UsageInstant -When $limit.until } else { $null }
+        $result.until = $until
+        if (-not $Dry) {
+            switch ($limit.state) {
+                'cooling_down'      { Set-WorkerCooldown -Worker $Name -Until $until -UsagePath $UsagePath }
+                'waiting_for_reset' { Set-WorkerLockout  -Worker $Name -ResetAt $until -Reason $limit.reason -UsagePath $UsagePath }
+                'limited'           { Set-WorkerLimited  -Worker $Name -Reason $limit.reason -UsagePath $UsagePath }
+            }
+        }
+    }
+    return $result
+}
+
+function Get-WorkerStatus {
+    <# Compose state + budget + utilization + forecast for one worker.
+       consumed = ticks since the latest lockout|clear boundary (else all). #>
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        [datetime]$Now = [datetime]::UtcNow,
+        [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl'),
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml')
+    )
+    $state  = Get-WorkerState -Worker $Worker -Now $Now -UsagePath $UsagePath
+    $fc     = Get-UsageForecast -Worker $Worker -Now $Now -UsagePath $UsagePath -FleetPath $FleetPath
+    $budget = Get-WorkerBudget -Worker $Worker -FleetPath $FleetPath
+    $rows   = Read-UsageJournal -Path $UsagePath
+    $nowUtc = $Now.ToUniversalTime()
+    $bounds = @($rows | Where-Object {
+        $_.worker -eq $Worker -and $_.event -in @('lockout','clear') -and (ConvertTo-UsageDateTime ([string]$_.ts)) -le $nowUtc
+    })
+    $windowStart = [datetime]::MinValue
+    if ($bounds.Count -gt 0) {
+        $windowStart = ConvertTo-UsageDateTime ([string](($bounds | Sort-Object { ConvertTo-UsageDateTime ([string]$_.ts) } | Select-Object -Last 1).ts))
+    }
+    $consumed = 0
+    foreach ($t in @($rows | Where-Object { $_.event -eq 'tick' -and $_.worker -eq $Worker })) {
+        if ((ConvertTo-UsageDateTime ([string]$t.ts)) -ge $windowStart) { $consumed += [int]$t.count }
+    }
+    $util = $null; $remaining = $null
+    if ($null -ne $budget -and $budget -gt 0) {
+        $remaining = [math]::Max(0, $budget - $consumed)
+        $util = [math]::Round(($consumed / $budget) * 100, 1)
+    }
+    return [ordered]@{
+        worker = $Worker; state = $state.state; eta_human = $state.eta_human
+        budget = $budget; consumed = $consumed; remaining = $remaining
+        utilization_pct = $util; forecast_status = $fc.status; run_rate = $fc.run_rate
+        days_to_exhaustion = $(if ($fc.Contains('days_to_exhaustion')) { $fc.days_to_exhaustion } else { $null })
+    }
+}
