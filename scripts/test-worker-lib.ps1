@@ -92,6 +92,24 @@ providers:
     Check 'T29 status computes utilization from budget' ($st.budget -eq 100 -and $st.consumed -eq 25 -and $st.utilization_pct -eq 25.0 -and $st.remaining -eq 75)
     $st2 = Get-WorkerStatus -Worker 'plain-cli' -UsagePath $up6 -FleetPath $fleetFx
     Check 'T30 status no budget -> utilization null' ($null -eq $st2.utilization_pct)
+
+    # ---- Task 4: CLI (child process; zero network/model) ----
+    $cli = Join-Path $PSScriptRoot 'fleet-worker.ps1'
+    $cliHome = Join-Path $tmpDir 'clihome'
+    New-Item -ItemType Directory -Force -Path $cliHome | Out-Null
+    Copy-Item -LiteralPath $fleetFx -Destination (Join-Path $cliHome 'fleet.yaml')
+    $env:BATON_HOME = $cliHome
+
+    $runJson = & pwsh -NoProfile -File $cli run github-models --prompt 'hi' --model gpt-4o-mini --dry --json 2>&1 | Out-String
+    Check 'T31 CLI run --dry --json emits result shape' ($runJson -match '"metered"' -and $runJson -match 'github-models')
+    Check 'T32 CLI run --dry wrote no journal' (-not (Test-Path (Join-Path $cliHome 'usage-journal.jsonl')))
+
+    $statusJson = & pwsh -NoProfile -File $cli status --json 2>&1 | Out-String
+    Check 'T33 CLI status --json lists adapter workers' ($statusJson -match 'github-models' -and $statusJson -match 'utilization_pct')
+    $statusTxt = & pwsh -NoProfile -File $cli status 2>&1 | Out-String
+    Check 'T34 CLI status text has header + worker' ($statusTxt -match 'WORKER' -and $statusTxt -match 'github-models')
+
+    Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue
 }
 finally {
     if ($tmpDir -and (Test-Path $tmpDir)) { Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }

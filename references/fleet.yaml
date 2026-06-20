@@ -14,6 +14,9 @@
 #   base_url          (http only) read by scripts/fleet/<name>.ps1
 #   role              (optional) draft | bulk | finisher — cascade stage (Slice B).
 #                     Absent -> inferred: local/free = draft, paid = finisher.
+#   adapter           (optional) names the worker-adapter that meters this provider
+#                     and maps its rate-limit responses to Usage-Governor states
+#                     (auto-tick + auto-lockout). Absent = unmetered. v1: github-models.
 #   platform          (optional) claude | codex | gemini | github | local — Lever 4
 #                     identity; journaled now, consumed by the cost/speed advisor later.
 #   timeout_s         (http only, optional) per-request timeout; default 300 in the
@@ -167,3 +170,15 @@ providers:
     capabilities: [judge, commit-msg, extract-json, summarize-short]
     context: 16384
     usage_class: tight
+
+  - name: github-models
+    kind: cli
+    enabled: false            # opt-in: enable in your live ~/.baton/fleet.yaml
+    cost_tier: free
+    adapter: github-models    # adapter-backed -> auto-metered + rate-limit-aware
+    platform: github
+    model_default: gpt-4o-mini
+    command_template: 'gh models run {{model}} "{{prompt}}"'
+    capabilities: [code-gen, summarize-short, classify]
+    # budget: <int>           # BOX-PRIVATE — set the real per-window allotment ONLY
+    #                           in your live ~/.baton/fleet.yaml, never in this seed.
