@@ -177,8 +177,10 @@ providers:
     cost_tier: free
     adapter: github-models    # adapter-backed -> auto-metered + rate-limit-aware
     platform: github
-    model_default: gpt-4o-mini
-    command_template: 'gh models run {{model}} "{{prompt}}"'
+    model_default: openai/gpt-4o-mini
+    command_template: 'gh models run {{model}}'
+    stdin: true               # pipe the prompt via stdin — gh models blocks reading
+                              #   inherited stdin under pwsh; stdin is also quote-safe.
     capabilities: [code-gen, summarize-short, classify]
     # budget: <int>           # BOX-PRIVATE — set the real per-window allotment ONLY
     #                           in your live ~/.baton/fleet.yaml, never in this seed.
