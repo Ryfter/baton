@@ -19,6 +19,7 @@ try {
     $reset = Get-RateLimitState -Output 'rate limit; resets at 2026-06-20T05:00:00Z'
     Check 'T8 absolute reset -> waiting_for_reset + iso' ($reset.state -eq 'waiting_for_reset' -and $reset.until -eq '2026-06-20T05:00:00Z')
     Check 'T9 non-limit error -> available (fail-open)' ((Get-RateLimitState -Output 'connection refused' -ExitCode 1).state -eq 'available')
+    Check 'T9b bare 429 in a normal answer -> available' ((Get-RateLimitState -Output 'the function returned 429 widgets in total' -ExitCode 0).state -eq 'available')
     Check 'T10 reason set on a limit' ((Get-RateLimitState -Output 'rate limit hit').reason -eq 'rate limit')
     Check 'T11 api-hit true on success' (Test-WorkerApiHit -ExitCode 0 -LimitState @{ state='available' })
     Check 'T12 api-hit true on 429' (Test-WorkerApiHit -ExitCode 1 -LimitState @{ state='limited' })

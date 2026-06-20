@@ -19,8 +19,12 @@ function Get-RateLimitState {
     $text = [string]$Output
     if ([string]::IsNullOrWhiteSpace($text)) { return $result }
     $low = $text.ToLowerInvariant()
-    $isLimit = ($low -match '\b429\b') -or ($low -match 'rate.?limit') -or ($low -match 'quota') -or
+    $hasWord = ($low -match 'rate.?limit') -or ($low -match 'quota') -or
                ($low -match 'too many requests') -or ($low -match 'ratelimitreached')
+    # A bare "429" only signals a limit alongside HTTP/error/rate context — a model
+    # answer that merely mentions the number 429 must not trigger a false lockout.
+    $has429 = ($low -match '\b429\b') -and ($low -match 'http|status|error|rate|limit|request')
+    $isLimit = $hasWord -or $has429
     if (-not $isLimit) { return $result }
     $result.reason = 'rate limit'
     # Relative retry hint: "try again in 60 seconds", "retry after 5 minutes", "wait 2 hours"
