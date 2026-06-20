@@ -28,6 +28,39 @@ try {
     Check 'T10 row round-trips with computed fields' (@($rows).Count -eq 1 -and $rows[0].outcome -eq 'fail' -and $rows[0].promoted -eq $false)
     Add-Content -LiteralPath $jp -Value 'this is not json' -Encoding utf8
     Check 'T11 malformed line skipped' (@(Read-MemoryJournal -Path $jp).Count -eq 1)
+
+    # ---- Task 2: matching + promotion candidates (pure) ----
+    # Rows 1 & 2 share a signature (same problem text) so the fail-threshold can fire;
+    # row 4 partially overlaps so ranking is observable.
+    $mp = Join-Path $tmpDir 'match-journal.jsonl'
+    [void](Add-MemoryEvent -Problem 'auth test is flaky in ci' -Approach 'mock clock' -Outcome fail -Path $mp)
+    [void](Add-MemoryEvent -Problem 'auth test is flaky in ci' -Approach 'raise timeout' -Outcome fail -Path $mp)
+    [void](Add-MemoryEvent -Problem 'docker build is slow' -Approach 'cache layers' -Outcome pass -Path $mp)
+    [void](Add-MemoryEvent -Problem 'auth dashboard work' -Approach 'css-grid' -Outcome pass -Path $mp)
+    $mrows = Read-MemoryJournal -Path $mp
+
+    # Rows 1 & 2 share the signature; overlaps tie at 1.0 so assert membership, not position.
+    $exact = Find-MemoryMatches -Query 'auth test is flaky in ci' -Rows $mrows
+    Check 'T12 exact signature match found' (@($exact | Where-Object { $_.approach -eq 'mock clock' }).Count -eq 1)
+    $partial = Find-MemoryMatches -Query 'auth test timeout' -MinOverlap 0.5 -Rows $mrows
+    Check 'T13 token-overlap match above floor' (@($partial).Count -ge 2)
+    $miss = Find-MemoryMatches -Query 'kubernetes ingress config' -Rows $mrows
+    Check 'T14 below-floor miss returns none' (@($miss).Count -eq 0)
+    # Query {auth,flaky}: rows 1&2 overlap 1.0, dashboard row overlap 0.5 -> ranks last.
+    $ranked = Find-MemoryMatches -Query 'auth flaky' -MinOverlap 0.5 -Rows $mrows
+    Check 'T15 ranked overlap desc (partial ranks last)' (@($ranked).Count -ge 3 -and $ranked[-1].approach -eq 'css-grid' -and $ranked[0].approach -ne 'css-grid')
+
+    $cands = Get-PromotionCandidates -FailThreshold 2 -WinThreshold 2 -Rows $mrows
+    $authCand = @($cands | Where-Object { $_.signature -match 'auth' -and $_.kind -eq 'avoid' }) | Select-Object -First 1
+    Check 'T16 fail-threshold fires (avoid)' ($null -ne $authCand -and $authCand.fail_count -ge 2)
+    [void](Add-MemoryEvent -Problem 'speed up jest suite' -Approach 'shard' -Outcome pass -Path (Join-Path $tmpDir 'win.jsonl'))
+    [void](Add-MemoryEvent -Problem 'speed up jest suite' -Approach 'shard' -Outcome pass -Path (Join-Path $tmpDir 'win.jsonl'))
+    $winCands = Get-PromotionCandidates -Rows (Read-MemoryJournal -Path (Join-Path $tmpDir 'win.jsonl'))
+    Check 'T17 win-threshold fires (prefer)' (@($winCands | Where-Object { $_.kind -eq 'prefer' }).Count -ge 1)
+    $promotedRows = @($mrows | ForEach-Object { $h=@{}; $_.PSObject.Properties | ForEach-Object { $h[$_.Name]=$_.Value }; $h['promoted']=$true; [pscustomobject]$h })
+    Check 'T18 promoted rows excluded' (@(Get-PromotionCandidates -Rows $promotedRows).Count -eq 0)
+    $single = @(Add-MemoryEvent -Problem 'one off thing' -Approach 'x' -Outcome fail -Path (Join-Path $tmpDir 'single.jsonl'))
+    Check 'T19 below threshold -> none' (@(Get-PromotionCandidates -Rows (Read-MemoryJournal -Path (Join-Path $tmpDir 'single.jsonl'))).Count -eq 0)
 }
 finally {
     if ($tmpDir -and (Test-Path $tmpDir)) { Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }

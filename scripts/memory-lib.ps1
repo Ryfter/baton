@@ -85,3 +85,61 @@ function Add-MemoryEvent {
     }
     return [pscustomobject]@{ id = $Id; signature = $sig }
 }
+
+function Find-MemoryMatches {
+    <# Rows whose stored signature token-overlaps the query signature at/above
+       -MinOverlap (shared / query-token count). Ranked overlap desc then recency
+       desc. Reads the journal when -Rows is not supplied. #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Query,
+        [double]$MinOverlap = 0.5,
+        [string]$Path = $script:DefaultMemoryPath,
+        [object[]]$Rows
+    )
+    $qtokens = @((Get-MemorySignature -Text $Query) -split '\s+' | Where-Object { $_ })
+    if ($qtokens.Count -eq 0) { return ([object[]]@()) }
+    if ($null -eq $Rows) { $Rows = Read-MemoryJournal -Path $Path }
+    $scored = foreach ($r in $Rows) {
+        $rtokens = @([string]$r.signature -split '\s+' | Where-Object { $_ })
+        if ($rtokens.Count -eq 0) { continue }
+        $shared  = @($qtokens | Where-Object { $rtokens -contains $_ }).Count
+        $overlap = [double]$shared / $qtokens.Count
+        if ($overlap -ge $MinOverlap) {
+            [pscustomobject]@{ row = $r; overlap = $overlap; ts = [string]$r.ts }
+        }
+    }
+    $ranked = @($scored) | Sort-Object -Property @{ e = { $_.overlap }; Descending = $true }, @{ e = { $_.ts }; Descending = $true }
+    $out = [object[]]@($ranked | ForEach-Object { $_.row })
+    if ($out.Count -eq 0) { return ([object[]]@()) }
+    return ,([object[]]$out)
+}
+
+function Get-PromotionCandidates {
+    <# Group non-promoted rows by signature; flag one whose fail-count >= FailThreshold
+       (governance: stop repeating a bad fix) or pass-count >= WinThreshold (crystallize
+       a winner). Returns one candidate per flagged signature. #>
+    param(
+        [int]$FailThreshold = 2,
+        [int]$WinThreshold = 2,
+        [string]$Path = $script:DefaultMemoryPath,
+        [object[]]$Rows
+    )
+    if ($null -eq $Rows) { $Rows = Read-MemoryJournal -Path $Path }
+    $active = @($Rows | Where-Object { $_.promoted -ne $true -and [string]$_.signature })
+    $out = [System.Collections.ArrayList]@()
+    foreach ($grp in ($active | Group-Object -Property signature)) {
+        $fails = @($grp.Group | Where-Object { [string]$_.outcome -eq 'fail' }).Count
+        $wins  = @($grp.Group | Where-Object { [string]$_.outcome -eq 'pass' }).Count
+        $reason = $null; $kind = $null
+        if ($fails -ge $FailThreshold)     { $reason = "failed ${fails}x";    $kind = 'avoid' }
+        elseif ($wins -ge $WinThreshold)   { $reason = "succeeded ${wins}x";  $kind = 'prefer' }
+        if ($reason) {
+            [void]$out.Add([pscustomobject]@{
+                signature = $grp.Name; reason = $reason; fail_count = $fails; win_count = $wins
+                kind = $kind; rows = @($grp.Group); problem = [string]($grp.Group[0].problem)
+            })
+        }
+    }
+    if ($out.Count -eq 0) { return ([object[]]@()) }
+    return ,([object[]]$out.ToArray())
+}
