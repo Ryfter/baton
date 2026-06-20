@@ -61,6 +61,25 @@ try {
     Check 'T18 promoted rows excluded' (@(Get-PromotionCandidates -Rows $promotedRows).Count -eq 0)
     $single = @(Add-MemoryEvent -Problem 'one off thing' -Approach 'x' -Outcome fail -Path (Join-Path $tmpDir 'single.jsonl'))
     Check 'T19 below threshold -> none' (@(Get-PromotionCandidates -Rows (Read-MemoryJournal -Path (Join-Path $tmpDir 'single.jsonl'))).Count -eq 0)
+
+    # ---- Task 3: formatting (pure) ----
+    $fmtMatches = @(
+        [pscustomobject]@{ approach='mock clock'; outcome='fail'; problem='auth test flaky'; refs=[pscustomobject]@{ job='j-0042' } },
+        [pscustomobject]@{ approach='raise timeout'; outcome='fail'; problem='auth test flaky'; refs=[pscustomobject]@{ job='j-0051' } }
+    )
+    $fmtCands = @([pscustomobject]@{ signature='auth flaky test'; reason='failed 2x'; kind='avoid' })
+    $report = Format-RecallReport -Query 'fix flaky auth test' -Matches $fmtMatches -Candidates $fmtCands
+    Check 'T20 report leads with failed count + lists match' ($report -match '2 prior attempt' -and $report -match '2 FAILED' -and $report -match 'mock clock')
+    Check 'T21 report includes promotion candidate line' ($report -match 'PROMOTION CANDIDATE' -and $report -match 'memory-promote')
+    $emptyReport = Format-RecallReport -Query 'brand new task' -Matches @() -Candidates @()
+    Check 'T22a empty report says no matches' ($emptyReport -match 'No prior memory')
+
+    $promoCand = [pscustomobject]@{ signature='auth flaky test'; reason='failed 2x'; kind='avoid'
+        problem='auth test is flaky'; rows=@(
+            [pscustomobject]@{ approach='mock clock'; outcome='fail' },
+            [pscustomobject]@{ approach='raise timeout'; outcome='fail' }) }
+    $memo = Format-PromotionMemo -Candidate $promoCand
+    Check 'T22b promotion memo renders AVOID + attempts' ($memo -match 'AVOID' -and $memo -match 'mock clock' -and $memo -match 'raise timeout')
 }
 finally {
     if ($tmpDir -and (Test-Path $tmpDir)) { Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }

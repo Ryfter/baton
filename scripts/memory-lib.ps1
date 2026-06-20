@@ -143,3 +143,55 @@ function Get-PromotionCandidates {
     if ($out.Count -eq 0) { return ([object[]]@()) }
     return ,([object[]]$out.ToArray())
 }
+
+function Format-RecallReport {
+    <# Human-readable recall warning: signature, prior matches (failed count first),
+       promotion candidates, and any semantic neighbors. Pure string builder. #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Query,
+        [object[]]$Matches = @(),
+        [object[]]$Candidates = @(),
+        [object[]]$SemanticCandidates = @()
+    )
+    $sig = Get-MemorySignature -Text $Query
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine("RECALL — signature: $sig")
+    $fails = @($Matches | Where-Object { [string]$_.outcome -eq 'fail' })
+    if (@($Matches).Count -eq 0) {
+        [void]$sb.AppendLine("No prior memory matches this task.")
+    } else {
+        [void]$sb.AppendLine("$(@($Matches).Count) prior attempt(s) on this signature — $(@($fails).Count) FAILED:")
+        foreach ($m in $Matches) {
+            $oc = ([string]$m.outcome).ToUpperInvariant()
+            $job = if ($m.refs -and $m.refs.job) { "  [$($m.refs.job)]" } else { '' }
+            [void]$sb.AppendLine("  • $($m.approach) — $oc ($($m.problem))$job")
+        }
+    }
+    foreach ($c in $Candidates) {
+        [void]$sb.AppendLine("PROMOTION CANDIDATE: signature '$($c.signature)' $($c.reason) — consider /baton:memory-promote")
+    }
+    if (@($SemanticCandidates).Count) {
+        [void]$sb.AppendLine("Related (semantic):")
+        foreach ($s in $SemanticCandidates) {
+            $txt = ("$($s.text)" -replace '\s+',' ').Trim()
+            [void]$sb.AppendLine("  ~ $($s.source): $txt")
+        }
+    }
+    return $sb.ToString().TrimEnd()
+}
+
+function Format-PromotionMemo {
+    <# A promotion candidate -> a Grimdex lesson/decision draft (AVOID or PREFER). #>
+    param([Parameter(Mandatory)][pscustomobject]$Candidate)
+    $verb = if ($Candidate.kind -eq 'avoid') { 'AVOID' } else { 'PREFER' }
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine("## Memory-promoted rule ($verb)")
+    [void]$sb.AppendLine("Signature: $($Candidate.signature)")
+    [void]$sb.AppendLine("Problem: $($Candidate.problem)")
+    [void]$sb.AppendLine("Basis: $($Candidate.reason)")
+    [void]$sb.AppendLine("Attempts:")
+    foreach ($r in @($Candidate.rows)) {
+        [void]$sb.AppendLine("  - $($r.approach) -> $($r.outcome)")
+    }
+    return $sb.ToString().TrimEnd()
+}
