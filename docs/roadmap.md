@@ -7,6 +7,12 @@ Tracked as GitHub issues on **[Project #5: baton](https://github.com/users/Ryfte
 
 ---
 
+## Active WIP Branches
+
+- **Dashboard/docs refresh:** `wip/dashboard-docs-refresh` (`origin/wip/dashboard-docs-refresh`, checkpoint `cc909d6`) preserves the unmerged v1.2.0 docs refresh, dashboard operator-console restyle, and hook/OTel test isolation tweaks. Recovery copies: `D:\tmp\baton-wip-2026-06-20.patch` and `stash@{0}: baton WIP snapshot 2026-06-20 before sprint 6`. Before merge, fix the command-reference mismatches for `/baton:recall`, `/baton:remember`, and `/baton:go`, then consolidate the duplicated/overridden CSS theme rules in `dashboard/static/style.css`. Verified so far: `python -m pytest dashboard -q` (124 passed), `scripts\test-hook.ps1`, and `scripts\test-otel-parser.ps1`.
+
+---
+
 ## Shipped (no further work planned)
 
 | # | Plan | What it ships | Tag |

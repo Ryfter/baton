@@ -2,6 +2,14 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
+## ⚑ Active WIP branch — dashboard/docs refresh (2026-06-20)
+
+The unmerged v1.2.0 docs refresh + dashboard operator-console restyle was preserved on branch `wip/dashboard-docs-refresh` (remote: `origin/wip/dashboard-docs-refresh`, checkpoint commit `cc909d6`). It is also recoverable from patch `D:\tmp\baton-wip-2026-06-20.patch` and stash `stash@{0}: baton WIP snapshot 2026-06-20 before sprint 6`.
+
+Scope on that branch: v1.2.0 docs refresh (`README.md`, `docs/COMMANDS.md`, `docs/DECISIONS.md`, `docs/getting-started.md`, `docs/roadmap.md`, this file, AGENTS/GEMINI status text), dashboard template/CSS restyle, and state-path isolation hardening in `scripts/test-hook.ps1` / `scripts/test-otel-parser.ps1`.
+
+Review status: affected tests passed before the branch commit (`python -m pytest dashboard -q` = 124 passed; `pwsh -NoProfile -File scripts\test-hook.ps1` passed; `pwsh -NoProfile -File scripts\test-otel-parser.ps1` passed). Do not merge that branch as-is. Must-fix items: `docs/COMMANDS.md` documents `/baton:recall "<task>"` but the command requires `-Text` or `-File`; it documents `/baton:remember ... --note` but the runner exposes `-Tags`/`-RefJob` and no `Note`; it documents `/baton:go ... --json` even though the slash wrapper advertises `--budget`/`--max-tier` and uses JSON internally. Also consolidate `dashboard/static/style.css`: it contains an earlier cinematic/glow theme later overridden by the "Baton operator console pass".
+
 ## ⚑ Baton v2 direction — 2026-06-16 (read FIRST)
 
 **Strategic pivot (2026-06-15, ChatGPT brainstorm + design pass):** Baton v2 = **economic conductor for AI software development** — "spend intelligence like money." Research before building, estimate before spending, route to the cheapest capable worker, reach *acceptable* quality cheaply, spend premium intelligence on *polish/judgment*, track usage limits, distill lessons into memory. Crisp **"What Baton Is Not"** list (not an IDE / harness / memory DB / benchmark suite / project manager / dashboard) guards scope. **v2 EXTENDS v1, not a rebuild** (d046): fleet.yaml→Worker Registry, capability routing→Worker Router, cost cascade→Economic Policy + Acceptable/Polished gates, usage_class→Usage Governor seed. **Memory Adapter is Projectmem-style, not a hard dep** (d047). 7-sprint MVP order: Triage → Usage Governor → GitHub Projects sync → Research Gate → Memory Bridge → Worker Adapter → Acceptance/Polish gates. Full brief + clarifications in memory `project_baton_v2_direction` (d045-d047).
