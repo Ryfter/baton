@@ -128,6 +128,30 @@ try {
     $faultWriter = { param($memo,$c) throw 'grimdex unavailable' }
     $resWf = Invoke-MemoryPromote -Candidate $candWf -Path $wf -Writer $faultWriter
     Check 'T29 writer fault -> promoted false, rows not stamped' ($resWf.promoted -eq $false -and @(Read-MemoryJournal -Path $wf | Where-Object { $_.promoted -eq $true }).Count -eq 0)
+
+    # ---- Task 6: CLI (child process; zero network/model) ----
+    $cli = Join-Path $PSScriptRoot 'fleet-memory.ps1'
+    $cliHome = Join-Path $tmpDir 'clihome'
+    New-Item -ItemType Directory -Force -Path $cliHome | Out-Null
+    $env:BATON_HOME = $cliHome
+    $env:BATON_MEM_LESSONS = (Join-Path $tmpDir 'cli-lessons.md')   # redirect promotion writer off the real KB
+
+    & pwsh -NoProfile -File $cli remember -Problem 'auth test is flaky in ci' -Approach 'mock clock' -Outcome fail 2>&1 | Out-Null
+    & pwsh -NoProfile -File $cli remember -Problem 'auth test is flaky in ci' -Approach 'raise timeout' -Outcome fail 2>&1 | Out-Null
+    Check 'T30 CLI remember round-trips into journal' (@(Read-MemoryJournal -Path (Join-Path $cliHome 'memory-journal.jsonl')).Count -eq 2)
+
+    $recallOut = & pwsh -NoProfile -File $cli recall -Text 'fix the flaky auth test' 2>&1 | Out-String
+    Check 'T31 CLI recall prints warning + failed count' ($recallOut -match 'RECALL' -and $recallOut -match 'FAILED')
+
+    $listOut = & pwsh -NoProfile -File $cli promote 2>&1 | Out-String
+    Check 'T32 CLI promote (no target) lists candidates' ($listOut -match 'Promotion candidates' -and $listOut -match 'avoid')
+
+    $sig = (Get-PromotionCandidates -Path (Join-Path $cliHome 'memory-journal.jsonl'))[0].signature
+    & pwsh -NoProfile -File $cli promote $sig 2>&1 | Out-Null
+    $stamped = @(Read-MemoryJournal -Path (Join-Path $cliHome 'memory-journal.jsonl') | Where-Object { $_.promoted -eq $true }).Count
+    Check 'T33 CLI promote <signature> writes lessons + stamps rows' ((Test-Path $env:BATON_MEM_LESSONS) -and $stamped -eq 2)
+
+    Remove-Item Env:\BATON_HOME, Env:\BATON_MEM_LESSONS -ErrorAction SilentlyContinue
 }
 finally {
     if ($tmpDir -and (Test-Path $tmpDir)) { Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }

@@ -49,6 +49,8 @@ Assert "deploys research-gate-lib script"   ($out -match 'research-gate-lib\.ps1
 Assert "deploys fleet-research-gate script" ($out -match 'fleet-research-gate\.ps1')
 Assert "deploys conductor-lib script" ($out -match 'conductor-lib\.ps1')
 Assert "deploys fleet-go script"      ($out -match 'fleet-go\.ps1')
+Assert "deploys memory-lib script"   ($out -match 'memory-lib\.ps1')
+Assert "deploys fleet-memory script" ($out -match 'fleet-memory\.ps1')
 Assert "would deploy lm-studio-small.ps1" ($out -match 'lm-studio-small\.ps1')
 Assert "would seed prime-hours.yaml"    ($out -match 'prime-hours\.yaml')
 Assert "does not exit non-zero"          ($LASTEXITCODE -eq 0 -or $out -match 'Bootstrap complete')
