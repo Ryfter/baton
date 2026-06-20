@@ -96,6 +96,38 @@ try {
     $throwSearcher = { param($q) throw 'kb index down' }
     $recErr = Invoke-MemoryRecall -Task 'auth test is flaky in ci' -Path $rp -Deep -Searcher $throwSearcher
     Check 'T25 searcher throw degrades to empty (no throw)' (@($recErr.semantic).Count -eq 0 -and @($recErr.matches).Count -eq 2)
+
+    # ---- Task 5: capture source + promotion (seamed -Writer) ----
+    $sp = Join-Path $tmpDir 'source-journal.jsonl'
+    $ids = Invoke-MemorySource -Source manual -Fields @{ problem='db migration failed'; approach='down then up'; outcome='fail'; tags=@('db') } -Path $sp
+    Check 'T26 source appends a manual row + returns id' (@($ids).Count -eq 1 -and $ids[0] -like 'mem-*' -and @(Read-MemoryJournal -Path $sp).Count -eq 1)
+
+    $pp = Join-Path $tmpDir 'promote-journal.jsonl'
+    [void](Add-MemoryEvent -Problem 'auth test is flaky in ci' -Approach 'mock clock' -Outcome fail -Path $pp)
+    [void](Add-MemoryEvent -Problem 'auth test is flaky in ci' -Approach 'raise timeout' -Outcome fail -Path $pp)
+    $cand = (Get-PromotionCandidates -Rows (Read-MemoryJournal -Path $pp))[0]
+    $script:writeCalls = 0
+    $stubWriter = { param($memo,$c) $script:writeCalls++; "stub-target" }
+    $res = Invoke-MemoryPromote -Candidate $cand -Path $pp -Writer $stubWriter
+    Check 'T27 promote (watch) calls writer + stamps rows' ($res.promoted -eq $true -and $script:writeCalls -eq 1 -and @(Read-MemoryJournal -Path $pp | Where-Object { $_.promoted -eq $true }).Count -eq 2)
+
+    $fp = Join-Path $tmpDir 'flag-journal.jsonl'
+    $fr1 = Add-MemoryEvent -Problem 'cache invalidation bug' -Approach 'ttl bump' -Outcome fail -Path $fp
+    $script:writeCalls2 = 0
+    $stubWriter2 = { param($memo,$c) $script:writeCalls2++; "t2" }
+    $resFlag = Invoke-MemoryPromote -Id $fr1.id -Path $fp -Writer $stubWriter2
+    Check 'T28 promote (flag by id) calls writer + stamps' ($resFlag.promoted -eq $true -and $script:writeCalls2 -eq 1 -and @(Read-MemoryJournal -Path $fp | Where-Object { $_.promoted -eq $true }).Count -eq 1)
+    $threw = $false
+    try { Invoke-MemoryPromote -Id 'mem-nope-0000' -Path $fp -Writer $stubWriter2 } catch { $threw = $true }
+    Check 'T28b unknown id throws' ($threw)
+
+    $wf = Join-Path $tmpDir 'writefault-journal.jsonl'
+    [void](Add-MemoryEvent -Problem 'x problem here' -Approach 'a' -Outcome fail -Path $wf)
+    [void](Add-MemoryEvent -Problem 'x problem here' -Approach 'b' -Outcome fail -Path $wf)
+    $candWf = (Get-PromotionCandidates -Rows (Read-MemoryJournal -Path $wf))[0]
+    $faultWriter = { param($memo,$c) throw 'grimdex unavailable' }
+    $resWf = Invoke-MemoryPromote -Candidate $candWf -Path $wf -Writer $faultWriter
+    Check 'T29 writer fault -> promoted false, rows not stamped' ($resWf.promoted -eq $false -and @(Read-MemoryJournal -Path $wf | Where-Object { $_.promoted -eq $true }).Count -eq 0)
 }
 finally {
     if ($tmpDir -and (Test-Path $tmpDir)) { Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }

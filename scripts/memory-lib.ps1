@@ -233,3 +233,102 @@ function Invoke-MemoryRecall {
         semantic   = @($semantic)
     }
 }
+
+function Invoke-MemorySource {
+    <# Pluggable capture adapter. -Source names the producer (v1 ships 'manual').
+       A -Producer scriptblock returns one or more field-hashtables; the default
+       treats -Fields as a single manual row. Appends via Add-MemoryEvent; returns
+       the appended ids. The seam future Conductor-ledger ingest plugs into. #>
+    param(
+        [string]$Source = 'manual',
+        [hashtable]$Fields = @{},
+        [string]$Path = $script:DefaultMemoryPath,
+        [scriptblock]$Producer
+    )
+    $records = if ($Producer) { @(& $Producer $Fields) } else { ,$Fields }
+    $ids = foreach ($r in $records) {
+        $oc = if ($r['outcome']) { [string]$r['outcome'] } else { 'unknown' }
+        $sc = if ($r['scope'])   { [string]$r['scope'] }   else { 'project' }
+        $refs = @{}; if ($r['job']) { $refs['job'] = $r['job'] }
+        $res = Add-MemoryEvent -Problem ([string]$r['problem']) -Approach ([string]$r['approach']) `
+            -Outcome $oc -Tags @($r['tags']) -Scope $sc -Source $Source -Refs $refs -Path $Path
+        $res.id
+    }
+    if (-not $ids) { return ([string[]]@()) }
+    return ,([string[]]$ids)
+}
+
+function Set-MemoryPromoted {
+    <# Idempotent journal rewrite: stamp every row with -Signature as promoted=true.
+       Best-effort; warns on fault. #>
+    param([Parameter(Mandatory)][string]$Signature, [string]$Path = $script:DefaultMemoryPath)
+    if (-not (Test-Path $Path)) { return }
+    try {
+        $rows = Read-MemoryJournal -Path $Path
+        $lines = foreach ($r in $rows) {
+            $h = @{}; foreach ($p in $r.PSObject.Properties) { $h[$p.Name] = $p.Value }
+            if ([string]$r.signature -eq $Signature) { $h['promoted'] = $true }
+            ($h | ConvertTo-Json -Depth 6 -Compress)
+        }
+        Set-Content -LiteralPath $Path -Value $lines -Encoding utf8
+    } catch { Write-Warning "memory: failed to stamp promoted in $Path : $($_.Exception.Message)" }
+}
+
+function Write-PromotionToGrimdex {
+    <# Default promotion writer: append the memo to the box-private Grimdex/KB lessons
+       file. Override via the -Writer seam (tests do). Returns the path written. #>
+    param(
+        [Parameter(Mandatory)][string]$Memo,
+        [pscustomobject]$Candidate,
+        [string]$LessonsPath = $script:DefaultLessonsPath
+    )
+    $dir = Split-Path -Parent $LessonsPath
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    Add-Content -LiteralPath $LessonsPath -Value ("`n" + $Memo + "`n") -Encoding utf8
+    return $LessonsPath
+}
+
+function Invoke-MemoryPromote {
+    <# Crystallize a candidate into a Grimdex write, then stamp its source rows
+       promoted. Two nomination paths: watch (-Candidate) or flag (-Id / -Signature).
+       The -Writer seam performs the write (default = Write-PromotionToGrimdex).
+       On writer fault: promoted=$false and rows are left un-stamped (re-surfaces).
+       Unknown id/signature throws. #>
+    param(
+        [pscustomobject]$Candidate,
+        [string]$Id,
+        [string]$Signature,
+        [int]$FailThreshold = 2,
+        [int]$WinThreshold = 2,
+        [string]$Path = $script:DefaultMemoryPath,
+        [scriptblock]$Writer = { param($memo,$cand) Write-PromotionToGrimdex -Memo $memo -Candidate $cand }
+    )
+    if (-not $Candidate) {
+        $rows = Read-MemoryJournal -Path $Path
+        $sig = $Signature
+        if ($Id) {
+            $hit = @($rows | Where-Object { [string]$_.id -eq $Id }) | Select-Object -First 1
+            if (-not $hit) { throw "no memory with id '$Id'" }
+            $sig = [string]$hit.signature
+        }
+        if (-not $sig) { throw "promote requires -Candidate, -Id, or -Signature" }
+        $grp = @($rows | Where-Object { [string]$_.signature -eq $sig })
+        if ($grp.Count -eq 0) { throw "no memory with signature '$sig'" }
+        $fails = @($grp | Where-Object { [string]$_.outcome -eq 'fail' }).Count
+        $wins  = @($grp | Where-Object { [string]$_.outcome -eq 'pass' }).Count
+        $Candidate = [pscustomobject]@{
+            signature = $sig; reason = "flagged (fail ${fails}, pass ${wins})"
+            fail_count = $fails; win_count = $wins
+            kind = if ($fails -ge $wins) { 'avoid' } else { 'prefer' }
+            rows = $grp; problem = [string]$grp[0].problem
+        }
+    }
+    $memo = Format-PromotionMemo -Candidate $Candidate
+    try { $written = & $Writer $memo $Candidate }
+    catch {
+        Write-Warning "memory: promotion write failed: $($_.Exception.Message)"
+        return @{ promoted = $false; signature = $Candidate.signature; written = $null }
+    }
+    Set-MemoryPromoted -Signature $Candidate.signature -Path $Path
+    return @{ promoted = $true; signature = $Candidate.signature; written = $written }
+}
