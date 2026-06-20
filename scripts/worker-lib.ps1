@@ -44,3 +44,41 @@ function Test-WorkerApiHit {
     if ($LimitState -and $LimitState.state -ne 'available') { return $true }
     return ($ExitCode -eq 0)
 }
+
+# Adapter dispatch table: adapter name -> rate-limit parser. A future external
+# worker adds one entry here; the query core does not change.
+$script:WorkerAdapters = @{
+    'github-models' = { param($wOut, $wExit) Get-RateLimitState -Output $wOut -ExitCode $wExit }
+}
+
+function Test-WorkerAdapter {
+    <# The provider's adapter name (string) or $null if unmetered / null provider. #>
+    param([object]$Provider)
+    if ($null -eq $Provider) { return $null }
+    $a = [string]$Provider.adapter
+    if ([string]::IsNullOrWhiteSpace($a)) { return $null }
+    return $a
+}
+
+function Get-AdapterParser {
+    <# The rate-limit parser scriptblock for an adapter name, or $null if unknown. #>
+    param([string]$Adapter)
+    if (-not $Adapter) { return $null }
+    if ($script:WorkerAdapters.ContainsKey($Adapter)) { return $script:WorkerAdapters[$Adapter] }
+    return $null
+}
+
+function Format-WorkerReport {
+    <# Plain-English legibility summary of a dispatch result. #>
+    param([hashtable]$Result)
+    $lines = @("worker:   $($Result.name)")
+    if ($Result.model)   { $lines += "model:    $($Result.model)" }
+    $lines += "metered:  $($Result.metered)"
+    if ($Result.metered) {
+        $lines += "tick:     $($Result.tick) request(s)"
+        $eta = if ($Result.until) { " (until $($Result.until))" } else { '' }
+        $lines += "state:    $($Result.state)$eta"
+    }
+    if ($Result.exit -ne 0) { $lines += "exit:     $($Result.exit) (dispatch error)" }
+    return ($lines -join "`n")
+}
