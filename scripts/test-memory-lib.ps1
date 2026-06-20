@@ -80,6 +80,22 @@ try {
             [pscustomobject]@{ approach='raise timeout'; outcome='fail' }) }
     $memo = Format-PromotionMemo -Candidate $promoCand
     Check 'T22b promotion memo renders AVOID + attempts' ($memo -match 'AVOID' -and $memo -match 'mock clock' -and $memo -match 'raise timeout')
+
+    # ---- Task 4: seamed recall ----
+    $rp = Join-Path $tmpDir 'recall-journal.jsonl'
+    [void](Add-MemoryEvent -Problem 'auth test is flaky in ci' -Approach 'mock clock' -Outcome fail -Path $rp)
+    [void](Add-MemoryEvent -Problem 'auth test is flaky in ci' -Approach 'raise timeout' -Outcome fail -Path $rp)
+    $script:semCalls = 0
+    $stubSearcher = { param($q) $script:semCalls++; @([pscustomobject]@{ source='kb'; text='prior auth note' }) }
+
+    $rec = Invoke-MemoryRecall -Task 'auth test is flaky in ci' -Path $rp -Searcher $stubSearcher
+    Check 'T23 offline recall: matches found, zero searcher calls' (@($rec.matches).Count -eq 2 -and $rec.semantic.Count -eq 0 -and $script:semCalls -eq 0)
+    Check 'T23b touched candidate surfaced' (@($rec.candidates | Where-Object { $_.kind -eq 'avoid' }).Count -ge 1)
+    $recDeep = Invoke-MemoryRecall -Task 'auth test is flaky in ci' -Path $rp -Deep -Searcher $stubSearcher
+    Check 'T24 deep recall invokes searcher + appends semantic' ($recDeep.semantic.Count -eq 1 -and $script:semCalls -eq 1)
+    $throwSearcher = { param($q) throw 'kb index down' }
+    $recErr = Invoke-MemoryRecall -Task 'auth test is flaky in ci' -Path $rp -Deep -Searcher $throwSearcher
+    Check 'T25 searcher throw degrades to empty (no throw)' (@($recErr.semantic).Count -eq 0 -and @($recErr.matches).Count -eq 2)
 }
 finally {
     if ($tmpDir -and (Test-Path $tmpDir)) { Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }

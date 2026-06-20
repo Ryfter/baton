@@ -195,3 +195,41 @@ function Format-PromotionMemo {
     }
     return $sb.ToString().TrimEnd()
 }
+
+function Invoke-RealMemorySearch {
+    <# Default semantic searcher for -Deep: reuse the KB embedding index. Best-effort
+       and box-private — returns @() if the index is absent or kb-search errors. #>
+    param([Parameter(Mandatory)][string]$Query)
+    try { return @(Invoke-KbSearch -Query $Query -K 3 -SnippetChars 400) } catch { return @() }
+}
+
+function Invoke-MemoryRecall {
+    <# Pre-action recall: deterministic signature matches always; -Deep additionally
+       pulls KB semantic neighbors via the -Searcher seam (offline makes ZERO searcher
+       calls). Surfaces only promotion candidates whose signature appears in the
+       matches. Returns @{ signature; matches; candidates; semantic }. #>
+    param(
+        [Parameter(Mandatory)][string]$Task,
+        [double]$MinOverlap = 0.5,
+        [int]$FailThreshold = 2,
+        [int]$WinThreshold = 2,
+        [switch]$Deep,
+        [string]$Path = $script:DefaultMemoryPath,
+        [scriptblock]$Searcher = { param($q) Invoke-RealMemorySearch -Query $q }
+    )
+    $rows    = Read-MemoryJournal -Path $Path
+    $matches = Find-MemoryMatches -Query $Task -MinOverlap $MinOverlap -Rows $rows
+    $cands   = Get-PromotionCandidates -FailThreshold $FailThreshold -WinThreshold $WinThreshold -Rows $rows
+    $msigs   = @($matches | ForEach-Object { [string]$_.signature } | Sort-Object -Unique)
+    $touched = @($cands | Where-Object { $msigs -contains $_.signature })
+    $semantic = @()
+    if ($Deep) {
+        try { $semantic = @(& $Searcher $Task) } catch { $semantic = @() }
+    }
+    return @{
+        signature  = (Get-MemorySignature -Text $Task)
+        matches    = @($matches)
+        candidates = @($touched)
+        semantic   = @($semantic)
+    }
+}
