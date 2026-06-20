@@ -1,7 +1,7 @@
 {# Fleet cockpit styles live in static/style.css (consolidated, no inline <style>). #}
 {% set f = fleet | default(None) %}
 <div class="fleet-cockpit">
-  <h2>🚀 Fleet Activity <span class="fleet-muted">— live, every model running concurrently</span></h2>
+  <h2>Fleet Activity <span class="fleet-muted">Live multi-model execution</span></h2>
 
   {% if f is none %}
     <p class="fleet-muted">loading…</p>
@@ -12,7 +12,7 @@
           <div class="fleet-run-head">
             <span class="fleet-kind">{{ run.kind }}</span>
             <span class="fleet-muted">{{ run.run_id }}</span>
-            <span class="fleet-muted">⏱ {{ run.elapsed_s }}s</span>
+            <span class="fleet-muted">{{ run.elapsed_s }}s elapsed</span>
             <span class="fleet-muted">{{ run.counts.running }} running · {{ run.counts.done }} done{% if run.counts.error %} · {{ run.counts.error }} err{% endif %}</span>
           </div>
           {% if run.prompt %}<div class="fleet-prompt">{{ run.prompt }}</div>{% endif %}
@@ -40,14 +40,14 @@
           {% endif %}
           {% if run.synthesis %}
             <details class="fleet-synth" open>
-              <summary>🧬 Synthesis preview</summary>
+              <summary>Synthesis preview</summary>
               <pre>{{ run.synthesis }}{% if run.synthesis_truncated %}<span class="fleet-trunc"> … (truncated)</span>{% endif %}</pre>
             </details>
           {% endif %}
         </div>
       {% endfor %}
     {% else %}
-      <p class="fleet-muted">No fleet runs in flight. Dispatch <code>/ensemble</code>, <code>/six-hats</code>, <code>/council</code>, or a fleet task batch and every model lights up here at once.</p>
+      <p class="fleet-muted">No fleet runs in flight.</p>
     {% endif %}
 
     {% if f.recent %}
@@ -61,7 +61,7 @@
         </div>
         {% if run.synthesis %}
           <details class="fleet-synth">
-            <summary>🧬 {{ run.run_id }} synthesis</summary>
+            <summary>{{ run.run_id }} synthesis</summary>
             <pre>{{ run.synthesis }}{% if run.synthesis_truncated %}<span class="fleet-trunc"> … (truncated)</span>{% endif %}</pre>
           </details>
         {% endif %}

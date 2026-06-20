@@ -8,7 +8,7 @@
   <tbody>
     {% for j in active_jobs %}
     <tr>
-      <td><a href="/jobs/{{ j.id }}" class="job-link">🟢 {{ j.id }}</a></td>
+      <td><a href="/jobs/{{ j.id }}" class="job-link"><span class="status-dot status-running-dot"></span>{{ j.id }}</a></td>
       <td><code>{{ j.current_phase }}</code></td>
       <td>{{ j.project or '—' }}</td>
       <td class="cost">${{ '%.4f' | format(j.cost_usd) }}</td>
@@ -19,7 +19,7 @@
 </table>
 </div>
 {% else %}
-<p class="empty">No active jobs. Use <code>/job-start</code> in Claude Code to begin.</p>
+<p class="empty">No active jobs. Use <code>/baton:job-start</code> in Claude Code to begin.</p>
 {% endif %}
 
 {% if done_jobs %}
@@ -29,7 +29,7 @@
   <tbody>
     {% for j in done_jobs %}
     <tr>
-      <td><a href="/jobs/{{ j.id }}" class="job-link">⚫ {{ j.id }}</a></td>
+      <td><a href="/jobs/{{ j.id }}" class="job-link"><span class="status-dot status-done-dot"></span>{{ j.id }}</a></td>
       <td><code>{{ j.current_phase }}</code></td>
       <td>{{ j.project or '—' }}</td>
       <td class="cost">${{ '%.4f' | format(j.cost_usd) }}</td>

@@ -21,7 +21,7 @@
 
   {% if detail.record.status == 'needs-you' and detail.record.parked_question %}
   <div class="needs-you">
-    <p class="question">⏳ Needs you: {{ detail.record.parked_question }}</p>
+    <p class="question">Needs you: {{ detail.record.parked_question }}</p>
     <form hx-post="/runs/{{ detail.record.id }}/answer" hx-target="#run-detail">
       <input type="text" name="answer" placeholder="Your answer…" autocomplete="off">
       <button type="submit">Answer &amp; un-block</button>

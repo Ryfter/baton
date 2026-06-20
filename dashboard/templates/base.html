@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}Routing Dashboard{% endblock %}</title>
-  <!-- Inline emoji favicon — avoids a 404 with zero network/asset cost. -->
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐙</text></svg>">
+  <title>{% block title %}Baton Routing Dashboard{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='16' fill='%230b1220'/><path d='M24 52h52M58 34l18 18-18 18' fill='none' stroke='%2338bdf8' stroke-width='10' stroke-linecap='round' stroke-linejoin='round'/></svg>">
   <!-- Vendored locally so the dashboard runs fully offline (no CDN / Google Fonts). -->
   <script src="/static/vendor/htmx.min.js"></script>
   <script src="/static/vendor/chart.umd.min.js"></script>
@@ -13,7 +12,7 @@
 </head>
 <body>
   <header>
-    <h1><a href="/" style="text-decoration:none;color:inherit;">🐙 Routing Dashboard</a></h1>
+    <h1><a href="/">Baton</a></h1>
     <nav class="topnav">
       <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Home</a>
       <a href="/projects" class="{% if request.url.path.startswith('/projects') %}active{% endif %}">Portfolio</a>

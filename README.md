@@ -9,8 +9,9 @@ you decided, and what you learned. Built on
 [claude-octopus](https://github.com/nyldn/claude-octopus) as the dispatch layer
 (recommended companion plugin, not a hard dependency).
 
-**Status:** `v1.2.0-rc.6` — *the Fleet Conductor release* (capability routing, cost-optimization,
-Grimdex, plugin packaging + MCP server). **MIT licensed.** An early/experimental personal project, shared in the hope it's
+**Status:** `v1.2.0` — *the Conductor + Memory Bridge stable release* (capability routing,
+cost optimization, `/baton:go`, usage governance, research gate, GitHub Projects sync,
+dev memory, Grimdex, plugin packaging + MCP server). **MIT licensed.** An early/experimental personal project, shared in the hope it's
 useful — not a turnkey product.
 
 ### 📖 New here? Read these
@@ -83,6 +84,18 @@ Each feature has a one-line "what it does"; the link goes to its full design spe
 
 ### New in v1.2.0 — the Fleet Conductor release
 
+- **Conductor front door** — `/baton:go "<goal>"` plans a task DAG, executes it through the
+  governed fleet, logs budget/destructive interrupts, and writes a run report under
+  `$BATON_HOME/runs/`.
+- **Memory Bridge** — `/baton:remember`, `/baton:recall`, and `/baton:memory-promote` keep a
+  local problem/attempt/outcome journal and surface prior failed or winning approaches before
+  you spend again.
+- **Triage + GitHub Projects sync** — `/baton:triage` classifies tasks and `/baton:projects`
+  can dry-run or apply labels and Project v2 fields, with dry-run as the default.
+- **Usage Governor** — `/baton:usage` records worker lockouts, limits, cooldowns, conserve mode,
+  ticks, and forecasts so routing can avoid exhausted workers.
+- **Research Gate** — `/baton:research-gate` returns a build/adopt/adapt/inconclusive verdict
+  from local registry evidence, prior research, KB hits, and optional deep search.
 - **Capability-routing optimizer** — an explainable, cheapest-tier-first auto-router over your
   models + tools: it picks the *optimal* (not most-powerful) capability, dispatches, verifies,
   and escalates up the cost ladder on failure — then **learns** which model/tool wins each

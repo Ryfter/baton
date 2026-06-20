@@ -3,7 +3,7 @@
   <a class="run-card status-{{ r.status }}" href="/runs/{{ r.id }}"
      hx-get="/partials/runs/{{ r.id }}" hx-target="#run-detail">
     <div class="run-name">{{ r.name }}
-      {% if r.status == 'needs-you' %}⏳{% elif r.status == 'running' %}🟢{% elif r.status == 'idle' %}💤{% elif r.status == 'done' %}✓{% elif r.status == 'failed' %}✗{% endif %}
+      <span class="status-dot" aria-label="{{ r.status }}"></span>
     </div>
     <div class="run-meta">{{ r.model }}{% if r.tree %} · {{ r.tree }}{% endif %}</div>
     <div class="run-meta">

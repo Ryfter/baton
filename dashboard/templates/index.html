@@ -2,7 +2,7 @@
 {% block content %}
 
 <!-- Fleet Activity cockpit (Plan 10) — polls every 2s so concurrent runs animate live -->
-<div class="card fleet-cockpit-card" style="grid-column: 1 / -1;"
+<div class="card fleet-cockpit-card full-span"
      hx-get="/partials/fleet"
      hx-trigger="load, every 2s"
      hx-swap="innerHTML">
@@ -10,20 +10,20 @@
 </div>
 
 <!-- Per-agent assignment board (legibility feed, polls every 5s) -->
-<section class="assignments-section" style="grid-column: 1 / -1;">
+<section class="assignments-section full-span">
   <h2>Fleet assignments</h2>
   <div id="assignments" hx-get="/partials/assignments" hx-trigger="load, every 5s"></div>
 </section>
 
 <!-- Runs gutter + detail (legibility feed, polls every 5s) -->
-<section class="runs-section">
+<section class="runs-section full-span">
   <h2>Runs</h2>
   <div id="runs-gutter" hx-get="/partials/runs" hx-trigger="load, every 5s"></div>
   <div id="run-detail"><p class="muted">Select a run to see what it's doing.</p></div>
 </section>
 
 <!-- Portfolio panel — polls every 60s -->
-<div class="card" style="grid-column: 1 / -1;"
+<div class="card full-span"
      hx-get="/partials/projects"
      hx-trigger="every 60s"
      hx-swap="innerHTML">

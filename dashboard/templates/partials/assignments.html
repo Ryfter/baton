@@ -4,7 +4,7 @@
 
 {% if parked_runs %}
 <div class="assign-parked-lane">
-  <h3>⏸ Parked — waiting on you</h3>
+  <h3>Parked — waiting on you</h3>
   {% for r in parked_runs %}
   <div class="assign-parked-item">
     <span class="assign-model">{{ r.model }}</span>
@@ -26,7 +26,7 @@
     {% if lane.active %}
       {% for r in lane.active %}
       <div class="assign-active" hx-get="/partials/runs/{{ r.id }}" hx-target="#run-detail" hx-swap="innerHTML" style="cursor:pointer">
-        ▶ {{ r.name }}{% if r.current_step %} — {{ r.current_step }}{% endif %}
+        {{ r.name }}{% if r.current_step %} — {{ r.current_step }}{% endif %}
       </div>
       {% endfor %}
     {% else %}

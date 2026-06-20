@@ -39,6 +39,59 @@ knowledge base mixed into their prompt before they answer.
 
 ---
 
+# Conductor, triage, governance, and memory
+
+These are the v1.2 front-door commands: plan work, classify it, prevent waste, route
+around exhausted workers, and remember what happened.
+
+### /baton:go
+- **One-liner:** Natural-language plan-then-execute front door for Baton.
+- **When you'd use it:** You want Baton to turn a goal into a task DAG and run the governed fleet until the run completes or hits a guard.
+- **Syntax:** `/baton:go "<goal>" [--budget <usd>] [--json]`
+- **Under the hood:** Writes `plan.json`, `events.jsonl`, `decisions.jsonl`, and `report.md` under `$BATON_HOME/runs/go-<timestamp>/`.
+- **Gotchas:** It pauses only for a budget cap or a destructive `reversible:false` task; ambiguity is logged as an autonomous guess.
+
+### /baton:triage
+- **One-liner:** Classifies any task or issue into type, priority, estimate, risk, route, and confidence.
+- **Syntax:** `/baton:triage [--url <github-issue-url> | --file <path>] [--json] [<text>]`
+- **Under the hood:** Routes through the fleet with a cheap Haiku-first preference and Sonnet escalation for low confidence or high risk.
+- **Gotchas:** If classification fails, it emits a deterministic fallback instead of inventing a confident answer.
+
+### /baton:usage
+- **One-liner:** Records and reports worker availability so routing avoids exhausted models.
+- **Syntax:** `/baton:usage status|lockout|limit|cooldown|clear|conserve|tick|forecast [...] [--json]`
+- **Under the hood:** Appends events to `$BATON_HOME/usage-journal.jsonl`; routing folds those events into availability.
+- **Gotchas:** Shared seed config does not include private budgets; add those only to your live `$BATON_HOME/fleet.yaml`.
+
+### /baton:projects
+- **One-liner:** Syncs GitHub issues to labels and Project v2 fields using Baton triage.
+- **Syntax:** `/baton:projects init --owner @me [--repo OWNER/REPO] [--title "<name>"]` or `/baton:projects sync --owner @me --project N [--repo OWNER/REPO] [--apply|--reclassify|--classify|--json]`
+- **Under the hood:** Dry-run by default. `sync --apply` writes labels and project fields through `gh`.
+- **Gotchas:** `init` creates/ensures structure explicitly; `sync` never creates a project by accident.
+
+### /baton:research-gate
+- **One-liner:** Decides build/adopt/adapt/inconclusive before you start non-trivial work.
+- **Syntax:** `/baton:research-gate --text "<task>" | --url <issue-url> | --file <path> [--deep] [--json] [--out <path>]`
+- **Under the hood:** Uses local tool-registry evidence, prior research synthesis, KB hits, and optional deep search, then routes a cheap governed model to decide.
+- **Gotchas:** Default mode is offline and zero-network; `--deep` is the explicit live-evidence path.
+
+### /baton:remember
+- **One-liner:** Captures a problem, attempted approach, and outcome into local dev memory.
+- **Syntax:** `/baton:remember --problem "<p>" --approach "<a>" --outcome pass|fail|partial|unknown [--scope project|universal] [--note "<n>"]`
+- **Where results land:** `$BATON_HOME/memory-journal.jsonl`.
+
+### /baton:recall
+- **One-liner:** Checks whether a new task matches prior attempts before you spend.
+- **Syntax:** `/baton:recall "<task>" [--deep] [--json]`
+- **Gotchas:** Deterministic signature matching is the default; `--deep` adds advisory semantic KB recall.
+
+### /baton:memory-promote
+- **One-liner:** Promotes repeated wins or failures into durable guidance.
+- **Syntax:** `/baton:memory-promote [<id|signature>] [--json]`
+- **Gotchas:** Without a target it lists promotion candidates; with a target it writes through the promotion writer and marks source rows promoted.
+
+---
+
 # Jobs — track a piece of work start to finish
 
 A **job** is a tracked unit of work (a feature, a bug, an investigation). It has
@@ -258,6 +311,34 @@ the repo → `/baton:code-merge` reviews the results and folds them back into th
 
 ---
 
+# Routing, ideas, and local tool inventory
+
+### /baton:route
+- **One-liner:** Shows or runs the cheapest capable model/tool for a capability.
+- **Syntax:** `/baton:route <capability> [--run "<prompt>"] [--max-tier local|free|paid] [--local] [--judge] [--rate good|bad "<note>"] [--calibrate ...]`
+- **Under the hood:** Reads `$BATON_HOME/tools.yaml`, `$BATON_HOME/fleet.yaml`, routing ratings, usage state, and prime-hours policy.
+- **Gotchas:** Cost tier dominates quality by design; learning affects ordering within a tier.
+
+### /baton:idea
+- **One-liner:** Turns a raw idea into a concept doc and board-ready GitHub issues.
+- **Syntax:** `/baton:idea "<raw idea>"`
+- **Under the hood:** Stitches KB prefetch, research, council viability, concept generation, and `gh issue create`.
+- **Gotchas:** The command has one human gate at concept-doc approval; dispatching the created issues is a separate act.
+
+### /baton:tools
+- **One-liner:** Lists and checks the non-LLM tool registry.
+- **Syntax:** `/baton:tools list|doctor`
+- **Under the hood:** Reads `$BATON_HOME/tools.yaml` seeded from `references/tools.yaml`.
+- **Gotchas:** Heavy optional tools such as Docling can be absent; doctor should report that honestly instead of breaking markdown/PDF indexing.
+
+### /baton:models
+- **One-liner:** Inventories local model servers and compares installed models to the fleet registry.
+- **Syntax:** `/baton:models [--json]`
+- **Under the hood:** Probes enabled local HTTP providers, writes `$BATON_HOME/model-inventory.json`, and prints recommend-only findings.
+- **Gotchas:** It never installs, deletes, or unloads models; it only reports.
+
+---
+
 # Decisions & guidance — the self-improvement loop
 
 See the [**Decision log**](DECISIONS.md) for every record in plain language.
@@ -377,6 +458,10 @@ observations from the noisy journal into the clean catalog.
 | `/baton:code-merge [--apply]` | Review/merge the results |
 | `/baton:kb-index [--full]` | Refresh search index |
 | `/baton:kb-search "<query>"` | Search your knowledge |
+| `/baton:route <capability>` | Pick or run the cheapest capable worker |
+| `/baton:idea "<idea>"` | Turn an idea into GitHub issues |
+| `/baton:tools list\|doctor` | Inspect the tool registry |
+| `/baton:models` | Inventory local model servers |
 | `/baton:decision-feedback <id> "<text>"` | Verdict on a decision |
 | `/baton:consolidate-decisions` | Roll decisions into guidance |
 | `/baton:project-init` | Calibrate a new project |
@@ -384,3 +469,11 @@ observations from the noisy journal into the clean catalog.
 | `/baton:consolidate-routing` | Update the model catalog |
 | `/baton:consolidate-lessons` | File lessons into the KB |
 | `/baton:cost [<total>]` | Per-project spend ledger |
+| `/baton:go "<goal>"` | Plan and execute a governed run |
+| `/baton:triage "<task>"` | Classify a task or issue |
+| `/baton:usage status` | Show worker availability |
+| `/baton:projects sync ...` | Dry-run or apply GitHub Project triage sync |
+| `/baton:research-gate --text "<task>"` | Decide build/adopt/adapt before work |
+| `/baton:remember ...` | Capture a dev-memory outcome |
+| `/baton:recall "<task>"` | Recall similar prior attempts |
+| `/baton:memory-promote [target]` | Promote repeated lessons |

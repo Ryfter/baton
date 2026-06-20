@@ -2,10 +2,10 @@
 {% block title %}Portfolio — Routing Dashboard{% endblock %}
 {% block content %}
 
-<div class="card" style="grid-column: 1 / -1;">
+<div class="card full-span">
   <h2>All Projects ({{ projects|length }})</h2>
   {% if not projects %}
-    <p class="muted">No projects yet. Run /project-init in any repo to seed one.</p>
+    <p class="muted">No projects yet. Run <code>/baton:project-init</code> in any repo to seed one.</p>
   {% else %}
     <table class="projects-table">
       <thead>

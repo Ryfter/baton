@@ -5,7 +5,7 @@
 ## Codex-specific
 - **Role: primary autonomous implementer** (decision d009). As an agentic file-editing CLI, you implement backlog items end-to-end and take them through the hard merge gate to master.
 - Tests before merging: `python -m pytest kb dashboard -q` and the PowerShell suites at `scripts/test-*.ps1`.
-- Status: Plans 1–11 shipped (v1.1.0), backlog #16–#26 cleared. An unreviewed Gemini dashboard redesign waits on branch `gemini/dashboard-redesign`.
+- Status: Baton v1.2.0 shipped (Conductor + Memory Bridge stable). Current next build target is Sprint 6 — Worker Adapter. An unreviewed Gemini dashboard redesign waits on branch `gemini/dashboard-redesign`.
 
 <!-- grimdex:start -->
 # Grimdex — coding knowledge base (read first)

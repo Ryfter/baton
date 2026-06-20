@@ -3,7 +3,7 @@
 Every significant choice in this project is captured as a **decision record** — a small
 markdown file holding *what was chosen*, *the alternatives*, *the reasoning*, a
 *confidence* level, and a *revisit-if* condition. They live in the private knowledge
-repo at `~/.claude/knowledge/projects/coding-agent-orchestrator/decisions/dNNN-*.md`.
+repo at `~/.claude/knowledge/projects/baton/decisions/dNNN-*.md`.
 
 This page is the human-readable index so you never have to decode a bare ID like
 "d007". For the full reasoning and alternatives of any record, open its file.

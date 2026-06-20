@@ -4,21 +4,18 @@
       hx-target="#kb-search-results"
       hx-swap="innerHTML"
       hx-trigger="submit, keyup changed delay:600ms from:input[name=q]"
-      style="display:flex;gap:0.5rem;margin-bottom:0.75rem;">
+      class="kb-search-form">
   <input type="text" name="q" value="{{ query }}" placeholder="ask the KB..."
-         style="flex:1;padding:0.4rem 0.6rem;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;" />
+         class="kb-search-input" />
   <input type="hidden" name="k" value="5" />
-  <button type="submit"
-          style="padding:0.4rem 0.8rem;background:#238636;color:#fff;border:none;border-radius:4px;cursor:pointer;">
-    Search
-  </button>
+  <button type="submit" class="kb-search-submit">Search</button>
 </form>
 
 <div id="kb-search-results">
   {% if error %}
     <p class="muted">Search error: {{ error }}</p>
   {% elif query and not hits %}
-    <p class="muted">No hits for "{{ query }}". Try /kb-index --full if you haven't built the index yet.</p>
+    <p class="muted">No hits for "{{ query }}". Try <code>/baton:kb-index --full</code> if you haven't built the index yet.</p>
   {% elif hits %}
     <table class="projects-table">
       <thead><tr><th class="num">Score</th><th>Source</th><th>Section</th><th>Snippet</th></tr></thead>
@@ -34,8 +31,7 @@
                hx-get="/partials/decision?path={{ h.source | urlencode }}"
                hx-target="#kb-decision-detail" hx-swap="innerHTML"
                title="Open this decision record">
-              <span class="decision-badge"
-                    style="display:inline-block;padding:0 .35rem;margin-right:.35rem;border-radius:3px;background:#1f6feb;color:#fff;font-size:.7rem;">decision</span>{{ fname }}
+              <span class="decision-badge">decision</span>{{ fname }}
             </a>
             {% else %}{{ fname }}{% endif %}
           </td>
@@ -45,7 +41,7 @@
         {% endfor %}
       </tbody>
     </table>
-    <div id="kb-decision-detail" class="decision-detail" style="margin-top:0.75rem;"></div>
+    <div id="kb-decision-detail" class="decision-detail"></div>
   {% else %}
     <p class="muted">Type a query above to search the KB.</p>
   {% endif %}

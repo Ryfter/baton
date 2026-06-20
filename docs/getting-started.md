@@ -10,7 +10,7 @@ You're holding a working copy of Baton. This doc tells you how to **use** it on 
 
 After running `pwsh -NoProfile -File scripts\bootstrap.ps1 -Force`, you have:
 
-- **26 slash commands** invokable from any Claude Code session
+- **35 slash commands** invokable from any Claude Code session
 - **A live dashboard** at `http://localhost:8765` (start with `python -m dashboard.main` from this repo)
 - **A fleet** of paid + local LLM providers (`claude-cli`, `codex`, `gh-copilot`, `gemini-antigravity`, `ollama-local`, `lm-studio` — confirmed via `/baton:fleet doctor`)
 - **A knowledge base** at `~/.claude/knowledge/` (universal + per-project layers)

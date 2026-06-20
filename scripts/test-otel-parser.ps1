@@ -10,6 +10,7 @@ $fixture = Join-Path $here 'fixtures\otel-sample.jsonl'
 $tmpEvents = Join-Path $env:TEMP "otel-test-events-$(Get-Random).jsonl"
 $tmpJournal = Join-Path $env:TEMP "otel-test-journal-$(Get-Random).md"
 $tmpMarker = Join-Path $env:TEMP "otel-test-marker-$(Get-Random).txt"
+$tmpState = Join-Path $env:TEMP "otel-test-state-$(Get-Random).json"
 $catalog = Join-Path (Split-Path $here -Parent) 'references\model-routing.md'
 
 Copy-Item $fixture $tmpEvents
@@ -25,7 +26,8 @@ function Assert($label, $cond) {
     -EventsPath $tmpEvents `
     -JournalPath $tmpJournal `
     -MarkerPath $tmpMarker `
-    -CatalogPath $catalog | Out-Null
+    -CatalogPath $catalog `
+    -StatePath $tmpState | Out-Null
 
 $lines = Get-Content $tmpJournal
 $otelLines = @($lines | Where-Object { $_ -match '\| otel \|' })
@@ -47,7 +49,8 @@ Assert "first line event-type is api_request (claude_code. prefix stripped)" ($o
     -EventsPath $tmpEvents `
     -JournalPath $tmpJournal `
     -MarkerPath $tmpMarker `
-    -CatalogPath $catalog | Out-Null
+    -CatalogPath $catalog `
+    -StatePath $tmpState | Out-Null
 
 $linesAfter = Get-Content $tmpJournal
 $otelLinesAfter = @($linesAfter | Where-Object { $_ -match '\| otel \|' })
@@ -79,7 +82,8 @@ Add-Content $tmpEvents -Value $appendEvent
     -EventsPath $tmpEvents `
     -JournalPath $tmpJournal `
     -MarkerPath $tmpMarker `
-    -CatalogPath $catalog | Out-Null
+    -CatalogPath $catalog `
+    -StatePath $tmpState | Out-Null
 
 $linesFinal = Get-Content $tmpJournal
 $otelLinesFinal = @($linesFinal | Where-Object { $_ -match '\| otel \|' })
@@ -111,13 +115,14 @@ Add-Content $tmpEvents -Value $noCostEvent
     -EventsPath $tmpEvents `
     -JournalPath $tmpJournal `
     -MarkerPath $tmpMarker `
-    -CatalogPath $catalog | Out-Null
+    -CatalogPath $catalog `
+    -StatePath $tmpState | Out-Null
 
 $linesAfter2 = Get-Content $tmpJournal
 $otelLinesAfter2 = @($linesAfter2 | Where-Object { $_ -match '\| otel \|' })
 Assert "fallback computes from pricing table" ($otelLinesAfter2[-1] -match '\| \$0\.0180 \|')
 
-Remove-Item $tmpEvents, $tmpJournal, $tmpMarker -ErrorAction SilentlyContinue
+Remove-Item $tmpEvents, $tmpJournal, $tmpMarker, $tmpState -ErrorAction SilentlyContinue
 
 # --- Plan 3: OTel tagging from state file ---
 Write-Host ""

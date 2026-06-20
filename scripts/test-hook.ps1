@@ -7,6 +7,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $hook = Join-Path $here 'hooks\log-tool-call.ps1'
 $tmpLog = Join-Path $env:TEMP "test-journal-$(Get-Random).md"
 $tmpErr = Join-Path $env:TEMP "test-journal-err-$(Get-Random).log"
+$tmpState = Join-Path $env:TEMP "test-journal-state-$(Get-Random).json"
 
 $failures = 0
 function Assert-Match($label, $actual, $pattern) {
@@ -28,7 +29,7 @@ try {
         tool_response = @{ exit_code = 0; duration_ms = 38000 }
     } | ConvertTo-Json -Depth 5 -Compress
 
-    $event1 | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr | Out-Null
+    $event1 | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr -StatePath $tmpState | Out-Null
     $line = (Get-Content $tmpLog -Tail 1)
     Assert-Match 'bash ollama line shape' $line '\| hook \| bash:ollama run devstral.*\| 38s \| exit:0'
 
@@ -39,7 +40,7 @@ try {
         tool_response = @{ exit_code = 1; duration_ms = 4200 }
     } | ConvertTo-Json -Depth 5 -Compress
 
-    $event2 | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr | Out-Null
+    $event2 | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr -StatePath $tmpState | Out-Null
     $line = (Get-Content $tmpLog -Tail 1)
     Assert-Match 'bash gemini non-zero exit' $line '\| hook \| bash:gemini.*\| 4s \| exit:1'
 
@@ -50,7 +51,7 @@ try {
         tool_response = @{ exit_code = 0; duration_ms = 51000 }
     } | ConvertTo-Json -Depth 5 -Compress
 
-    $event3 | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr | Out-Null
+    $event3 | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr -StatePath $tmpState | Out-Null
     $line = (Get-Content $tmpLog -Tail 1)
     Assert-Match 'agent subagent line shape' $line '\| hook \| agent:octopus-coder \| 51s \| exit:0 \| "implement TokenStore"'
 
@@ -62,7 +63,7 @@ try {
     } | ConvertTo-Json -Depth 5 -Compress
 
     $before = (Get-Content $tmpLog).Count
-    $event4 | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr | Out-Null
+    $event4 | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr -StatePath $tmpState | Out-Null
     $after = (Get-Content $tmpLog).Count
     if ($after -eq $before) {
         Write-Host "PASS  Read tool is skipped" -ForegroundColor Green
@@ -74,7 +75,7 @@ try {
     # Test 5: Malformed input does not crash; writes to error log (and the line count grows)
     $errBefore = if (Test-Path $tmpErr) { (Get-Content $tmpErr).Count } else { 0 }
     $badEvent = "not-json-at-all"
-    $badEvent | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr 2>&1 | Out-Null
+    $badEvent | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr -StatePath $tmpState 2>&1 | Out-Null
     $errAfter = if (Test-Path $tmpErr) { (Get-Content $tmpErr).Count } else { 0 }
     if ($errAfter -gt $errBefore) {
         $newLines = (Get-Content $tmpErr) | Select-Object -Last ($errAfter - $errBefore)
@@ -96,7 +97,7 @@ try {
         tool_response = @{ exit_code = 0; duration_ms = 1000 }
     } | ConvertTo-Json -Depth 5 -Compress
 
-    $event5 | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr | Out-Null
+    $event5 | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr -StatePath $tmpState | Out-Null
     $line = (Get-Content $tmpLog -Tail 1)
     # After split on ' | ', there should be exactly 5 fields (ts, source=hook, target, elapsed, exit) when no brief
     $fields = $line -split ' \| '
@@ -110,12 +111,12 @@ try {
         tool_response = @{ exit_code = 0; duration_ms = 2000 }
     } | ConvertTo-Json -Depth 5 -Compress
 
-    $event6 | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr | Out-Null
+    $event6 | & pwsh -NoProfile -File $hook -JournalPath $tmpLog -ErrorPath $tmpErr -StatePath $tmpState | Out-Null
     $line = (Get-Content $tmpLog -Tail 1)
     Assert-Match 'pipe in description was sanitized to ¦' $line 'fix ¦ bug in module'
 
 } finally {
-    Remove-Item $tmpLog, $tmpErr -ErrorAction SilentlyContinue
+    Remove-Item $tmpLog, $tmpErr, $tmpState -ErrorAction SilentlyContinue
 }
 
 # --- Plan 3: tagging tests ---
