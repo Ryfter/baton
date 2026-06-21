@@ -170,3 +170,95 @@ function Format-GateReport {
     }
     return $sb.ToString().TrimEnd()
 }
+
+function Build-ReviewPrompt {
+    <# Compose one reviewer's instruction: role + strict-JSON findings schema +
+       the task + the artifact. The whole prompt rides stdin for stdin:true providers. #>
+    param(
+        [Parameter(Mandatory)][string]$Task,
+        [Parameter(Mandatory)][string]$Artifact
+    )
+    $schema = @'
+[
+  { "severity": "critical|important|minor",
+    "area": "<short area, e.g. correctness, security, style>",
+    "summary": "<one line: the specific issue>" }
+]
+'@
+    return @"
+You are a strict code/work reviewer. Review the ARTIFACT below against its TASK.
+Report real defects only. Respond with ONLY a JSON array matching this schema
+exactly — no prose, no markdown fences. Return [] if there are no findings.
+
+Schema:
+$schema
+
+Severity: critical = wrong/broken/unsafe; important = should fix before shipping;
+minor = nit/style. Be specific in each summary.
+
+## Task
+$Task
+
+## Artifact
+$Artifact
+"@
+}
+
+function Invoke-AcceptanceGate {
+    <# Run a competitive review of an artifact and return an accept/polish/reject
+       verdict with deduped findings + a polish brief. Each reviewer reviews
+       INDEPENDENTLY (no cross-talk); reconciliation/verdict are pure. Reviewers
+       default to providers claiming the 'review' capability. -Dispatcher injects
+       for tests; real path dispatches via Invoke-Fleet. Advisory — never blocks. #>
+    param(
+        [Parameter(Mandatory)][string]$Artifact,
+        [Parameter(Mandatory)][string]$Task,
+        [string[]]$Reviewers,
+        [string]$RejectAt = 'critical',
+        [string]$PolishAt = 'important',
+        [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [scriptblock]$Dispatcher
+    )
+    if (-not $Reviewers -or $Reviewers.Count -lt 1) {
+        $cands = Select-Capability -Capability review -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
+        $Reviewers = @($cands | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.name })
+    }
+    if (-not $Reviewers -or $Reviewers.Count -lt 1) {
+        throw "Invoke-AcceptanceGate: no reviewers configured (grant the 'review' capability to >=1 provider, or pass -Reviewers)."
+    }
+    $dispatch = {
+        param($name, $prompt)
+        if ($Dispatcher) { return (& $Dispatcher $name $prompt) }
+        return Invoke-Fleet -Name $name -Prompt $prompt -Path $FleetPath -NoJournal
+    }
+    $prompt  = Build-ReviewPrompt -Task $Task -Artifact $Artifact
+    $reviews = [System.Collections.ArrayList]@()
+    foreach ($r in $Reviewers) {
+        $pf = @{ reviewer = $r; parsed = $false; findings = @() }
+        try {
+            $res = & $dispatch $r $prompt
+            if ([int]$res.exit_code -eq 0) {
+                $parsed = Get-ReviewFindings -Output ([string]$res.stdout)
+                $pf.parsed   = $parsed.parsed
+                $pf.findings = $parsed.findings
+            }
+        } catch {
+            Write-Debug "reviewer $r failed: $($_.Exception.Message)"
+        }
+        [void]$reviews.Add($pf)
+    }
+    $merge   = Merge-ReviewFindings -Reviews $reviews.ToArray()
+    $verdict = Get-AcceptanceVerdict -MergedFindings $merge.merged -RejectAt $RejectAt -PolishAt $PolishAt
+    if (@($merge.unparsed).Count -ge $Reviewers.Count) {
+        $verdict.reason = 'no usable review obtained (fail-open accept)'
+    }
+    $brief = Format-PolishBrief -Verdict $verdict -MergedFindings $merge.merged
+    return [ordered]@{
+        verdict = $verdict.verdict; reason = $verdict.reason; counts = $verdict.counts
+        findings = $merge.merged; polish_brief = $brief
+        reviews = @($reviews | ForEach-Object { @{ reviewer = $_.reviewer; parsed = $_.parsed; count = @($_.findings).Count } })
+        unparsed = $merge.unparsed
+    }
+}

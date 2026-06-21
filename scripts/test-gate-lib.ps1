@@ -74,6 +74,84 @@ try {
         counts=@{critical=0;important=1;minor=1}; findings=$fset[1..2]; unparsed=@('r3') }
     Check 'G27 report shows verdict + counts' ($rep -match 'POLISH' -and $rep -match '1 important')
     Check 'G28 report groups solo + notes unparsed' ($rep -match 'Solo' -and $rep -match 'r3')
+
+    # ---- Task 4: seamed Invoke-AcceptanceGate (injected dispatcher) ----
+    Check 'G29 prompt carries schema + task + artifact' (
+        (Build-ReviewPrompt -Task 'do x' -Artifact 'fn foo') -match 'severity' -and
+        (Build-ReviewPrompt -Task 'do x' -Artifact 'fn foo') -match 'do x' -and
+        (Build-ReviewPrompt -Task 'do x' -Artifact 'fn foo') -match 'fn foo')
+
+    $disp = {
+        param($n,$p)
+        if ($n -eq 'r1') { return @{ stdout='[{"severity":"important","area":"correctness","summary":"off by one"},{"severity":"minor","area":"style","summary":"naming"}]'; stderr=''; exit_code=0 } }
+        elseif ($n -eq 'r2') { return @{ stdout='[{"severity":"important","area":"correctness","summary":"off by one"}]'; stderr=''; exit_code=0 } }
+        else { return @{ stdout='no json here'; stderr=''; exit_code=0 } }
+    }
+    $g = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Reviewers @('r1','r2') -Dispatcher $disp
+    Check 'G30 two reviewers -> polish, 2 findings' ($g.verdict -eq 'polish' -and @($g.findings).Count -eq 2)
+    $corrG = @($g.findings | Where-Object { $_.area -eq 'correctness' })[0]
+    Check 'G31 shared finding agreed' ($corrG.agreed)
+    Check 'G32 result shape' ($g.Contains('polish_brief') -and $g.Contains('reviews') -and @($g.reviews).Count -eq 2)
+
+    $g2 = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Reviewers @('r1','r3') -Dispatcher $disp
+    Check 'G33 garbage reviewer degraded, survivor counted' (@($g2.unparsed) -contains 'r3' -and $g2.verdict -eq 'polish')
+    $g3 = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Reviewers @('r3') -Dispatcher $disp
+    Check 'G34 all-unparsed -> accept, flagged' ($g3.verdict -eq 'accept' -and $g3.reason -match 'no usable review')
+
+    # zero reviewers + a fleet with no review-capable provider -> throws
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "gate-test-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    $emptyFleet = Join-Path $tmpDir 'fleet.yaml'
+    Set-Content -LiteralPath $emptyFleet -Encoding utf8 -Value @'
+providers:
+  - name: plain-cli
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    command_template: 'echo {{prompt}}'
+'@
+    $emptyTools = Join-Path $tmpDir 'tools.yaml'
+    Set-Content -LiteralPath $emptyTools -Encoding utf8 -Value "tools: []`n"
+    $threw = $false
+    try { Invoke-AcceptanceGate -Artifact 'a' -Task 'b' -Reviewers @() -FleetPath $emptyFleet -ToolsPath $emptyTools } catch { $threw = $true }
+    Check 'G35 no reviewers -> throws' ($threw)
+
+    # ---- Task 4: CLI (child process, hermetic BATON_HOME) ----
+    $canned = Join-Path $tmpDir 'canned-review.ps1'
+    Set-Content -LiteralPath $canned -Encoding utf8 -Value @'
+[void]([Console]::In.ReadToEnd())
+Write-Output '[{"severity":"important","area":"correctness","summary":"off by one"}]'
+'@
+    $cliFleet = Join-Path $tmpDir 'cli-fleet.yaml'
+    Set-Content -LiteralPath $cliFleet -Encoding utf8 -Value @"
+providers:
+  - name: rev-canned
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    stdin: true
+    capabilities: [review]
+    command_template: 'pwsh -NoProfile -File "$canned"'
+"@
+    $artFx = Join-Path $tmpDir 'artifact.txt'
+    Set-Content -LiteralPath $artFx -Encoding utf8 -Value 'function foo() { return 1 }'
+    $gateCli = Join-Path $PSScriptRoot 'fleet-gate.ps1'
+    $env:BATON_HOME = $tmpDir
+    Copy-Item -LiteralPath $cliFleet -Destination (Join-Path $tmpDir 'fleet.yaml') -Force
+    try {
+        $cliOut = & pwsh -NoProfile -File $gateCli run --task 'do x' --file $artFx --reviewers 'rev-canned' 2>&1 | Out-String
+        Check 'G36 CLI run prints verdict' ($cliOut -match 'ACCEPTANCE GATE' -and $cliOut -match 'POLISH')
+        $cliJson = & pwsh -NoProfile -File $gateCli run --task 'do x' --file $artFx --reviewers 'rev-canned' --json 2>&1 | Out-String
+        Check 'G37 CLI --json has verdict key' ($cliJson -match '"verdict"')
+        & pwsh -NoProfile -File $gateCli run --file $artFx --reviewers 'rev-canned' 2>$null | Out-Null
+        Check 'G38 CLI missing --task -> exit 2' ($LASTEXITCODE -eq 2)
+        & pwsh -NoProfile -File $gateCli bogus 2>$null | Out-Null
+        Check 'G39 CLI unknown subcommand -> exit 2' ($LASTEXITCODE -eq 2)
+    }
+    finally {
+        Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    }
 }
 finally {
     if ($script:fail -gt 0) { Write-Host "`n$script:fail FAILED"; exit 1 }
