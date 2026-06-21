@@ -28,8 +28,10 @@
 #                     code-gen, code-transform, commit-msg, extract-json,
 #                     summarize-short, summarize-long, synthesize, write-personal,
 #                     write-scientific, write-formal, ocr, embed, judge, reasoning,
-#                     vision, triage, classify
+#                     vision, triage, classify, review
 #   triage / classify  — structured task classification (issue → type/priority/risk)
+#   review            — competitive acceptance review: emit JSON findings
+#                       (severity/area/summary) for the Acceptance/Polish Gate
 #   budget            (optional, int) usage budget per reset window — read by the
 #                     Usage Governor forecast (days-to-exhaustion). BOX-PRIVATE: set
 #                     real values only in your live ~/.baton/fleet.yaml, never here.
@@ -95,12 +97,14 @@ providers:
   # ── Triage workers (Sprint 1): explicit model pins for the triage role. ──
   # stdin: true so the JSON-schema-heavy triage prompt is piped, never
   # interpolated through Invoke-Expression (which would mangle quotes/braces).
+  # The real competitive reviewer pair (e.g. Codex + Opus) is BOX-PRIVATE — set it
+  # in your live ~/.baton/fleet.yaml; these seed grants are an example pool only.
   - name: claude-haiku
     kind: cli
     enabled: true
     cost_tier: paid
     stdin: true
-    capabilities: [triage, classify, research, summarize-short]
+    capabilities: [triage, classify, research, summarize-short, review]
     model_default: 'claude-haiku-4-5-20251001'
     command_template: 'claude -p --model claude-haiku-4-5-20251001'
 
@@ -109,7 +113,7 @@ providers:
     enabled: true
     cost_tier: paid
     stdin: true
-    capabilities: [triage, research, code-gen, reasoning, summarize]
+    capabilities: [triage, research, code-gen, reasoning, summarize, review]
     model_default: 'claude-sonnet-4-6'
     command_template: 'claude -p --model claude-sonnet-4-6'
     # budget: 0   # example only — set a real per-window budget in live ~/.baton/fleet.yaml
