@@ -1,6 +1,6 @@
 # Baton
 
-**Pass the baton. Conduct the fleet.**
+**Conduct the fleet.**
 
 Baton turns Claude Code into the conductor of a fleet of coding LLMs — paid cloud
 CLIs, free CLIs, and local models on your own machines. You hand each task to the
