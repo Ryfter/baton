@@ -56,6 +56,24 @@ try {
     Check 'G21 none -> accept, reason no findings' ($vn.verdict -eq 'accept' -and $vn.reason -match 'no findings')
     $vt = Get-AcceptanceVerdict -MergedFindings @(@{severity='minor';area='a';summary='b'}) -PolishAt 'minor'
     Check 'G22 tunable threshold: minor -> polish when PolishAt=minor' ($vt.verdict -eq 'polish')
+
+    # ---- Task 3: formatters (pure) ----
+    $fset = @(
+        @{severity='critical';area='correctness';summary='off by one';agreed=$true;raised_by=@('r1','r2')},
+        @{severity='important';area='security';summary='unescaped input';agreed=$false;raised_by=@('r1')},
+        @{severity='minor';area='style';summary='naming';agreed=$false;raised_by=@('r2')})
+    $brief = Format-PolishBrief -Verdict @{verdict='polish'} -MergedFindings $fset
+    Check 'G23 brief lists critical + important' ($brief -match 'off by one' -and $brief -match 'unescaped input')
+    Check 'G24 brief excludes minor' ($brief -notmatch 'naming')
+    Check 'G25 brief agreed before solo' ($brief.IndexOf('off by one') -lt $brief.IndexOf('unescaped input'))
+    $acc = Format-PolishBrief -Verdict @{verdict='accept'} -MergedFindings @()
+    Check 'G26 accept brief says no polish' ($acc -match 'No polish needed')
+
+    $rep = Format-GateReport -Result @{
+        verdict='polish'; reason='1 important finding(s)'
+        counts=@{critical=0;important=1;minor=1}; findings=$fset[1..2]; unparsed=@('r3') }
+    Check 'G27 report shows verdict + counts' ($rep -match 'POLISH' -and $rep -match '1 important')
+    Check 'G28 report groups solo + notes unparsed' ($rep -match 'Solo' -and $rep -match 'r3')
 }
 finally {
     if ($script:fail -gt 0) { Write-Host "`n$script:fail FAILED"; exit 1 }

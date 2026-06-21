@@ -128,3 +128,45 @@ function Get-AcceptanceVerdict {
     }
     return @{ verdict = $verdict; reason = $reason; counts = $counts }
 }
+
+function Format-PolishBrief {
+    <# The must-fix brief for a premium polish pass: critical+important findings,
+       agreed-first then severity-desc. 'accept' -> a one-line no-op. #>
+    param([Parameter(Mandatory)][hashtable]$Verdict, [array]$MergedFindings)
+    if ($Verdict.verdict -eq 'accept') { return 'No polish needed — artifact accepted as-is.' }
+    $mustFix = @($MergedFindings | Where-Object { (Get-FindingSeverityRank $_.severity) -ge 2 })
+    $ordered = @($mustFix | Sort-Object `
+        @{ Expression = { if ($_.agreed) { 0 } else { 1 } } }, `
+        @{ Expression = { -(Get-FindingSeverityRank $_.severity) } })
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine('POLISH BRIEF — fix the following before this ships as polished:')
+    foreach ($f in $ordered) {
+        $tag = if ($f.agreed) { 'agreed' } else { 'solo' }
+        [void]$sb.AppendLine("  • [$($f.severity)][$tag] $($f.area): $($f.summary)")
+    }
+    return $sb.ToString().TrimEnd()
+}
+
+function Format-GateReport {
+    <# Human-readable verdict + counts, findings grouped agreed/solo, unparsed note. #>
+    param([Parameter(Mandatory)][hashtable]$Result)
+    $v = ([string]$Result.verdict).ToUpperInvariant()
+    $c = $Result.counts
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine("ACCEPTANCE GATE — verdict: $v  ($($Result.reason))")
+    [void]$sb.AppendLine("Findings: $($c.critical) critical, $($c.important) important, $($c.minor) minor")
+    $agreed = @($Result.findings | Where-Object { $_.agreed })
+    $solo   = @($Result.findings | Where-Object { -not $_.agreed })
+    if ($agreed.Count) {
+        [void]$sb.AppendLine('Agreed (raised by multiple reviewers):')
+        foreach ($f in $agreed) { [void]$sb.AppendLine("  • [$($f.severity)] $($f.area): $($f.summary)") }
+    }
+    if ($solo.Count) {
+        [void]$sb.AppendLine('Solo (one reviewer):')
+        foreach ($f in $solo) { [void]$sb.AppendLine("  • [$($f.severity)] $($f.area): $($f.summary) (by $($f.raised_by -join ', '))") }
+    }
+    if ($Result.unparsed -and @($Result.unparsed).Count) {
+        [void]$sb.AppendLine("Note: $((@($Result.unparsed)) -join ', ') returned no usable review.")
+    }
+    return $sb.ToString().TrimEnd()
+}
