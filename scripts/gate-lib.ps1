@@ -61,3 +61,70 @@ function Get-ReviewFindings {
     $result.findings = @($norm.ToArray())
     return $result
 }
+
+function Get-FindingKey {
+    <# Dedupe key: lowercased, whitespace-collapsed area|summary. Deliberately
+       conservative — divergent wordings stay separate (solo) rather than false-merge. #>
+    param([Parameter(Mandatory)][hashtable]$Finding)
+    $a = (([string]$Finding.area)    -replace '\s+',' ').Trim().ToLowerInvariant()
+    $s = (([string]$Finding.summary) -replace '\s+',' ').Trim().ToLowerInvariant()
+    return "$a|$s"
+}
+
+function Merge-ReviewFindings {
+    <# Reconcile per-reviewer parse results into one deduped set. Input items:
+       @{reviewer;parsed;findings}. Same key from >=2 reviewers -> one merged finding,
+       higher severity kept, agreed=$true. Unparsed reviewers collected by name. #>
+    param([array]$Reviews)
+    $unparsed = [System.Collections.ArrayList]@()
+    $byKey = [ordered]@{}
+    foreach ($rv in @($Reviews)) {
+        if ($null -eq $rv) { continue }
+        if (-not $rv.parsed) { [void]$unparsed.Add([string]$rv.reviewer); continue }
+        foreach ($f in @($rv.findings)) {
+            $key = Get-FindingKey -Finding $f
+            if ($byKey.Contains($key)) {
+                $m = $byKey[$key]
+                if ((Get-FindingSeverityRank $f.severity) -gt (Get-FindingSeverityRank $m.severity)) {
+                    $m.severity = $f.severity
+                }
+                if ($m.raised_by -notcontains $rv.reviewer) { $m.raised_by += [string]$rv.reviewer }
+                $m.agreed = ($m.raised_by.Count -ge 2)
+            } else {
+                $byKey[$key] = @{
+                    severity  = $f.severity; area = $f.area; summary = $f.summary
+                    raised_by = @([string]$rv.reviewer); agreed = $false
+                }
+            }
+        }
+    }
+    return @{ merged = @($byKey.Values); unparsed = @($unparsed.ToArray()) }
+}
+
+function Get-AcceptanceVerdict {
+    <# Severity-driven verdict over the merged set. any >=RejectAt -> reject;
+       else any >=PolishAt -> polish; else accept. Counts each tier. #>
+    param(
+        [array]$MergedFindings,
+        [string]$RejectAt = 'critical',
+        [string]$PolishAt = 'important'
+    )
+    $counts = @{ critical = 0; important = 0; minor = 0 }
+    $maxRank = 0
+    foreach ($f in @($MergedFindings)) {
+        $r = Get-FindingSeverityRank $f.severity
+        if ($r -gt $maxRank) { $maxRank = $r }
+        switch ($r) { 3 { $counts.critical++ } 2 { $counts.important++ } 1 { $counts.minor++ } }
+    }
+    $rejRank = Get-FindingSeverityRank $RejectAt
+    $polRank = Get-FindingSeverityRank $PolishAt
+    if ($maxRank -ge $rejRank)     { $verdict = 'reject' }
+    elseif ($maxRank -ge $polRank) { $verdict = 'polish' }
+    else                           { $verdict = 'accept' }
+    $reason = switch ($verdict) {
+        'reject' { "$($counts.critical) critical finding(s)" }
+        'polish' { "$($counts.important) important finding(s)" }
+        'accept' { if ($counts.minor -gt 0) { "$($counts.minor) minor finding(s), none blocking" } else { 'no findings' } }
+    }
+    return @{ verdict = $verdict; reason = $reason; counts = $counts }
+}
