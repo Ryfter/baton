@@ -163,6 +163,16 @@ try {
     Remove-Item Env:\BATON_HOME, Env:\BATON_GO_TEST_PLAN, Env:\BATON_GO_TEST_SPAWN -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $cliHome -ErrorAction SilentlyContinue
 
+    # ---- d058: acceptance-phase pure helpers ----
+    Check 'T60 Resolve-GateArtifact returns literal artifact' ((Resolve-GateArtifact -Artifact 'the diff text') -eq 'the diff text')
+    Check 'T61 Resolve-GateArtifact empty when neither given' ((Resolve-GateArtifact) -eq '')
+    Check 'T62 Resolve-GateArtifact bogus diff range -> empty (fail-open)' ((Resolve-GateArtifact -Diff 'no-such-ref-zzz..also-no-ref-zzz') -eq '')
+    $acc = Format-AcceptanceSection -Gate @{ verdict='polish'; reason='1 important finding'; counts=@{critical=0;important=1;minor=2}; polish_brief='[important][api] fix the thing' }
+    Check 'T63 acceptance section shows verdict + counts' (($acc -match '## Acceptance') -and ($acc -match 'polish') -and ($acc -match '1 important'))
+    Check 'T64 polish brief present when not accept' ($acc -match 'fix the thing')
+    $accA = Format-AcceptanceSection -Gate @{ verdict='accept'; reason='no blocking findings'; counts=@{critical=0;important=0;minor=0}; polish_brief='No polish needed' }
+    Check 'T65 accept omits the polish brief block' ($accA -notmatch '### Polish brief')
+
     Write-Host ""
     if ($script:fail -gt 0) { Write-Host "$script:fail CHECK(S) FAILED"; exit 1 } else { Write-Host "ALL CHECKS PASS"; exit 0 }
 } catch {

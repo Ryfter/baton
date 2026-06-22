@@ -195,6 +195,40 @@ function Format-RunReport {
     return $sb.ToString().TrimEnd()
 }
 
+function Resolve-GateArtifact {
+    <# The artifact text to gate: literal -Artifact wins; else `git diff <range>` for
+       -Diff; else ''. A git failure returns '' (fail-open -> the phase no-ops). #>
+    param([string]$Artifact, [string]$Diff)
+    if (-not [string]::IsNullOrWhiteSpace($Artifact)) { return $Artifact }
+    if (-not [string]::IsNullOrWhiteSpace($Diff)) {
+        try {
+            $out = & git diff $Diff 2>$null
+            if ($LASTEXITCODE -ne 0) { return '' }
+            return (@($out) -join "`n")
+        } catch { return '' }
+    }
+    return ''
+}
+
+function Format-AcceptanceSection {
+    <# Render the `## Acceptance` markdown block from a gate result (ordered or hashtable).
+       Polish brief only when verdict != accept. #>
+    param([Parameter(Mandatory)]$Gate)
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine('## Acceptance')
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine("**Verdict:** $($Gate.verdict)")
+    if ($Gate.reason) { [void]$sb.AppendLine("**Reason:** $($Gate.reason)") }
+    $c = $Gate.counts
+    if ($c) { [void]$sb.AppendLine("**Findings:** $($c.critical) critical, $($c.important) important, $($c.minor) minor") }
+    if (($Gate.verdict -ne 'accept') -and $Gate.polish_brief) {
+        [void]$sb.AppendLine('')
+        [void]$sb.AppendLine('### Polish brief')
+        [void]$sb.AppendLine([string]$Gate.polish_brief)
+    }
+    return $sb.ToString().TrimEnd()
+}
+
 function Build-PlannerPrompt {
     <# Instruct a model to decompose the goal into a task DAG (strict JSON). #>
     param([Parameter(Mandatory)][string]$Goal, [string[]]$RegistryLines = @())
