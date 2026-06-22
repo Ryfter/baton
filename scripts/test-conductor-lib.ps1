@@ -160,8 +160,73 @@ try {
     $made = @(Get-ChildItem -Path $runRoot -Directory -ErrorAction SilentlyContinue)
     Check 'T58 CLI created a run dir' (@($made).Count -ge 1)
     Check 'T59 CLI wrote report.md' (Test-Path (Join-Path $made[0].FullName 'report.md'))
+
+    # d058: CLI acceptance phase via the BATON_GO_TEST_GATE seam (reject -> rejected)
+    $env:BATON_HOME = $cliHome
+    $env:BATON_GO_TEST_PLAN = '{"tasks":[{"id":"t1","desc":"research","command":"research-gate","capability":"research","depends_on":[],"est_cost_tier":"free","reversible":true}]}'
+    $env:BATON_GO_TEST_SPAWN = '1'
+    $env:BATON_GO_TEST_GATE = 'reject'
+    $outG = & pwsh -NoProfile -File $cli -Goal 'convert pdfs' -GateArtifact 'finished work' -Json 2>&1 | Out-String
+    Check 'T60c CLI gate reject -> rejected status' ($outG -match 'rejected')
+    Remove-Item Env:\BATON_GO_TEST_GATE -ErrorAction SilentlyContinue
+
     Remove-Item Env:\BATON_HOME, Env:\BATON_GO_TEST_PLAN, Env:\BATON_GO_TEST_SPAWN -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $cliHome -ErrorAction SilentlyContinue
+
+    # ---- d058: acceptance-phase pure helpers ----
+    Check 'T60 Resolve-GateArtifact returns literal artifact' ((Resolve-GateArtifact -Artifact 'the diff text') -eq 'the diff text')
+    Check 'T61 Resolve-GateArtifact empty when neither given' ((Resolve-GateArtifact) -eq '')
+    Check 'T62 Resolve-GateArtifact bogus diff range -> empty (fail-open)' ((Resolve-GateArtifact -Diff 'no-such-ref-zzz..also-no-ref-zzz') -eq '')
+    $acc = Format-AcceptanceSection -Gate @{ verdict='polish'; reason='1 important finding'; counts=@{critical=0;important=1;minor=2}; polish_brief='[important][api] fix the thing' }
+    Check 'T63 acceptance section shows verdict + counts' (($acc -match '## Acceptance') -and ($acc -match 'polish') -and ($acc -match '1 important'))
+    Check 'T64 polish brief present when not accept' ($acc -match 'fix the thing')
+    $accA = Format-AcceptanceSection -Gate @{ verdict='accept'; reason='no blocking findings'; counts=@{critical=0;important=0;minor=0}; polish_brief='No polish needed' }
+    Check 'T65 accept omits the polish brief block' ($accA -notmatch '### Polish brief')
+
+    # ---- d058: acceptance phase (seamed -Gater) ----
+    $gtHome = Join-Path ([System.IO.Path]::GetTempPath()) "cond-gate-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $gtHome | Out-Null
+    $gPlanner = { param($goal) @{ run_id='x'; goal=$goal; budget_cap=$null; tasks=@( [pscustomobject]@{ id='t1'; desc='do t1'; command='x'; capability='reasoning'; model_pick=''; depends_on=@(); est_cost_tier='free'; reversible=$true } ) } }
+    $gSpawner = { param($task) @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+
+    # no gate target -> completed, no acceptance.json
+    $rn = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-none') -Planner $gPlanner -Spawner $gSpawner
+    Check 'T66 no gate target -> completed' ($rn.status -eq 'completed')
+    Check 'T67 no gate target -> no acceptance.json' (-not (Test-Path (Join-Path $gtHome 'r-none/acceptance.json')))
+
+    # accept -> completed + acceptance.json + ## Acceptance in report
+    $gaterAccept = { param($art,$goal) @{ verdict='accept'; reason='clean'; counts=@{critical=0;important=0;minor=1}; polish_brief='No polish needed'; findings=@(); reviews=@(); unparsed=@() } }
+    $ra = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-accept') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'finished work' -Gater $gaterAccept
+    Check 'T68 accept verdict -> completed' ($ra.status -eq 'completed')
+    Check 'T69 accept writes acceptance.json' (Test-Path (Join-Path $gtHome 'r-accept/acceptance.json'))
+    Check 'T70 report has ## Acceptance' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-accept/report.md') -Raw) -match '## Acceptance')
+
+    # polish -> completed + brief in report + gate event
+    $gaterPolish = { param($art,$goal) @{ verdict='polish'; reason='1 important'; counts=@{critical=0;important=1;minor=0}; polish_brief='[important][x] do better'; findings=@(); reviews=@(); unparsed=@() } }
+    $rp = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-polish') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'work' -Gater $gaterPolish
+    Check 'T71 polish verdict -> completed' ($rp.status -eq 'completed')
+    Check 'T72 polish brief in report' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-polish/report.md') -Raw) -match 'do better')
+    Check 'T73 gate event logged' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-polish/events.jsonl') -Raw) -match '"kind":"gate"')
+
+    # reject -> rejected status
+    $gaterReject = { param($art,$goal) @{ verdict='reject'; reason='1 critical'; counts=@{critical=1;important=0;minor=0}; polish_brief='[critical][x] broken'; findings=@(); reviews=@(); unparsed=@() } }
+    $rr = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-reject') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'work' -Gater $gaterReject
+    Check 'T74 reject verdict -> rejected status' ($rr.status -eq 'rejected')
+
+    # gate throws -> fail-open completed + warn event
+    $gaterThrow = { param($art,$goal) throw 'reviewer exploded' }
+    $rt = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-throw') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'work' -Gater $gaterThrow
+    Check 'T75 gate throw -> completed (fail-open)' ($rt.status -eq 'completed')
+    Check 'T76 gate throw logs warn event' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-throw/events.jsonl') -Raw) -match 'acceptance gate failed')
+
+    # gater returns a result with NO verdict -> fail-open completed + 'no verdict' warn event
+    $gaterNoVerdict = { param($art,$goal) @{ reason='x' } }
+    $rnv = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-noverdict') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'work' -Gater $gaterNoVerdict
+    Check 'T77 gate no-verdict -> completed (fail-open)' ($rnv.status -eq 'completed')
+    Check 'T78 gate no-verdict logs produced-no-verdict warn' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-noverdict/events.jsonl') -Raw) -match 'produced no verdict')
+    Check 'T79 gate no-verdict -> no acceptance.json' (-not (Test-Path (Join-Path $gtHome 'r-noverdict/acceptance.json')))
+
+    Remove-Item -Recurse -Force $gtHome -ErrorAction SilentlyContinue
 
     Write-Host ""
     if ($script:fail -gt 0) { Write-Host "$script:fail CHECK(S) FAILED"; exit 1 } else { Write-Host "ALL CHECKS PASS"; exit 0 }

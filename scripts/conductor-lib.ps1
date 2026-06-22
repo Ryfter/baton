@@ -12,6 +12,7 @@
 #>
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/routing-lib.ps1"   # Select-Capability (+ fleet-lib: Invoke-Fleet)
+. "$PSScriptRoot/gate-lib.ps1"   # Invoke-AcceptanceGate for the acceptance phase (d058)
 
 function New-RunId {
     param([datetime]$Now = (Get-Date))
@@ -195,6 +196,40 @@ function Format-RunReport {
     return $sb.ToString().TrimEnd()
 }
 
+function Resolve-GateArtifact {
+    <# The artifact text to gate: literal -Artifact wins; else `git diff <range>` for
+       -Diff; else ''. A git failure returns '' (fail-open -> the phase no-ops). #>
+    param([string]$Artifact, [string]$Diff)
+    if (-not [string]::IsNullOrWhiteSpace($Artifact)) { return $Artifact }
+    if (-not [string]::IsNullOrWhiteSpace($Diff)) {
+        try {
+            $out = & git diff $Diff 2>$null
+            if ($LASTEXITCODE -ne 0) { return '' }
+            return (@($out) -join "`n")
+        } catch { return '' }
+    }
+    return ''
+}
+
+function Format-AcceptanceSection {
+    <# Render the `## Acceptance` markdown block from a gate result (ordered or hashtable).
+       Polish brief only when verdict != accept. #>
+    param([Parameter(Mandatory)]$Gate)
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine('## Acceptance')
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine("**Verdict:** $($Gate.verdict)")
+    if ($Gate.reason) { [void]$sb.AppendLine("**Reason:** $($Gate.reason)") }
+    $c = $Gate.counts
+    if ($c) { [void]$sb.AppendLine("**Findings:** $($c.critical) critical, $($c.important) important, $($c.minor) minor") }
+    if (($Gate.verdict -ne 'accept') -and $Gate.polish_brief) {
+        [void]$sb.AppendLine('')
+        [void]$sb.AppendLine('### Polish brief')
+        [void]$sb.AppendLine([string]$Gate.polish_brief)
+    }
+    return $sb.ToString().TrimEnd()
+}
+
 function Build-PlannerPrompt {
     <# Instruct a model to decompose the goal into a task DAG (strict JSON). #>
     param([Parameter(Mandatory)][string]$Goal, [string[]]$RegistryLines = @())
@@ -289,18 +324,24 @@ function Invoke-TaskViaFleet {
 }
 
 function Complete-Run {
-    <# Render report.md and return the terminal status hashtable. #>
+    <# Render report.md (+ optional ## Acceptance) and return the terminal status hashtable.
+       -Gate (untyped: ordered dict or hashtable) writes acceptance.json + appends the section. #>
     param(
         [Parameter(Mandatory)][string]$RunDir,
         [Parameter(Mandatory)][hashtable]$Plan,
         [array]$Decisions = @(),
         [double]$Spend = 0.0,
         [string]$Status = 'completed',
-        [string]$PendingTaskId = ''
+        [string]$PendingTaskId = '',
+        $Gate = $null
     )
     $report = Format-RunReport -Plan $Plan -Decisions @($Decisions) -Spend $Spend -Status $Status -PendingTaskId $PendingTaskId
+    if ($Gate) {
+        $report = $report + "`n`n" + (Format-AcceptanceSection -Gate $Gate)
+        ($Gate | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'acceptance.json') -Encoding utf8NoBOM
+    }
     Set-Content -LiteralPath (Join-Path $RunDir 'report.md') -Value $report -Encoding utf8NoBOM
-    return @{ status = $Status; run_id = $Plan.run_id; run_dir = $RunDir; spend = $Spend; pending_task_id = $PendingTaskId; report = $report }
+    return @{ status = $Status; run_id = $Plan.run_id; run_dir = $RunDir; spend = $Spend; pending_task_id = $PendingTaskId; report = $report; acceptance = $Gate }
 }
 
 function Invoke-Conductor {
@@ -317,7 +358,10 @@ function Invoke-Conductor {
         [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
         [scriptblock]$Planner,
         [scriptblock]$Spawner,
-        [scriptblock]$Dispatcher
+        [scriptblock]$Dispatcher,
+        [string]$GateArtifact,
+        [string]$GateDiff,
+        [scriptblock]$Gater
     )
     if (-not $RunDir) { $RunDir = Initialize-RunDir }
     else { New-Item -ItemType Directory -Force -Path $RunDir | Out-Null }
@@ -372,5 +416,25 @@ function Invoke-Conductor {
             return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status 'failed' -PendingTaskId $task.id)
         }
     }
-    return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status 'completed')
+    # 4. Acceptance phase (d058): opt-in, advisory, fail-open. Runs only after a
+    #    successful walk and only when a gate target resolves.
+    $gate = $null
+    $finalStatus = 'completed'
+    $art = Resolve-GateArtifact -Artifact $GateArtifact -Diff $GateDiff
+    if (-not [string]::IsNullOrWhiteSpace($art)) {
+        $gateErr = $null
+        try {
+            $gate = if ($Gater) { & $Gater $art $plan.goal }
+                    else { Invoke-AcceptanceGate -Artifact $art -Task $plan.goal -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath }
+        } catch { $gate = $null; $gateErr = $_.Exception.Message }
+        if ($null -eq $gate -or -not $gate.verdict) {
+            $msg = if ($gateErr) { "acceptance gate failed: $gateErr" } else { 'acceptance gate produced no verdict (fail-open)' }
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Level 'warn' -Message $msg)
+            $gate = $null
+        } else {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Message "acceptance verdict: $($gate.verdict) — $($gate.reason)")
+            if ($gate.verdict -eq 'reject') { $finalStatus = 'rejected' }
+        }
+    }
+    return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status $finalStatus -Gate $gate)
 }

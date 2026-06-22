@@ -1,6 +1,6 @@
 ---
-description: Natural-language front door — describe an outcome and the Conductor plans it into a task DAG, then runs it full-auto under two guards (budget cap + destructive action), narrating as it goes. Interrupts only to cross a budget ceiling or before an irreversible action; guesses through everything else and logs every choice. Run artifacts (plan.json / events.jsonl / decisions.jsonl / report.md) land under BATON_HOME/runs/<run-id>/.
-argument-hint: "<what you want done>" [--budget <n>] [--max-tier local|free|paid]
+description: Natural-language front door — describe an outcome and the Conductor plans it into a task DAG, then runs it full-auto under two guards (budget cap + destructive action), narrating as it goes. Interrupts only to cross a budget ceiling or before an irreversible action; guesses through everything else and logs every choice. Run artifacts (plan.json / events.jsonl / decisions.jsonl / report.md / acceptance.json) land under BATON_HOME/runs/<run-id>/.
+argument-hint: "<what you want done>" [--budget <n>] [--max-tier local|free|paid] [--gate-artifact <text> | --gate-diff <range>]
 ---
 
 # /baton:go
@@ -18,6 +18,7 @@ let the engine and the fleet do the work.
    ```powershell
    pwsh -File "$HOME/.claude/scripts/fleet-go.ps1" -Goal "<goal>" -Json
    # add -Budget <n> and/or -MaxCostTier <tier> when the user supplied them
+   # add -GateArtifact "<text>" or -GateDiff "<range>" to gate the finished work (accept/polish/reject)
    ```
 
 3. Read the returned JSON (`status`, `run_dir`, `spend`, `pending_task_id`, `report`).
@@ -34,6 +35,9 @@ let the engine and the fleet do the work.
      force-push, out-of-worktree delete, or external publish). Describe exactly what it
      would do and ASK for explicit approval before resuming.
    - `failed` → a task could not complete; show the failing task and the event log.
+   - `rejected` → the optional acceptance gate reviewed the finished work and rejected it.
+     Show the `## Acceptance` section of `report.md` (verdict, findings, polish brief); the
+     work already ran — this is an advisory quality verdict, not a rollback.
    - `plan-failed` / `plan-invalid` → planning produced no usable DAG; show why and
      offer to retry with a sharper goal.
 
