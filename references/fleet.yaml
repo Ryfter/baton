@@ -17,6 +17,13 @@
 #   adapter           (optional) names the worker-adapter that meters this provider
 #                     and maps its rate-limit responses to Usage-Governor states
 #                     (auto-tick + auto-lockout). Absent = unmetered. v1: github-models.
+#   saturate          (optional) true | false — opt into the active saturation driver:
+#                     when this worker has a budget and is under-utilized, routing
+#                     up-ranks it (economy mode) to spend its pre-paid allotment first.
+#                     Default false. BOX-PRIVATE: set a real `saturate: true` (and the
+#                     budget) only in your live ~/.baton/fleet.yaml.
+#   saturation_target (optional, float) utilization % the driver pushes toward before it
+#                     stops boosting. Default 99.9.
 #   platform          (optional) claude | codex | gemini | github | local — Lever 4
 #                     identity; journaled now, consumed by the cost/speed advisor later.
 #   timeout_s         (http only, optional) per-request timeout; default 300 in the
@@ -188,3 +195,5 @@ providers:
     capabilities: [code-gen, summarize-short, classify]
     # budget: <int>           # BOX-PRIVATE — set the real per-window allotment ONLY
     #                           in your live ~/.baton/fleet.yaml, never in this seed.
+    saturate: false           # opt-in: set true (with a real budget) in live ~/.baton/fleet.yaml
+    # saturation_target: 99.9 # optional; default is 99.9

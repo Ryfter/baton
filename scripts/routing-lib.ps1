@@ -12,6 +12,7 @@
 . "$PSScriptRoot/fleet-lib.ps1"   # for Read-Fleet + ConvertFrom-FleetValue
 . "$PSScriptRoot/routing-learn.ps1"   # Slice 3 learning loop (ratings + learned quality + judge)
 . "$PSScriptRoot/usage-lib.ps1"   # Sprint 2: Get-WorkerState/Get-ConserveMode for route-around
+. "$PSScriptRoot/saturation-lib.ps1"   # d-wa-5 active saturation driver
 
 $script:DefaultToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml')
 
@@ -158,6 +159,8 @@ function Select-Capability {
                 cost_tier = [string]$p.cost_tier; quality = $detail.quality
                 quality_detail = $detail
                 role = $p.role; platform = $p.platform
+                budget = $p.budget; saturate = $p.saturate; saturation_target = $p.saturation_target
+                sat_util = $null
                 why = $why
             })
         }
@@ -170,8 +173,12 @@ function Select-Capability {
         $c
     }
 
-    # 3b. Usage governance (Sprint 2): drop hard-stopped fleet workers, honor conserve.
-    #     Absent journal -> no-op (every worker available); standalone/tests unaffected.
+    # 3b. Usage governance (Sprint 2) + active saturation (d-wa-5).
+    #     Route-around drops hard-stopped workers + down-ranks limited; saturation
+    #     up-ranks an under-utilized opt-in budgeted worker (effective tier -1).
+    #     Absent journal -> route-around no-op; saturation still applies (0 consumed).
+    $usageRows = @()
+    $conserve  = $false
     if (Get-Command Get-WorkerState -ErrorAction SilentlyContinue) {
         $usageRows = Read-UsageJournal -Path $UsagePath
         if (@($usageRows).Count -gt 0) {
@@ -189,6 +196,26 @@ function Select-Capability {
             }
             if ($conserve) { $SelectionMode = 'economy' }
         }
+        # Saturation boost: up-rank a surviving under-utilized opt-in budgeted worker.
+        foreach ($c in $filtered) {
+            if ($c.source -ne 'fleet') { continue }
+            # Strict opt-in: only a literal boolean $true opts in. A non-canonical YAML
+            # false token (no/off/n/0) parses as a string and would otherwise both skip
+            # the guard AND read truthy in the [bool] sort key — normalize it to $false.
+            if ($c.saturate -ne $true) { $c.saturate = $false; continue }
+            $budget = if ($null -ne $c.budget) { [int]$c.budget } else { 0 }
+            $target = if ($null -ne $c.saturation_target) { [double]$c.saturation_target } else { 99.9 }
+            $st = (Get-WorkerState -Worker $c.name -Rows $usageRows).state
+            $cu = Get-CandidateUtilization -Rows $usageRows -Worker $c.name -Budget $budget
+            $decision = Get-SaturationDecision -Saturate $true -Budget $budget -Consumed $cu.consumed -Target $target -State $st -SelectionMode $SelectionMode -Conserve $conserve
+            if ($decision.apply) {
+                $c.saturate = $true
+                $c.sat_util = $decision.utilization
+                $c.why = $decision.reason
+            } else {
+                $c.saturate = $false
+            }
+        }
     }
 
     # 4. Rank. economy: cost tier asc, quality desc ("smallest that clears the bar").
@@ -199,8 +226,12 @@ function Select-Capability {
             Sort-Object @{e={ -$_.quality }}, @{e={ Get-CostTierRank $_.cost_tier }}, @{e='name'}
     } else {
         $ranked = $filtered |
-            Select-Object *, @{n='score'; e={ (Get-CostTierRank $_.cost_tier) - ($_.quality * 0.001) }} |
-            Sort-Object @{e='score'}, @{e={ -$_.quality }}, @{e='name'}
+            Select-Object *, @{n='score'; e={ (Get-EffectiveTierRank $_.cost_tier ([bool]$_.saturate)) - ($_.quality * 0.001) }} |
+            Sort-Object `
+                @{e={ Get-EffectiveTierRank $_.cost_tier ([bool]$_.saturate) }}, `
+                @{e={ if ([bool]$_.saturate) { [double]$_.sat_util } else { 0 } }}, `
+                @{e={ -$_.quality }}, `
+                @{e='name'}
     }
     return ,([object[]]$ranked)
 }
