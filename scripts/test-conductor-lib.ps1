@@ -228,6 +228,38 @@ try {
 
     Remove-Item -Recurse -Force $gtHome -ErrorAction SilentlyContinue
 
+    # ---- T80-T86: effective cost wiring (slice 1) ----
+    $ecRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("baton-ec-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $ecRoot | Out-Null
+    try {
+        # A run that completes with a gate verdict -> effective-cost.json + report section.
+        $ecPlan = @{ run_id = 'go-ec-1'; goal = 'demo'; budget_cap = $null; tasks = @(
+            @{ id = 't1'; desc = 'do it'; deps = @(); est_cost_tier = 'paid'; reversible = $true }
+        ) }
+        $ecGate = @{ verdict = 'polish'; reason = '1 important finding(s)'; counts = @{ critical=0; important=1; minor=0 }; polish_brief = 'fix it'; findings = @(); reviews = @(); unparsed = @() }
+        $ecTaskCosts = @(@{ id='t1'; worker='claude-haiku'; cost=2.0 })
+        $ecRd = Join-Path $ecRoot 'go-ec-1'; New-Item -ItemType Directory -Force -Path $ecRd | Out-Null
+        $ecRes = Complete-Run -RunDir $ecRd -Plan $ecPlan -Decisions @() -Spend 2.0 -Status 'completed' -Gate $ecGate -TaskCosts $ecTaskCosts
+        $ecPath = Join-Path $ecRd 'effective-cost.json'
+        Check 'T80 effective-cost.json written when gate verdict present' (Test-Path $ecPath)
+        $ecObj = Get-Content $ecPath -Raw | ConvertFrom-Json
+        Check 'T81 record verdict matches the gate' ($ecObj.verdict -eq 'polish')
+        Check 'T82 record effective_cost = cost / quality (>cost when quality<1)' ($ecObj.effective_cost -gt $ecObj.cost)
+        Check 'T83 record attributes the producing worker' ($ecObj.workers[0].worker -eq 'claude-haiku')
+        Check 'T84 returned run object carries effective_cost' ($null -ne $ecRes.effective_cost)
+        $ecRep = Get-Content (Join-Path $ecRd 'report.md') -Raw
+        Check 'T85 report.md has the ## Effective cost section' ($ecRep -match '(?m)^## Effective cost')
+
+        # No gate -> no effective-cost.json, no section (byte-for-byte invariant).
+        $ecRd2 = Join-Path $ecRoot 'go-ec-2'; New-Item -ItemType Directory -Force -Path $ecRd2 | Out-Null
+        $ecPlan2 = @{ run_id = 'go-ec-2'; goal = 'demo'; budget_cap = $null; tasks = @() }
+        $ecRes2 = Complete-Run -RunDir $ecRd2 -Plan $ecPlan2 -Decisions @() -Spend 0.0 -Status 'completed'
+        Check 'T86 no gate -> no effective-cost.json and null effective_cost' ((-not (Test-Path (Join-Path $ecRd2 'effective-cost.json'))) -and ($null -eq $ecRes2.effective_cost))
+    }
+    finally {
+        Remove-Item -LiteralPath $ecRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     Write-Host ""
     if ($script:fail -gt 0) { Write-Host "$script:fail CHECK(S) FAILED"; exit 1 } else { Write-Host "ALL CHECKS PASS"; exit 0 }
 } catch {
