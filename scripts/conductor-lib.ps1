@@ -13,6 +13,7 @@
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/routing-lib.ps1"   # Select-Capability (+ fleet-lib: Invoke-Fleet)
 . "$PSScriptRoot/gate-lib.ps1"   # Invoke-AcceptanceGate for the acceptance phase (d058)
+. "$PSScriptRoot/effective-cost-lib.ps1"   # run-level effective cost (slice 1)
 
 function New-RunId {
     param([datetime]$Now = (Get-Date))
@@ -333,15 +334,30 @@ function Complete-Run {
         [double]$Spend = 0.0,
         [string]$Status = 'completed',
         [string]$PendingTaskId = '',
-        $Gate = $null
+        $Gate = $null,
+        [object[]]$TaskCosts = @()
     )
     $report = Format-RunReport -Plan $Plan -Decisions @($Decisions) -Spend $Spend -Status $Status -PendingTaskId $PendingTaskId
     if ($Gate) {
         $report = $report + "`n`n" + (Format-AcceptanceSection -Gate $Gate)
         ($Gate | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'acceptance.json') -Encoding utf8NoBOM
     }
+    # Effective cost (slice 1): only when a gate produced a verdict (a quality signal).
+    $effectiveCost = $null
+    if ($Gate -and $Gate.verdict) {
+        $quality   = Get-QualityScalar -Verdict ([string]$Gate.verdict) -Counts $Gate.counts
+        $runCost   = Get-RunCost -Tasks @($TaskCosts)
+        $effective = Get-EffectiveCost -Cost $runCost.cost -Quality $quality
+        $breakdown = Get-WorkerBreakdown -Tasks @($TaskCosts)
+        $record = New-EffectiveCostRecord -RunId $Plan.run_id -Verdict ([string]$Gate.verdict) `
+            -Quality $quality -Cost $runCost.cost -CostBasis $runCost.basis -Attempts $runCost.attempts `
+            -EffectiveCost $effective -Workers $breakdown
+        $report = $report + "`n`n" + (Format-EffectiveCostSection -Record $record)
+        ($record | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'effective-cost.json') -Encoding utf8NoBOM
+        $effectiveCost = $effective
+    }
     Set-Content -LiteralPath (Join-Path $RunDir 'report.md') -Value $report -Encoding utf8NoBOM
-    return @{ status = $Status; run_id = $Plan.run_id; run_dir = $RunDir; spend = $Spend; pending_task_id = $PendingTaskId; report = $report; acceptance = $Gate }
+    return @{ status = $Status; run_id = $Plan.run_id; run_dir = $RunDir; spend = $Spend; pending_task_id = $PendingTaskId; report = $report; acceptance = $Gate; effective_cost = $effectiveCost }
 }
 
 function Invoke-Conductor {
@@ -389,6 +405,7 @@ function Invoke-Conductor {
     # 3. Guarded walk.
     $spend = 0.0
     $decisions = [System.Collections.ArrayList]@()
+    $taskCosts = [System.Collections.ArrayList]@()
     foreach ($task in $order) {
         $est = Get-TaskCostEstimate -Tier $task.est_cost_tier -PaidPerCall $PaidPerCall
         if (Test-BudgetExceeded -CumulativeSpend $spend -TaskEstimate $est -BudgetCap $BudgetCap) {
@@ -409,6 +426,7 @@ function Invoke-Conductor {
             Add-RunDecision -RunDir $RunDir -Decision $dec
             [void]$decisions.Add($dec)
         }
+        [void]$taskCosts.Add(@{ id = $task.id; worker = ([string]$r.chose); cost = $tspend })
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'spent' -Message ("{0:0.00}" -f $tspend))
         $kind = if ($r.ok) { 'finished' } else { 'error' }
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind $kind -Message $task.desc)
@@ -436,5 +454,5 @@ function Invoke-Conductor {
             if ($gate.verdict -eq 'reject') { $finalStatus = 'rejected' }
         }
     }
-    return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status $finalStatus -Gate $gate)
+    return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status $finalStatus -Gate $gate -TaskCosts $taskCosts)
 }
