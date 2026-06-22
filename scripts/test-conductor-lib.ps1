@@ -255,6 +255,19 @@ try {
         $ecPlan2 = @{ run_id = 'go-ec-2'; goal = 'demo'; budget_cap = $null; tasks = @() }
         $ecRes2 = Complete-Run -RunDir $ecRd2 -Plan $ecPlan2 -Decisions @() -Spend 0.0 -Status 'completed'
         Check 'T86 no gate -> no effective-cost.json and null effective_cost' ((-not (Test-Path (Join-Path $ecRd2 'effective-cost.json'))) -and ($null -eq $ecRes2.effective_cost))
+
+        # Full Invoke-Conductor path: numerator is the cost-tier ESTIMATE (paid -> 0.05),
+        # NOT the placeholder realized spend (0.0) the stub spawner returns.
+        $ecPlanner = { param($g) @{ run_id='x'; goal=$g; budget_cap=$null; tasks=@(
+            [pscustomobject]@{ id='t1'; desc='paid task'; command='x'; capability='reasoning'; model_pick=''; depends_on=@(); est_cost_tier='paid'; reversible=$true }
+        ) } }
+        $ecSpawner = { param($t) @{ ok=$true; spend=0.0; chose='w1'; why='ran'; alternatives=@() } }   # spend 0.0 = production reality
+        $ecGater   = { param($art,$goal) @{ verdict='polish'; reason='1 important'; counts=@{critical=0;important=1;minor=0}; polish_brief='x'; findings=@(); reviews=@(); unparsed=@() } }
+        $ecRd3 = Join-Path $ecRoot 'go-ec-3'
+        $ecRes3 = Invoke-Conductor -Goal 'demo' -RunDir $ecRd3 -Planner $ecPlanner -Spawner $ecSpawner -GateArtifact 'work' -Gater $ecGater
+        $ecObj3 = Get-Content (Join-Path $ecRd3 'effective-cost.json') -Raw | ConvertFrom-Json
+        Check 'T87 numerator is the estimate (0.05), not placeholder spend (0)' ($ecObj3.cost -eq 0.05)
+        Check 'T88 effective_cost is non-zero (0.05 / 0.62)' ($ecObj3.effective_cost -gt 0)
     }
     finally {
         Remove-Item -LiteralPath $ecRoot -Recurse -Force -ErrorAction SilentlyContinue
