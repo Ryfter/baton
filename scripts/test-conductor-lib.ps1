@@ -160,6 +160,16 @@ try {
     $made = @(Get-ChildItem -Path $runRoot -Directory -ErrorAction SilentlyContinue)
     Check 'T58 CLI created a run dir' (@($made).Count -ge 1)
     Check 'T59 CLI wrote report.md' (Test-Path (Join-Path $made[0].FullName 'report.md'))
+
+    # d058: CLI acceptance phase via the BATON_GO_TEST_GATE seam (reject -> rejected)
+    $env:BATON_HOME = $cliHome
+    $env:BATON_GO_TEST_PLAN = '{"tasks":[{"id":"t1","desc":"research","command":"research-gate","capability":"research","depends_on":[],"est_cost_tier":"free","reversible":true}]}'
+    $env:BATON_GO_TEST_SPAWN = '1'
+    $env:BATON_GO_TEST_GATE = 'reject'
+    $outG = & pwsh -NoProfile -File $cli -Goal 'convert pdfs' -GateArtifact 'finished work' -Json 2>&1 | Out-String
+    Check 'T60c CLI gate reject -> rejected status' ($outG -match 'rejected')
+    Remove-Item Env:\BATON_GO_TEST_GATE -ErrorAction SilentlyContinue
+
     Remove-Item Env:\BATON_HOME, Env:\BATON_GO_TEST_PLAN, Env:\BATON_GO_TEST_SPAWN -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $cliHome -ErrorAction SilentlyContinue
 

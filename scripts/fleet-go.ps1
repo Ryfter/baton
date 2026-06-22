@@ -12,6 +12,8 @@ param(
     [string]$Text,
     [double]$Budget,
     [switch]$Json,
+    [string]$GateArtifact,
+    [string]$GateDiff,
     [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
     [string]$FleetPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'fleet.yaml' } else { Join-Path $HOME '.baton/fleet.yaml' }),
     [string]$ToolsPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'tools.yaml' } else { Join-Path $HOME '.baton/tools.yaml' })
@@ -34,6 +36,15 @@ if ($env:BATON_GO_TEST_PLAN) {
 }
 if ($env:BATON_GO_TEST_SPAWN -eq '1') {
     $go['Spawner'] = { param($task) @{ ok = $true; spend = 0.0; chose = 'test-stub'; why = "ran $($task.id)"; alternatives = @() } }
+}
+
+if ($PSBoundParameters.ContainsKey('GateArtifact')) { $go['GateArtifact'] = $GateArtifact }
+if ($PSBoundParameters.ContainsKey('GateDiff')) { $go['GateDiff'] = $GateDiff }
+# Test seam: a canned gate verdict so the suite never calls real reviewers.
+if ($env:BATON_GO_TEST_GATE) {
+    $cannedVerdict = $env:BATON_GO_TEST_GATE
+    $go['Gater'] = { param($art, $goal) @{ verdict = $cannedVerdict; reason = 'test-stub verdict'; counts = @{ critical = 0; important = 0; minor = 0 }; polish_brief = 'test brief'; findings = @(); reviews = @(); unparsed = @() } }.GetNewClosure()
+    if (-not $go.ContainsKey('GateArtifact')) { $go['GateArtifact'] = 'test artifact' }
 }
 
 $result = Invoke-Conductor @go
