@@ -173,6 +173,44 @@ try {
     $accA = Format-AcceptanceSection -Gate @{ verdict='accept'; reason='no blocking findings'; counts=@{critical=0;important=0;minor=0}; polish_brief='No polish needed' }
     Check 'T65 accept omits the polish brief block' ($accA -notmatch '### Polish brief')
 
+    # ---- d058: acceptance phase (seamed -Gater) ----
+    $gtHome = Join-Path ([System.IO.Path]::GetTempPath()) "cond-gate-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $gtHome | Out-Null
+    $gPlanner = { param($goal) @{ run_id='x'; goal=$goal; budget_cap=$null; tasks=@( [pscustomobject]@{ id='t1'; desc='do t1'; command='x'; capability='reasoning'; model_pick=''; depends_on=@(); est_cost_tier='free'; reversible=$true } ) } }
+    $gSpawner = { param($task) @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+
+    # no gate target -> completed, no acceptance.json
+    $rn = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-none') -Planner $gPlanner -Spawner $gSpawner
+    Check 'T66 no gate target -> completed' ($rn.status -eq 'completed')
+    Check 'T67 no gate target -> no acceptance.json' (-not (Test-Path (Join-Path $gtHome 'r-none/acceptance.json')))
+
+    # accept -> completed + acceptance.json + ## Acceptance in report
+    $gaterAccept = { param($art,$goal) @{ verdict='accept'; reason='clean'; counts=@{critical=0;important=0;minor=1}; polish_brief='No polish needed'; findings=@(); reviews=@(); unparsed=@() } }
+    $ra = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-accept') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'finished work' -Gater $gaterAccept
+    Check 'T68 accept verdict -> completed' ($ra.status -eq 'completed')
+    Check 'T69 accept writes acceptance.json' (Test-Path (Join-Path $gtHome 'r-accept/acceptance.json'))
+    Check 'T70 report has ## Acceptance' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-accept/report.md') -Raw) -match '## Acceptance')
+
+    # polish -> completed + brief in report + gate event
+    $gaterPolish = { param($art,$goal) @{ verdict='polish'; reason='1 important'; counts=@{critical=0;important=1;minor=0}; polish_brief='[important][x] do better'; findings=@(); reviews=@(); unparsed=@() } }
+    $rp = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-polish') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'work' -Gater $gaterPolish
+    Check 'T71 polish verdict -> completed' ($rp.status -eq 'completed')
+    Check 'T72 polish brief in report' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-polish/report.md') -Raw) -match 'do better')
+    Check 'T73 gate event logged' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-polish/events.jsonl') -Raw) -match '"kind":"gate"')
+
+    # reject -> rejected status
+    $gaterReject = { param($art,$goal) @{ verdict='reject'; reason='1 critical'; counts=@{critical=1;important=0;minor=0}; polish_brief='[critical][x] broken'; findings=@(); reviews=@(); unparsed=@() } }
+    $rr = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-reject') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'work' -Gater $gaterReject
+    Check 'T74 reject verdict -> rejected status' ($rr.status -eq 'rejected')
+
+    # gate throws -> fail-open completed + warn event
+    $gaterThrow = { param($art,$goal) throw 'reviewer exploded' }
+    $rt = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-throw') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'work' -Gater $gaterThrow
+    Check 'T75 gate throw -> completed (fail-open)' ($rt.status -eq 'completed')
+    Check 'T76 gate throw logs warn event' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-throw/events.jsonl') -Raw) -match 'acceptance gate failed')
+
+    Remove-Item -Recurse -Force $gtHome -ErrorAction SilentlyContinue
+
     Write-Host ""
     if ($script:fail -gt 0) { Write-Host "$script:fail CHECK(S) FAILED"; exit 1 } else { Write-Host "ALL CHECKS PASS"; exit 0 }
 } catch {
