@@ -150,6 +150,25 @@ providers:
     $two = Select-Capability -Capability 'code-gen' -SelectionMode 'economy' -ToolsPath $toolsFx -FleetPath $fleet2 -RatingsPath $ratingsFx -JournalPath $journalFx -UsagePath $usage2
     Check 'S28 lower-utilization saturator ranks first' ($two[0].name -eq 'gh-b')
 
+    # d-sat-2 hardening: a non-canonical YAML-false token (no/off) must NOT opt in.
+    $fleetNo = Join-Path $tmp 'fleet-no.yaml'
+    Set-Content -LiteralPath $fleetNo -Encoding utf8 -Value @'
+general_capabilities: [code-gen]
+providers:
+  - name: local-model
+    kind: http
+    enabled: true
+    cost_tier: local
+  - name: gh-no
+    kind: cli
+    enabled: true
+    cost_tier: free
+    budget: 50
+    saturate: no
+'@
+    $noSat = Select-Capability -Capability 'code-gen' -SelectionMode 'economy' -ToolsPath $toolsFx -FleetPath $fleetNo -RatingsPath $ratingsFx -JournalPath $journalFx -UsagePath $usageFx
+    Check 'S29 saturate: no (non-canonical false) does NOT opt in' ((($noSat | Where-Object { $_.name -eq 'gh-no' }).saturate -ne $true) -and ($noSat[0].name -eq 'local-model'))
+
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 
     Write-Host ""

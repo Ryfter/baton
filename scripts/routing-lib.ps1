@@ -199,12 +199,15 @@ function Select-Capability {
         # Saturation boost: up-rank a surviving under-utilized opt-in budgeted worker.
         foreach ($c in $filtered) {
             if ($c.source -ne 'fleet') { continue }
-            if (-not $c.saturate) { continue }
+            # Strict opt-in: only a literal boolean $true opts in. A non-canonical YAML
+            # false token (no/off/n/0) parses as a string and would otherwise both skip
+            # the guard AND read truthy in the [bool] sort key — normalize it to $false.
+            if ($c.saturate -ne $true) { $c.saturate = $false; continue }
             $budget = if ($null -ne $c.budget) { [int]$c.budget } else { 0 }
             $target = if ($null -ne $c.saturation_target) { [double]$c.saturation_target } else { 99.9 }
             $st = (Get-WorkerState -Worker $c.name -Rows $usageRows).state
             $cu = Get-CandidateUtilization -Rows $usageRows -Worker $c.name -Budget $budget
-            $decision = Get-SaturationDecision -Saturate ([bool]$c.saturate) -Budget $budget -Consumed $cu.consumed -Target $target -State $st -SelectionMode $SelectionMode -Conserve $conserve
+            $decision = Get-SaturationDecision -Saturate $true -Budget $budget -Consumed $cu.consumed -Target $target -State $st -SelectionMode $SelectionMode -Conserve $conserve
             if ($decision.apply) {
                 $c.saturate = $true
                 $c.sat_util = $decision.utilization
