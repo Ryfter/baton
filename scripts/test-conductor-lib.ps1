@@ -219,6 +219,13 @@ try {
     Check 'T75 gate throw -> completed (fail-open)' ($rt.status -eq 'completed')
     Check 'T76 gate throw logs warn event' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-throw/events.jsonl') -Raw) -match 'acceptance gate failed')
 
+    # gater returns a result with NO verdict -> fail-open completed + 'no verdict' warn event
+    $gaterNoVerdict = { param($art,$goal) @{ reason='x' } }
+    $rnv = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-noverdict') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'work' -Gater $gaterNoVerdict
+    Check 'T77 gate no-verdict -> completed (fail-open)' ($rnv.status -eq 'completed')
+    Check 'T78 gate no-verdict logs produced-no-verdict warn' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-noverdict/events.jsonl') -Raw) -match 'produced no verdict')
+    Check 'T79 gate no-verdict -> no acceptance.json' (-not (Test-Path (Join-Path $gtHome 'r-noverdict/acceptance.json')))
+
     Remove-Item -Recurse -Force $gtHome -ErrorAction SilentlyContinue
 
     Write-Host ""
