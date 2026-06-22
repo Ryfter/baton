@@ -426,7 +426,10 @@ function Invoke-Conductor {
             Add-RunDecision -RunDir $RunDir -Decision $dec
             [void]$decisions.Add($dec)
         }
-        [void]$taskCosts.Add(@{ id = $task.id; worker = ([string]$r.chose); cost = $tspend })
+        # Numerator is the cost-tier ESTIMATE (basis='estimate'), matching the budget
+        # guard and the record's label — realized spend ($tspend) is a placeholder
+        # (0.0) today; realized cost arrives later via Get-RunCost's -CostResolver seam.
+        [void]$taskCosts.Add(@{ id = $task.id; worker = ([string]$r.chose); cost = $est })
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'spent' -Message ("{0:0.00}" -f $tspend))
         $kind = if ($r.ok) { 'finished' } else { 'error' }
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind $kind -Message $task.desc)
