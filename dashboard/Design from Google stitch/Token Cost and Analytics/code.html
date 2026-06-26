@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Baton - Cost Ledger</title>
+<!-- Fonts & Icons -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;800&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Theme Configuration -->
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "surface-container-highest": "#353534",
+                    "surface-variant": "#353534",
+                    "surface-dim": "#131313",
+                    "on-error-container": "#ffdad6",
+                    "inverse-primary": "#4b6700",
+                    "on-secondary-fixed-variant": "#7200a3",
+                    "background": "#131313",
+                    "secondary": "#e9b3ff",
+                    "tertiary-container": "#d6e3ff",
+                    "primary": "#ffffff",
+                    "on-tertiary-fixed": "#001b3e",
+                    "secondary-fixed-dim": "#e9b3ff",
+                    "on-background": "#e5e2e1",
+                    "on-tertiary": "#003064",
+                    "surface-container": "#201f1f",
+                    "on-primary": "#253600",
+                    "surface-tint": "#a0d800",
+                    "outline-variant": "#434933",
+                    "error": "#ffb4ab",
+                    "on-primary-fixed": "#141f00",
+                    "error-container": "#93000a",
+                    "primary-container": "#b7f700",
+                    "on-tertiary-fixed-variant": "#00468d",
+                    "tertiary-fixed": "#d6e3ff",
+                    "on-surface-variant": "#c2caad",
+                    "on-secondary-fixed": "#310048",
+                    "tertiary-fixed-dim": "#aac7ff",
+                    "on-error": "#690005",
+                    "surface-container-high": "#2a2a2a",
+                    "primary-fixed-dim": "#a0d800",
+                    "outline": "#8c9479",
+                    "tertiary": "#ffffff",
+                    "surface-container-low": "#1c1b1b",
+                    "surface-bright": "#3a3939",
+                    "surface": "#131313",
+                    "secondary-fixed": "#f6d9ff",
+                    "secondary-container": "#7d01b1",
+                    "on-secondary": "#510074",
+                    "inverse-on-surface": "#313030",
+                    "on-surface": "#e5e2e1",
+                    "on-secondary-container": "#e5a9ff",
+                    "surface-container-lowest": "#0e0e0e",
+                    "on-tertiary-container": "#0063c3",
+                    "on-primary-container": "#506e00",
+                    "primary-fixed": "#b7f700",
+                    "on-primary-fixed-variant": "#374e00",
+                    "inverse-surface": "#e5e2e1"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "unit": "4px",
+                    "margin-desktop": "32px",
+                    "gutter": "16px",
+                    "margin-mobile": "16px",
+                    "container-max": "1440px"
+            },
+            "fontFamily": {
+                    "body-base": ["Hanken Grotesk"],
+                    "label-caps": ["JetBrains Mono"],
+                    "headline-md-mobile": ["Hanken Grotesk"],
+                    "headline-md": ["Hanken Grotesk"],
+                    "mono-reasoning": ["JetBrains Mono"],
+                    "display-lg": ["Hanken Grotesk"],
+                    "data-table": ["JetBrains Mono"]
+            },
+            "fontSize": {
+                    "body-base": ["15px", {"lineHeight": "1.5", "letterSpacing": "0em", "fontWeight": "400"}],
+                    "label-caps": ["11px", {"lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700"}],
+                    "headline-md-mobile": ["20px", {"lineHeight": "1.2", "fontWeight": "600"}],
+                    "headline-md": ["24px", {"lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "600"}],
+                    "mono-reasoning": ["13px", {"lineHeight": "1.6", "letterSpacing": "0em", "fontWeight": "400"}],
+                    "display-lg": ["48px", {"lineHeight": "1.1", "letterSpacing": "-0.04em", "fontWeight": "800"}],
+                    "data-table": ["12px", {"lineHeight": "1.4", "letterSpacing": "-0.01em", "fontWeight": "500"}]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+          font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        /* Custom Luminescent Stroke Utility */
+        .luminescent-stroke {
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+        }
+        /* Acid Green Glow for active inputs/elements */
+        .glow-active {
+            box-shadow: 0 0 8px 0 rgba(183, 247, 0, 0.4);
+            border-color: #b7f700;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-base min-h-screen flex flex-col antialiased">
+<!-- TopNavBar Component -->
+<header class="bg-surface border-b border-surface-container-highest full-width top-0 z-50 sticky">
+<div class="flex justify-between items-center px-margin-desktop w-full h-16">
+<!-- Brand Logo -->
+<div class="flex items-center gap-3">
+<span class="font-display-lg text-display-lg font-extrabold text-primary-container tracking-tighter" style="font-size: 24px;">Baton</span>
+</div>
+<!-- Navigation Links -->
+<nav class="hidden md:flex items-center gap-8 h-full">
+<a class="text-on-surface-variant font-medium hover:text-primary-container transition-colors duration-200 h-full flex items-center pt-1 border-b-2 border-transparent" href="#">
+<span class="font-body-base text-body-base">Cockpit</span>
+</a>
+<a class="text-on-surface-variant font-medium hover:text-primary-container transition-colors duration-200 h-full flex items-center pt-1 border-b-2 border-transparent" href="#">
+<span class="font-body-base text-body-base">Intelligence</span>
+</a>
+<a class="text-primary-container font-bold border-b-2 border-primary-container pb-1 h-full flex items-center pt-1 opacity-80 scale-95" href="#">
+<span class="font-body-base text-body-base">Cost Ledger</span>
+</a>
+</nav>
+<!-- Trailing Icons -->
+<div class="flex items-center gap-4">
+<button class="text-on-surface-variant hover:text-primary-container transition-colors duration-200 flex items-center justify-center p-2 rounded-full hover:bg-surface-container-highest">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary-container transition-colors duration-200 flex items-center justify-center p-2 rounded-full hover:bg-surface-container-highest relative">
+<span class="absolute top-1.5 right-1.5 w-2 h-2 bg-primary-container rounded-full animate-pulse"></span>
+<span class="material-symbols-outlined text-[20px]" data-icon="notifications_active">notifications_active</span>
+</button>
+</div>
+</div>
+</header>
+<!-- Main Canvas -->
+<main class="flex-1 w-full max-w-container-max mx-auto p-margin-mobile md:p-margin-desktop flex flex-col gap-gutter">
+<!-- Header Section -->
+<div class="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-2">
+<div>
+<h1 class="font-headline-md text-headline-md text-primary mb-1">Fleet Ledger</h1>
+<p class="font-mono-reasoning text-mono-reasoning text-on-surface-variant">Real-time token burn and orchestration cost analysis.</p>
+</div>
+<div class="flex gap-3">
+<button class="bg-surface-container border border-outline-variant text-on-surface font-body-base text-body-base px-4 py-2 rounded-DEFAULT hover:bg-surface-container-high transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px]">download</span>
+                    Export CSV
+                </button>
+<button class="bg-primary-container text-on-primary-container font-body-base text-body-base font-bold px-4 py-2 rounded-DEFAULT hover:bg-primary transition-colors">
+                    Add Budget Alert
+                </button>
+</div>
+</div>
+<!-- Top Grid: Hero Metrics & Visuals -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-gutter">
+<!-- Fleet Spend Overview (Left Col, 3 stacked cards or grid) -->
+<div class="lg:col-span-4 flex flex-col gap-gutter">
+<!-- Card 1 -->
+<div class="bg-surface-container luminescent-stroke rounded-xl p-5 flex flex-col justify-between min-h-[140px] relative overflow-hidden group hover:border-primary-container/30 transition-colors">
+<div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+<span class="material-symbols-outlined text-[64px] text-primary-container">payments</span>
+</div>
+<div class="flex justify-between items-start z-10">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest">Total Spend Today</span>
+<div class="flex items-center gap-1.5 bg-surface-container-lowest px-2 py-1 rounded-DEFAULT border border-surface-container-highest">
+<div class="w-1.5 h-1.5 rounded-full bg-primary-container animate-pulse"></div>
+<span class="font-label-caps text-label-caps text-primary-container">LIVE</span>
+</div>
+</div>
+<div class="z-10 mt-4 flex items-baseline gap-2">
+<span class="font-display-lg text-display-lg text-primary">$14.28</span>
+<span class="font-mono-reasoning text-mono-reasoning text-error flex items-center"><span class="material-symbols-outlined text-[14px]">arrow_upward</span> 2.4%</span>
+</div>
+</div>
+<!-- Card 2 -->
+<div class="bg-surface-container luminescent-stroke rounded-xl p-5 flex flex-col justify-between min-h-[140px]">
+<div class="flex justify-between items-start">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest">Token Burn Rate (24h)</span>
+<span class="material-symbols-outlined text-on-surface-variant text-[18px]">speed</span>
+</div>
+<div class="mt-4 flex items-baseline gap-2">
+<span class="font-display-lg text-display-lg text-primary">1.24<span class="text-headline-md text-on-surface-variant ml-1">M</span></span>
+<span class="font-mono-reasoning text-mono-reasoning text-on-surface-variant">tokens</span>
+</div>
+<div class="w-full bg-surface-container-highest h-1 mt-3 rounded-full overflow-hidden">
+<div class="bg-primary-container h-full w-[65%]"></div>
+</div>
+</div>
+<!-- Card 3 -->
+<div class="bg-surface-container luminescent-stroke rounded-xl p-5 flex flex-col justify-between min-h-[140px]">
+<div class="flex justify-between items-start">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest">Proj. Monthly Spend</span>
+<span class="material-symbols-outlined text-on-surface-variant text-[18px]">calendar_month</span>
+</div>
+<div class="mt-4 flex items-baseline gap-2">
+<span class="font-display-lg text-display-lg text-primary">$420.50</span>
+</div>
+<p class="font-mono-reasoning text-mono-reasoning text-on-surface-variant mt-2 text-[11px]">Based on current 7-day trailing average.</p>
+</div>
+</div>
+<!-- Usage Visualization (Middle/Right Col) -->
+<div class="lg:col-span-8 bg-surface-container luminescent-stroke rounded-xl p-5 flex flex-col">
+<div class="flex justify-between items-center mb-6">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest">Token Consumption Pipeline</span>
+<div class="flex gap-2">
+<button class="bg-surface-container-highest text-on-surface font-label-caps text-label-caps px-3 py-1 rounded-DEFAULT hover:text-primary-container transition-colors">24H</button>
+<button class="bg-surface-container-low border border-surface-container-highest text-on-surface-variant font-label-caps text-label-caps px-3 py-1 rounded-DEFAULT hover:text-primary transition-colors">7D</button>
+<button class="bg-surface-container-low border border-surface-container-highest text-on-surface-variant font-label-caps text-label-caps px-3 py-1 rounded-DEFAULT hover:text-primary transition-colors">30D</button>
+</div>
+</div>
+<!-- Mock Chart Area - Technical Aesthetic -->
+<div class="flex-1 flex items-end gap-2 mt-4 relative h-[240px] border-b border-l border-surface-container-highest pb-2 pl-2">
+<!-- Y-Axis Labels -->
+<div class="absolute left-[-40px] top-0 bottom-0 flex flex-col justify-between font-mono-reasoning text-[10px] text-on-surface-variant text-right w-8">
+<span>250k</span>
+<span>200k</span>
+<span>150k</span>
+<span>100k</span>
+<span>50k</span>
+<span>0</span>
+</div>
+<!-- Grid Lines -->
+<div class="absolute inset-0 border-t border-surface-container-highest/50 top-[20%] w-full"></div>
+<div class="absolute inset-0 border-t border-surface-container-highest/50 top-[40%] w-full"></div>
+<div class="absolute inset-0 border-t border-surface-container-highest/50 top-[60%] w-full"></div>
+<div class="absolute inset-0 border-t border-surface-container-highest/50 top-[80%] w-full"></div>
+<!-- Bars -->
+<div class="w-full flex justify-between items-end h-full px-2 gap-2 relative z-10">
+<div class="w-1/12 bg-primary-container/20 border-t border-primary-container hover:bg-primary-container/40 transition-colors h-[30%] relative group">
+<div class="absolute -top-8 left-1/2 -translate-x-1/2 bg-surface border border-outline-variant px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity font-mono-reasoning text-[10px]">75k</div>
+</div>
+<div class="w-1/12 bg-primary-container/20 border-t border-primary-container hover:bg-primary-container/40 transition-colors h-[45%]"></div>
+<div class="w-1/12 bg-primary-container/20 border-t border-primary-container hover:bg-primary-container/40 transition-colors h-[25%]"></div>
+<div class="w-1/12 bg-primary-container/20 border-t border-primary-container hover:bg-primary-container/40 transition-colors h-[60%]"></div>
+<div class="w-1/12 bg-primary-container/20 border-t border-primary-container hover:bg-primary-container/40 transition-colors h-[80%]"></div>
+<div class="w-1/12 bg-primary-container/20 border-t border-primary-container hover:bg-primary-container/40 transition-colors h-[50%]"></div>
+<div class="w-1/12 bg-primary-container/20 border-t border-primary-container hover:bg-primary-container/40 transition-colors h-[90%]"></div>
+<div class="w-1/12 bg-primary-container border-t border-white hover:bg-primary transition-colors h-[75%] relative group">
+<div class="absolute -top-8 left-1/2 -translate-x-1/2 bg-surface border border-outline-variant px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity font-mono-reasoning text-[10px] z-20">180k</div>
+</div>
+</div>
+</div>
+<!-- X-Axis Labels -->
+<div class="flex justify-between w-full pl-2 mt-2 font-mono-reasoning text-[10px] text-on-surface-variant">
+<span>00:00</span>
+<span>04:00</span>
+<span>08:00</span>
+<span>12:00</span>
+<span>16:00</span>
+<span>20:00</span>
+<span>Now</span>
+</div>
+</div>
+</div>
+<!-- Bottom Grid: Tables & Lists -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-gutter mt-2">
+<!-- Cost by Model (Leaderboard) -->
+<div class="lg:col-span-4 bg-surface-container luminescent-stroke rounded-xl p-5 flex flex-col">
+<div class="flex justify-between items-center mb-5">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest">Compute by Model</span>
+</div>
+<div class="flex flex-col gap-4 flex-1">
+<!-- Model Row -->
+<div class="flex flex-col gap-1.5">
+<div class="flex justify-between items-center font-mono-reasoning text-data-table">
+<span class="text-primary flex items-center gap-2"><div class="w-2 h-2 rounded-sm bg-primary-container"></div> GPT-4o</span>
+<span class="text-on-surface-variant">$8.50 <span class="text-[10px] ml-1 opacity-50">(650k)</span></span>
+</div>
+<div class="w-full bg-surface-container-highest h-1.5 rounded-full overflow-hidden">
+<div class="bg-primary-container h-full w-[60%]"></div>
+</div>
+</div>
+<!-- Model Row -->
+<div class="flex flex-col gap-1.5">
+<div class="flex justify-between items-center font-mono-reasoning text-data-table">
+<span class="text-primary flex items-center gap-2"><div class="w-2 h-2 rounded-sm bg-secondary"></div> Claude 3.5 Sonnet</span>
+<span class="text-on-surface-variant">$4.20 <span class="text-[10px] ml-1 opacity-50">(320k)</span></span>
+</div>
+<div class="w-full bg-surface-container-highest h-1.5 rounded-full overflow-hidden">
+<div class="bg-secondary h-full w-[35%]"></div>
+</div>
+</div>
+<!-- Model Row -->
+<div class="flex flex-col gap-1.5">
+<div class="flex justify-between items-center font-mono-reasoning text-data-table">
+<span class="text-primary flex items-center gap-2"><div class="w-2 h-2 rounded-sm bg-outline"></div> Llama 3 70B</span>
+<span class="text-on-surface-variant">$1.58 <span class="text-[10px] ml-1 opacity-50">(270k)</span></span>
+</div>
+<div class="w-full bg-surface-container-highest h-1.5 rounded-full overflow-hidden">
+<div class="bg-outline h-full w-[15%]"></div>
+</div>
+</div>
+<!-- Model Row -->
+<div class="flex flex-col gap-1.5 opacity-60">
+<div class="flex justify-between items-center font-mono-reasoning text-data-table">
+<span class="text-primary flex items-center gap-2"><div class="w-2 h-2 rounded-sm bg-surface-container-highest"></div> Command R+</span>
+<span class="text-on-surface-variant">$0.00 <span class="text-[10px] ml-1 opacity-50">(0)</span></span>
+</div>
+<div class="w-full bg-surface-container-highest h-1.5 rounded-full overflow-hidden">
+<div class="bg-surface-container-highest h-full w-[0%]"></div>
+</div>
+</div>
+</div>
+</div>
+<!-- Project Ledger Table -->
+<div class="lg:col-span-8 bg-surface-container luminescent-stroke rounded-xl flex flex-col overflow-hidden">
+<div class="p-5 border-b border-surface-container-highest flex justify-between items-center">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest">Active Projects (7)</span>
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined text-[18px]">filter_list</span>
+</button>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="border-b border-surface-container-highest bg-surface-container-low/50">
+<th class="p-4 font-label-caps text-label-caps text-on-surface-variant uppercase font-medium">Project Name</th>
+<th class="p-4 font-label-caps text-label-caps text-on-surface-variant uppercase font-medium text-right">Tokens</th>
+<th class="p-4 font-label-caps text-label-caps text-on-surface-variant uppercase font-medium text-right">Cost (USD)</th>
+<th class="p-4 font-label-caps text-label-caps text-on-surface-variant uppercase font-medium text-right">Last Activity</th>
+</tr>
+</thead>
+<tbody class="font-data-table text-data-table">
+<!-- Row 1 -->
+<tr class="border-b border-surface-container-highest hover:bg-surface-container-high transition-colors group cursor-pointer">
+<td class="p-4 flex items-center gap-3">
+<div class="w-2 h-2 rounded-full bg-primary-container"></div>
+<div>
+<div class="text-primary font-body-base text-body-base">Decision guidance</div>
+<div class="text-on-surface-variant text-[11px]">coding-agent-orchestrator</div>
+</div>
+</td>
+<td class="p-4 text-right text-on-surface-variant">845,201</td>
+<td class="p-4 text-right text-primary-container font-mono-reasoning">$185.21</td>
+<td class="p-4 text-right text-on-surface-variant font-mono-reasoning">2026-06-22 17:50</td>
+</tr>
+<!-- Row 2 -->
+<tr class="border-b border-surface-container-highest hover:bg-surface-container-high transition-colors group cursor-pointer">
+<td class="p-4 flex items-center gap-3">
+<div class="w-2 h-2 rounded-full bg-surface-container-highest"></div>
+<div>
+<div class="text-primary font-body-base text-body-base">Canvas Toolchain</div>
+<div class="text-on-surface-variant text-[11px]">decision guidance &amp; closing...</div>
+</div>
+</td>
+<td class="p-4 text-right text-on-surface-variant">0</td>
+<td class="p-4 text-right text-on-surface-variant font-mono-reasoning">$0.00</td>
+<td class="p-4 text-right text-on-surface-variant font-mono-reasoning">2026-06-19 15:35</td>
+</tr>
+<!-- Row 3 -->
+<tr class="border-b border-surface-container-highest hover:bg-surface-container-high transition-colors group cursor-pointer">
+<td class="p-4 flex items-center gap-3">
+<div class="w-2 h-2 rounded-full bg-secondary"></div>
+<div>
+<div class="text-primary font-body-base text-body-base">Kidsbats</div>
+<div class="text-on-surface-variant text-[11px]">kidsbats</div>
+</div>
+</td>
+<td class="p-4 text-right text-on-surface-variant">12,050</td>
+<td class="p-4 text-right text-primary font-mono-reasoning">$4.50</td>
+<td class="p-4 text-right text-on-surface-variant font-mono-reasoning">2026-06-11 00:11</td>
+</tr>
+<!-- Row 4 -->
+<tr class="border-b border-surface-container-highest hover:bg-surface-container-high transition-colors group cursor-pointer">
+<td class="p-4 flex items-center gap-3">
+<div class="w-2 h-2 rounded-full bg-surface-container-highest"></div>
+<div>
+<div class="text-primary font-body-base text-body-base">Bench Gauntlet</div>
+<div class="text-on-surface-variant text-[11px]">bench-gauntlet</div>
+</div>
+</td>
+<td class="p-4 text-right text-on-surface-variant">0</td>
+<td class="p-4 text-right text-on-surface-variant font-mono-reasoning">$0.00</td>
+<td class="p-4 text-right text-on-surface-variant font-mono-reasoning">--</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</main>
+</body></html>

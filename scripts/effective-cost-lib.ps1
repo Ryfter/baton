@@ -24,12 +24,14 @@ function Get-QualityScalar {
     if (-not $Bands.Contains($v)) { $v = 'reject' }   # unknown verdict -> worst band
     $lo = [double]$Bands[$v][0]
     $hi = [double]$Bands[$v][1]
+    if ($v -ne 'accept') { $hi = [math]::Max($lo, $hi - 0.0001) }  # lower bands are half-open at report precision
     $w  = $hi - $lo
     $crit = [int]($Counts['critical']); $imp = [int]($Counts['important']); $min = [int]($Counts['minor'])
     $penalty = ([double]$Weights['critical'] * $crit) + ([double]$Weights['important'] * $imp) + ([double]$Weights['minor'] * $min)
     if ($penalty -lt 0) { $penalty = 0.0 }
     if ($penalty -gt 1) { $penalty = 1.0 }
     $q = $hi - ($penalty * $w)
+    if ($q -lt $lo) { $q = $lo }
     if ($q -lt $Floor) { $q = $Floor }
     return [math]::Round($q, 4)
 }
@@ -127,5 +129,113 @@ function Format-EffectiveCostSection {
     [void]$sb.AppendLine("Effective cost **$eff** = cost $cost ($($Record.cost_basis)) / quality $q ($($Record.verdict)).")
     [void]$sb.AppendLine("Attempts: $($Record.attempts). Basis: $($Record.cost_basis) — $basisNote.")
     if ($shareStr) { [void]$sb.AppendLine("Per-worker share: $shareStr.") }
+    return $sb.ToString().TrimEnd()
+}
+
+function Get-WorkerEffectiveCost {
+    <# Fold per-run effective-cost records into a per-worker learned leaderboard.
+       A mixed run contributes by worker share; a single-producer run contributes
+       full attribution and raises confidence more strongly. Advisory only. #>
+    param(
+        [object[]]$Records = @(),
+        [int]$MinConfidenceRuns = 5
+    )
+    if ($MinConfidenceRuns -lt 1) { $MinConfidenceRuns = 1 }
+
+    $byWorker = [ordered]@{}
+    foreach ($rec in @($Records)) {
+        if ($null -eq $rec) { continue }
+        $workers = @($rec.workers)
+        if ($workers.Count -eq 0) { continue }
+
+        $eff = [double]$rec.effective_cost
+        if ([double]::IsNaN($eff) -or [double]::IsInfinity($eff)) { continue }
+
+        $isSingle = [bool]$rec.single_producer
+        foreach ($w in $workers) {
+            $name = [string]$w.worker
+            if ([string]::IsNullOrWhiteSpace($name)) { continue }
+
+            $share = [double]$w.share
+            if ($share -le 0) { continue }
+            if ($share -gt 1) { $share = 1.0 }
+
+            if (-not $byWorker.Contains($name)) {
+                $byWorker[$name] = @{
+                    weighted_cost = 0.0
+                    weight = 0.0
+                    run_ids = @{}
+                    single_run_ids = @{}
+                }
+            }
+
+            $byWorker[$name].weighted_cost += ($eff * $share)
+            $byWorker[$name].weight += $share
+
+            $runId = [string]$rec.run_id
+            if ([string]::IsNullOrWhiteSpace($runId)) { $runId = "__record_$($byWorker[$name].run_ids.Count)" }
+            $byWorker[$name].run_ids[$runId] = $true
+            if ($isSingle -and $workers.Count -eq 1) {
+                $byWorker[$name].single_run_ids[$runId] = $true
+            }
+        }
+    }
+
+    if ($byWorker.Count -eq 0) { return @() }
+
+    $rows = foreach ($name in $byWorker.Keys) {
+        $state = $byWorker[$name]
+        if ([double]$state.weight -le 0) { continue }
+
+        $nRuns = [int]$state.run_ids.Count
+        $singleRuns = [int]$state.single_run_ids.Count
+        $runConfidence = [math]::Min(1.0, [double]$nRuns / [double]$MinConfidenceRuns)
+        $singleFraction = if ($nRuns -gt 0) { [double]$singleRuns / [double]$nRuns } else { 0.0 }
+        $confidence = $runConfidence * (0.5 + (0.5 * $singleFraction))
+
+        [ordered]@{
+            worker               = $name
+            n_runs               = $nRuns
+            eff_cost_mean        = [math]::Round(([double]$state.weighted_cost / [double]$state.weight), 4)
+            single_producer_runs = $singleRuns
+            confidence           = [math]::Round($confidence, 4)
+        }
+    }
+
+    $sorted = @($rows) | Sort-Object @{ Expression = 'eff_cost_mean'; Ascending = $true }, @{ Expression = 'confidence'; Descending = $true }, @{ Expression = 'worker'; Ascending = $true }
+    return ,@($sorted)
+}
+
+function Format-EffectiveCostLeaderboard {
+    <# Render a Get-WorkerEffectiveCost leaderboard as a plain-text report block.
+       Rows arrive already cheapest-first (do not re-sort). Low-confidence rows
+       (< 0.50) are flagged 'tentative'. Empty rows -> one-line guidance. #>
+    param(
+        [object[]]$Rows = @(),
+        [int]$RunCount = 0,
+        [double]$TentativeBelow = 0.5
+    )
+    $rows = @($Rows)
+    if ($rows.Count -eq 0) {
+        return "No effective-cost records found. Run /baton:go with a gate (--gate-artifact or --gate-diff) to produce them."
+    }
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine('## Effective-cost leaderboard')
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine("Across $RunCount run(s). Cheapest quality-adjusted worker first (lower eff_cost = better).")
+    [void]$sb.AppendLine('')
+    $wCol = [math]::Max(6, (@($rows | ForEach-Object { ([string]$_.worker).Length }) | Measure-Object -Maximum).Maximum)
+    [void]$sb.AppendLine(("{0}  {1}  {2}  {3}" -f 'worker'.PadRight($wCol), 'runs'.PadLeft(4), 'eff_cost'.PadLeft(10), 'confidence'))
+    foreach ($r in $rows) {
+        $tent = if ([double]$r.confidence -lt $TentativeBelow) { '  tentative' } else { '' }
+        [void]$sb.AppendLine(("{0}  {1}  {2}  {3}{4}" -f `
+            ([string]$r.worker).PadRight($wCol), `
+            ([string][int]$r.n_runs).PadLeft(4), `
+            ('{0:0.0000}' -f [double]$r.eff_cost_mean).PadLeft(10), `
+            ('{0:0.00}' -f [double]$r.confidence), `
+            $tent))
+    }
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine("Confidence rises with run count and single-producer (clean-attribution) runs; rows marked tentative (confidence < $('{0:0.00}' -f $TentativeBelow)) have too little clean data to trust yet.")
     return $sb.ToString().TrimEnd()
 }
