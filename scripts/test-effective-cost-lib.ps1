@@ -12,7 +12,7 @@ try {
     $qAccept = Get-QualityScalar -Verdict 'accept' -Counts @{ critical=0; important=0; minor=0 }
     Check 'E1 clean accept -> top of band (1.0)' (Approx $qAccept 1.0)
     $qPolish = Get-QualityScalar -Verdict 'polish' -Counts @{ critical=0; important=0; minor=0 }
-    Check 'E2 clean polish -> top of polish band (0.7)' (Approx $qPolish 0.7)
+    Check 'E2 clean polish -> below accept floor (0.6999)' (Approx $qPolish 0.6999)
     $qReject = Get-QualityScalar -Verdict 'reject' -Counts @{ critical=1; important=0; minor=0 }
     Check 'E3 reject in (0,0.3] and floored > 0' (($qReject -gt 0) -and ($qReject -le 0.3))
 
@@ -22,6 +22,9 @@ try {
     Check 'E5 refined accept stays in band (>=0.7)' ($qAcceptMinor -ge 0.7)
     $qAcceptManyMinor = Get-QualityScalar -Verdict 'accept' -Counts @{ critical=0; important=0; minor=999 }
     Check 'E6 saturated penalty clamps at band floor (0.7)' (Approx $qAcceptManyMinor 0.7)
+    Check 'E6b worst accept stays above clean polish' ($qAcceptManyMinor -gt $qPolish)
+    $qPolishManyMinor = Get-QualityScalar -Verdict 'polish' -Counts @{ critical=0; important=0; minor=999 }
+    Check 'E6c saturated polish clamps at band floor (0.3)' (Approx $qPolishManyMinor 0.3)
 
     # ---- Get-QualityScalar: floor + unknown verdict + null counts ----
     $qWorst = Get-QualityScalar -Verdict 'reject' -Counts @{ critical=999; important=0; minor=0 }
@@ -82,6 +85,64 @@ try {
     Check 'E31 section shows the effective cost number' ($sec -match '5\.77')
     Check 'E32 section names the basis honestly' ($sec -match 'estimate')
     Check 'E33 section shows per-worker share' ($sec -match 'haiku')
+
+    # ---- Get-WorkerEffectiveCost ----
+    $leaderRecords = @(
+        [ordered]@{
+            run_id = 'r1'; effective_cost = 10.0; single_producer = $true
+            workers = @([ordered]@{ worker = 'a'; share = 1.0 })
+        }
+        [ordered]@{
+            run_id = 'r2'; effective_cost = 30.0; single_producer = $false
+            workers = @(
+                [ordered]@{ worker = 'a'; share = 0.25 }
+                [ordered]@{ worker = 'b'; share = 0.75 }
+            )
+        }
+        [ordered]@{
+            run_id = 'r3'; effective_cost = 20.0; single_producer = $true
+            workers = @([ordered]@{ worker = 'b'; share = 1.0 })
+        }
+        [ordered]@{
+            run_id = 'r4'; effective_cost = 40.0; single_producer = $false
+            workers = @(
+                [ordered]@{ worker = 'c'; share = 0.5 }
+                [ordered]@{ worker = 'd'; share = 0.5 }
+            )
+        }
+        [ordered]@{
+            run_id = 'r5'; effective_cost = 20.0; single_producer = $false
+            workers = @(
+                [ordered]@{ worker = 'c'; share = 0.5 }
+                [ordered]@{ worker = 'd'; share = 0.5 }
+            )
+        }
+        [ordered]@{
+            run_id = 'r6'; effective_cost = 99.0; single_producer = $false
+            workers = @()
+        }
+    )
+    $leader = Get-WorkerEffectiveCost -Records $leaderRecords -MinConfidenceRuns 4
+    Check 'E34 leaderboard has one row per attributed worker' (@($leader).Count -eq 4)
+    Check 'E35 leaderboard sorts cheapest effective cost first' ($leader[0].worker -eq 'a')
+    $rowA = @($leader | Where-Object { $_.worker -eq 'a' })[0]
+    Check 'E36 mixed run contributes by share-weighted mean' (Approx $rowA.eff_cost_mean 14.0)
+    Check 'E37 n_runs counts distinct attributed runs' ($rowA.n_runs -eq 2)
+    Check 'E38 single_producer_runs counts clean attribution' ($rowA.single_producer_runs -eq 1)
+    $rowC = @($leader | Where-Object { $_.worker -eq 'c' })[0]
+    Check 'E39 mixed-only rows have lower confidence than same-count rows with a solo run' ($rowC.confidence -lt $rowA.confidence)
+    $emptyLeader = Get-WorkerEffectiveCost -Records @()
+    Check 'E40 empty records -> empty leaderboard' (@($emptyLeader).Count -eq 0)
+
+    # ---- Format-EffectiveCostLeaderboard ----
+    $board = Format-EffectiveCostLeaderboard -Rows $leader -RunCount 5
+    Check 'E41 board starts with the heading' ($board -match '(?m)^## Effective-cost leaderboard')
+    Check 'E42 board states the run count' ($board -match '\b5\b')
+    Check 'E43 board lists each worker' (($board -match '(?m)^a\b') -and ($board -match '(?m)^b\b'))
+    Check 'E44 board shows the cheapest worker before the dearest' ($board.IndexOf("`na ") -lt $board.IndexOf("`nd "))
+    Check 'E45 low-confidence rows are flagged tentative' ($board -match 'tentative')
+    $emptyBoard = Format-EffectiveCostLeaderboard -Rows @() -RunCount 0
+    Check 'E46 empty rows -> guidance, no table' (($emptyBoard -match 'No effective-cost') -and ($emptyBoard -notmatch '(?m)^## Effective-cost leaderboard'))
 }
 finally {
     if ($script:fail -gt 0) { Write-Host "`n$($script:fail) CHECK(S) FAILED" -ForegroundColor Red; exit 1 }
