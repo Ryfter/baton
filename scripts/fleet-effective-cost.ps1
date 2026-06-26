@@ -37,7 +37,10 @@ switch ($Subcommand) {
         $records = Read-EffectiveCostRecords -Root $RunsRoot -Glob $Runs
         $board = Get-WorkerEffectiveCost -Records @($records) -MinConfidenceRuns $MinConfidenceRuns
         if ($Json) {
-            @($board) | ConvertTo-Json -Depth 6
+            # -InputObject (not pipe): a piped array unrolls, so ConvertTo-Json
+            # would emit a bare object for 1 row and nothing for 0 rows. Force a
+            # real JSON array for every N so the rows-array contract holds.
+            ConvertTo-Json -InputObject @($board) -Depth 6
         }
         else {
             Write-Host (Format-EffectiveCostLeaderboard -Rows @($board) -RunCount (@($records).Count))

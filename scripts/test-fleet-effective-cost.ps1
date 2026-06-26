@@ -56,6 +56,19 @@ try {
     # C10: unknown subcommand -> exit 2.
     & pwsh -NoProfile -File $cli bogus -RunsRoot $runsRoot 2>$null | Out-Null
     Check 'C10 unknown subcommand exits 2' ($LASTEXITCODE -eq 2)
+
+    # C11: --json on a SINGLE-row board still emits a JSON array (not a bare object).
+    $soloRoot = Join-Path $tmp 'solo-runs'
+    New-Item -ItemType Directory -Force -Path $soloRoot | Out-Null
+    New-Record $soloRoot 'go-s1' 0.10 'onlyw' $true
+    $soloJson = (& pwsh -NoProfile -File $cli report -RunsRoot $soloRoot -Json 2>$null | Out-String)
+    Check 'C11 single-row --json starts as an array' ($soloJson.Trim().StartsWith('['))
+    $soloParsed = $soloJson | ConvertFrom-Json
+    Check 'C12 single-row --json parses to a 1-element array' ((@($soloParsed).Count -eq 1) -and (@($soloParsed)[0].worker -eq 'onlyw'))
+
+    # C13: --json on an EMPTY board emits an empty JSON array, not "".
+    $emptyJson = (& pwsh -NoProfile -File $cli report -RunsRoot $emptyRoot -Json 2>$null | Out-String)
+    Check 'C13 empty --json is a valid empty array' (@($emptyJson | ConvertFrom-Json).Count -eq 0)
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
