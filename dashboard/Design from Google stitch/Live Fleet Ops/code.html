@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Cockpit - BATON</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "secondary-container": "#7d01b1",
+                      "on-secondary-fixed-variant": "#7200a3",
+                      "on-surface": "#e5e2e1",
+                      "on-background": "#e5e2e1",
+                      "outline": "#8c9479",
+                      "background": "#131313",
+                      "on-secondary-fixed": "#310048",
+                      "inverse-primary": "#4b6700",
+                      "secondary-fixed-dim": "#e9b3ff",
+                      "surface": "#131313",
+                      "inverse-on-surface": "#313030",
+                      "on-primary-fixed": "#141f00",
+                      "on-surface-variant": "#c2caad",
+                      "on-secondary-container": "#e5a9ff",
+                      "tertiary-container": "#d6e3ff",
+                      "surface-container": "#201f1f",
+                      "inverse-surface": "#e5e2e1",
+                      "surface-bright": "#3a3939",
+                      "on-tertiary-container": "#0063c3",
+                      "surface-container-lowest": "#0e0e0e",
+                      "on-tertiary-fixed": "#001b3e",
+                      "on-tertiary": "#003064",
+                      "tertiary": "#ffffff",
+                      "surface-tint": "#a0d800",
+                      "surface-container-highest": "#353534",
+                      "error": "#ffb4ab",
+                      "primary-container": "#b7f700",
+                      "on-secondary": "#510074",
+                      "surface-container-low": "#1c1b1b",
+                      "on-error": "#690005",
+                      "error-container": "#93000a",
+                      "secondary-fixed": "#f6d9ff",
+                      "surface-variant": "#353534",
+                      "on-primary": "#253600",
+                      "primary": "#ffffff",
+                      "outline-variant": "#434933",
+                      "surface-dim": "#131313",
+                      "on-error-container": "#ffdad6",
+                      "primary-fixed": "#b7f700",
+                      "secondary": "#e9b3ff",
+                      "on-primary-container": "#506e00",
+                      "on-tertiary-fixed-variant": "#00468d",
+                      "surface-container-high": "#2a2a2a",
+                      "tertiary-fixed": "#d6e3ff",
+                      "tertiary-fixed-dim": "#aac7ff",
+                      "primary-fixed-dim": "#a0d800",
+                      "on-primary-fixed-variant": "#374e00"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.125rem",
+                      "lg": "0.25rem",
+                      "xl": "0.5rem",
+                      "full": "0.75rem"
+              },
+              "spacing": {
+                      "container-max": "1440px",
+                      "margin-desktop": "32px",
+                      "unit": "4px",
+                      "margin-mobile": "16px",
+                      "gutter": "16px"
+              },
+              "fontFamily": {
+                      "headline-md": [
+                              "Hanken Grotesk"
+                      ],
+                      "label-caps": [
+                              "JetBrains Mono"
+                      ],
+                      "body-base": [
+                              "Hanken Grotesk"
+                      ],
+                      "display-lg": [
+                              "Hanken Grotesk"
+                      ],
+                      "headline-md-mobile": [
+                              "Hanken Grotesk"
+                      ],
+                      "mono-reasoning": [
+                              "JetBrains Mono"
+                      ],
+                      "data-table": [
+                              "JetBrains Mono"
+                      ]
+              },
+              "fontSize": {
+                      "headline-md": [
+                              "24px",
+                              {
+                                      "lineHeight": "1.2",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "label-caps": [
+                              "11px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "0.1em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "body-base": [
+                              "15px",
+                              {
+                                      "lineHeight": "1.5",
+                                      "letterSpacing": "0em",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "display-lg": [
+                              "48px",
+                              {
+                                      "lineHeight": "1.1",
+                                      "letterSpacing": "-0.04em",
+                                      "fontWeight": "800"
+                              }
+                      ],
+                      "headline-md-mobile": [
+                              "20px",
+                              {
+                                      "lineHeight": "1.2",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "mono-reasoning": [
+                              "13px",
+                              {
+                                      "lineHeight": "1.6",
+                                      "letterSpacing": "0em",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "data-table": [
+                              "12px",
+                              {
+                                      "lineHeight": "1.4",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "500"
+                              }
+                      ]
+              }
+            }
+          }
+        }
+    </script>
+<style>
+        body {
+            background-color: #050505;
+            color: #e5e2e1;
+        }
+        .card-level-1 {
+            background-color: #121212;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+        }
+        .card-level-2 {
+            background-color: #1C1C1E;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+        }
+        .glow-active {
+            box-shadow: 0 0 12px 2px rgba(183, 247, 0, 0.15), inset 0 0 0 1px rgba(183, 247, 0, 0.3);
+        }
+        .glow-attention {
+            box-shadow: 0 0 12px 2px rgba(125, 1, 177, 0.2), inset 0 0 0 1px rgba(125, 1, 177, 0.4);
+        }
+        /* Custom scrollbar for dense panels */
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #353534;
+            border-radius: 2px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #434933;
+        }
+    </style>
+</head>
+<body class="font-body-base text-body-base h-screen overflow-hidden flex flex-col">
+<!-- TopNavBar -->
+<header class="bg-background dark:bg-background docked full-width top-0 sticky z-50 border-b border-outline-variant flat no shadows flex justify-between items-center w-full px-margin-desktop py-unit max-w-container-max mx-auto shrink-0">
+<div class="flex items-center gap-8">
+<div class="font-headline-md text-headline-md font-extrabold text-primary tracking-tighter uppercase flex items-center gap-2">
+<span class="material-symbols-outlined text-primary-fixed" data-icon="route" style="font-variation-settings: 'FILL' 1;">route</span>
+                BATON
+            </div>
+<nav class="hidden md:flex items-center gap-6">
+<a class="text-primary font-bold border-b-2 border-primary-fixed pb-1" href="#">Cockpit</a>
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-200" href="#">Intelligence</a>
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-200" href="#">Fleet Settings</a>
+</nav>
+</div>
+<div class="flex items-center gap-4 text-on-surface-variant">
+<button class="hover:text-primary-fixed transition-colors duration-200"><span class="material-symbols-outlined" data-icon="settings_suggest">settings_suggest</span></button>
+<button class="hover:text-primary-fixed transition-colors duration-200"><span class="material-symbols-outlined" data-icon="monitoring">monitoring</span></button>
+<button class="hover:text-primary-fixed transition-colors duration-200"><span class="material-symbols-outlined" data-icon="account_circle">account_circle</span></button>
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="flex-1 overflow-hidden flex max-w-container-max w-full mx-auto px-gutter py-6 gap-gutter">
+<!-- LEFT COLUMN: Fleet Activity -->
+<section class="w-1/4 flex flex-col gap-4 min-w-[300px]">
+<div class="card-level-1 rounded-lg flex-1 flex flex-col overflow-hidden">
+<div class="px-4 py-3 border-b border-outline-variant/30 flex justify-between items-center bg-surface-container-low shrink-0">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest">Fleet Activity</span>
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-primary-container animate-pulse"></span>
+<span class="font-mono-reasoning text-data-table text-primary-container">LIVE</span>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto p-4 space-y-4">
+<!-- Activity Item 1 -->
+<div class="flex flex-col gap-1 border-l-2 border-outline-variant/30 pl-3 py-1">
+<div class="flex justify-between items-baseline">
+<span class="font-data-table text-data-table text-on-surface-variant">14:02:01</span>
+<span class="font-data-table text-data-table text-outline">0.2s</span>
+</div>
+<div class="text-sm">
+<span class="font-semibold text-primary">Cortex</span> <span class="text-on-surface-variant">&gt;</span> <span class="text-[#00ffff]">Refactoring</span> auth middleware
+                        </div>
+<div class="font-mono-reasoning text-data-table text-on-surface-variant/80 bg-surface-container-lowest p-2 rounded mt-1 border border-outline-variant/20">
+                            &gt; Target: Improve security compliance. Assessing JWT implementation against current specs.
+                        </div>
+</div>
+<!-- Activity Item 2 -->
+<div class="flex flex-col gap-1 border-l-2 border-[#00ffff]/50 pl-3 py-1 bg-[#00ffff]/5 rounded-r">
+<div class="flex justify-between items-baseline">
+<span class="font-data-table text-data-table text-on-surface-variant">14:01:45</span>
+<span class="font-data-table text-data-table text-outline">1.5s</span>
+</div>
+<div class="text-sm">
+<span class="font-semibold text-primary">DataMiner</span> <span class="text-on-surface-variant">&gt;</span> <span class="text-[#00ffff]">Querying</span> Production DB
+                        </div>
+<div class="font-mono-reasoning text-data-table text-on-surface-variant/80 bg-surface-container-lowest p-2 rounded mt-1 border border-outline-variant/20">
+                            &gt; SELECT * FROM user_metrics WHERE last_active &gt; NOW() - INTERVAL '24 hours'
+                        </div>
+</div>
+<!-- Activity Item 3 -->
+<div class="flex flex-col gap-1 border-l-2 border-outline-variant/30 pl-3 py-1">
+<div class="flex justify-between items-baseline">
+<span class="font-data-table text-data-table text-on-surface-variant">14:00:12</span>
+<span class="font-data-table text-data-table text-outline">0.8s</span>
+</div>
+<div class="text-sm">
+<span class="font-semibold text-primary">Summarizer</span> <span class="text-on-surface-variant">&gt;</span> <span class="text-[#00ffff]">Parsing</span> Daily Standup Transcript
+                        </div>
+</div>
+<!-- Activity Item 4 -->
+<div class="flex flex-col gap-1 border-l-2 border-outline-variant/30 pl-3 py-1">
+<div class="flex justify-between items-baseline">
+<span class="font-data-table text-data-table text-on-surface-variant">13:58:22</span>
+<span class="font-data-table text-data-table text-outline">4.2s</span>
+</div>
+<div class="text-sm">
+<span class="font-semibold text-primary">UI_Gen</span> <span class="text-on-surface-variant">&gt;</span> <span class="text-[#00ffff]">Generating</span> Component CSS
+                        </div>
+<div class="font-mono-reasoning text-data-table text-on-surface-variant/80 bg-surface-container-lowest p-2 rounded mt-1 border border-outline-variant/20">
+                            &gt; Applying theme tokens to dashboard shell. Resolving flexbox constraints.
+                        </div>
+</div>
+</div>
+</div>
+</section>
+<!-- CENTER COLUMN: Active Jobs & Decisions -->
+<section class="flex-1 flex flex-col gap-6 min-w-[500px]">
+<!-- Decision Queue -->
+<div class="flex flex-col gap-3 shrink-0">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest pl-1">Decision Queue</span>
+<div class="grid grid-cols-2 gap-4">
+<!-- Decision Card 1 -->
+<div class="card-level-1 rounded-lg p-4 glow-attention flex flex-col gap-3 relative overflow-hidden group">
+<div class="absolute top-0 left-0 w-1 h-full bg-secondary-container"></div>
+<div class="flex justify-between items-start">
+<span class="font-label-caps text-[10px] text-tertiary bg-secondary-container px-2 py-0.5 rounded-sm">ACTION REQUIRED</span>
+<span class="font-data-table text-data-table text-on-surface-variant">#PR-882</span>
+</div>
+<div>
+<h3 class="font-headline-md text-headline-md-mobile text-primary mb-1">Approve Auth Refactor</h3>
+<p class="font-body-base text-[13px] text-on-surface-variant line-clamp-2">Cortex has completed the JWT middleware rewrite. All tests passing. Awaiting human review before merge.</p>
+</div>
+<div class="flex gap-2 mt-2">
+<button class="bg-primary-container text-on-primary-container font-semibold py-1.5 px-4 rounded text-sm hover:bg-primary-fixed-dim transition-colors flex-1">Review PR</button>
+<button class="border border-outline-variant text-primary py-1.5 px-4 rounded text-sm hover:bg-surface-container-high transition-colors flex-1">Reject</button>
+</div>
+</div>
+<!-- Decision Card 2 -->
+<div class="card-level-1 rounded-lg p-4 border border-outline-variant/30 flex flex-col gap-3 relative group hover:border-outline-variant transition-colors">
+<div class="flex justify-between items-start">
+<span class="font-label-caps text-[10px] text-on-surface-variant bg-surface-container-highest px-2 py-0.5 rounded-sm">MODEL SELECTION</span>
+<span class="font-data-table text-data-table text-on-surface-variant">#TSK-104</span>
+</div>
+<div>
+<h3 class="font-headline-md text-headline-md-mobile text-primary mb-1">High-Compute Task</h3>
+<p class="font-body-base text-[13px] text-on-surface-variant line-clamp-2">DataMiner requires a more capable model to parse the 5GB unstructured log file. Recommend switching to GPT-4-Turbo.</p>
+</div>
+<div class="flex gap-2 mt-2">
+<button class="bg-primary-container text-on-primary-container font-semibold py-1.5 px-4 rounded text-sm hover:bg-primary-fixed-dim transition-colors flex-1">Approve Switch</button>
+<button class="border border-outline-variant text-primary py-1.5 px-4 rounded text-sm hover:bg-surface-container-high transition-colors flex-1">Keep Current</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Active Jobs -->
+<div class="card-level-1 rounded-lg flex-1 flex flex-col overflow-hidden">
+<div class="px-4 py-3 border-b border-outline-variant/30 flex justify-between items-center bg-surface-container-low shrink-0">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest">Active Jobs</span>
+<button class="text-xs text-primary-fixed hover:text-primary-fixed-dim border border-primary-fixed/30 px-3 py-1 rounded">View All</button>
+</div>
+<div class="flex-1 overflow-y-auto p-2">
+<!-- Job Row 1 -->
+<div class="p-3 border-b border-outline-variant/20 hover:bg-surface-container-lowest transition-colors flex items-center justify-between gap-4 group">
+<div class="flex-1 min-w-0">
+<div class="flex items-center gap-2 mb-1">
+<span class="font-data-table text-primary font-semibold">j-2026-06-14-atomicforge</span>
+<span class="font-label-caps text-[9px] bg-surface-bright text-on-surface-variant px-1.5 rounded">RESEARCH</span>
+</div>
+<div class="font-mono-reasoning text-[11px] text-on-surface-variant truncate">
+                                Analyzing latest documentation for Canvas toolchain implementation.
+                            </div>
+</div>
+<div class="w-32 flex flex-col gap-1 shrink-0">
+<div class="flex justify-between text-[10px] font-data-table text-on-surface-variant">
+<span>Progress</span>
+<span>45%</span>
+</div>
+<div class="h-1 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-primary-container w-[45%]"></div>
+</div>
+</div>
+<div class="w-20 text-right shrink-0">
+<div class="font-data-table text-[12px] text-primary-container">$0.1420</div>
+<div class="font-data-table text-[10px] text-outline">cost limit: $2</div>
+</div>
+<div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+<button class="p-1 text-on-surface-variant hover:text-primary transition-colors" title="Pause"><span class="material-symbols-outlined text-[18px]" data-icon="pause">pause</span></button>
+<button class="p-1 text-on-surface-variant hover:text-error transition-colors" title="Terminate"><span class="material-symbols-outlined text-[18px]" data-icon="stop">stop</span></button>
+</div>
+</div>
+<!-- Job Row 2 -->
+<div class="p-3 border-b border-outline-variant/20 hover:bg-surface-container-lowest transition-colors flex items-center justify-between gap-4 group">
+<div class="flex-1 min-w-0">
+<div class="flex items-center gap-2 mb-1">
+<span class="font-data-table text-primary font-semibold">j-2026-06-15-data-ingest</span>
+<span class="font-label-caps text-[9px] bg-surface-bright text-on-surface-variant px-1.5 rounded">ETL</span>
+</div>
+<div class="font-mono-reasoning text-[11px] text-on-surface-variant truncate">
+                                Batch processing Q2 financial reports into vector store.
+                            </div>
+</div>
+<div class="w-32 flex flex-col gap-1 shrink-0">
+<div class="flex justify-between text-[10px] font-data-table text-on-surface-variant">
+<span>Progress</span>
+<span>88%</span>
+</div>
+<div class="h-1 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-primary-container w-[88%]"></div>
+</div>
+</div>
+<div class="w-20 text-right shrink-0">
+<div class="font-data-table text-[12px] text-primary-container">$1.4050</div>
+<div class="font-data-table text-[10px] text-outline">cost limit: $5</div>
+</div>
+<div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+<button class="p-1 text-on-surface-variant hover:text-primary transition-colors" title="Pause"><span class="material-symbols-outlined text-[18px]" data-icon="pause">pause</span></button>
+<button class="p-1 text-on-surface-variant hover:text-error transition-colors" title="Terminate"><span class="material-symbols-outlined text-[18px]" data-icon="stop">stop</span></button>
+</div>
+</div>
+<!-- Job Row 3 (Paused) -->
+<div class="p-3 border-b border-outline-variant/20 hover:bg-surface-container-lowest transition-colors flex items-center justify-between gap-4 group opacity-60">
+<div class="flex-1 min-w-0">
+<div class="flex items-center gap-2 mb-1">
+<span class="font-data-table text-primary font-semibold">j-2026-06-16-ui-audit</span>
+<span class="font-label-caps text-[9px] bg-surface-bright text-on-surface-variant px-1.5 rounded">AUDIT</span>
+<span class="font-label-caps text-[9px] bg-surface-container-highest text-outline px-1.5 rounded">PARKED</span>
+</div>
+<div class="font-mono-reasoning text-[11px] text-on-surface-variant truncate">
+                                Scanning frontend repo for accessibility violations.
+                            </div>
+</div>
+<div class="w-32 flex flex-col gap-1 shrink-0">
+<div class="flex justify-between text-[10px] font-data-table text-on-surface-variant">
+<span>Progress</span>
+<span>12%</span>
+</div>
+<div class="h-1 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-outline-variant w-[12%]"></div>
+</div>
+</div>
+<div class="w-20 text-right shrink-0">
+<div class="font-data-table text-[12px] text-on-surface-variant">$0.0200</div>
+<div class="font-data-table text-[10px] text-outline">cost limit: $1</div>
+</div>
+<div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+<button class="p-1 text-on-surface-variant hover:text-primary transition-colors" title="Resume"><span class="material-symbols-outlined text-[18px]" data-icon="play_arrow">play_arrow</span></button>
+<button class="p-1 text-on-surface-variant hover:text-error transition-colors" title="Terminate"><span class="material-symbols-outlined text-[18px]" data-icon="stop">stop</span></button>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- RIGHT COLUMN: Resources & Metadata -->
+<section class="w-[320px] flex flex-col gap-6 shrink-0">
+<!-- KB Search -->
+<div class="card-level-1 rounded-lg p-4 flex flex-col gap-3">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest">KB Search</span>
+<div class="relative">
+<input class="w-full bg-surface-container-lowest border-b border-outline-variant/50 focus:border-[#00ffff] text-primary text-sm px-3 py-2 pl-9 outline-none transition-colors rounded-t placeholder:text-on-surface-variant/50" placeholder="Search knowledge base..." type="text"/>
+<span class="material-symbols-outlined absolute left-2 top-2 text-on-surface-variant/50 text-[18px]" data-icon="search">search</span>
+</div>
+<div class="font-mono-reasoning text-[11px] text-outline mt-1">
+                    Press <kbd class="bg-surface-container px-1 py-0.5 rounded border border-outline-variant/30 text-on-surface-variant">⌘</kbd> + <kbd class="bg-surface-container px-1 py-0.5 rounded border border-outline-variant/30 text-on-surface-variant">K</kbd> to focus
+                </div>
+</div>
+<!-- System Context -->
+<div class="card-level-1 rounded-lg flex-1 flex flex-col overflow-hidden">
+<div class="px-4 py-3 border-b border-outline-variant/30 bg-surface-container-low shrink-0">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest">System Context</span>
+</div>
+<div class="p-4 flex flex-col gap-5 overflow-y-auto">
+<!-- Environment -->
+<div>
+<div class="font-label-caps text-[10px] text-outline mb-2">ENVIRONMENT</div>
+<div class="card-level-2 rounded p-3 border border-outline-variant/20 flex flex-col gap-2">
+<div class="flex justify-between items-center text-sm">
+<span class="text-on-surface-variant">Project</span>
+<span class="font-data-table text-primary">BATON-Core</span>
+</div>
+<div class="flex justify-between items-center text-sm">
+<span class="text-on-surface-variant">Branch</span>
+<span class="font-data-table text-[#00ffff]">feature/agent-routing</span>
+</div>
+<div class="flex justify-between items-center text-sm">
+<span class="text-on-surface-variant">Uptime</span>
+<span class="font-data-table text-primary">4d 12h 30m</span>
+</div>
+</div>
+</div>
+<!-- Active Models -->
+<div>
+<div class="font-label-caps text-[10px] text-outline mb-2 flex justify-between">
+<span>ACTIVE MODELS (3)</span>
+<span class="text-primary-container">Total RPM: 450</span>
+</div>
+<div class="flex flex-col gap-2">
+<div class="card-level-2 rounded px-3 py-2 border border-outline-variant/20 flex justify-between items-center">
+<span class="font-data-table text-[11px] text-primary truncate max-w-[150px]">gpt-4-turbo-preview</span>
+<span class="w-2 h-2 rounded-full bg-primary-container"></span>
+</div>
+<div class="card-level-2 rounded px-3 py-2 border border-outline-variant/20 flex justify-between items-center">
+<span class="font-data-table text-[11px] text-primary truncate max-w-[150px]">claude-3-opus-20240229</span>
+<span class="w-2 h-2 rounded-full bg-primary-container"></span>
+</div>
+<div class="card-level-2 rounded px-3 py-2 border border-outline-variant/20 flex justify-between items-center">
+<span class="font-data-table text-[11px] text-primary truncate max-w-[150px]">text-embedding-3-large</span>
+<span class="w-2 h-2 rounded-full bg-primary-container opacity-50"></span>
+</div>
+</div>
+</div>
+<!-- Today's Spend -->
+<div class="mt-auto">
+<div class="card-level-2 rounded p-4 border border-outline-variant/20 flex flex-col">
+<span class="font-label-caps text-[10px] text-outline mb-1">TODAY'S SPEND</span>
+<span class="font-display-lg text-[32px] text-primary-container tracking-tight">$14.28</span>
+<span class="font-mono-reasoning text-[11px] text-on-surface-variant mt-1">~1.2M tokens processed</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+</main>
+</body></html>

@@ -1,0 +1,9 @@
+These are three possible layouts for the Baton Dashboard.  
+
+The Cockpit - live fleet ops. 
+The cockpit - Analytics and Insights (Intelligence)
+The Cockpit - Token & Cost Analytics.  I prefer the Live Fleet Ops dashboard menu over the other two.  
+
+While Token and Cost Analytics is similar to Analytics and Insights, the Token & Cost Analytics is basically a rebuild of the current token cost page.  
+
+Notes for integration when ready.  
