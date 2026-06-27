@@ -97,7 +97,10 @@ $learnedOn = Get-LearnedRoutingEnabled -FleetPath $FleetPath   # global switch, 
 $board = @()
 if ($learnedOn -and $SelectionMode -eq 'economy') {
     $records = Read-EffectiveCostRecords -RunsRoot $RunsRoot   # injectable seam, default (Get-BatonHome)/runs
-    if (@($records).Count -gt 0) { $board = @(Get-WorkerEffectiveCost -Records $records) }
+    # NOTE: no @() around the call. Get-WorkerEffectiveCost returns ,@($rows) (unary-comma),
+    # which direct assignment unwraps to the rows array; wrapping it in @() would re-nest it
+    # into a 1-element array holding the rows. The @($board).Count guard below re-wraps safely.
+    if (@($records).Count -gt 0) { $board = Get-WorkerEffectiveCost -Records $records }
 }
 foreach ($c in $filtered) {
     $c | Add-Member -NotePropertyName learned_adjust -NotePropertyValue 0.0 -Force

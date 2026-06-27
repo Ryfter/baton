@@ -21,7 +21,8 @@ $ErrorActionPreference = 'Stop'
 
 switch ($Subcommand) {
     'report' {
-        $records = Read-EffectiveCostRecords -RunsRoot $RunsRoot
+        # --runs (a path/glob to record files) overrides the default $BATON_HOME runs root.
+        $records = if ($Runs) { Read-EffectiveCostRecords -Glob $Runs } else { Read-EffectiveCostRecords -RunsRoot $RunsRoot }
         $board = Get-WorkerEffectiveCost -Records @($records) -MinConfidenceRuns $MinConfidenceRuns
         if ($Json) {
             # -InputObject (not pipe): a piped array unrolls, so ConvertTo-Json

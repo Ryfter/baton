@@ -323,9 +323,11 @@ providers:
     $on = Select-Capability @onArgs
     Check 'W_on1 learned-bad local yields to learned-good free' (@($on)[0].name -eq 'freew')
 
-    # Champion ignores the board: board unread, both candidates present, no throw.
+    # Champion ignores the board: with equal quality it ranks by tier ordinal (local first).
+    # If the learned bias leaked into champion, localw (learned-terrible) would be pushed
+    # DOWN like in W_on1 -> freew first. Asserting localw first proves champion never reads it.
     $champ = Select-Capability @onArgs -SelectionMode champion
-    Check 'W_champ1 champion mode ignores learned board (no throw, both present)' (@($champ).Count -eq 2)
+    Check 'W_champ1 champion ignores learned board (localw still first, not yielded)' (@($champ).Count -eq 2 -and @($champ)[0].name -eq 'localw')
 }
 finally { Remove-Item -Recurse -Force $tmpW -ErrorAction SilentlyContinue }
 

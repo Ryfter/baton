@@ -154,6 +154,10 @@ try {
     $recs = Read-EffectiveCostRecords -RunsRoot $tmpR
     Check 'E_rdr1 reads good record, skips malformed' (@($recs).Count -eq 1 -and [string]$recs[0].run_id -eq 'go-1')
     Check 'E_rdr2 missing root -> empty array' (@(Read-EffectiveCostRecords -RunsRoot (Join-Path $tmpR 'nope')).Count -eq 0)
+    # -Glob mode: an explicit path/glob to the record files (the CLI's --runs surface).
+    $globRecs = Read-EffectiveCostRecords -Glob (Join-Path $tmpR '*/effective-cost.json')
+    Check 'E_rdr3 -Glob reads files matching an explicit glob' (@($globRecs).Count -eq 1 -and [string]$globRecs[0].run_id -eq 'go-1')
+    Check 'E_rdr4 neither RunsRoot nor Glob -> empty array' (@(Read-EffectiveCostRecords).Count -eq 0)
     Remove-Item -Recurse -Force $tmpR -ErrorAction SilentlyContinue
 
     $tmpF = Join-Path ([System.IO.Path]::GetTempPath()) "ec-cfg-$([System.IO.Path]::GetRandomFileName()).yaml"
@@ -164,6 +168,8 @@ try {
     'fleet: []' | Set-Content -LiteralPath $tmpF -Encoding utf8NoBOM
     Check 'E_cfg3 absent key -> disabled' (-not (Get-LearnedRoutingEnabled -FleetPath $tmpF))
     Check 'E_cfg4 missing file -> disabled' (-not (Get-LearnedRoutingEnabled -FleetPath (Join-Path ([System.IO.Path]::GetTempPath()) 'no-such.yaml')))
+    'learned_routing: false' | Set-Content -LiteralPath $tmpF -Encoding utf8NoBOM
+    Check 'E_cfg5 literal false -> disabled' (-not (Get-LearnedRoutingEnabled -FleetPath $tmpF))
     Remove-Item -Force $tmpF -ErrorAction SilentlyContinue
 
     # Get-LearnedCostAdjustment — bias math
@@ -193,6 +199,9 @@ try {
     $lo = Get-LearnedCostAdjustment -Worker 'lo' -Board $board2
     $hi = Get-LearnedCostAdjustment -Worker 'hi' -Board $board2
     Check 'E_adj8 confidence-weighted (just-cleared moves less)' ([math]::Abs($lo.adjust) -lt [math]::Abs($hi.adjust))
+    # Degenerate band MinConfidence = 1.0: denominator 0 must NOT leak NaN past the clamp.
+    $nanProbe = Get-LearnedCostAdjustment -Worker 'dear' -Board $board -MinConfidence 1.0
+    Check 'E_adj9 MinConfidence=1.0 -> no NaN, bounded' ((-not [double]::IsNaN([double]$nanProbe.adjust)) -and ([math]::Abs([double]$nanProbe.adjust) -le 1.0))
 }
 finally {
     if ($script:fail -gt 0) { Write-Host "`n$($script:fail) CHECK(S) FAILED" -ForegroundColor Red; exit 1 }

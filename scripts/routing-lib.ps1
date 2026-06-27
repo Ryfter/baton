@@ -225,6 +225,9 @@ function Select-Capability {
     $board = @()
     if ($learnedOn -and $SelectionMode -eq 'economy') {
         $records = Read-EffectiveCostRecords -RunsRoot $RunsRoot
+        # No @() around the call: Get-WorkerEffectiveCost returns ,@($rows) (unary-comma), which
+        # direct assignment unwraps to the rows array. Wrapping in @() would RE-NEST it into a
+        # 1-element array holding the rows (breaks the per-row lookup below). @($board).Count re-wraps safely.
         if (@($records).Count -gt 0) { $board = Get-WorkerEffectiveCost -Records $records }
     }
     $filtered = foreach ($c in $filtered) {

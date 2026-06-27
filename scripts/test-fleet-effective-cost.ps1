@@ -69,6 +69,13 @@ try {
     # C13: --json on an EMPTY board emits an empty JSON array, not "".
     $emptyJson = (& pwsh -NoProfile -File $cli report -RunsRoot $emptyRoot -Json 2>$null | Out-String)
     Check 'C13 empty --json is a valid empty array' (@($emptyJson | ConvertFrom-Json).Count -eq 0)
+
+    # C14: --runs (a glob to record files) is honored and overrides the runs root.
+    # Point -Runs at the seeded records but -RunsRoot at the EMPTY root: the glob must win.
+    $glob = Join-Path $runsRoot '*/effective-cost.json'
+    $globOut = (& pwsh -NoProfile -File $cli report -Runs $glob -RunsRoot $emptyRoot 2>$null | Out-String)
+    Check 'C14 exit 0 on --runs glob' ($LASTEXITCODE -eq 0)
+    Check 'C15 --runs glob folds the seeded records (not the empty root)' (($globOut -match 'Across 3 run') -and ($globOut -match 'cheapw'))
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

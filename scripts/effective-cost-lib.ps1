@@ -207,11 +207,23 @@ function Get-WorkerEffectiveCost {
 }
 
 function Read-EffectiveCostRecords {
-    <# Glob effective-cost.json records under RunsRoot, parse each, skip malformed.
-       Missing root -> empty array. Pure/dependency-free: path is a parameter. #>
-    param([Parameter(Mandatory)][string]$RunsRoot)
-    if (-not (Test-Path $RunsRoot)) { return @() }
-    $records = foreach ($f in (Get-ChildItem -Path $RunsRoot -Filter 'effective-cost.json' -Recurse -File -ErrorAction SilentlyContinue)) {
+    <# Read effective-cost.json records, parse each, skip malformed. Two source modes:
+         -Glob     an explicit path/glob to the record FILES (e.g. 'D:/runs/*/effective-cost.json');
+                   resolved with Get-ChildItem -Path. This is the CLI's `--runs` surface.
+         -RunsRoot a runs ROOT directory; recurse for 'effective-cost.json' under it. Routing's seam.
+       -Glob wins when both are given. Neither supplied / missing path -> empty array.
+       Pure/dependency-free: all paths are parameters. #>
+    param(
+        [string]$RunsRoot,
+        [string]$Glob
+    )
+    $files = if (-not [string]::IsNullOrWhiteSpace($Glob)) {
+        @(Get-ChildItem -Path $Glob -File -ErrorAction SilentlyContinue)
+    } elseif ((-not [string]::IsNullOrWhiteSpace($RunsRoot)) -and (Test-Path $RunsRoot)) {
+        @(Get-ChildItem -Path $RunsRoot -Filter 'effective-cost.json' -Recurse -File -ErrorAction SilentlyContinue)
+    } else { @() }
+    if ($files.Count -eq 0) { return @() }
+    $records = foreach ($f in $files) {
         try { Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json } catch { continue }
     }
     $records = @($records)
@@ -257,7 +269,11 @@ function Get-LearnedCostAdjustment {
     if ($median -le 0) { return @{ adjust = 0.0; confidence = $conf; reason = $null } }
     $logr = [math]::Log(([double]$me.eff_cost_mean / $median))
     $clamped = [math]::Max(-$MaxShift, [math]::Min($MaxShift, $logr))
-    $w = ($conf - $MinConfidence) / (1.0 - $MinConfidence)
+    # Guard the degenerate band MinConfidence = 1.0: the denominator is 0, and 0/0 = NaN
+    # slips past the [-0,1] clamp below (NaN comparisons are always false). A worker that
+    # clears a bar of 1.0 has conf = 1.0 exactly -> full weight.
+    $denom = 1.0 - $MinConfidence
+    $w = if ($denom -le 0) { 1.0 } else { ($conf - $MinConfidence) / $denom }
     if ($w -lt 0) { $w = 0.0 } elseif ($w -gt 1) { $w = 1.0 }
     $adjust = [math]::Round(($clamped * $w), 4)
     $reason = $null

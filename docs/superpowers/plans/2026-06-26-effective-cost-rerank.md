@@ -307,7 +307,9 @@ $learnedOn = (Get-LearnedRoutingEnabled -FleetPath $FleetPath)
 $board = @()
 if ($learnedOn -and $SelectionMode -eq 'economy') {
     $records = Read-EffectiveCostRecords -RunsRoot $RunsRoot
-    if (@($records).Count -gt 0) { $board = @(Get-WorkerEffectiveCost -Records $records) }
+    # No @() — Get-WorkerEffectiveCost returns ,@($rows); direct assignment unwraps to the
+    # rows array, and @() would re-nest it. The @($board).Count guard below re-wraps safely.
+    if (@($records).Count -gt 0) { $board = Get-WorkerEffectiveCost -Records $records }
 }
 $filtered = foreach ($c in $filtered) {
     $c | Add-Member -NotePropertyName learned_adjust -NotePropertyValue 0.0 -Force
