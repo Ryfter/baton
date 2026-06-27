@@ -16,8 +16,9 @@ cheap on paper but cost more once rejects and polish rounds are counted.
 Whole-run, single-producer-weighted attribution: a worker that did one task in a
 mixed run is credited by its cost share, not condemned for the rest. `confidence`
 rises with run count and the fraction of clean single-producer runs; low-confidence
-rows are flagged **tentative**. Advisory / legibility only — it never changes
-routing.
+rows are flagged **tentative**. This command is advisory / read-only. Routing only
+consumes the leaderboard when you opt in with `learned_routing: true` in the
+box-private `~/.baton/fleet.yaml` (slice 3, d060 — see step 4); off by default.
 
 ## Steps
 
@@ -38,3 +39,9 @@ routing.
 3. Summarize in plain language: who the cheapest-quality-adjusted worker is, which
    rows are still tentative (and why — too few clean runs), and any worker that
    looks cheap by tier but ranks poorly once quality is folded in.
+
+4. Routing consumer (opt-in): with `learned_routing: true` in the box-private
+   `~/.baton/fleet.yaml`, `/baton:go` routing biases worker selection in economy
+   mode by this same leaderboard (slice 3, d060) — a learned-expensive worker yields
+   toward the next cost tier, bounded to an adjacent-tier shift and confidence-gated.
+   Off by default → routing is unchanged and this command stays purely informational.

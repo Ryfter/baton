@@ -68,6 +68,15 @@ capability_floors:
 # propose culling them, the router can never claim them (they're unregistered).
 keep_list: ['*heretic*']
 
+# learned_routing (optional, top-level) — BOX-PRIVATE, default OFF. When set true in
+# your live ~/.baton/fleet.yaml, Select-Capability biases its ECONOMY ranking by each
+# worker's LEARNED effective cost (slice 3, d060): a worker that has cost more per unit
+# quality (Acceptance-Gate verdicts ÷ spend, folded from $BATON_HOME/runs) yields toward
+# the next cost tier; a learned-cheap worker reaches toward the tier below. Bounded to an
+# adjacent-tier shift, confidence-gated (only trusted rows move routing), saturation-
+# floored. Champion mode ignores it. Off / absent => routing is byte-for-byte unchanged.
+# learned_routing: true   # set ONLY in your live box file, never in this shared seed.
+
 providers:
   - name: claude-cli
     kind: cli
