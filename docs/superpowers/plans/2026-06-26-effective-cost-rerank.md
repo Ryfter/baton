@@ -62,7 +62,7 @@ Remove-Item -Force $tmpF -ErrorAction SilentlyContinue
 
 - [ ] **Step 2: Run, verify fail** — `pwsh -NoProfile -File scripts/test-effective-cost-lib.ps1` → the new E_rdr/E_cfg checks FAIL ("not recognized").
 
-- [ ] **Step 3: Implement.** In `effective-cost-lib.ps1`, dot-source `baton-home.ps1` if not already present at top (`. "$PSScriptRoot/baton-home.ps1"`), and add. Use the existing fleet reader if the lib has one in scope (`Read-Fleet` lives in `routing-lib.ps1`, NOT here — so parse the switch directly to avoid a cross-lib dependency):
+- [ ] **Step 3: Implement.** In `effective-cost-lib.ps1`, add the two functions. The lib is pure/dependency-free today (no `Get-BatonHome` use — confirmed) and must stay that way: both functions take their path as a parameter, so **do not** add a `baton-home.ps1` dot-source. Parse the switch directly rather than calling `Read-Fleet` (which lives in `routing-lib.ps1`) to avoid a cross-lib dependency:
 
 ```powershell
 function Read-EffectiveCostRecords {
@@ -235,6 +235,7 @@ function Get-LearnedTierRank {
 
 **Interfaces:**
 - Consumes: `Get-LearnedRoutingEnabled`, `Read-EffectiveCostRecords`, `Get-WorkerEffectiveCost`, `Get-LearnedCostAdjustment` (effective-cost-lib), `Get-LearnedTierRank` (saturation-lib). `routing-lib.ps1` must dot-source `effective-cost-lib.ps1` (it already dot-sources `saturation-lib.ps1`).
+- Produces: a new **injectable `-RunsRoot` parameter** on `Select-Capability` (default `(Join-Path (Get-BatonHome) 'runs')`), mirroring the existing `-RatingsPath`/`-JournalPath`/`-UsagePath` seams so the board source is overridable in tests and never hits real `~/.baton`.
 
 - [ ] **Step 1: Write the failing tests** — append to `test-routing-lib.ps1`, following its existing fixture idiom (temp tools/fleet files, `$env:BATON_HOME` pointed at a temp dir). Two cases:
 
@@ -246,57 +247,54 @@ fleet:
   - { name: freew,  kind: cli, enabled: true, cost_tier: free,  capabilities: [code] }
 "@
 $ft = Join-Path $tmp 'fleet-off.yaml'; $baseFleet | Set-Content -LiteralPath $ft -Encoding utf8NoBOM
-$off = Select-Capability -Capability code -FleetPath $ft -ToolsPath (Join-Path $tmp 'none.yaml')
+$off = Select-Capability -Capability code -FleetPath $ft -ToolsPath (Join-Path $tmp 'none.yaml') -RatingsPath $nopath -JournalPath $nopath -UsagePath $noUsage
 Check 'W_off1 default-off ranks local before free' (@($off)[0].name -eq 'localw' -and @($off)[1].name -eq 'freew')
 
 # ON: learned_routing true + a seeded box-private board where localw is learned-terrible
 # (eff_cost far above median) and freew is learned-great -> localw yields, freew rises.
 $onFleet = "learned_routing: true`n" + $baseFleet
 $ft2 = Join-Path $tmp 'fleet-on.yaml'; $onFleet | Set-Content -LiteralPath $ft2 -Encoding utf8NoBOM
-$runs = Join-Path $env:BATON_HOME 'runs'
+$runs = Join-Path $tmp 'learned-runs'
 foreach ($r in @(@{id='r1';w='localw';e=50},@{id='r2';w='freew';e=1},@{id='r3';w='localw';e=50},@{id='r4';w='freew';e=1},@{id='r5';w='localw';e=50},@{id='r6';w='freew';e=1})) {
     $d = Join-Path $runs $r.id; New-Item -ItemType Directory -Force -Path $d | Out-Null
     (@{ run_id=$r.id; effective_cost=$r.e; workers=@(@{worker=$r.w; share=1.0}); single_producer=$true } | ConvertTo-Json -Depth 6) |
         Set-Content -LiteralPath (Join-Path $d 'effective-cost.json') -Encoding utf8NoBOM
 }
-$on = Select-Capability -Capability code -FleetPath $ft2 -ToolsPath (Join-Path $tmp 'none.yaml')
+$onArgs = @{ Capability='code'; FleetPath=$ft2; ToolsPath=(Join-Path $tmp 'none.yaml'); RunsRoot=$runs; RatingsPath=$nopath; JournalPath=$nopath; UsagePath=$noUsage }
+$on = Select-Capability @onArgs
 Check 'W_on1 learned-bad local yields to learned-good free' (@($on)[0].name -eq 'freew')
 
-# Champion ignores the board: localw (cheaper tier) still ranks by quality, board unread.
-$champ = Select-Capability -Capability code -FleetPath $ft2 -ToolsPath (Join-Path $tmp 'none.yaml') -SelectionMode champion
+# Champion ignores the board: board unread, both candidates present, no throw.
+$champ = Select-Capability @onArgs -SelectionMode champion
 Check 'W_champ1 champion mode ignores learned board (no throw, both present)' (@($champ).Count -eq 2)
 ```
 
-(Use the file's existing `$tmp` / `$env:BATON_HOME` setup; if it sets `BATON_HOME` per-test, seed `runs` under that same root. Keep `localw`'s 6 single-producer runs so its confidence clears 0.5 with `MinConfidenceRuns` default 5.)
+Pass `-RunsRoot $runs` (the injectable seam from this task) so the board is read from the temp dir, never real `~/.baton`. Pass `-RatingsPath/-JournalPath/-UsagePath $nopath/$noUsage` like the file's other `Select-Capability` calls. The 6 single-producer runs give `localw`/`freew` 3 runs each — confidence `= min(1, 3/5) * (0.5 + 0.5*1.0) = 0.6 >= 0.5`, clearing the bar. For the OFF case (`W_off1`), pass the same injectable paths but a fleet **without** `learned_routing`, and (optionally) `-RunsRoot $runs` to prove the switch — not the absence of records — is what gates it.
 
 - [ ] **Step 2: Run, verify fail** — `pwsh -NoProfile -File scripts/test-routing-lib.ps1` → W_on1 FAILs (localw still first because no bias yet); W_off1/W_champ1 may pass.
 
-- [ ] **Step 3: Implement** — ensure `routing-lib.ps1` dot-sources the lib near its other sources (after the `saturation-lib.ps1` line):
+- [ ] **Step 3: Implement** — three edits to `routing-lib.ps1`:
+
+(a) Dot-source the lib after the `saturation-lib.ps1` line:
 
 ```powershell
 . "$PSScriptRoot/effective-cost-lib.ps1"   # d060 learned-cost re-rank
 ```
 
-Insert the `3c` block after the §3b saturation `foreach` (the block from spec §3.3), then change the economy sort's first key. Exact economy `Sort-Object` becomes:
+(b) Add the `-RunsRoot` parameter to `Select-Capability`'s `param(...)` block, beside the other injectable paths (so tests never read real `~/.baton`):
 
 ```powershell
-$ranked = $filtered |
-    Select-Object *, @{n='score'; e={ (Get-LearnedTierRank $_.cost_tier ([bool]$_.saturate) ([double]$_.learned_adjust)) - ($_.quality * 0.001) }} |
-    Sort-Object `
-        @{e={ Get-LearnedTierRank $_.cost_tier ([bool]$_.saturate) ([double]$_.learned_adjust) }}, `
-        @{e={ if ([bool]$_.saturate) { [double]$_.sat_util } else { 0 } }}, `
-        @{e={ -$_.quality }}, `
-        @{e='name'}
+[string]$RunsRoot = (Join-Path (Get-BatonHome) 'runs'),
 ```
 
-The `3c` block (default-off → every `learned_adjust = 0.0`):
+(c) Insert the `3c` block after the §3b saturation `foreach`, then change the economy sort's first key. The `3c` block reads the board from `$RunsRoot` (the injectable seam, default-off → every `learned_adjust = 0.0`):
 
 ```powershell
 # 3c. Learned-cost re-rank (d060) — opt-in, economy-only, confidence-gated.
 $learnedOn = (Get-LearnedRoutingEnabled -FleetPath $FleetPath)
 $board = @()
 if ($learnedOn -and $SelectionMode -eq 'economy') {
-    $records = Read-EffectiveCostRecords -RunsRoot (Join-Path (Get-BatonHome) 'runs')
+    $records = Read-EffectiveCostRecords -RunsRoot $RunsRoot
     if (@($records).Count -gt 0) { $board = @(Get-WorkerEffectiveCost -Records $records) }
 }
 $filtered = foreach ($c in $filtered) {
@@ -308,6 +306,18 @@ $filtered = foreach ($c in $filtered) {
     }
     $c
 }
+```
+
+Then change the economy sort's first key. Exact economy `Sort-Object` becomes:
+
+```powershell
+$ranked = $filtered |
+    Select-Object *, @{n='score'; e={ (Get-LearnedTierRank $_.cost_tier ([bool]$_.saturate) ([double]$_.learned_adjust)) - ($_.quality * 0.001) }} |
+    Sort-Object `
+        @{e={ Get-LearnedTierRank $_.cost_tier ([bool]$_.saturate) ([double]$_.learned_adjust) }}, `
+        @{e={ if ([bool]$_.saturate) { [double]$_.sat_util } else { 0 } }}, `
+        @{e={ -$_.quality }}, `
+        @{e='name'}
 ```
 
 - [ ] **Step 4: Run** — `pwsh -NoProfile -File scripts/test-routing-lib.ps1` → all PASS. Then run the full routing suite set to confirm no regression: `scripts/test-saturation-lib.ps1`, `scripts/test-routing-dispatch.ps1`.

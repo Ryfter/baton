@@ -80,15 +80,19 @@ Get-LearnedTierRank -CostTier <string> [-Saturating <bool>] [-Adjust <double>]
 
 ### 3.3 Wiring (`routing-lib.ps1` → `Select-Capability`, economy branch only)
 
-After the §3b saturation block, **when learned routing is enabled and a leaderboard
-exists**, annotate each surviving candidate with its adjustment:
+`Select-Capability` gains an injectable `-RunsRoot` parameter (default
+`(Join-Path (Get-BatonHome) 'runs')`), mirroring its existing `-RatingsPath` /
+`-JournalPath` / `-UsagePath` seams so the board source is overridable in tests and
+never touches real `~/.baton`. After the §3b saturation block, **when learned
+routing is enabled and a leaderboard exists**, annotate each surviving candidate
+with its adjustment:
 
 ```powershell
 # 3c. Learned-cost re-rank (d060) — opt-in, economy-only, confidence-gated.
 $learnedOn = Get-LearnedRoutingEnabled -FleetPath $FleetPath   # global switch, default $false
 $board = @()
 if ($learnedOn -and $SelectionMode -eq 'economy') {
-    $records = Read-EffectiveCostRecords -RunsRoot (Join-Path (Get-BatonHome) 'runs')
+    $records = Read-EffectiveCostRecords -RunsRoot $RunsRoot   # injectable seam, default (Get-BatonHome)/runs
     if (@($records).Count -gt 0) { $board = @(Get-WorkerEffectiveCost -Records $records) }
 }
 foreach ($c in $filtered) {
