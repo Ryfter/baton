@@ -165,6 +165,34 @@ try {
     Check 'E_cfg3 absent key -> disabled' (-not (Get-LearnedRoutingEnabled -FleetPath $tmpF))
     Check 'E_cfg4 missing file -> disabled' (-not (Get-LearnedRoutingEnabled -FleetPath (Join-Path ([System.IO.Path]::GetTempPath()) 'no-such.yaml')))
     Remove-Item -Force $tmpF -ErrorAction SilentlyContinue
+
+    # Get-LearnedCostAdjustment — bias math
+    # Board: 'cheap' is much cheaper than median, 'dear' much dearer, both fully confident;
+    # 'tent' is dear but below the confidence bar (must be inert AND not anchor the median).
+    $board = @(
+        [ordered]@{ worker='cheap'; n_runs=10; eff_cost_mean=1.0;  single_producer_runs=10; confidence=1.0 },
+        [ordered]@{ worker='mid';   n_runs=10; eff_cost_mean=2.0;  single_producer_runs=10; confidence=1.0 },
+        [ordered]@{ worker='dear';  n_runs=10; eff_cost_mean=8.0;  single_producer_runs=10; confidence=1.0 },
+        [ordered]@{ worker='tent';  n_runs=1;  eff_cost_mean=99.0; single_producer_runs=0;  confidence=0.10 }
+    )
+    $cheap = Get-LearnedCostAdjustment -Worker 'cheap' -Board $board
+    $dear  = Get-LearnedCostAdjustment -Worker 'dear'  -Board $board
+    Check 'E_adj1 cheaper-than-median -> negative adjust' ($cheap.adjust -lt 0)
+    Check 'E_adj2 dearer-than-median -> positive adjust'  ($dear.adjust  -gt 0)
+    Check 'E_adj3 bounded by MaxShift' ([math]::Abs($dear.adjust) -le 1.0 -and [math]::Abs($cheap.adjust) -le 1.0)
+    Check 'E_adj4 below-confidence worker is inert' ((Get-LearnedCostAdjustment -Worker 'tent' -Board $board).adjust -eq 0)
+    Check 'E_adj5 absent worker is inert' ((Get-LearnedCostAdjustment -Worker 'ghost' -Board $board).adjust -eq 0)
+    Check 'E_adj6 reason set only when adjust != 0' ($null -ne $dear.reason -and $null -eq (Get-LearnedCostAdjustment -Worker 'ghost' -Board $board).reason)
+    Check 'E_adj7 empty board inert' ((Get-LearnedCostAdjustment -Worker 'cheap' -Board @()).adjust -eq 0)
+    # Confidence-weighting: same ratio, lower confidence (but above bar) -> smaller magnitude.
+    $board2 = @(
+        [ordered]@{ worker='lo'; n_runs=3; eff_cost_mean=8.0; single_producer_runs=0; confidence=0.55 },
+        [ordered]@{ worker='hi'; n_runs=9; eff_cost_mean=8.0; single_producer_runs=9; confidence=1.0  },
+        [ordered]@{ worker='anchor'; n_runs=9; eff_cost_mean=2.0; single_producer_runs=9; confidence=1.0 }
+    )
+    $lo = Get-LearnedCostAdjustment -Worker 'lo' -Board $board2
+    $hi = Get-LearnedCostAdjustment -Worker 'hi' -Board $board2
+    Check 'E_adj8 confidence-weighted (just-cleared moves less)' ([math]::Abs($lo.adjust) -lt [math]::Abs($hi.adjust))
 }
 finally {
     if ($script:fail -gt 0) { Write-Host "`n$($script:fail) CHECK(S) FAILED" -ForegroundColor Red; exit 1 }

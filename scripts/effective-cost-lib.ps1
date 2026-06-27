@@ -234,6 +234,40 @@ function Get-LearnedRoutingEnabled {
     return $false
 }
 
+function Get-LearnedCostAdjustment {
+    <# Map a worker's learned eff_cost_mean vs the trusted-fleet median into a
+       bounded, confidence-weighted rank shift. Positive = worse (yields up a tier);
+       negative = better (preferred). Inert when untrusted/absent. Pure. #>
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        [object[]]$Board = @(),
+        [double]$MinConfidence = 0.5,
+        [double]$MaxShift = 1.0
+    )
+    $rows = @($Board)
+    $me = $rows | Where-Object { [string]$_.worker -eq $Worker } | Select-Object -First 1
+    $trusted = @($rows | Where-Object { [double]$_.confidence -ge $MinConfidence -and [double]$_.eff_cost_mean -gt 0 -and [string]$_.worker -ne $Worker })
+    $conf = if ($me) { [double]$me.confidence } else { 0.0 }
+    if (-not $me -or $conf -lt $MinConfidence -or [double]$me.eff_cost_mean -le 0 -or $trusted.Count -lt 1) {
+        return @{ adjust = 0.0; confidence = $conf; reason = $null }
+    }
+    $vals = @($trusted | ForEach-Object { [double]$_.eff_cost_mean } | Sort-Object)
+    $mid = [int][math]::Floor($vals.Count / 2)
+    $median = if ($vals.Count % 2 -eq 1) { $vals[$mid] } else { ($vals[$mid - 1] + $vals[$mid]) / 2.0 }
+    if ($median -le 0) { return @{ adjust = 0.0; confidence = $conf; reason = $null } }
+    $logr = [math]::Log(([double]$me.eff_cost_mean / $median))
+    $clamped = [math]::Max(-$MaxShift, [math]::Min($MaxShift, $logr))
+    $w = ($conf - $MinConfidence) / (1.0 - $MinConfidence)
+    if ($w -lt 0) { $w = 0.0 } elseif ($w -gt 1) { $w = 1.0 }
+    $adjust = [math]::Round(($clamped * $w), 4)
+    $reason = $null
+    if ($adjust -ne 0) {
+        $sign = if ($adjust -gt 0) { '+' } else { '' }
+        $reason = "learned eff_cost $('{0:0.00}' -f [double]$me.eff_cost_mean) vs fleet median $('{0:0.00}' -f $median) (conf $('{0:0.00}' -f $conf)) -> $sign$adjust tier"
+    }
+    return @{ adjust = $adjust; confidence = $conf; reason = $reason }
+}
+
 function Format-EffectiveCostLeaderboard {
     <# Render a Get-WorkerEffectiveCost leaderboard as a plain-text report block.
        Rows arrive already cheapest-first (do not re-sort). Low-confidence rows
