@@ -206,6 +206,34 @@ function Get-WorkerEffectiveCost {
     return ,@($sorted)
 }
 
+function Read-EffectiveCostRecords {
+    <# Glob effective-cost.json records under RunsRoot, parse each, skip malformed.
+       Missing root -> empty array. Pure/dependency-free: path is a parameter. #>
+    param([Parameter(Mandatory)][string]$RunsRoot)
+    if (-not (Test-Path $RunsRoot)) { return @() }
+    $records = foreach ($f in (Get-ChildItem -Path $RunsRoot -Filter 'effective-cost.json' -Recurse -File -ErrorAction SilentlyContinue)) {
+        try { Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json } catch { continue }
+    }
+    $records = @($records)
+    if ($records.Count -eq 0) { return @() }
+    return ,@($records)
+}
+
+function Get-LearnedRoutingEnabled {
+    <# Read the fleet YAML for the top-level learned_routing switch.
+       $true ONLY for a literal boolean true; absent/false/non-boolean -> $false.
+       Pure/dependency-free: path is a parameter. #>
+    param([Parameter(Mandatory)][string]$FleetPath)
+    if (-not (Test-Path $FleetPath)) { return $false }
+    foreach ($line in (Get-Content -LiteralPath $FleetPath)) {
+        if ($line -match '^\s*learned_routing\s*:\s*(.+?)\s*$') {
+            $val = $Matches[1].Trim().Trim('"').Trim("'")
+            return ($val -eq 'true')
+        }
+    }
+    return $false
+}
+
 function Format-EffectiveCostLeaderboard {
     <# Render a Get-WorkerEffectiveCost leaderboard as a plain-text report block.
        Rows arrive already cheapest-first (do not re-sort). Low-confidence rows

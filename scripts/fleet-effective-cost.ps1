@@ -19,22 +19,9 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'effective-cost-lib.ps1')
 
-function Read-EffectiveCostRecords {
-    <# Glob effective-cost.json records and parse them; a malformed file is
-       skipped, never fatal. Returns an array (possibly empty). #>
-    param([string]$Root, [string]$Glob)
-    $pattern = if ($Glob) { $Glob } else { Join-Path $Root '*/effective-cost.json' }
-    $records = @()
-    foreach ($f in @(Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue)) {
-        try { $records += (Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json) }
-        catch { [Console]::Error.WriteLine("skipped unreadable record: $($f.FullName)") }
-    }
-    return ,@($records)
-}
-
 switch ($Subcommand) {
     'report' {
-        $records = Read-EffectiveCostRecords -Root $RunsRoot -Glob $Runs
+        $records = Read-EffectiveCostRecords -RunsRoot $RunsRoot
         $board = Get-WorkerEffectiveCost -Records @($records) -MinConfidenceRuns $MinConfidenceRuns
         if ($Json) {
             # -InputObject (not pipe): a piped array unrolls, so ConvertTo-Json
