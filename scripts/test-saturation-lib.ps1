@@ -171,6 +171,12 @@ providers:
 
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 
+    # ---- Get-LearnedTierRank (Task 3: saturation-floored effective rank) ----
+    Check 'L1 saturating returns -1 ignoring Adjust' ((Get-LearnedTierRank -CostTier 'paid' -Saturating $true -Adjust -5) -eq -1)
+    Check 'L2 non-saturating local +0.5 -> 0.5' ((Get-LearnedTierRank -CostTier 'local' -Adjust 0.5) -eq 0.5)
+    Check 'L3 floored at -1 for large negative Adjust' ((Get-LearnedTierRank -CostTier 'local' -Adjust -9) -eq -1)
+    Check 'L4 Adjust 0 equals Get-EffectiveTierRank' ((Get-LearnedTierRank -CostTier 'free' -Adjust 0) -eq (Get-EffectiveTierRank 'free' $false))
+
     Write-Host ""
     if ($script:fail -eq 0) { Write-Host 'ALL PASS' } else { Write-Host "$($script:fail) FAILED"; exit 1 }
 } catch {

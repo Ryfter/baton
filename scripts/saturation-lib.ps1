@@ -65,3 +65,15 @@ function Get-EffectiveTierRank {
     if ($Saturating) { return -1 }
     return (Get-CostTierRank $CostTier)
 }
+
+function Get-LearnedTierRank {
+    <# Effective tier rank with a learned-cost Adjust folded in. Saturation wins
+       (-1); otherwise CostTierRank + Adjust, floored at -1 so learned bias never
+       undercuts saturation. Returns a double (fractional ranks order same-tier
+       workers by learned cost). #>
+    param([string]$CostTier, [bool]$Saturating = $false, [double]$Adjust = 0.0)
+    if ($Saturating) { return -1 }
+    $r = (Get-CostTierRank $CostTier) + $Adjust
+    if ($r -lt -1) { $r = -1 }
+    return $r
+}
