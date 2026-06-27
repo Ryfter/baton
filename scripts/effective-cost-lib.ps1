@@ -206,6 +206,84 @@ function Get-WorkerEffectiveCost {
     return ,@($sorted)
 }
 
+function Read-EffectiveCostRecords {
+    <# Read effective-cost.json records, parse each, skip malformed. Two source modes:
+         -Glob     an explicit path/glob to the record FILES (e.g. 'D:/runs/*/effective-cost.json');
+                   resolved with Get-ChildItem -Path. This is the CLI's `--runs` surface.
+         -RunsRoot a runs ROOT directory; recurse for 'effective-cost.json' under it. Routing's seam.
+       -Glob wins when both are given. Neither supplied / missing path -> empty array.
+       Pure/dependency-free: all paths are parameters. #>
+    param(
+        [string]$RunsRoot,
+        [string]$Glob
+    )
+    $files = if (-not [string]::IsNullOrWhiteSpace($Glob)) {
+        @(Get-ChildItem -Path $Glob -File -ErrorAction SilentlyContinue)
+    } elseif ((-not [string]::IsNullOrWhiteSpace($RunsRoot)) -and (Test-Path $RunsRoot)) {
+        @(Get-ChildItem -Path $RunsRoot -Filter 'effective-cost.json' -Recurse -File -ErrorAction SilentlyContinue)
+    } else { @() }
+    if ($files.Count -eq 0) { return @() }
+    $records = foreach ($f in $files) {
+        try { Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json } catch { continue }
+    }
+    $records = @($records)
+    if ($records.Count -eq 0) { return @() }
+    return ,@($records)
+}
+
+function Get-LearnedRoutingEnabled {
+    <# Read the fleet YAML for the top-level learned_routing switch.
+       $true ONLY for a literal boolean true; absent/false/non-boolean -> $false.
+       Pure/dependency-free: path is a parameter. #>
+    param([Parameter(Mandatory)][string]$FleetPath)
+    if (-not (Test-Path $FleetPath)) { return $false }
+    foreach ($line in (Get-Content -LiteralPath $FleetPath)) {
+        if ($line -match '^\s*learned_routing\s*:\s*(.+?)\s*$') {
+            $val = $Matches[1].Trim().Trim('"').Trim("'")
+            return ($val -eq 'true')
+        }
+    }
+    return $false
+}
+
+function Get-LearnedCostAdjustment {
+    <# Map a worker's learned eff_cost_mean vs the trusted-fleet median into a
+       bounded, confidence-weighted rank shift. Positive = worse (yields up a tier);
+       negative = better (preferred). Inert when untrusted/absent. Pure. #>
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        [object[]]$Board = @(),
+        [double]$MinConfidence = 0.5,
+        [double]$MaxShift = 1.0
+    )
+    $rows = @($Board)
+    $me = $rows | Where-Object { [string]$_.worker -eq $Worker } | Select-Object -First 1
+    $trusted = @($rows | Where-Object { [double]$_.confidence -ge $MinConfidence -and [double]$_.eff_cost_mean -gt 0 -and [string]$_.worker -ne $Worker })
+    $conf = if ($me) { [double]$me.confidence } else { 0.0 }
+    if (-not $me -or $conf -lt $MinConfidence -or [double]$me.eff_cost_mean -le 0 -or $trusted.Count -lt 1) {
+        return @{ adjust = 0.0; confidence = $conf; reason = $null }
+    }
+    $vals = @($trusted | ForEach-Object { [double]$_.eff_cost_mean } | Sort-Object)
+    $mid = [int][math]::Floor($vals.Count / 2)
+    $median = if ($vals.Count % 2 -eq 1) { $vals[$mid] } else { ($vals[$mid - 1] + $vals[$mid]) / 2.0 }
+    if ($median -le 0) { return @{ adjust = 0.0; confidence = $conf; reason = $null } }
+    $logr = [math]::Log(([double]$me.eff_cost_mean / $median))
+    $clamped = [math]::Max(-$MaxShift, [math]::Min($MaxShift, $logr))
+    # Guard the degenerate band MinConfidence = 1.0: the denominator is 0, and 0/0 = NaN
+    # slips past the [-0,1] clamp below (NaN comparisons are always false). A worker that
+    # clears a bar of 1.0 has conf = 1.0 exactly -> full weight.
+    $denom = 1.0 - $MinConfidence
+    $w = if ($denom -le 0) { 1.0 } else { ($conf - $MinConfidence) / $denom }
+    if ($w -lt 0) { $w = 0.0 } elseif ($w -gt 1) { $w = 1.0 }
+    $adjust = [math]::Round(($clamped * $w), 4)
+    $reason = $null
+    if ($adjust -ne 0) {
+        $sign = if ($adjust -gt 0) { '+' } else { '' }
+        $reason = "learned eff_cost $('{0:0.00}' -f [double]$me.eff_cost_mean) vs fleet median $('{0:0.00}' -f $median) (conf $('{0:0.00}' -f $conf)) -> $sign$adjust tier"
+    }
+    return @{ adjust = $adjust; confidence = $conf; reason = $reason }
+}
+
 function Format-EffectiveCostLeaderboard {
     <# Render a Get-WorkerEffectiveCost leaderboard as a plain-text report block.
        Rows arrive already cheapest-first (do not re-sort). Low-confidence rows

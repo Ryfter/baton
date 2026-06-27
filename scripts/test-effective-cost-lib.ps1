@@ -143,6 +143,65 @@ try {
     Check 'E45 low-confidence rows are flagged tentative' ($board -match 'tentative')
     $emptyBoard = Format-EffectiveCostLeaderboard -Rows @() -RunCount 0
     Check 'E46 empty rows -> guidance, no table' (($emptyBoard -match 'No effective-cost') -and ($emptyBoard -notmatch '(?m)^## Effective-cost leaderboard'))
+
+    # Read-EffectiveCostRecords — shared reader
+    $tmpR = Join-Path ([System.IO.Path]::GetTempPath()) "ec-rdr-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path (Join-Path $tmpR 'go-1') | Out-Null
+    '{ "run_id":"go-1","effective_cost":0.5,"workers":[{"worker":"a","share":1.0}],"single_producer":true }' |
+        Set-Content -LiteralPath (Join-Path $tmpR 'go-1/effective-cost.json') -Encoding utf8NoBOM
+    New-Item -ItemType Directory -Force -Path (Join-Path $tmpR 'go-bad') | Out-Null
+    '{ not json' | Set-Content -LiteralPath (Join-Path $tmpR 'go-bad/effective-cost.json') -Encoding utf8NoBOM
+    $recs = Read-EffectiveCostRecords -RunsRoot $tmpR
+    Check 'E_rdr1 reads good record, skips malformed' (@($recs).Count -eq 1 -and [string]$recs[0].run_id -eq 'go-1')
+    Check 'E_rdr2 missing root -> empty array' (@(Read-EffectiveCostRecords -RunsRoot (Join-Path $tmpR 'nope')).Count -eq 0)
+    # -Glob mode: an explicit path/glob to the record files (the CLI's --runs surface).
+    $globRecs = Read-EffectiveCostRecords -Glob (Join-Path $tmpR '*/effective-cost.json')
+    Check 'E_rdr3 -Glob reads files matching an explicit glob' (@($globRecs).Count -eq 1 -and [string]$globRecs[0].run_id -eq 'go-1')
+    Check 'E_rdr4 neither RunsRoot nor Glob -> empty array' (@(Read-EffectiveCostRecords).Count -eq 0)
+    Remove-Item -Recurse -Force $tmpR -ErrorAction SilentlyContinue
+
+    $tmpF = Join-Path ([System.IO.Path]::GetTempPath()) "ec-cfg-$([System.IO.Path]::GetRandomFileName()).yaml"
+    'learned_routing: true' | Set-Content -LiteralPath $tmpF -Encoding utf8NoBOM
+    Check 'E_cfg1 true enables'  (Get-LearnedRoutingEnabled -FleetPath $tmpF)
+    'learned_routing: no' | Set-Content -LiteralPath $tmpF -Encoding utf8NoBOM
+    Check 'E_cfg2 non-canonical false token -> disabled' (-not (Get-LearnedRoutingEnabled -FleetPath $tmpF))
+    'fleet: []' | Set-Content -LiteralPath $tmpF -Encoding utf8NoBOM
+    Check 'E_cfg3 absent key -> disabled' (-not (Get-LearnedRoutingEnabled -FleetPath $tmpF))
+    Check 'E_cfg4 missing file -> disabled' (-not (Get-LearnedRoutingEnabled -FleetPath (Join-Path ([System.IO.Path]::GetTempPath()) 'no-such.yaml')))
+    'learned_routing: false' | Set-Content -LiteralPath $tmpF -Encoding utf8NoBOM
+    Check 'E_cfg5 literal false -> disabled' (-not (Get-LearnedRoutingEnabled -FleetPath $tmpF))
+    Remove-Item -Force $tmpF -ErrorAction SilentlyContinue
+
+    # Get-LearnedCostAdjustment — bias math
+    # Board: 'cheap' is much cheaper than median, 'dear' much dearer, both fully confident;
+    # 'tent' is dear but below the confidence bar (must be inert AND not anchor the median).
+    $board = @(
+        [ordered]@{ worker='cheap'; n_runs=10; eff_cost_mean=1.0;  single_producer_runs=10; confidence=1.0 },
+        [ordered]@{ worker='mid';   n_runs=10; eff_cost_mean=2.0;  single_producer_runs=10; confidence=1.0 },
+        [ordered]@{ worker='dear';  n_runs=10; eff_cost_mean=8.0;  single_producer_runs=10; confidence=1.0 },
+        [ordered]@{ worker='tent';  n_runs=1;  eff_cost_mean=99.0; single_producer_runs=0;  confidence=0.10 }
+    )
+    $cheap = Get-LearnedCostAdjustment -Worker 'cheap' -Board $board
+    $dear  = Get-LearnedCostAdjustment -Worker 'dear'  -Board $board
+    Check 'E_adj1 cheaper-than-median -> negative adjust' ($cheap.adjust -lt 0)
+    Check 'E_adj2 dearer-than-median -> positive adjust'  ($dear.adjust  -gt 0)
+    Check 'E_adj3 bounded by MaxShift' ([math]::Abs($dear.adjust) -le 1.0 -and [math]::Abs($cheap.adjust) -le 1.0)
+    Check 'E_adj4 below-confidence worker is inert' ((Get-LearnedCostAdjustment -Worker 'tent' -Board $board).adjust -eq 0)
+    Check 'E_adj5 absent worker is inert' ((Get-LearnedCostAdjustment -Worker 'ghost' -Board $board).adjust -eq 0)
+    Check 'E_adj6 reason set only when adjust != 0' ($null -ne $dear.reason -and $null -eq (Get-LearnedCostAdjustment -Worker 'ghost' -Board $board).reason)
+    Check 'E_adj7 empty board inert' ((Get-LearnedCostAdjustment -Worker 'cheap' -Board @()).adjust -eq 0)
+    # Confidence-weighting: same ratio, lower confidence (but above bar) -> smaller magnitude.
+    $board2 = @(
+        [ordered]@{ worker='lo'; n_runs=3; eff_cost_mean=8.0; single_producer_runs=0; confidence=0.55 },
+        [ordered]@{ worker='hi'; n_runs=9; eff_cost_mean=8.0; single_producer_runs=9; confidence=1.0  },
+        [ordered]@{ worker='anchor'; n_runs=9; eff_cost_mean=2.0; single_producer_runs=9; confidence=1.0 }
+    )
+    $lo = Get-LearnedCostAdjustment -Worker 'lo' -Board $board2
+    $hi = Get-LearnedCostAdjustment -Worker 'hi' -Board $board2
+    Check 'E_adj8 confidence-weighted (just-cleared moves less)' ([math]::Abs($lo.adjust) -lt [math]::Abs($hi.adjust))
+    # Degenerate band MinConfidence = 1.0: denominator 0 must NOT leak NaN past the clamp.
+    $nanProbe = Get-LearnedCostAdjustment -Worker 'dear' -Board $board -MinConfidence 1.0
+    Check 'E_adj9 MinConfidence=1.0 -> no NaN, bounded' ((-not [double]::IsNaN([double]$nanProbe.adjust)) -and ([math]::Abs([double]$nanProbe.adjust) -le 1.0))
 }
 finally {
     if ($script:fail -gt 0) { Write-Host "`n$($script:fail) CHECK(S) FAILED" -ForegroundColor Red; exit 1 }
