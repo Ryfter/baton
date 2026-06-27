@@ -13,6 +13,7 @@
 . "$PSScriptRoot/routing-learn.ps1"   # Slice 3 learning loop (ratings + learned quality + judge)
 . "$PSScriptRoot/usage-lib.ps1"   # Sprint 2: Get-WorkerState/Get-ConserveMode for route-around
 . "$PSScriptRoot/saturation-lib.ps1"   # d-wa-5 active saturation driver
+. "$PSScriptRoot/effective-cost-lib.ps1"   # d060 learned-cost re-rank
 
 $script:DefaultToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml')
 
@@ -113,7 +114,8 @@ function Select-Capability {
         [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
         [string]$RatingsPath = (Join-Path $HOME '.claude/knowledge/universal/routing-ratings.jsonl'),
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'),
-        [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl')
+        [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl'),
+        [string]$RunsRoot = (Join-Path (Get-BatonHome) 'runs')
     )
     $candidates = [System.Collections.ArrayList]@()
 
@@ -218,6 +220,23 @@ function Select-Capability {
         }
     }
 
+    # 3c. Learned-cost re-rank (d060) — opt-in, economy-only, confidence-gated.
+    $learnedOn = (Get-LearnedRoutingEnabled -FleetPath $FleetPath)
+    $board = @()
+    if ($learnedOn -and $SelectionMode -eq 'economy') {
+        $records = Read-EffectiveCostRecords -RunsRoot $RunsRoot
+        if (@($records).Count -gt 0) { $board = Get-WorkerEffectiveCost -Records $records }
+    }
+    $filtered = foreach ($c in $filtered) {
+        $c | Add-Member -NotePropertyName learned_adjust -NotePropertyValue 0.0 -Force
+        if ($learnedOn -and $SelectionMode -eq 'economy' -and @($board).Count -gt 0) {
+            $ladj = (Get-LearnedCostAdjustment -Worker $c.name -Board $board)
+            $c.learned_adjust = [double]$ladj.adjust
+            if ($ladj.reason) { $c.why = "$($c.why); $($ladj.reason)" }
+        }
+        $c
+    }
+
     # 4. Rank. economy: cost tier asc, quality desc ("smallest that clears the bar").
     #    champion: quality desc, cost tier asc tiebreak ("just the best" — BoB slot).
     if ($SelectionMode -eq 'champion') {
@@ -226,9 +245,9 @@ function Select-Capability {
             Sort-Object @{e={ -$_.quality }}, @{e={ Get-CostTierRank $_.cost_tier }}, @{e='name'}
     } else {
         $ranked = $filtered |
-            Select-Object *, @{n='score'; e={ (Get-EffectiveTierRank $_.cost_tier ([bool]$_.saturate)) - ($_.quality * 0.001) }} |
+            Select-Object *, @{n='score'; e={ (Get-LearnedTierRank $_.cost_tier ([bool]$_.saturate) ([double]$_.learned_adjust)) - ($_.quality * 0.001) }} |
             Sort-Object `
-                @{e={ Get-EffectiveTierRank $_.cost_tier ([bool]$_.saturate) }}, `
+                @{e={ Get-LearnedTierRank $_.cost_tier ([bool]$_.saturate) ([double]$_.learned_adjust) }}, `
                 @{e={ if ([bool]$_.saturate) { [double]$_.sat_util } else { 0 } }}, `
                 @{e={ -$_.quality }}, `
                 @{e='name'}

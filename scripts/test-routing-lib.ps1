@@ -274,4 +274,59 @@ providers:
 }
 finally { Remove-Item -Recurse -Force $tmpC -ErrorAction SilentlyContinue }
 
+# ===== W: Learned-cost re-rank (d060) =====
+$tmpW = Join-Path ([System.IO.Path]::GetTempPath()) ("routing-learned-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $tmpW | Out-Null
+try {
+    # Use providers: multi-line format so Read-Fleet's hand-rolled parser can handle it.
+    $baseFleet = @"
+general_capabilities: []
+
+providers:
+  - name: localw
+    kind: cli
+    enabled: true
+    cost_tier: local
+    capabilities: [code]
+    command_template: 'echo x'
+  - name: freew
+    kind: cli
+    enabled: true
+    cost_tier: free
+    capabilities: [code]
+    command_template: 'echo x'
+"@
+    # Seed a box-private board FIRST (localw learned-terrible, freew learned-great), so the
+    # OFF test proves the SWITCH gates the bias — not the mere absence of records.
+    # 5 single-producer runs per worker so confidence reaches 1.0 (min(1,5/5)*(0.5+0.5*1.0)),
+    # weight = (1.0-0.5)/0.5 = 1.0, full +/-1.0 adjust -> a decisive adjacent-tier flip.
+    # Fewer runs (e.g. 3/worker -> conf 0.6 -> weight 0.2 -> +/-0.2) would NOT flip a full tier.
+    $runs = Join-Path $tmpW 'learned-runs'
+    $runDefs = 1..5 | ForEach-Object { @{ id="l$_"; w='localw'; e=50 } }
+    $runDefs += 1..5 | ForEach-Object { @{ id="f$_"; w='freew'; e=1 } }
+    foreach ($r in $runDefs) {
+        $d = Join-Path $runs $r.id; New-Item -ItemType Directory -Force -Path $d | Out-Null
+        (@{ run_id=$r.id; effective_cost=$r.e; workers=@(@{worker=$r.w; share=1.0}); single_producer=$true } | ConvertTo-Json -Depth 6) |
+            Set-Content -LiteralPath (Join-Path $d 'effective-cost.json') -Encoding utf8NoBOM
+    }
+
+    # OFF: no learned_routing key. Records ARE present (-RunsRoot $runs), but the switch is
+    # off, so ranking must still be tier-ordinal: local before free, byte-for-byte unchanged.
+    $ft = Join-Path $tmpW 'fleet-off.yaml'; $baseFleet | Set-Content -LiteralPath $ft -Encoding utf8NoBOM
+    $off = Select-Capability -Capability code -FleetPath $ft -ToolsPath (Join-Path $tmpW 'none.yaml') -RunsRoot $runs -RatingsPath $nopath -JournalPath $nopath -UsagePath $noUsage
+    Check 'W_off1 switch-off ranks local before free despite present records' (@($off)[0].name -eq 'localw' -and @($off)[1].name -eq 'freew')
+
+    # ON: learned_routing true + the same seeded board -> localw yields, freew rises.
+    $onFleet = "learned_routing: true`n" + $baseFleet
+    $ft2 = Join-Path $tmpW 'fleet-on.yaml'; $onFleet | Set-Content -LiteralPath $ft2 -Encoding utf8NoBOM
+    $onArgs = @{ Capability='code'; FleetPath=$ft2; ToolsPath=(Join-Path $tmpW 'none.yaml'); RunsRoot=$runs; RatingsPath=$nopath; JournalPath=$nopath; UsagePath=$noUsage }
+    $on = Select-Capability @onArgs
+    Check 'W_on1 learned-bad local yields to learned-good free' (@($on)[0].name -eq 'freew')
+
+    # Champion ignores the board: board unread, both candidates present, no throw.
+    $champ = Select-Capability @onArgs -SelectionMode champion
+    Check 'W_champ1 champion mode ignores learned board (no throw, both present)' (@($champ).Count -eq 2)
+}
+finally { Remove-Item -Recurse -Force $tmpW -ErrorAction SilentlyContinue }
+
 if ($fail -gt 0) { Write-Host "`n$fail FAILED"; exit 1 } else { Write-Host "`nALL PASS"; exit 0 }
