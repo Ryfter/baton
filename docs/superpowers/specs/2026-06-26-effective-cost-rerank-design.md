@@ -48,9 +48,13 @@ I/O-free, like `Get-SaturationDecision`. Rules:
 1. **Inert when untrusted or absent.** Find the worker's row in `Board`. If absent,
    or its `confidence < MinConfidence` → `@{ adjust = 0.0; confidence = <row or 0>;
    reason = $null }`. Untrusted signal never moves routing.
-2. **Baseline = median over trusted rows only.** Compute the fleet **median**
-   `eff_cost_mean` across rows whose `confidence >= MinConfidence`. Untrusted rows
-   neither move nor anchor. If fewer than 1 trusted row, or median `<= 0` → inert.
+2. **Baseline = median over trusted PEERS (excluding the evaluated worker).**
+   Compute the median `eff_cost_mean` across rows whose `confidence >= MinConfidence`
+   **and `worker != Worker`** — a relative re-rank compares a candidate against its
+   *alternatives*, not a pool containing itself (self-inclusion would dampen the
+   signal and make confidence-weighting unobservable for a worker at the median).
+   Untrusted rows neither move nor anchor. If fewer than 1 trusted peer, or median
+   `<= 0` → inert (fail-open; a single-trusted-worker fleet produces no bias).
 3. **Signed, bounded, symmetric shift.** `logr = ln(eff_cost_mean / median)` — `0`
    at median, **positive when the worker is worse** (more expensive per quality),
    negative when better. Clamp to `[-MaxShift, MaxShift]`.

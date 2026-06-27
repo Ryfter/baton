@@ -154,8 +154,11 @@ function Get-LearnedCostAdjustment {
         [double]$MaxShift = 1.0
     )
     $rows = @($Board)
-    $trusted = @($rows | Where-Object { [double]$_.confidence -ge $MinConfidence -and [double]$_.eff_cost_mean -gt 0 })
     $me = $rows | Where-Object { [string]$_.worker -eq $Worker } | Select-Object -First 1
+    # Peer median: exclude the evaluated worker so the baseline is its *alternatives*,
+    # not a pool containing itself (self-inclusion makes confidence-weighting unobservable
+    # for a worker sitting at the median). A 1-trusted-worker fleet -> 0 peers -> inert.
+    $trusted = @($rows | Where-Object { [double]$_.confidence -ge $MinConfidence -and [double]$_.eff_cost_mean -gt 0 -and [string]$_.worker -ne $Worker })
     $conf = if ($me) { [double]$me.confidence } else { 0.0 }
     if (-not $me -or $conf -lt $MinConfidence -or [double]$me.eff_cost_mean -le 0 -or $trusted.Count -lt 1) {
         return @{ adjust = 0.0; confidence = $conf; reason = $null }
@@ -246,20 +249,29 @@ fleet:
   - { name: localw, kind: cli, enabled: true, cost_tier: local, capabilities: [code] }
   - { name: freew,  kind: cli, enabled: true, cost_tier: free,  capabilities: [code] }
 "@
-$ft = Join-Path $tmp 'fleet-off.yaml'; $baseFleet | Set-Content -LiteralPath $ft -Encoding utf8NoBOM
-$off = Select-Capability -Capability code -FleetPath $ft -ToolsPath (Join-Path $tmp 'none.yaml') -RatingsPath $nopath -JournalPath $nopath -UsagePath $noUsage
-Check 'W_off1 default-off ranks local before free' (@($off)[0].name -eq 'localw' -and @($off)[1].name -eq 'freew')
-
-# ON: learned_routing true + a seeded box-private board where localw is learned-terrible
-# (eff_cost far above median) and freew is learned-great -> localw yields, freew rises.
-$onFleet = "learned_routing: true`n" + $baseFleet
-$ft2 = Join-Path $tmp 'fleet-on.yaml'; $onFleet | Set-Content -LiteralPath $ft2 -Encoding utf8NoBOM
+# Seed a box-private board FIRST (localw learned-terrible, freew learned-great), so the
+# OFF test proves the SWITCH gates the bias — not the mere absence of records.
+# 5 single-producer runs per worker so confidence reaches 1.0 (min(1,5/5)*(0.5+0.5*1.0)),
+# weight = (1.0-0.5)/0.5 = 1.0, full +/-1.0 adjust -> a decisive adjacent-tier flip.
+# Fewer runs (e.g. 3/worker -> conf 0.6 -> weight 0.2 -> +/-0.2) would NOT flip a full tier.
 $runs = Join-Path $tmp 'learned-runs'
-foreach ($r in @(@{id='r1';w='localw';e=50},@{id='r2';w='freew';e=1},@{id='r3';w='localw';e=50},@{id='r4';w='freew';e=1},@{id='r5';w='localw';e=50},@{id='r6';w='freew';e=1})) {
+$runDefs = 1..5 | ForEach-Object { @{ id="l$_"; w='localw'; e=50 } }
+$runDefs += 1..5 | ForEach-Object { @{ id="f$_"; w='freew'; e=1 } }
+foreach ($r in $runDefs) {
     $d = Join-Path $runs $r.id; New-Item -ItemType Directory -Force -Path $d | Out-Null
     (@{ run_id=$r.id; effective_cost=$r.e; workers=@(@{worker=$r.w; share=1.0}); single_producer=$true } | ConvertTo-Json -Depth 6) |
         Set-Content -LiteralPath (Join-Path $d 'effective-cost.json') -Encoding utf8NoBOM
 }
+
+# OFF: no learned_routing key. Records ARE present (-RunsRoot $runs), but the switch is
+# off, so ranking must still be tier-ordinal: local before free, byte-for-byte unchanged.
+$ft = Join-Path $tmp 'fleet-off.yaml'; $baseFleet | Set-Content -LiteralPath $ft -Encoding utf8NoBOM
+$off = Select-Capability -Capability code -FleetPath $ft -ToolsPath (Join-Path $tmp 'none.yaml') -RunsRoot $runs -RatingsPath $nopath -JournalPath $nopath -UsagePath $noUsage
+Check 'W_off1 switch-off ranks local before free despite present records' (@($off)[0].name -eq 'localw' -and @($off)[1].name -eq 'freew')
+
+# ON: learned_routing true + the same seeded board -> localw yields, freew rises.
+$onFleet = "learned_routing: true`n" + $baseFleet
+$ft2 = Join-Path $tmp 'fleet-on.yaml'; $onFleet | Set-Content -LiteralPath $ft2 -Encoding utf8NoBOM
 $onArgs = @{ Capability='code'; FleetPath=$ft2; ToolsPath=(Join-Path $tmp 'none.yaml'); RunsRoot=$runs; RatingsPath=$nopath; JournalPath=$nopath; UsagePath=$noUsage }
 $on = Select-Capability @onArgs
 Check 'W_on1 learned-bad local yields to learned-good free' (@($on)[0].name -eq 'freew')
@@ -269,7 +281,7 @@ $champ = Select-Capability @onArgs -SelectionMode champion
 Check 'W_champ1 champion mode ignores learned board (no throw, both present)' (@($champ).Count -eq 2)
 ```
 
-Pass `-RunsRoot $runs` (the injectable seam from this task) so the board is read from the temp dir, never real `~/.baton`. Pass `-RatingsPath/-JournalPath/-UsagePath $nopath/$noUsage` like the file's other `Select-Capability` calls. The 6 single-producer runs give `localw`/`freew` 3 runs each — confidence `= min(1, 3/5) * (0.5 + 0.5*1.0) = 0.6 >= 0.5`, clearing the bar. For the OFF case (`W_off1`), pass the same injectable paths but a fleet **without** `learned_routing`, and (optionally) `-RunsRoot $runs` to prove the switch — not the absence of records — is what gates it.
+Pass `-RunsRoot $runs` (the injectable seam from this task) so the board is read from the temp dir, never real `~/.baton`. Pass `-RatingsPath/-JournalPath/-UsagePath $nopath/$noUsage` like the file's other `Select-Capability` calls. The 5 single-producer runs per worker give each `confidence = min(1, 5/5) * (0.5 + 0.5*1.0) = 1.0`, so the confidence weight is `1.0` and the bounded adjust reaches its full `±1.0` — a decisive flip of the one-tier `local`→`free` gap. (`Get-LearnedCostAdjustment` excludes the evaluated worker from the peer median, so for a 2-worker fleet each worker's median is simply the other worker's `eff_cost_mean`: `localw` 50 vs median 1 → +1.0 → rank 1.0; `freew` 1 vs median 50 → −1.0 → rank 0.0 → `freew` first.) For the OFF case (`W_off1`), pass the same injectable paths but a fleet **without** `learned_routing`, and `-RunsRoot $runs` to prove the switch — not the absence of records — is what gates it.
 
 - [ ] **Step 2: Run, verify fail** — `pwsh -NoProfile -File scripts/test-routing-lib.ps1` → W_on1 FAILs (localw still first because no bias yet); W_off1/W_champ1 may pass.
 
