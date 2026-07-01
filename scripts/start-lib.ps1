@@ -82,3 +82,54 @@ function Get-NextCommandRecommendation {
     }
     return @{ command = '/baton:start'; why = 'status not recognized — starting fresh is the safest next step' }
 }
+
+function Read-ProjectRecord {
+    param(
+        [Parameter(Mandatory)][string]$ProjectId,
+        [string]$ProjectsRoot = (Join-Path (Get-BatonHome) 'projects')
+    )
+    $path = Join-Path (Join-Path $ProjectsRoot $ProjectId) 'project.json'
+    if (-not (Test-Path $path)) { return $null }
+    try {
+        $raw = Get-Content $path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        return ($raw | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        Write-Debug "Read-ProjectRecord: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Write-ProjectRecord {
+    param(
+        [Parameter(Mandatory)][hashtable]$Record,
+        [string]$ProjectsRoot = (Join-Path (Get-BatonHome) 'projects')
+    )
+    $dir = Join-Path $ProjectsRoot $Record.id
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $path = Join-Path $dir 'project.json'
+    $Record | ConvertTo-Json -Depth 6 | Set-Content -Path $path -Encoding utf8NoBOM
+}
+
+function Read-UserProfile {
+    param([string]$ProfilePath = (Join-Path (Get-BatonHome) 'user-profile.json'))
+    if (-not (Test-Path $ProfilePath)) { return $null }
+    try {
+        $raw = Get-Content $ProfilePath -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        return ($raw | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        Write-Debug "Read-UserProfile: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Write-UserProfile {
+    param(
+        [Parameter(Mandatory)][hashtable]$Profile,
+        [string]$ProfilePath = (Join-Path (Get-BatonHome) 'user-profile.json')
+    )
+    $dir = Split-Path -Parent $ProfilePath
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $Profile | ConvertTo-Json -Depth 6 | Set-Content -Path $ProfilePath -Encoding utf8NoBOM
+}

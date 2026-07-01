@@ -62,3 +62,51 @@ foreach ($failStatus in @('failed', 'plan-failed', 'plan-invalid')) {
     Assert-True (-not [string]::IsNullOrWhiteSpace($rec.command)) "$failStatus -> has a command"
     Assert-True (-not [string]::IsNullOrWhiteSpace($rec.why)) "$failStatus -> has a why"
 }
+
+# --- Project record R/W ---
+Write-Host "=== Project record R/W ===" -ForegroundColor Cyan
+$projRoot = Join-Path $env:TEMP "cao-start-proj-$(Get-Random)"
+
+# Read when missing -> $null, no throw
+$rec = Read-ProjectRecord -ProjectId 'acme-api' -ProjectsRoot $projRoot
+Assert-Null $rec 'missing project record: read returns null'
+
+# Write then read
+$now = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
+Write-ProjectRecord -ProjectsRoot $projRoot -Record @{
+    id = 'acme-api'; name = 'Acme API'; folder = 'D:/Dev/acme-api'
+    charter_path = 'D:/Dev/acme-api/CHARTER.md'
+    created_at = $now; last_updated = $now; last_run = $null
+}
+$rec = Read-ProjectRecord -ProjectId 'acme-api' -ProjectsRoot $projRoot
+Assert-Equal 'acme-api'  $rec.id     'project record: id round-trips'
+Assert-Equal 'Acme API'  $rec.name   'project record: name round-trips'
+Assert-Equal 'D:/Dev/acme-api' $rec.folder 'project record: folder round-trips'
+
+# Corrupted file -> read returns null, no throw
+$corruptDir = Join-Path $projRoot 'broken-proj'
+New-Item -ItemType Directory -Path $corruptDir -Force | Out-Null
+Set-Content -Path (Join-Path $corruptDir 'project.json') -Value '{ not json' -Encoding utf8NoBOM
+$rec = Read-ProjectRecord -ProjectId 'broken-proj' -ProjectsRoot $projRoot
+Assert-Null $rec 'corrupted project record: read returns null'
+
+Remove-Item $projRoot -Recurse -Force
+
+# --- User profile R/W ---
+Write-Host "=== User profile R/W ===" -ForegroundColor Cyan
+$profTmp = Join-Path $env:TEMP "cao-start-profile-$(Get-Random)"
+$profilePath = Join-Path $profTmp 'user-profile.json'
+
+# Read when missing -> $null, no throw
+$prof = Read-UserProfile -ProfilePath $profilePath
+Assert-Null $prof 'missing user profile: read returns null'
+
+# Write then read
+Write-UserProfile -ProfilePath $profilePath -Profile @{
+    preferred_interview_depth = 'light'; teaching_level = 'teach'; updated_at = $now
+}
+$prof = Read-UserProfile -ProfilePath $profilePath
+Assert-Equal 'light' $prof.preferred_interview_depth 'user profile: depth round-trips'
+Assert-Equal 'teach' $prof.teaching_level             'user profile: teaching_level round-trips'
+
+Remove-Item $profTmp -Recurse -Force
