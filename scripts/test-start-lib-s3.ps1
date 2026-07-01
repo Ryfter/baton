@@ -53,6 +53,54 @@ $mockDispatch2 = {
 $route2 = Resolve-IdeaRouting -IdeaText "Just fix a typo" -Dispatcher $mockDispatch2
 Assert-Equal 're-plan' $route2 'F4: fails open to re-plan on bad output'
 
+Write-Host "`n=== G-series: dispatch-result normalization (defect regression) ===" -ForegroundColor Cyan
+
+# G1: Dispatcher returns a HASHTABLE (mirrors Invoke-Fleet's real shape) with
+# valid backlog JSON in .stdout and a zero exit_code -> route parses normally.
+$mockDispatch3 = {
+    param($cand, $prompt)
+    return @{ stdout = '{ "route": "backlog", "reasoning": "Big rewrite", "confidence": 0.9 }'; exit_code = 0 }
+}
+$route3 = Resolve-IdeaRouting -IdeaText "Rearchitect the whole pipeline" -Dispatcher $mockDispatch3
+Assert-Equal 'backlog' $route3 'G1: hashtable dispatch result with stdout+exit_code 0 parses backlog'
+
+# G2: Dispatcher returns a HASHTABLE with a non-zero exit_code -> fail open to
+# re-plan WITHOUT attempting to parse the (garbage) stdout.
+$mockDispatch4 = {
+    param($cand, $prompt)
+    return @{ stdout = 'garbage'; exit_code = 1 }
+}
+$route4 = Resolve-IdeaRouting -IdeaText "Doesn't matter" -Dispatcher $mockDispatch4
+Assert-Equal 're-plan' $route4 'G2: hashtable dispatch result with non-zero exit_code fails open to re-plan'
+
+# G3: Dispatcher returns a plain JSON STRING (regression — must keep working
+# after the hashtable-normalization fix).
+$mockDispatch5 = {
+    param($cand, $prompt)
+    return '{ "route": "re-plan", "reasoning": "Small tweak", "confidence": 0.8 }'
+}
+$route5 = Resolve-IdeaRouting -IdeaText "Tweak the retry count" -Dispatcher $mockDispatch5
+Assert-Equal 're-plan' $route5 'G3: plain string dispatch result still parses (regression)'
+
+# G4: Invoke-IdeaInjection must insert idea text LITERALLY — regex replacement
+# metacharacters ($1, $$) in the idea must not corrupt the CHARTER.
+$charterF3 = Join-Path $tmpF 'CHARTER3.md'
+Set-Content -Path $charterF3 -Value "## Decisions & open questions`n- [2026-07-01] Old note" -Encoding utf8NoBOM
+$dangerousIdea = 'costs $$ and uses $1 tokens'
+$res3 = Invoke-IdeaInjection -IdeaText $dangerousIdea -CharterPath $charterF3
+Assert-True $res3 'G4: Invoke-IdeaInjection returns true with dangerous idea text'
+$content3 = Get-Content -LiteralPath $charterF3 -Raw
+Assert-True ($content3.Contains($dangerousIdea)) 'G4: literal $$ / $1 idea text preserved verbatim in CHARTER'
+
+# G5: Dispatcher returns a HASHTABLE with a zero exit_code but MALFORMED JSON
+# in .stdout -> fail open to re-plan.
+$mockDispatch6 = {
+    param($cand, $prompt)
+    return @{ stdout = 'not json at all'; exit_code = 0 }
+}
+$route6 = Resolve-IdeaRouting -IdeaText "Whatever" -Dispatcher $mockDispatch6
+Assert-Equal 're-plan' $route6 'G5: hashtable dispatch result with malformed JSON stdout fails open to re-plan'
+
 Remove-Item $tmpF -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host "`n=== Summary ===" -ForegroundColor Cyan
