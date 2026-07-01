@@ -435,7 +435,7 @@ function Invoke-IdeaInjection {
     $entry = "- [$ts] Idea: $IdeaText"
     
     if ($content -match '## Decisions & open questions') {
-        $content = $content -replace '## Decisions & open questions', "## Decisions & open questions`n$entry"
+        $content = $content.Replace('## Decisions & open questions', "## Decisions & open questions`n$entry")
     } else {
         $content += "`n`n## Decisions & open questions`n$entry"
     }
@@ -501,7 +501,7 @@ function Resolve-IdeaRouting {
         if ($Dispatcher) { return (& $Dispatcher $cand $prompt) }
         # Load routing-lib dynamically if needed
         if (-not (Get-Command Select-Capability -ErrorAction Ignore)) {
-            . "$HOME/.claude/scripts/routing-lib.ps1"
+            . "$PSScriptRoot/routing-lib.ps1"
         }
         return Invoke-Fleet -Name $cand.name -Prompt $prompt -NoJournal
     }
@@ -509,7 +509,7 @@ function Resolve-IdeaRouting {
     # If Dispatcher is absent, we need routing-lib to get a candidate
     if (-not $Dispatcher) {
         if (-not (Get-Command Select-Capability -ErrorAction Ignore)) {
-            . "$HOME/.claude/scripts/routing-lib.ps1"
+            . "$PSScriptRoot/routing-lib.ps1"
         }
         $cands = Select-Capability -Capability triage
         if ($null -eq $cands -or @($cands | Where-Object { $null -ne $_ }).Count -lt 1) {
@@ -523,9 +523,28 @@ function Resolve-IdeaRouting {
 
     try {
         $raw = & $dispatch $cand $prompt
-        $res = ConvertTo-IdeaRoutingHashtable -RawStdout $raw
-        if ($res -and $res.route -in @('re-plan', 'backlog')) {
-            return $res.route
+        $rawText = $null
+        if ($raw -is [string]) {
+            $rawText = $raw
+        } elseif ($null -ne $raw) {
+            # Dispatch result is a structured hashtable/object (e.g. Invoke-Fleet's
+            # @{ stdout; stderr; exit_code; duration_s }). Normalize before parsing.
+            $memberNames = if ($raw -is [hashtable]) { $raw.Keys } else { $raw.PSObject.Properties.Name }
+            if ($memberNames -contains 'exit_code') {
+                $exitCode = if ($raw -is [hashtable]) { $raw['exit_code'] } else { $raw.exit_code }
+                if (([int]$exitCode) -ne 0) {
+                    return 're-plan' # fail-open: dispatcher reported a non-zero exit
+                }
+            }
+            if ($memberNames -contains 'stdout') {
+                $rawText = if ($raw -is [hashtable]) { [string]$raw['stdout'] } else { [string]$raw.stdout }
+            }
+        }
+        if ($null -ne $rawText) {
+            $res = ConvertTo-IdeaRoutingHashtable -RawStdout $rawText
+            if ($res -and ($res.route -in @('re-plan', 'backlog'))) {
+                return $res.route
+            }
         }
     } catch {
         Write-Debug "Resolve-IdeaRouting error: $_"

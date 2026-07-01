@@ -59,8 +59,12 @@ Assert "deploys fleet-worker script" ($out -match 'fleet-worker\.ps1')
 Assert "deploys gate-lib script"   ($out -match 'gate-lib\.ps1')
 Assert "deploys fleet-gate script" ($out -match 'fleet-gate\.ps1')
 Assert "would deploy start-lib.ps1" ($out -match 'start-lib\.ps1')
+Assert "would deploy cost-resolver-lib.ps1"    ($out -match 'cost-resolver-lib\.ps1')
+Assert "would deploy optimize-prompt-lib.ps1"  ($out -match 'optimize-prompt-lib\.ps1')
+Assert "would deploy fleet-optimize-prompt.ps1" ($out -match 'fleet-optimize-prompt\.ps1')
 Assert "would deploy lm-studio-small.ps1" ($out -match 'lm-studio-small\.ps1')
 Assert "would seed prime-hours.yaml"    ($out -match 'prime-hours\.yaml')
+Assert "would seed the planner prompt (seed-if-absent)" ($out -match 'planner prompt \(seed-if-absent\)')
 Assert "does not exit non-zero"          ($LASTEXITCODE -eq 0 -or $out -match 'Bootstrap complete')
 Assert "does NOT register hooks anymore" ($out -notmatch 'would register PostToolUse')
 Assert "mentions mcp SDK probe"          ($out -match 'mcp SDK|mcp.*package missing|python not on PATH')
@@ -68,5 +72,11 @@ Assert "mentions mcp SDK probe"          ($out -match 'mcp SDK|mcp.*package miss
 # Static check: bootstrap must back up settings.json before overwriting it.
 $bootstrapContent = Get-Content (Join-Path $here 'bootstrap.ps1') -Raw
 Assert "bootstrap backs up settings.json before overwriting" ($bootstrapContent -match 'Copy-Item.*settings\.json.*\.bak|settingsPath\.bak')
+
+# Static check: the planner prompt must be seeded via the never-overwrite path
+# (Copy-IfMissing), not Copy-WithPrompt/-Force — the optimizer mutates the live
+# copy and a redeploy must never clobber it.
+Assert "planner prompt seeded via Copy-IfMissing (never clobbers a tuned live prompt)" `
+    ($bootstrapContent -match 'Copy-IfMissing\s+\$promptSrc\s+\$promptDst')
 
 if ($failures -gt 0) { exit 1 } else { exit 0 }

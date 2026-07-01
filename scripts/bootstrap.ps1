@@ -256,7 +256,7 @@ if (-not (Test-Path $scriptsDst)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $scriptsDst" }
     else { New-Item -ItemType Directory -Force -Path $scriptsDst | Out-Null; Write-Ok "created $scriptsDst" }
 }
-foreach ($script in @('baton-home.ps1', 'job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'routing-lib.ps1', 'saturation-lib.ps1', 'effective-cost-lib.ps1', 'routing-dispatch.ps1', 'routing-learn.ps1', 'routing-calibrate.ps1', 'routing-cascade.ps1', 'prime-hours.ps1', 'six-hats-lib.ps1', 'council-lib.ps1', 'code-lib.ps1', 'kb-lib.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1', 'runs-lib.ps1', 'statusline-feed.ps1', 'fleet-runs-bridge.ps1', 'fleet-orchestrate.ps1', 'fleet-backlog.ps1', 'run-backlog.ps1', 'fleet-models.ps1', 'triage-lib.ps1', 'fleet-triage.ps1', 'usage-lib.ps1', 'fleet-usage.ps1', 'projects-lib.ps1', 'fleet-projects.ps1', 'research-gate-lib.ps1', 'fleet-research-gate.ps1', 'conductor-lib.ps1', 'fleet-go.ps1', 'memory-lib.ps1', 'fleet-memory.ps1', 'worker-lib.ps1', 'fleet-worker.ps1', 'gate-lib.ps1', 'fleet-gate.ps1', 'fleet-effective-cost.ps1', 'idea-lib.ps1', 'start-lib.ps1')) {
+foreach ($script in @('baton-home.ps1', 'job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'routing-lib.ps1', 'saturation-lib.ps1', 'effective-cost-lib.ps1', 'routing-dispatch.ps1', 'routing-learn.ps1', 'routing-calibrate.ps1', 'routing-cascade.ps1', 'prime-hours.ps1', 'six-hats-lib.ps1', 'council-lib.ps1', 'code-lib.ps1', 'kb-lib.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1', 'runs-lib.ps1', 'statusline-feed.ps1', 'fleet-runs-bridge.ps1', 'fleet-orchestrate.ps1', 'fleet-backlog.ps1', 'run-backlog.ps1', 'fleet-models.ps1', 'triage-lib.ps1', 'fleet-triage.ps1', 'usage-lib.ps1', 'fleet-usage.ps1', 'projects-lib.ps1', 'fleet-projects.ps1', 'research-gate-lib.ps1', 'fleet-research-gate.ps1', 'conductor-lib.ps1', 'fleet-go.ps1', 'cost-resolver-lib.ps1', 'optimize-prompt-lib.ps1', 'fleet-optimize-prompt.ps1', 'memory-lib.ps1', 'fleet-memory.ps1', 'worker-lib.ps1', 'fleet-worker.ps1', 'gate-lib.ps1', 'fleet-gate.ps1', 'fleet-effective-cost.ps1', 'idea-lib.ps1', 'start-lib.ps1')) {
     $src = Join-Path $repoRoot "scripts\$script"
     $dst = Join-Path $scriptsDst $script
     Copy-WithPrompt $src $dst "lib script: $script" -Force
@@ -297,6 +297,14 @@ if ($DryRun) {
     foreach ($s in $seeded) { Write-Ok "seeded $s -> $batonHome" }
     if (-not $seeded -or @($seeded).Count -eq 0) { Write-Skip "configs already present in $batonHome" }
 }
+
+# Seed the live planner prompt copy — seed-if-absent ONLY (mirrors how
+# fleet.yaml/tools.yaml/prime-hours.yaml are seeded above via Initialize-BatonHome).
+# This is CRITICAL: /baton:optimize-prompt mutates this BATON_HOME copy in place,
+# and a redeploy must never clobber a tuned live prompt.
+$promptSrc = Join-Path $repoRoot 'prompts\conductor-planner.txt'
+$promptDst = Join-Path $batonHome 'prompts\conductor-planner.txt'
+Copy-IfMissing $promptSrc $promptDst 'planner prompt (seed-if-absent)' | Out-Null
 
 # --- Step 5c: Create jobs + knowledge dirs ---
 Write-Step "Creating jobs + knowledge directories"
