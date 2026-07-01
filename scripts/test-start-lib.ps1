@@ -110,3 +110,32 @@ Assert-Equal 'light' $prof.preferred_interview_depth 'user profile: depth round-
 Assert-Equal 'teach' $prof.teaching_level             'user profile: teaching_level round-trips'
 
 Remove-Item $profTmp -Recurse -Force
+
+# --- New-CharterContent ---
+Write-Host "=== New-CharterContent ===" -ForegroundColor Cyan
+$charter = New-CharterContent -Name 'Acme API' -Goal 'A backend for the Acme mobile app' `
+    -Audience 'Acme mobile team' -Done 'Endpoints match the mobile app spec and pass its test suite' `
+    -Reasoning 'Existing backend is unmaintained; a clean rebuild is faster than patching it.'
+Assert-True ($charter -match 'Acme API')                                   'charter: name present'
+Assert-True ($charter -match 'A backend for the Acme mobile app')          'charter: goal present'
+Assert-True ($charter -match 'Acme mobile team')                          'charter: audience present'
+Assert-True ($charter -match 'Endpoints match the mobile app spec')       'charter: done present'
+Assert-True ($charter -match 'clean rebuild is faster')                   'charter: reasoning present'
+
+$minimal = New-CharterContent -Name 'Solo Tool' -Goal 'A CLI to rename files' -Audience $null -Done $null -Reasoning $null
+Assert-True ($minimal -match '\(to be filled in\)') 'charter: empty optional sections render placeholder line'
+Assert-True ($minimal -notmatch "`n`n`n")            'charter: no triple-blank-line from empty sections'
+
+# --- Format-ResumeStatus ---
+Write-Host "=== Format-ResumeStatus ===" -ForegroundColor Cyan
+$noRun = Format-ResumeStatus -ProjectRecord @{ name = 'Acme API'; folder = 'D:/Dev/acme-api'; last_run = $null }
+Assert-True ($noRun -match 'Acme API')          'resume status: name present, no prior run'
+Assert-True ($noRun -match 'D:/Dev/acme-api')   'resume status: folder present, no prior run'
+Assert-True ($noRun -match "hasn't run|has not run|no runs yet") 'resume status: says no prior run'
+
+$withRun = Format-ResumeStatus -ProjectRecord @{
+    name = 'Acme API'; folder = 'D:/Dev/acme-api'
+    last_run = @{ run_id = 'run-2026-07-01-abc'; status = 'interrupted-budget'; at = '2026-07-01T09:20:00-06:00' }
+}
+Assert-True ($withRun -match 'Acme API')            'resume status: name present, with prior run'
+Assert-True ($withRun -match 'interrupted-budget|budget') 'resume status: reflects last run status'

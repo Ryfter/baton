@@ -133,3 +133,53 @@ function Write-UserProfile {
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $Profile | ConvertTo-Json -Depth 6 | Set-Content -Path $ProfilePath -Encoding utf8NoBOM
 }
+
+function New-CharterContent {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Goal,
+        [string]$Audience,
+        [string]$Done,
+        [string]$Reasoning
+    )
+    $today = Get-Date -Format 'yyyy-MM-dd'
+    $audienceText  = if ([string]::IsNullOrWhiteSpace($Audience))  { '(to be filled in)' } else { $Audience }
+    $doneText      = if ([string]::IsNullOrWhiteSpace($Done))      { '(to be filled in)' } else { $Done }
+    $reasoningText = if ([string]::IsNullOrWhiteSpace($Reasoning)) { '(to be filled in)' } else { $Reasoning }
+
+    @"
+# $Name — Project Charter
+
+_Written by /baton:start on $today. Your plain-language record of what we're building and why._
+
+## What we're building
+$Goal
+
+## Who it's for
+$audienceText
+
+## What "done" looks like
+$doneText
+
+## Why — the reasoning
+$reasoningText
+
+## Decisions & open questions
+(to be filled in as the project moves along)
+
+---
+_Baton tracks the technical run history privately under its own home; this file is yours._
+"@
+}
+
+function Format-ResumeStatus {
+    param([Parameter(Mandatory)][object]$ProjectRecord)
+    $name = $ProjectRecord.name
+    $folder = $ProjectRecord.folder
+    if ($null -eq $ProjectRecord.last_run) {
+        return "Project '$name' at $folder hasn't run yet — pick up where onboarding left off, or describe what to build."
+    }
+    $status = $ProjectRecord.last_run.status
+    $at = $ProjectRecord.last_run.at
+    return "Project '$name' at $folder — last run ($at) ended with status '$status'."
+}
