@@ -1,6 +1,6 @@
 ---
 description: The front porch — start a new project or resume one, guided in plain language, then run it full-auto via /baton:go. Aliases: /baton:init, /baton:initialize.
-argument-hint: ["<name>"] [--folder <path>] [--goal "<text>"] [--budget <n>] [--max-tier local|free|paid] [--depth light|adaptive|full] [--quiet]
+argument-hint: ["<name>"] [--folder <path>] [--goal "<text>"] [--idea "<text>"] [--budget <n>] [--max-tier local|free|paid] [--depth light|adaptive|full] [--quiet]
 ---
 
 # /baton:start
@@ -15,7 +15,7 @@ happens next, and why.
 ## Steps
 
 1. **Parse `$ARGUMENTS`.** Optional leading quoted **name**. Flags:
-   `--folder <path>`, `--goal "<text>"`, `--budget <n>`,
+   `--folder <path>`, `--goal "<text>"`, `--idea "<text>"`, `--budget <n>`,
    `--max-tier local|free|paid`, `--depth light|adaptive|full`, `--quiet`
    (forces teaching level to `quiet`). Anything not supplied is asked for (new
    path) or inferred (resume path).
@@ -38,13 +38,20 @@ happens next, and why.
    ```
 
 3. **Resume path** (`$mode -eq 'resume'`):
+   - If the `--idea "<text>"` flag is present, skip the prompt and immediately handle the idea injection (see below).
    - Print `Format-ResumeStatus -ProjectRecord $projRecord` in plain language.
    - Compute `Get-NextCommandRecommendation -RunStatus $projRecord.last_run.status`
      (skip if `last_run` is `$null`) and surface it — in `teach` mode, include the
      `why`; in `quiet` mode, just the `command`.
-   - Ask: *"Resume with a new outcome, or pick up the recommended next step?"*
-     Wait for the answer, then either go to step 6 with a new goal, or hand off
-     to the recommended command directly (do not re-run onboarding).
+   - Ask: *"Resume with a new outcome, pick up the recommended next step, or drop in a new idea/brain-dump?"*
+   - Wait for the answer:
+     - **If new goal:** go to step 6 with a new goal.
+     - **If recommended command:** hand off to it directly (do not re-run onboarding).
+     - **If idea injection** (via flag or answer):
+       - Run `Invoke-IdeaInjection -IdeaText $idea -CharterPath $projRecord.charter_path`
+       - Run `$route = Resolve-IdeaRouting -IdeaText $idea`
+       - Present recommendation: *"I've recorded that idea in your CHARTER. Based on its scope, I recommend we "* (if `re-plan` add *"re-plan the current run with /baton:go"* else *"vet this epic via /baton:idea"*). *"Proceed?"*
+       - Hand off to `/baton:go` (for re-plan, passing the idea as context in the goal) or `/baton:idea "<text>"`.
 
 4. **New path onboarding** (`$mode -eq 'new'`):
    - `$depth = Resolve-InterviewDepth -Profile $profile -Explicit '<DEPTH_FLAG_OR_EMPTY>'`

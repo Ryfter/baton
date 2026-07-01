@@ -5,7 +5,8 @@
 `agy` is the Gemini/Antigravity CLI, wired into the fleet as the `gemini-antigravity` provider.
 
 ## Gemini / `agy`-specific
-- **Role: design & interface reviewer** (decisions d009/d010). Implementation is driven by Claude/Codex; you design and review, and can implement when asked.
+- **Role: design & interface reviewer** (decisions d009/d010). 
+- **Model Preferences:** When running in Antigravity, design and planning should be done using Claude Opus. The actual implementation of the plan, creating walkthroughs, etc., should be done using either a Gemini model or Claude Sonnet.
 - **`agy` invocation:** `agy --print "<prompt>"` requires the prompt as the argument — it rejects stdin, and the prompt must stay **≤965 bytes**. For context, pass `--add-dir <dir>` so it reads files itself instead of inlining them; add `--dangerously-skip-permissions` to let it edit. Large inline prompts hang.
 - Status: Plans 1–11 shipped (v1.1.0), backlog #16–#26 cleared. Your prior dashboard redesign is on branch `gemini/dashboard-redesign` (unreviewed) — continue it there.
 

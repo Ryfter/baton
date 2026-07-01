@@ -422,3 +422,113 @@ function Get-GrimdexStyleNote {
 - Updated: $ts
 "@
 }
+
+function Invoke-IdeaInjection {
+    <# Appends the idea to the CHARTER.md under "Decisions & open questions" #>
+    param(
+        [Parameter(Mandatory)][string]$IdeaText,
+        [Parameter(Mandatory)][string]$CharterPath
+    )
+    if (-not (Test-Path $CharterPath)) { return $false }
+    $content = Get-Content -LiteralPath $CharterPath -Raw
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm'
+    $entry = "- [$ts] Idea: $IdeaText"
+    
+    if ($content -match '## Decisions & open questions') {
+        $content = $content -replace '## Decisions & open questions', "## Decisions & open questions`n$entry"
+    } else {
+        $content += "`n`n## Decisions & open questions`n$entry"
+    }
+    Set-Content -Path $CharterPath -Value $content.TrimEnd() -Encoding utf8NoBOM
+    return $true
+}
+
+function Build-IdeaRoutingPrompt {
+    <# Compose the routing instruction for the idea scope #>
+    param([Parameter(Mandatory)][string]$IdeaText)
+    $schema = @'
+{
+  "route": "re-plan|backlog",
+  "reasoning": "<one sentence rationale>",
+  "confidence": 0.0
+}
+'@
+    return @"
+You are a project manager routing an injected idea mid-stream. Classify the scope of this idea and respond with ONLY valid JSON matching this schema exactly. No prose, no markdown fences.
+
+Schema:
+$schema
+
+Guidance: 
+- 're-plan': for tactical pivots, immediate next steps, minor scope adjustments, or bug fixes.
+- 'backlog': for massive new epics, architectural overhauls, or ideas requiring a viability debate before implementation.
+- 'confidence' is your 0.0-1.0 certainty.
+
+Idea:
+$IdeaText
+"@
+}
+
+function Get-IdeaRoutingJsonBlock {
+    param([Parameter(Mandatory)][string]$Raw)
+    $open  = $Raw.IndexOf('{')
+    $close = $Raw.LastIndexOf('}')
+    if ($open -lt 0 -or $close -lt $open) { return '' }
+    return $Raw.Substring($open, $close - $open + 1)
+}
+
+function ConvertTo-IdeaRoutingHashtable {
+    param([Parameter(Mandatory)][string]$RawStdout)
+    $block = Get-IdeaRoutingJsonBlock -Raw $RawStdout
+    if (-not $block) { return $null }
+    try { $o = $block | ConvertFrom-Json -ErrorAction Stop } catch { return $null }
+    $h = @{}
+    foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = $p.Value }
+    return $h
+}
+
+function Resolve-IdeaRouting {
+    <# Classifies the idea using a triage-capable model (via fleet). 
+       Returns 're-plan' or 'backlog'. Fails open to 're-plan'. #>
+    param(
+        [Parameter(Mandatory)][string]$IdeaText,
+        [scriptblock]$Dispatcher
+    )
+    $prompt = Build-IdeaRoutingPrompt -IdeaText $IdeaText
+
+    $dispatch = {
+        param($cand, $prompt)
+        if ($Dispatcher) { return (& $Dispatcher $cand $prompt) }
+        # Load routing-lib dynamically if needed
+        if (-not (Get-Command Select-Capability -ErrorAction Ignore)) {
+            . "$HOME/.claude/scripts/routing-lib.ps1"
+        }
+        return Invoke-Fleet -Name $cand.name -Prompt $prompt -NoJournal
+    }
+
+    # If Dispatcher is absent, we need routing-lib to get a candidate
+    if (-not $Dispatcher) {
+        if (-not (Get-Command Select-Capability -ErrorAction Ignore)) {
+            . "$HOME/.claude/scripts/routing-lib.ps1"
+        }
+        $cands = Select-Capability -Capability triage
+        if ($null -eq $cands -or @($cands | Where-Object { $null -ne $_ }).Count -lt 1) {
+            return 're-plan' # fail-open
+        }
+        $cand = @($cands)[0]
+    } else {
+        # Test seam
+        $cand = @{ name = 'test-stub' }
+    }
+
+    try {
+        $raw = & $dispatch $cand $prompt
+        $res = ConvertTo-IdeaRoutingHashtable -RawStdout $raw
+        if ($res -and $res.route -in @('re-plan', 'backlog')) {
+            return $res.route
+        }
+    } catch {
+        Write-Debug "Resolve-IdeaRouting error: $_"
+    }
+    return 're-plan' # fail-open
+}
