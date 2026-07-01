@@ -50,6 +50,14 @@ happens next, and why.
    - `$depth = Resolve-InterviewDepth -Profile $profile -Explicit '<DEPTH_FLAG_OR_EMPTY>'`
    - Run the guided interview at that depth (always in plain language, never
      assuming the user knows jargon):
+     - **All depths:** if no name was supplied as the leading CLI argument in
+       step 1 (`$name` is empty), ask "What should we call this project?" as
+       part of the interview → `$name`. If the user has no preference, fall
+       back to a sensible default — the title-cased leaf folder name of
+       `$targetFolder` once resolved below (e.g. `acme-api` → `Acme Api`), or a
+       title-cased version of `$projectId` if the folder name isn't usable —
+       and confirm the chosen default back to them. Either way, `$name` must be
+       a non-empty string before step 6 runs.
      - **All depths:** "What are you trying to make?" → `$goal`. If `--goal` was
        already supplied on the command line, skip asking and confirm it back to
        the user instead.
@@ -146,10 +154,13 @@ happens next, and why.
     a genuinely new user), write a starter `user-profile.json` now with
     `preferred_interview_depth = $depth` (what was actually used) and
     `teaching_level = $teachLevel`, so the *next* `/baton:start` call is
-    already calibrated:
+    already calibrated. `$depth` is only ever assigned on the new-project path
+    (step 4), so gate this on `$mode -eq 'new'` too — a resume that reaches
+    here with no prior profile (e.g. `user-profile.json` was deleted, or the
+    project predates this feature) must not write an unbound `$depth` into it:
 
     ```powershell
-    if (-not $profile) {
+    if ($mode -eq 'new' -and -not $profile) {
         Write-UserProfile -Profile @{
             preferred_interview_depth = $depth; teaching_level = $teachLevel
             updated_at = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')

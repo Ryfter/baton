@@ -36,6 +36,7 @@ Assert-Equal 'full' (Resolve-InterviewDepth -Profile @{ preferred_interview_dept
 # --- Resolve-TeachingLevel ---
 Write-Host "=== Resolve-TeachingLevel ===" -ForegroundColor Cyan
 Assert-Equal 'teach' (Resolve-TeachingLevel -Profile $null -Explicit $null) 'no profile, no explicit -> teach (default)'
+Assert-Equal 'teach' (Resolve-TeachingLevel -Profile @{ teaching_level = $null } -Explicit $null) 'profile present but level unset -> teach'
 Assert-Equal 'quiet' (Resolve-TeachingLevel -Profile @{ teaching_level = 'quiet' } -Explicit $null) 'profile says quiet -> quiet'
 Assert-Equal 'quiet' (Resolve-TeachingLevel -Profile @{ teaching_level = 'teach' } -Explicit 'quiet') 'explicit overrides profile'
 
@@ -62,6 +63,10 @@ foreach ($failStatus in @('failed', 'plan-failed', 'plan-invalid')) {
     Assert-True (-not [string]::IsNullOrWhiteSpace($rec.command)) "$failStatus -> has a command"
     Assert-True (-not [string]::IsNullOrWhiteSpace($rec.why)) "$failStatus -> has a why"
 }
+
+$rec = Get-NextCommandRecommendation -RunStatus 'some-unknown-status'
+Assert-True (-not [string]::IsNullOrWhiteSpace($rec.command)) 'unknown status -> has a command (fallback)'
+Assert-True (-not [string]::IsNullOrWhiteSpace($rec.why)) 'unknown status -> has a why (fallback)'
 
 # --- Project record R/W ---
 Write-Host "=== Project record R/W ===" -ForegroundColor Cyan
@@ -108,6 +113,12 @@ Write-UserProfile -ProfilePath $profilePath -Profile @{
 $prof = Read-UserProfile -ProfilePath $profilePath
 Assert-Equal 'light' $prof.preferred_interview_depth 'user profile: depth round-trips'
 Assert-Equal 'teach' $prof.teaching_level             'user profile: teaching_level round-trips'
+
+# Corrupted file -> read returns null, no throw
+$corruptProfilePath = Join-Path $profTmp 'corrupt-profile.json'
+Set-Content -Path $corruptProfilePath -Value '{ not json' -Encoding utf8NoBOM
+$prof = Read-UserProfile -ProfilePath $corruptProfilePath
+Assert-Null $prof 'corrupted user profile: read returns null'
 
 Remove-Item $profTmp -Recurse -Force
 

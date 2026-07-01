@@ -37,6 +37,8 @@ needed, writes a plain-language `CHARTER.md` recording what you want and why,
 then drives the work full-auto via `/baton:go` — stopping only for a budget
 limit or a hard-to-undo action.
 
+The hook auto-tags every model dispatch with the project name; the dashboard portfolio panel shows it.
+
 If you'd rather track the work as a manual job without the guided interview or
 full-auto execution, `/baton:job-start "<brief>"` remains available — it
 creates `$BATON_HOME/jobs/<id>/` (default `~/.baton/jobs/<id>/`) with
