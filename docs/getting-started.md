@@ -18,24 +18,32 @@ After running `pwsh -NoProfile -File scripts\bootstrap.ps1 -Force`, you have:
 
 ## A typical session — start to finish
 
-### 1. Open a project
+### 1. Start (or resume) a project
 
 ```powershell
 cd path\to\some\repo
 claude   # or your IDE's Claude integration
 ```
 
-The hook auto-tags every model dispatch with the project name; the dashboard portfolio panel shows it.
-
-### 2. Open a job
-
 ```
-/baton:job-start "rewrite the auth middleware"
+/baton:start "rewrite the auth middleware"
 ```
 
-Creates `$BATON_HOME/jobs/<id>/` (default `~/.baton/jobs/<id>/`) with `manifest.yaml`, `brief.md`, `phase-log.md`, `lessons.md`. Phase starts at `research`.
+`/baton:start` is the recommended on-ramp — it works whether this is a brand
+new project or one you've already begun, and it doesn't assume you know git or
+how to structure a repo. It asks what you're building (skipping questions
+you've already answered via flags), sets up the folder and git for you if
+needed, writes a plain-language `CHARTER.md` recording what you want and why,
+then drives the work full-auto via `/baton:go` — stopping only for a budget
+limit or a hard-to-undo action.
 
-### 3. Research the problem
+If you'd rather track the work as a manual job without the guided interview or
+full-auto execution, `/baton:job-start "<brief>"` remains available — it
+creates `$BATON_HOME/jobs/<id>/` (default `~/.baton/jobs/<id>/`) with
+`manifest.yaml`, `brief.md`, `phase-log.md`, `lessons.md`, starting at the
+`research` phase, and you drive each phase yourself.
+
+### 2. Research the problem
 
 ```
 /baton:research "what's the safest way to migrate session tokens without invalidating logins?"
@@ -51,13 +59,13 @@ For decision-making rather than research:
 /baton:council "should we adopt sliding-window refresh tokens?" --providers claude-cli,codex
 ```
 
-### 4. Capture a lesson
+### 3. Capture a lesson
 
 ```
 /baton:job-lesson knowledge "session tokens are HS256 today; rotating without invalidating requires a grace window in the validator"
 ```
 
-### 5. Design (still in conversation — no slash command needed)
+### 4. Design (still in conversation — no slash command needed)
 
 Write a design spec to `<job>/phases/design/<topic>.md` (or anywhere). When you have a spec, advance the phase:
 
@@ -65,7 +73,7 @@ Write a design spec to `<job>/phases/design/<topic>.md` (or anywhere). When you 
 /baton:job-phase next   # research → design (or design → code.sprint-1)
 ```
 
-### 6. Code phase (Plan 6)
+### 5. Code phase (Plan 6)
 
 ```
 /baton:code-decompose docs/specs/auth-rewrite.md
@@ -85,7 +93,7 @@ Dispatches one Agent subagent per task in an isolated git worktree (Claude Code'
 
 Surfaces likely conflicts via `files_touched` overlap, then prints the cherry-pick plan. Add `--apply` to execute.
 
-### 7. Wrap up
+### 6. Wrap up
 
 ```
 /baton:job-phase done
