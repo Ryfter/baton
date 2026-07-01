@@ -358,6 +358,19 @@ observations from the noisy journal into the clean catalog.
 - **Plain example:** `/baton:consolidate-lessons` → pending lessons get sorted into the KB.
 - **Gotchas:** Project-scoped lessons on a job with no project are skipped.
 
+### /baton:optimize-prompt
+- **One-liner:** Reflects on past run failures and proposes an improved Conductor planner prompt (GEPA-style).
+- **When you'd use it:** After a few `/baton:go` runs have come back `polish` or `reject` from the acceptance gate.
+- **Syntax:** `/baton:optimize-prompt [--max-runs <n>] [--max-tier local|free|paid] [--apply]`
+- **Arguments & flags:**
+  - `--max-runs <n>` — how many recent gated runs to reflect over. Default 5.
+  - `--max-tier <t>` — cost ceiling for the reflection model. Default `paid`.
+  - `--apply` — actually deploy the mutation (validated + backed up). Without it you only get a candidate file to review.
+- **Under the hood:** Gathers runs whose gate verdict was `polish`/`reject`, has a fleet-routed model reflect on *why* the plans fell short, and writes a mutated planner prompt. Default = propose-only (`conductor-planner.candidate.txt`); `--apply` first checks the `{{schema}}`/`{{evi}}`/`{{Goal}}` placeholders survived, backs up the live prompt to a timestamped `.bak-` file, then overwrites.
+- **Where results land:** `$BATON_HOME/prompts/` — the live prompt, the candidate, and the backups.
+- **Plain example:** `/baton:optimize-prompt` → review the candidate → `/baton:optimize-prompt --apply`.
+- **Gotchas:** Needs at least one run with a `polish`/`reject` verdict — a clean history gives it nothing to learn from. It never deploys on its own; `--apply` is always your call (d070). Redeploys never clobber a tuned live prompt (seed-if-absent).
+
 ---
 
 # Cost
@@ -399,6 +412,7 @@ observations from the noisy journal into the clean catalog.
 | `/baton:kb-index [--full]` | Refresh search index |
 | `/baton:kb-search "<query>"` | Search your knowledge |
 | `/baton:decision-feedback <id> "<text>"` | Verdict on a decision |
+| `/baton:optimize-prompt [--apply]` | Propose (then deploy) a better planner prompt |
 | `/baton:consolidate-decisions` | Roll decisions into guidance |
 | `/baton:project-init` | Calibrate a new project |
 | `/baton:log-routing <model> <note>` | Note a model's performance |

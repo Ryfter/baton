@@ -14,6 +14,7 @@
 . "$PSScriptRoot/routing-lib.ps1"   # Select-Capability (+ fleet-lib: Invoke-Fleet)
 . "$PSScriptRoot/gate-lib.ps1"   # Invoke-AcceptanceGate for the acceptance phase (d058)
 . "$PSScriptRoot/effective-cost-lib.ps1"   # run-level effective cost (slice 1)
+. "$PSScriptRoot/cost-resolver-lib.ps1"   # realized-cost metering (slice 2)
 
 function New-RunId {
     param([datetime]$Now = (Get-Date))
@@ -231,8 +232,42 @@ function Format-AcceptanceSection {
     return $sb.ToString().TrimEnd()
 }
 
+# Fail-open fallback for Build-PlannerPrompt: the exact conductor-planner.txt
+# template text, baked in so a missing/corrupt/malformed prompt file on disk
+# can never take the planner phase down. Kept in sync by hand with
+# prompts/conductor-planner.txt (read-only reference).
+$script:DefaultPlannerPrompt = @'
+You are a planning orchestrator for an autonomous software conductor. Break the
+GOAL into an ordered task DAG that sequences existing Baton building blocks
+(triage, research-gate, code-decompose, code-parallel, code-merge) and fleet
+capabilities. Respond with ONLY valid JSON matching this schema — no prose, no fences.
+
+Schema:
+{{schema}}
+
+Rules: give each task a unique id; use depends_on to order; set reversible=false
+ONLY for steps that commit to master, force-push, delete outside a worktree, or
+publish externally; prefer the cheapest est_cost_tier that can do the job. Use the
+evidence to avoid planning work that already exists.
+
+{{evi}}
+
+## Goal
+{{Goal}}
+'@
+
 function Build-PlannerPrompt {
-    <# Instruct a model to decompose the goal into a task DAG (strict JSON). #>
+    <# Instruct a model to decompose the goal into a task DAG (strict JSON).
+       Fail-open + injection-safe:
+        - Resolution order: the BATON_HOME copy first (the live copy, possibly
+          tuned by the prompt optimizer), then the repo's $PSScriptRoot/../prompts
+          copy as a fallback.
+        - If neither file exists, is unreadable, or is missing any of the
+          required literal placeholders, fall back to $script:DefaultPlannerPrompt
+          — this function never throws.
+        - Substitution uses [string]::Replace, NOT -replace: $Goal is untrusted
+          user text, and a regex replacement would treat literal '$1'/'$&' in the
+          goal as backreferences and corrupt the prompt. #>
     param([Parameter(Mandatory)][string]$Goal, [string[]]$RegistryLines = @())
     $schema = @'
 {
@@ -249,25 +284,24 @@ function Build-PlannerPrompt {
     $evi = if ($RegistryLines.Count) {
         "Tools already wired locally:`n" + (($RegistryLines | ForEach-Object { "- $_" }) -join "`n")
     } else { 'Tools already wired locally: (none)' }
-    return @"
-You are a planning orchestrator for an autonomous software conductor. Break the
-GOAL into an ordered task DAG that sequences existing Baton building blocks
-(triage, research-gate, code-decompose, code-parallel, code-merge) and fleet
-capabilities. Respond with ONLY valid JSON matching this schema — no prose, no fences.
 
-Schema:
-$schema
+    $requiredPlaceholders = @('{{schema}}', '{{evi}}', '{{Goal}}')
+    $template = $null
+    foreach ($candidatePath in @(
+        (Join-Path (Get-BatonHome) 'prompts/conductor-planner.txt'),
+        (Join-Path $PSScriptRoot '../prompts/conductor-planner.txt')
+    )) {
+        if (-not (Test-Path $candidatePath)) { continue }
+        $candidate = $null
+        try { $candidate = Get-Content -Raw -LiteralPath $candidatePath -ErrorAction Stop } catch { continue }
+        if ([string]::IsNullOrEmpty($candidate)) { continue }
+        $hasAll = $true
+        foreach ($ph in $requiredPlaceholders) { if (-not $candidate.Contains($ph)) { $hasAll = $false; break } }
+        if ($hasAll) { $template = $candidate; break }
+    }
+    if ($null -eq $template) { $template = $script:DefaultPlannerPrompt }
 
-Rules: give each task a unique id; use depends_on to order; set reversible=false
-ONLY for steps that commit to master, force-push, delete outside a worktree, or
-publish externally; prefer the cheapest est_cost_tier that can do the job. Use the
-evidence to avoid planning work that already exists.
-
-$evi
-
-## Goal
-$Goal
-"@
+    return $template.Replace('{{schema}}', $schema).Replace('{{evi}}', $evi).Replace('{{Goal}}', $Goal)
 }
 
 function Invoke-PlanPhase {
@@ -346,7 +380,7 @@ function Complete-Run {
     $effectiveCost = $null
     if ($Gate -and $Gate.verdict) {
         $quality   = Get-QualityScalar -Verdict ([string]$Gate.verdict) -Counts $Gate.counts
-        $runCost   = Get-RunCost -Tasks @($TaskCosts)
+        $runCost   = Get-RunCost -Tasks @($TaskCosts) -CostResolver { param($t) Get-RealizedTaskCost -Task $t -RunDir $RunDir }
         $effective = Get-EffectiveCost -Cost $runCost.cost -Quality $quality
         $breakdown = Get-WorkerBreakdown -Tasks @($TaskCosts)
         $record = New-EffectiveCostRecord -RunId $Plan.run_id -Verdict ([string]$Gate.verdict) `
