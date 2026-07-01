@@ -89,34 +89,84 @@ happens next, and why.
      for the routine "empty new folder" case — that's not a decision with
      alternatives.
 
-6. **Write the CHARTER + register the project.** Because goal/reasoning text
-   can be long, build the CHARTER string in-process and write it directly —
-   never pass long text as an inline shell argument (965-byte limit):
+6. **Record the style observation (slice 2).** After the interview answers
+    are captured but before writing the CHARTER, record the behavioural
+    observation so the learning loop has data to fold on:
 
-   ```powershell
-   $charterPath = Join-Path $targetFolder 'CHARTER.md'
-   $charterText = New-CharterContent -Name $name -Goal $goal -Audience $audience -Done $done -Reasoning $reasoning
-   Set-Content -Path $charterPath -Value $charterText -Encoding utf8NoBOM
+    ```powershell
+    # Determine whether the user passed --depth / --quiet explicitly
+    $depthWasExplicit = (-not [string]::IsNullOrWhiteSpace('<DEPTH_FLAG_OR_EMPTY>'))
+    $teachWasExplicit = (-not [string]::IsNullOrWhiteSpace('<QUIET_FLAG_OR_EMPTY>'))
 
-   $now = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
-   Write-ProjectRecord -Record @{
-       id = $projectId; name = $name; folder = $targetFolder
-       charter_path = $charterPath; created_at = $now; last_updated = $now
-       last_run = $null
-   }
+    # Count turns: how many user messages it took to confirm the goal
+    # (set $turnsToGoal during the interview; default 1 if goal came from --goal)
+    # $audienceVol = $true if user volunteered audience without being asked (light depth)
+    # $doneVol = $true if user volunteered done criteria without being asked (light depth)
+    # $reasoningQual = 'detailed' if they gave a paragraph+; 'brief' if a sentence; 'none' if skipped
 
-   # Best-effort supplement to Grimdex/memory if present — never required.
-   # If a Grimdex project tier exists for this project, or auto-memory is
-   # active in this session, record the captured reasoning there too.
-   ```
+    Add-StyleObservation -ProjectId $projectId `
+        -DepthUsed $depth -DepthExplicit $depthWasExplicit `
+        -TeachingUsed $teachLevel -TeachingExplicit $teachWasExplicit `
+        -TurnsToGoal $turnsToGoal `
+        -AudienceVolunteered $audienceVol `
+        -DoneVolunteered $doneVol `
+        -ReasoningQuality $reasoningQual
+    ```
 
-   In `teach` mode, explain: *"I wrote your reasoning to CHARTER.md in your
-   project folder — that's yours to read and edit any time."*
+    This is always called — even when the user passed explicit flags (recorded
+    as `explicit: true`, excluded from the fold vote).
 
-7. **Hand off to `/baton:go` full-auto:**
+7. **Write the CHARTER + register the project.** Because goal/reasoning text
+    can be long, build the CHARTER string in-process and write it directly —
+    never pass long text as an inline shell argument (965-byte limit):
 
-   ```powershell
-   pwsh -NoProfile -File "$HOME/.claude/scripts/fleet-go.ps1" -Goal "<goal from step 4/6>" -Json
+    ```powershell
+    $charterPath = Join-Path $targetFolder 'CHARTER.md'
+    $charterText = New-CharterContent -Name $name -Goal $goal -Audience $audience -Done $done -Reasoning $reasoning
+    Set-Content -Path $charterPath -Value $charterText -Encoding utf8NoBOM
+
+    $now = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
+    Write-ProjectRecord -Record @{
+        id = $projectId; name = $name; folder = $targetFolder
+        charter_path = $charterPath; created_at = $now; last_updated = $now
+        last_run = $null
+    }
+
+    # Best-effort supplement to Grimdex/memory if present — never required.
+    # If a Grimdex project tier exists for this project, or auto-memory is
+    # active in this session, record the captured reasoning there too.
+    ```
+
+    In `teach` mode, explain: *"I wrote your reasoning to CHARTER.md in your
+    project folder — that's yours to read and edit any time."*
+
+8. **Run the style fold (slice 2).** After writing the CHARTER and before
+    handing off to `/baton:go`, fold the accumulated observations:
+
+    ```powershell
+    $foldResult = Invoke-StyleFold
+    $foldNote = Format-StyleFoldNote -FoldResult $foldResult
+    if ($foldNote) {
+        # Always show — even in quiet mode, a profile update is visible
+        Write-Host $foldNote
+    }
+
+    # High-confidence Grimdex suggestion (operator-gated, never auto-written)
+    if ($foldResult.updated -and
+        ($foldResult.depth_confidence -gt 0.85 -or $foldResult.teaching_confidence -gt 0.85)) {
+        $updatedProfile = Read-UserProfile
+        $grimdexNote = Get-GrimdexStyleNote -Profile $updatedProfile
+        # Show the user: "Your preferences have stabilised. Want me to save
+        # this to Grimdex so any machine knows your style?"
+        # If yes: write $grimdexNote to D:\Dev\Grimdex\projects\baton\notes\working-style.md
+        # (check path exists first — if Grimdex is absent, skip silently)
+    }
+    ```
+
+9. **Hand off to `/baton:go` full-auto:**
+
+    ```powershell
+    pwsh -NoProfile -File "$HOME/.claude/scripts/fleet-go.ps1" -Goal "<goal from step 7/9>" -Json
    # add -Budget <n> when --budget was supplied
    # add -MaxCostTier <tier> when --max-tier was supplied
    ```
@@ -124,7 +174,7 @@ happens next, and why.
    Before running, tell the user (teach mode adds the *why*): *"Now driving
    /baton:go — I'll only stop for a budget limit or an irreversible action."*
 
-8. **Read the result and update state:**
+10. **Read the result and update state:**
 
    ```powershell
    # $result = the parsed JSON from step 7
@@ -140,7 +190,7 @@ happens next, and why.
    Narrate the run terse-one-liner style from `<run_dir>/events.jsonl`, and
    surface autonomous choices from `<run_dir>/decisions.jsonl` (legibility).
 
-9. **Report by `status`** using `Get-NextCommandRecommendation -RunStatus $result.status`:
+11. **Report by `status`** using `Get-NextCommandRecommendation -RunStatus $result.status`:
    - Print the recommended command; in `teach` mode also print its `why`.
    - `completed` → also point at `<run_dir>/report.md`.
    - `interrupted-budget` / `interrupted-destructive` → describe exactly what
@@ -150,7 +200,7 @@ happens next, and why.
    - `failed` / `plan-failed` / `plan-invalid` → show why, then the
      recommendation.
 
-10. **First-run profile write.** If `$profile` was `$null` at step 2 (this was
+12. **First-run profile write.** If `$profile` was `$null` at step 2 (this was
     a genuinely new user), write a starter `user-profile.json` now with
     `preferred_interview_depth = $depth` (what was actually used) and
     `teaching_level = $teachLevel`, so the *next* `/baton:start` call is
