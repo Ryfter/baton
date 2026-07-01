@@ -39,6 +39,26 @@ knowledge base mixed into their prompt before they answer.
 
 ---
 
+# Front porch — the one command to begin or resume
+
+### /baton:start
+- **One-liner:** Start a new project or resume one you already began — guided in plain language, no git or coding knowledge required.
+- **When you'd use it:** This is the recommended way to begin. It works whether you know exactly what you want or have no idea where to start.
+- **Syntax:** `/baton:start ["<name>"] [--folder <path>] [--goal "<text>"] [--budget <n>] [--max-tier local|free|paid] [--depth light|adaptive|full] [--quiet]`
+- **Arguments & flags:**
+  - `"<name>"` — the project's name (optional; asked for if omitted).
+  - `--folder <path>` — where it lives. Omit it and Baton either adopts your current folder or asks.
+  - `--goal "<text>"` — what you want built, if you already know. Omit it and you'll be asked.
+  - `--budget <n>` / `--max-tier <tier>` — passed straight through to the execution engine.
+  - `--depth light|adaptive|full` — override how many questions it asks. Default adapts to you over time.
+  - `--quiet` — turn off the plain-language explanations (teaching is on by default).
+- **Under the hood:** Detects whether this is a new or existing Baton project. New: runs a guided interview, sets up the folder and git for you (explaining each step), writes a `CHARTER.md` in your project recording what you want and why, then hands off to `/baton:go` to build it full-auto. Existing: shows you where you left off and recommends the next command.
+- **Where results land:** `CHARTER.md` in your project folder (yours to read/edit); `$BATON_HOME/projects/<id>/project.json` (box-private project record); run artifacts under `$BATON_HOME/runs/<run-id>/` (same as `/baton:go`).
+- **Plain example:** `/baton:start "Acme API"` → asks a few questions, sets everything up, and starts building.
+- **Gotchas:** Aliases `/baton:init` and `/baton:initialize` do exactly the same thing — pick whichever name you remember. It only stops mid-run for a budget limit or an action that's hard to undo; everything else runs on your behalf.
+
+---
+
 # Jobs — track a piece of work start to finish
 
 A **job** is a tracked unit of work (a feature, a bug, an investigation). It has
@@ -361,6 +381,7 @@ observations from the noisy journal into the clean catalog.
 
 | Command | One-liner |
 |---|---|
+| `/baton:start ["<name>"]` | Start or resume a project — the front porch |
 | `/baton:job-start "<brief>"` | Start a tracked job |
 | `/baton:job-status` | Where am I on the current job |
 | `/baton:job-list [--all\|--active\|--done]` | List jobs |
