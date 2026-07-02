@@ -53,88 +53,6 @@ try {
     Check 'O4 returned run has the right id' ($runsPop[0].run_id -eq 'go-1')
     Check 'O5 returned run carries the verdict' ($runsPop[0].verdict -eq 'reject')
 
-    # ---- Build-ReflectionPrompt ----
-    $runsForPrompt = @(
-        @{ run_id = 'go-1'; goal = 'G'; plan_tasks = '[]'; verdict = 'reject'; reason = 'R'; findings = '{}'; polish_brief = 'P' }
-    )
-    $rp = Build-ReflectionPrompt -HistoricalRuns $runsForPrompt -CurrentPrompt 'ORIGINAL_PROMPT_TEMPLATE'
-    Check 'O6 reflection prompt contains the current prompt' ($rp -match 'ORIGINAL_PROMPT_TEMPLATE')
-    Check 'O7 reflection prompt contains the run history' ($rp -match '--- RUN: go-1 ---')
-    Check 'O8 reflection prompt instructs a <new_prompt> block' ($rp -match '<new_prompt>')
-
-    # ---- Invoke-PromptOptimizer: stubbed dispatcher, hermetic prompt + runs ----
-    $liveDir = New-TempDir
-    $livePromptPath = Join-Path $liveDir 'conductor-planner.txt'
-    $liveOriginal = "TEMPLATE {{schema}} {{evi}} {{Goal}}"
-    Set-Content -LiteralPath $livePromptPath -Value $liveOriginal -Encoding utf8NoBOM
-
-    # Point BATON_HOME at a fake root with one polish-verdict run, so
-    # Get-HistoricalRuns (called internally with its default Root) finds work.
-    $fakeBatonHome = New-TempDir
-    $fakeRunsRoot = Join-Path $fakeBatonHome 'runs'
-    New-Item -ItemType Directory -Force -Path $fakeRunsRoot | Out-Null
-    $fakeRun1 = Join-Path $fakeRunsRoot 'go-1'
-    New-Item -ItemType Directory -Force -Path $fakeRun1 | Out-Null
-    @{ goal = 'G1'; tasks = @() } | ConvertTo-Json | Set-Content (Join-Path $fakeRun1 'plan.json')
-    @{ verdict = 'polish'; reason = 'R1'; counts = @{ important = 1 }; polish_brief = 'P1' } | ConvertTo-Json | Set-Content (Join-Path $fakeRun1 'acceptance.json')
-    $env:BATON_HOME = $fakeBatonHome
-
-    # Case 1: valid mutation with placeholders, no -Apply -> candidate written, live untouched.
-    $validMutation = "<new_prompt>MUTATED {{schema}} {{evi}} {{Goal}}</new_prompt>"
-    $dispValid = { param($p) @{ stdout = $validMutation; exit_code = 0 } }
-    $r1 = Invoke-PromptOptimizer -PromptPath $livePromptPath -Dispatcher $dispValid
-    Check 'O9 valid mutation -> success true' ($r1.success -eq $true)
-    Check 'O10 valid mutation, no -Apply -> applied false' ($r1.applied -eq $false)
-    $expectedCandidate = Join-Path $liveDir 'conductor-planner.candidate.txt'
-    Check 'O11 candidate path reported' ($r1.candidate_path -eq $expectedCandidate)
-    Check 'O12 candidate file written' (Test-Path $expectedCandidate)
-    Check 'O13 candidate content is the mutation' ((Get-Content -Raw $expectedCandidate).Trim() -eq 'MUTATED {{schema}} {{evi}} {{Goal}}')
-    Check 'O14 live prompt untouched by the default run' ((Get-Content -Raw $livePromptPath).Trim() -eq $liveOriginal)
-    Remove-Item -Force $expectedCandidate -ErrorAction SilentlyContinue
-
-    # Case 2: -Apply -> backup created + live overwritten.
-    $r2 = Invoke-PromptOptimizer -PromptPath $livePromptPath -Dispatcher $dispValid -Apply
-    Check 'O15 -Apply -> success true' ($r2.success -eq $true)
-    Check 'O16 -Apply -> applied true' ($r2.applied -eq $true)
-    $backups = @(Get-ChildItem -Path $liveDir -Filter 'conductor-planner.txt.bak-*')
-    Check 'O17 -Apply creates a timestamped backup' (@($backups).Count -ge 1)
-    Check 'O18 backup holds the pre-apply content' ((Get-Content -Raw $backups[0].FullName).Trim() -eq $liveOriginal)
-    Check 'O19 live prompt overwritten with the mutation' ((Get-Content -Raw $livePromptPath).Trim() -eq 'MUTATED {{schema}} {{evi}} {{Goal}}')
-
-    # Reset the live prompt for the remaining cases.
-    Set-Content -LiteralPath $livePromptPath -Value $liveOriginal -Encoding utf8NoBOM
-
-    # Case 3: mutation missing {{Goal}} -> nothing written, success=false.
-    $missingGoalMutation = "<new_prompt>MUTATED {{schema}} {{evi}} NO GOAL PLACEHOLDER</new_prompt>"
-    $dispMissing = { param($p) @{ stdout = $missingGoalMutation; exit_code = 0 } }
-    $r3 = Invoke-PromptOptimizer -PromptPath $livePromptPath -Dispatcher $dispMissing
-    Check 'O20 mutation missing {{Goal}} -> success false' ($r3.success -eq $false)
-    Check 'O21 mutation missing {{Goal}} -> nothing written (no candidate)' (-not (Test-Path (Join-Path $liveDir 'conductor-planner.candidate.txt')))
-    Check 'O22 mutation missing {{Goal}} -> live untouched' ((Get-Content -Raw $livePromptPath).Trim() -eq $liveOriginal)
-
-    # Case 4: -Apply with a mutation missing {{Goal}} -> also refuses to touch the live prompt.
-    $r4 = Invoke-PromptOptimizer -PromptPath $livePromptPath -Dispatcher $dispMissing -Apply
-    Check 'O23 -Apply + missing placeholder -> success false' ($r4.success -eq $false)
-    Check 'O24 -Apply + missing placeholder -> applied false' ($r4.applied -eq $false)
-    Check 'O25 -Apply + missing placeholder -> live untouched' ((Get-Content -Raw $livePromptPath).Trim() -eq $liveOriginal)
-
-    # Case 5: no <new_prompt> tags -> success=false, nothing written.
-    $dispNoTags = { param($p) @{ stdout = 'no tags here at all'; exit_code = 0 } }
-    $r5 = Invoke-PromptOptimizer -PromptPath $livePromptPath -Dispatcher $dispNoTags
-    Check 'O26 no <new_prompt> tags -> success false' ($r5.success -eq $false)
-    Check 'O27 no <new_prompt> tags -> nothing written' (-not (Test-Path (Join-Path $liveDir 'conductor-planner.candidate.txt')))
-
-    # Case 6: dispatcher reports a nonzero exit -> success=false.
-    $dispFail = { param($p) @{ stdout = ''; exit_code = 1 } }
-    $r6 = Invoke-PromptOptimizer -PromptPath $livePromptPath -Dispatcher $dispFail
-    Check 'O28 dispatcher failure -> success false' ($r6.success -eq $false)
-
-    # Case 7: no historical runs -> success=false, reason mentions it.
-    $env:BATON_HOME = (New-TempDir)   # runs/ subdir absent
-    $r7 = Invoke-PromptOptimizer -PromptPath $livePromptPath -Dispatcher $dispValid
-    Check 'O29 no historical runs -> success false' ($r7.success -eq $false)
-    Check 'O30 no historical runs -> reason explains why' ($r7.reason -match 'no historical runs')
-
     # ==== M-series: minibatch evaluator ====
     $mbRuns = @(
         @{ run_id = 'go-1'; goal = 'Goal one'; verdict = 'reject'; reason = 'R1'; findings = '{}'; polish_brief = 'P1' },
@@ -195,6 +113,149 @@ try {
         -ReferencePrompt 'R {{schema}} {{evi}} {{Goal}}' -Runs $mbRuns `
         -PlanDispatcher $planFail -JudgeDispatcher $judgeTie
     Check 'M8 failed plan generation -> example dropped' ($mb5.dropped -eq 2)
+
+    # ==== E-series: Invoke-PromptEvolution ====
+    # Shared hermetic fixture: temp BATON_HOME with one polish run + live prompt.
+    function New-EvoFixture {
+        $root = New-TempDir
+        $runsRoot = Join-Path $root 'runs'
+        $runDir = Join-Path $runsRoot 'go-1'
+        New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+        @{ goal = 'G1'; tasks = @() } | ConvertTo-Json | Set-Content (Join-Path $runDir 'plan.json')
+        @{ verdict = 'polish'; reason = 'R1'; counts = @{ important = 1 }; polish_brief = 'P1' } |
+            ConvertTo-Json | Set-Content (Join-Path $runDir 'acceptance.json')
+        $promptDir = Join-Path $root 'prompts'
+        New-Item -ItemType Directory -Force -Path $promptDir | Out-Null
+        $livePath = Join-Path $promptDir 'conductor-planner.txt'
+        Set-Content -LiteralPath $livePath -Value 'LIVE {{schema}} {{evi}} {{Goal}}' -Encoding utf8NoBOM
+        return @{ root = $root; live = $livePath; pool = (Join-Path $promptDir 'pool') }
+    }
+    $okReflect = { param($p) @{ stdout = '<diagnosis>too vague about ordering</diagnosis>'; exit_code = 0 } }
+    $okMutate = { param($p) @{ stdout = '<new_prompt>BETTER v2 {{schema}} {{evi}} {{Goal}}</new_prompt>'; exit_code = 0 } }
+    $echoPlan2 = { param($p) @{ stdout = $p; exit_code = 0 } }
+    $judgeBetter = { param($p)
+        $aIdx = $p.IndexOf('## Plan A'); $bIdx = $p.IndexOf('## Plan B')
+        $v = if ($p.Substring($aIdx, $bIdx - $aIdx).Contains('BETTER')) { 'A' } else { 'B' }
+        @{ stdout = "<verdict>$v</verdict>"; exit_code = 0 }
+    }
+
+    # E1+E2: first run seeds the pool, survivor proposed, live untouched (v1 regression).
+    $fx1 = New-EvoFixture
+    $env:BATON_HOME = $fx1.root
+    $ev1 = Invoke-PromptEvolution -PromptPath $fx1.live -PoolDir $fx1.pool `
+        -ReflectDispatcher $okReflect -MutateDispatcher $okMutate `
+        -PlanDispatcher $echoPlan2 -JudgeDispatcher $judgeBetter -Draw { param($t) 0.0 }
+    Check 'E1 first evolution seeds the pool (p001 champion)' ((Get-PromptPool -PoolDir $fx1.pool).pool.champion -eq 'p001')
+    Check 'E2 survivor: success, candidate file written, live prompt untouched' (
+        $ev1.success -and (-not $ev1.applied) -and (Test-Path $ev1.candidate_path) -and
+        ((Get-Content -Raw $fx1.live) -match '^LIVE')
+    )
+    $pool1 = (Get-PromptPool -PoolDir $fx1.pool).pool
+    $p002 = @($pool1.candidates | Where-Object { $_.id -eq 'p002' })[0]
+    Check 'E3 child recorded as candidate with parent p001 and scores' (
+        ($p002.status -eq 'candidate') -and ($p002.parent -eq 'p001') -and
+        (([double]$p002.offline.minibatch.win_rate_vs_champion) -eq 1.0)
+    )
+    Check 'E4 child text file written to pool' ((Get-Content -Raw (Join-Path $fx1.pool 'p002.txt')) -match '^BETTER v2')
+    Check 'E5 generation record present' ((@($ev1.generations).Count -eq 1) -and (@($ev1.generations)[0].pass))
+
+    # E6: placeholder-dropping mutation -> retired, no proposal.
+    $fx2 = New-EvoFixture
+    $env:BATON_HOME = $fx2.root
+    $badMutate = { param($p) @{ stdout = '<new_prompt>DROPPED THE PLACEHOLDERS</new_prompt>'; exit_code = 0 } }
+    $ev2 = Invoke-PromptEvolution -PromptPath $fx2.live -PoolDir $fx2.pool `
+        -ReflectDispatcher $okReflect -MutateDispatcher $badMutate `
+        -PlanDispatcher $echoPlan2 -JudgeDispatcher $judgeBetter -Draw { param($t) 0.0 }
+    $pool2 = (Get-PromptPool -PoolDir $fx2.pool).pool
+    $ret2 = @($pool2.candidates | Where-Object { $_.status -eq 'retired' })
+    Check 'E6 placeholder drop -> retired with reason, run reports no survivor' (
+        (-not $ev2.success) -and (@($ret2).Count -eq 1) -and ($ret2[0].retired_reason -match 'placeholder')
+    )
+
+    # E7: length cap (seed ~8 tokens; 2x cap; give a huge mutation).
+    $fx3 = New-EvoFixture
+    $env:BATON_HOME = $fx3.root
+    $longBody = ('x' * 400)
+    $longMutate = { param($p) @{ stdout = "<new_prompt>$longBody {{schema}} {{evi}} {{Goal}}</new_prompt>"; exit_code = 0 } }.GetNewClosure()
+    $ev3 = Invoke-PromptEvolution -PromptPath $fx3.live -PoolDir $fx3.pool `
+        -ReflectDispatcher $okReflect -MutateDispatcher $longMutate `
+        -PlanDispatcher $echoPlan2 -JudgeDispatcher $judgeBetter -Draw { param($t) 0.0 }
+    $ret3 = @((Get-PromptPool -PoolDir $fx3.pool).pool.candidates | Where-Object { $_.status -eq 'retired' })
+    Check 'E7 length cap -> retired with length reason' (
+        (-not $ev3.success) -and (@($ret3).Count -eq 1) -and ($ret3[0].retired_reason -match 'length cap')
+    )
+
+    # E8: all-ties judge -> gate fail (no evidence).
+    $fx4 = New-EvoFixture
+    $env:BATON_HOME = $fx4.root
+    $judgeTie2 = { param($p) @{ stdout = '<verdict>tie</verdict>'; exit_code = 0 } }
+    $ev4 = Invoke-PromptEvolution -PromptPath $fx4.live -PoolDir $fx4.pool `
+        -ReflectDispatcher $okReflect -MutateDispatcher $okMutate `
+        -PlanDispatcher $echoPlan2 -JudgeDispatcher $judgeTie2 -Draw { param($t) 0.0 }
+    Check 'E8 all ties -> no survivor, no-evidence reason recorded' (
+        (-not $ev4.success) -and ((@(@($ev4.generations)[0].reasons) -join ';') -match 'no evidence')
+    )
+
+    # E9: -Apply promotes the survivor (champion swap + backup + stale-marking).
+    $fx5 = New-EvoFixture
+    $env:BATON_HOME = $fx5.root
+    $ev5 = Invoke-PromptEvolution -PromptPath $fx5.live -PoolDir $fx5.pool -Apply `
+        -ReflectDispatcher $okReflect -MutateDispatcher $okMutate `
+        -PlanDispatcher $echoPlan2 -JudgeDispatcher $judgeBetter -Draw { param($t) 0.0 }
+    $pool5 = (Get-PromptPool -PoolDir $fx5.pool).pool
+    $old5 = @($pool5.candidates | Where-Object { $_.id -eq 'p001' })[0]
+    $new5 = @($pool5.candidates | Where-Object { $_.id -eq 'p002' })[0]
+    Check 'E9a apply: live prompt overwritten with survivor text' ((Get-Content -Raw $fx5.live) -match '^BETTER v2')
+    Check 'E9b apply: timestamped backup of previous live prompt exists' (@(Get-ChildItem "$($fx5.live).bak-*").Count -eq 1)
+    Check 'E9c apply: champion swapped, old champion retired as superseded' (
+        ($pool5.champion -eq 'p002') -and ($new5.status -eq 'champion') -and
+        ($old5.status -eq 'retired') -and ($old5.retired_reason -eq 'superseded')
+    )
+    Check 'E9d apply: new champion re-baselined to 0.5' (([double]$new5.offline.minibatch.win_rate_vs_champion) -eq 0.5)
+
+    # E10: corrupt pool manifest -> refuse to run.
+    $fx6 = New-EvoFixture
+    $env:BATON_HOME = $fx6.root
+    New-Item -ItemType Directory -Force -Path $fx6.pool | Out-Null
+    Set-Content -LiteralPath (Join-Path $fx6.pool 'pool.json') -Value '{ broken' -Encoding utf8NoBOM
+    $ev6 = Invoke-PromptEvolution -PromptPath $fx6.live -PoolDir $fx6.pool `
+        -ReflectDispatcher $okReflect -MutateDispatcher $okMutate `
+        -PlanDispatcher $echoPlan2 -JudgeDispatcher $judgeBetter -Draw { param($t) 0.0 }
+    Check 'E10 corrupt pool -> refuses, manifest untouched' (
+        (-not $ev6.success) -and ($ev6.reason -match 'corrupt') -and
+        ((Get-Content -Raw (Join-Path $fx6.pool 'pool.json')) -match 'broken')
+    )
+
+    # E11: no gated runs -> honest no-op.
+    $fx7 = New-EvoFixture
+    Remove-Item -Recurse -Force (Join-Path $fx7.root 'runs')
+    $env:BATON_HOME = $fx7.root
+    $ev7 = Invoke-PromptEvolution -PromptPath $fx7.live -PoolDir $fx7.pool `
+        -ReflectDispatcher $okReflect -MutateDispatcher $okMutate `
+        -PlanDispatcher $echoPlan2 -JudgeDispatcher $judgeBetter -Draw { param($t) 0.0 }
+    Check 'E11 no gated runs -> no-op with honest reason' ((-not $ev7.success) -and ($ev7.reason -match 'no historical runs'))
+
+    # E12: reflection failure -> generation fail-open, pool not grown.
+    $fx8 = New-EvoFixture
+    $env:BATON_HOME = $fx8.root
+    $failReflect = { param($p) @{ stdout = ''; exit_code = 1 } }
+    $ev8 = Invoke-PromptEvolution -PromptPath $fx8.live -PoolDir $fx8.pool `
+        -ReflectDispatcher $failReflect -MutateDispatcher $okMutate `
+        -PlanDispatcher $echoPlan2 -JudgeDispatcher $judgeBetter -Draw { param($t) 0.0 }
+    Check 'E12 reflection failure -> fail-open, only the seed in the pool' (
+        (-not $ev8.success) -and (@((Get-PromptPool -PoolDir $fx8.pool).pool.candidates).Count -eq 1)
+    )
+
+    # E13: builders carry their contracts.
+    $dg = Build-DiagnosisPrompt -HistoricalRuns @(@{ run_id = 'go-1'; goal = 'G'; plan_tasks = '[]'; verdict = 'reject'; reason = 'R'; findings = '{}'; polish_brief = 'P' }) `
+        -ParentPrompt 'PARENT_TEXT' -PriorFates @('p009 retired: length cap')
+    Check 'E13a diagnosis prompt: history + parent + prior fates + <diagnosis> tag' (
+        ($dg -match 'go-1') -and ($dg -match 'PARENT_TEXT') -and ($dg -match 'p009 retired') -and ($dg -match '<diagnosis>')
+    )
+    $mt = Build-MutationPrompt -Diagnosis 'DIAG_TEXT' -ParentPrompt 'PARENT_TEXT'
+    Check 'E13b mutation prompt: diagnosis + parent + placeholder-keep + <new_prompt> tag' (
+        ($mt -match 'DIAG_TEXT') -and ($mt -match 'PARENT_TEXT') -and ($mt -match '\{\{schema\}\}') -and ($mt -match '<new_prompt>')
+    )
 
     if ($null -eq $prevBatonHome) { Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue }
     else { $env:BATON_HOME = $prevBatonHome }
