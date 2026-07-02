@@ -59,8 +59,11 @@ function New-PoolCandidateRecord {
         [Parameter(Mandatory)][ValidateSet('champion','candidate','retired')][string]$Status,
         [Parameter(Mandatory)][int]$PromptTokens
     )
+    # [string]$Parent coerces $null to '' — normalize back so seed lineage
+    # serializes as JSON null (Slice B reads parentage from this field).
+    $parentVal = if ([string]::IsNullOrEmpty($Parent)) { $null } else { $Parent }
     return @{
-        id = $Id; file = "$Id.txt"; parent = $Parent; origin = $Origin
+        id = $Id; file = "$Id.txt"; parent = $parentVal; origin = $Origin
         created = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         status = $Status
         retired_reason = $null
