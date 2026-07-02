@@ -15,6 +15,7 @@
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/routing-lib.ps1"
 . "$PSScriptRoot/fleet-lib.ps1"
+. "$PSScriptRoot/prompt-pool-lib.ps1"
 
 function Get-HistoricalRuns {
     <# Most-recent-first scan of BATON_HOME/runs for reject/polish-verdict runs.
@@ -83,6 +84,109 @@ INSTRUCTIONS:
 3. Your output MUST contain the new prompt inside a <new_prompt> XML block.
 4. Do not output anything outside of the <new_prompt> block that could be confused with the prompt itself.
 "@
+}
+
+# Offline-eval stand-in for the production plan schema. Both sides of every
+# head-to-head are hydrated with the SAME text, so the judge's A/B comparison
+# stays fair even though this is not byte-identical to conductor-lib's live
+# schema (kept decoupled on purpose — sourcing conductor-lib here would drag
+# in the whole run engine).
+$script:MinibatchPlanSchema = @'
+{
+  "run_id": "<id>",
+  "goal": "<the goal>",
+  "tasks": [
+    { "id": "<unique>", "desc": "<what>", "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true }
+  ]
+}
+'@
+
+function Build-HydratedPlannerPrompt {
+    <# Literal [string]::Replace — never regex: goals are untrusted user text
+       and '$1'/'$&' in a regex replacement would corrupt the prompt. #>
+    param([Parameter(Mandatory)][string]$Template, [Parameter(Mandatory)][string]$Goal)
+    $evi = 'Tools already wired locally: (none - offline evaluation)'
+    return $Template.Replace('{{schema}}', $script:MinibatchPlanSchema).Replace('{{evi}}', $evi).Replace('{{Goal}}', $Goal)
+}
+
+function Build-JudgePrompt {
+    param(
+        [Parameter(Mandatory)][hashtable]$Run,
+        [Parameter(Mandatory)][string]$PlanA,
+        [Parameter(Mandatory)][string]$PlanB
+    )
+    $brief = if ($Run.polish_brief) { "Polish brief:`n$($Run.polish_brief)" } else { '' }
+    return @"
+You are judging two candidate task plans produced for the same goal by an autonomous software agent.
+This goal previously FAILED its acceptance gate; the recorded feedback below tells you what a better plan must address.
+
+## Goal
+$($Run.goal)
+
+## Acceptance-gate feedback from the failed run
+Verdict: $($Run.verdict)
+Reason: $($Run.reason)
+Findings: $($Run.findings)
+$brief
+
+## Plan A
+$PlanA
+
+## Plan B
+$PlanB
+
+Which plan better addresses the recorded feedback (avoids the same failures, tighter scope, correct ordering)?
+Answer with EXACTLY one of A, B, or tie inside a <verdict> tag, e.g. <verdict>A</verdict>. No other output.
+"@
+}
+
+function Invoke-MinibatchEval {
+    <# Head-to-head: candidate vs reference prompt over historical gated runs
+       (plan-only generation — no execution). Position bias is cancelled by
+       swapping which side is "A" per example. A judge reply without a
+       parseable <verdict>, or a failed plan generation, drops the example
+       (counted in `dropped`). win_rate = wins/(wins+losses), ties excluded;
+       null when nothing scoreable (= "no evidence" upstream). #>
+    param(
+        [Parameter(Mandatory)][string]$CandidatePrompt,
+        [Parameter(Mandatory)][string]$ReferencePrompt,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Runs,
+        [Parameter(Mandatory)][scriptblock]$PlanDispatcher,
+        [Parameter(Mandatory)][scriptblock]$JudgeDispatcher
+    )
+    $wins = 0; $losses = 0; $ties = 0; $dropped = 0
+    $examples = [System.Collections.ArrayList]@()
+    $i = 0
+    foreach ($run in @($Runs)) {
+        $candIsA = (($i % 2) -eq 0)
+        $i++
+        $candRes = & $PlanDispatcher (Build-HydratedPlannerPrompt -Template $CandidatePrompt -Goal ([string]$run.goal))
+        $refRes = & $PlanDispatcher (Build-HydratedPlannerPrompt -Template $ReferencePrompt -Goal ([string]$run.goal))
+        if ((([int]$candRes.exit_code) -ne 0) -or (([int]$refRes.exit_code) -ne 0)) { $dropped++; continue }
+        $planA = if ($candIsA) { [string]$candRes.stdout } else { [string]$refRes.stdout }
+        $planB = if ($candIsA) { [string]$refRes.stdout } else { [string]$candRes.stdout }
+        $judgeRes = & $JudgeDispatcher (Build-JudgePrompt -Run $run -PlanA $planA -PlanB $planB)
+        $verdict = $null
+        if ((([int]$judgeRes.exit_code) -eq 0) -and (([string]$judgeRes.stdout) -match '<verdict>\s*(A|B|tie)\s*</verdict>')) {
+            $verdict = $Matches[1]
+        }
+        if ($null -eq $verdict) { $dropped++; continue }
+        if ($verdict -eq 'tie') {
+            $ties++
+        } elseif ((($verdict -eq 'A') -and $candIsA) -or (($verdict -eq 'B') -and (-not $candIsA))) {
+            $wins++
+        } else {
+            $losses++
+        }
+        [void]$examples.Add(@{
+            run_id = [string]$run.run_id
+            candidate_was = $(if ($candIsA) { 'A' } else { 'B' })
+            verdict = $verdict
+        })
+    }
+    $winRate = $null
+    if (($wins + $losses) -gt 0) { $winRate = [math]::Round($wins / [double]($wins + $losses), 4) }
+    return @{ wins = $wins; losses = $losses; ties = $ties; dropped = $dropped; win_rate = $winRate; examples = @($examples) }
 }
 
 function Invoke-PromptOptimizer {

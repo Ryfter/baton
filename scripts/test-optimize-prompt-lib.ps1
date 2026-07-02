@@ -135,6 +135,67 @@ try {
     Check 'O29 no historical runs -> success false' ($r7.success -eq $false)
     Check 'O30 no historical runs -> reason explains why' ($r7.reason -match 'no historical runs')
 
+    # ==== M-series: minibatch evaluator ====
+    $mbRuns = @(
+        @{ run_id = 'go-1'; goal = 'Goal one'; verdict = 'reject'; reason = 'R1'; findings = '{}'; polish_brief = 'P1' },
+        @{ run_id = 'go-2'; goal = 'Goal two'; verdict = 'polish'; reason = 'R2'; findings = '{}'; polish_brief = $null }
+    )
+
+    # Hydration is literal (injection-safe) and total.
+    $hyd = Build-HydratedPlannerPrompt -Template 'T {{schema}} | {{evi}} | {{Goal}}' -Goal 'costs $1 and $$'
+    Check 'M1 hydration replaces Goal literally (no regex corruption)' ($hyd -match [regex]::Escape('costs $1 and $$'))
+    Check 'M2 hydration removes all placeholders' (-not ($hyd -match '\{\{(schema|evi|Goal)\}\}'))
+
+    $jp = Build-JudgePrompt -Run $mbRuns[0] -PlanA 'PLAN_A_TEXT' -PlanB 'PLAN_B_TEXT'
+    Check 'M3 judge prompt carries goal, feedback, both plans, verdict tag' (
+        ($jp -match 'Goal one') -and ($jp -match 'R1') -and ($jp -match 'PLAN_A_TEXT') -and
+        ($jp -match 'PLAN_B_TEXT') -and ($jp -match '<verdict>')
+    )
+
+    # Plan dispatcher echoes its prompt so the judge stub can tell sides apart.
+    $echoPlan = { param($p) @{ stdout = $p; exit_code = 0 } }
+
+    # Judge stub: verdict goes to whichever side's plan contains CAND_MARK.
+    $judgeCand = { param($p)
+        $aIdx = $p.IndexOf('## Plan A'); $bIdx = $p.IndexOf('## Plan B')
+        $aTxt = $p.Substring($aIdx, $bIdx - $aIdx)
+        $v = if ($aTxt.Contains('CAND_MARK')) { 'A' } else { 'B' }
+        @{ stdout = "<verdict>$v</verdict>"; exit_code = 0 }
+    }
+    $mb1 = Invoke-MinibatchEval -CandidatePrompt 'CAND_MARK {{schema}} {{evi}} {{Goal}}' `
+        -ReferencePrompt 'REF {{schema}} {{evi}} {{Goal}}' -Runs $mbRuns `
+        -PlanDispatcher $echoPlan -JudgeDispatcher $judgeCand
+    Check 'M4 candidate-favoring judge -> win rate 1 across position swap' (
+        ($mb1.wins -eq 2) -and ($mb1.losses -eq 0) -and (([double]$mb1.win_rate) -eq 1.0)
+    )
+
+    # Position-bias probe: a judge that ALWAYS answers A splits with the swap.
+    $judgeAlwaysA = { param($p) @{ stdout = '<verdict>A</verdict>'; exit_code = 0 } }
+    $mb2 = Invoke-MinibatchEval -CandidatePrompt 'CAND_MARK {{schema}} {{evi}} {{Goal}}' `
+        -ReferencePrompt 'REF {{schema}} {{evi}} {{Goal}}' -Runs $mbRuns `
+        -PlanDispatcher $echoPlan -JudgeDispatcher $judgeAlwaysA
+    Check 'M5 position swap cancels an always-A judge (1 win, 1 loss)' (
+        ($mb2.wins -eq 1) -and ($mb2.losses -eq 1) -and (([double]$mb2.win_rate) -eq 0.5)
+    )
+
+    $judgeTie = { param($p) @{ stdout = '<verdict>tie</verdict>'; exit_code = 0 } }
+    $mb3 = Invoke-MinibatchEval -CandidatePrompt 'C {{schema}} {{evi}} {{Goal}}' `
+        -ReferencePrompt 'R {{schema}} {{evi}} {{Goal}}' -Runs $mbRuns `
+        -PlanDispatcher $echoPlan -JudgeDispatcher $judgeTie
+    Check 'M6 all ties -> win_rate null, ties counted' (($null -eq $mb3.win_rate) -and ($mb3.ties -eq 2))
+
+    $judgeGarbage = { param($p) @{ stdout = 'no tag here'; exit_code = 0 } }
+    $mb4 = Invoke-MinibatchEval -CandidatePrompt 'C {{schema}} {{evi}} {{Goal}}' `
+        -ReferencePrompt 'R {{schema}} {{evi}} {{Goal}}' -Runs $mbRuns `
+        -PlanDispatcher $echoPlan -JudgeDispatcher $judgeGarbage
+    Check 'M7 unparseable judge output -> examples dropped and counted' (($mb4.dropped -eq 2) -and ($null -eq $mb4.win_rate))
+
+    $planFail = { param($p) @{ stdout = ''; exit_code = 1 } }
+    $mb5 = Invoke-MinibatchEval -CandidatePrompt 'C {{schema}} {{evi}} {{Goal}}' `
+        -ReferencePrompt 'R {{schema}} {{evi}} {{Goal}}' -Runs $mbRuns `
+        -PlanDispatcher $planFail -JudgeDispatcher $judgeTie
+    Check 'M8 failed plan generation -> example dropped' ($mb5.dropped -eq 2)
+
     if ($null -eq $prevBatonHome) { Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue }
     else { $env:BATON_HOME = $prevBatonHome }
 
