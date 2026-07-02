@@ -359,17 +359,20 @@ observations from the noisy journal into the clean catalog.
 - **Gotchas:** Project-scoped lessons on a job with no project are skipped.
 
 ### /baton:optimize-prompt
-- **One-liner:** Reflects on past run failures and proposes an improved Conductor planner prompt (GEPA-style).
+- **One-liner:** GEPA evolution over the Conductor planner prompt (candidate pool, propose-then-apply).
 - **When you'd use it:** After a few `/baton:go` runs have come back `polish` or `reject` from the acceptance gate.
-- **Syntax:** `/baton:optimize-prompt [--max-runs <n>] [--max-tier local|free|paid] [--apply]`
+- **Syntax:** `/baton:optimize-prompt [--max-runs N] [--max-tier local|free|paid] [--reflect-tier T] [--generations N] [--pool] [--apply]`
 - **Arguments & flags:**
-  - `--max-runs <n>` — how many recent gated runs to reflect over. Default 5.
-  - `--max-tier <t>` — cost ceiling for the reflection model. Default `paid`.
-  - `--apply` — actually deploy the mutation (validated + backed up). Without it you only get a candidate file to review.
-- **Under the hood:** Gathers runs whose gate verdict was `polish`/`reject`, has a fleet-routed model reflect on *why* the plans fell short, and writes a mutated planner prompt. Default = propose-only (`conductor-planner.candidate.txt`); `--apply` first checks the `{{schema}}`/`{{evi}}`/`{{Goal}}` placeholders survived, backs up the live prompt to a timestamped `.bak-` file, then overwrites.
-- **Where results land:** `$BATON_HOME/prompts/` — the live prompt, the candidate, and the backups.
-- **Plain example:** `/baton:optimize-prompt` → review the candidate → `/baton:optimize-prompt --apply`.
-- **Gotchas:** Needs at least one run with a `polish`/`reject` verdict — a clean history gives it nothing to learn from. It never deploys on its own; `--apply` is always your call (d070). Redeploys never clobber a tuned live prompt (seed-if-absent).
+  - `--max-runs N` — default 5.
+  - `--max-tier` — mutation/judge tier, default paid.
+  - `--reflect-tier` — default one below max-tier.
+  - `--generations N` — default 1.
+  - `--pool` — prints the pool report.
+  - `--apply` — human-gated (d070), backs up the live prompt and promotes the survivor to champion.
+- **Under the hood:** GEPA evolution over the Conductor planner prompt. A box-private candidate pool (`$BATON_HOME/prompts/pool/`) tracks every prompt variant: lineage, status (champion / candidate / retired), judge scores, token estimates, and — reserved for the shadow-A/B slice — live cost-to-acceptance stats. Each generation: Pareto-front parent selection → cheap reflection model diagnoses gate-failed runs → stronger mutation model rewrites the prompt → plan-only minibatch judged head-to-head vs the champion (position-swapped) → dual gate (beat parent AND Pareto-non-dominated on quality vs tokens; length cap). Survivors are proposed as `conductor-planner.candidate.txt`; `--apply` backs up the live prompt and promotes the survivor to champion.
+- **Where results land:** `$BATON_HOME/prompts/pool/` (the pool); `$BATON_HOME/prompts/conductor-planner.candidate.txt` (proposal); `$BATON_HOME/prompts/conductor-planner.txt` (live, only with `--apply`).
+- **Plain example:** `/baton:optimize-prompt --generations 3` → runs 3 generations, proposes the best → `/baton:optimize-prompt --apply`.
+- **Gotchas:** Needs at least one run with a `polish`/`reject` verdict. It never deploys on its own; `--apply` is always your call (d070). Redeploys never clobber a tuned live prompt (seed-if-absent).
 
 ---
 
@@ -412,7 +415,7 @@ observations from the noisy journal into the clean catalog.
 | `/baton:kb-index [--full]` | Refresh search index |
 | `/baton:kb-search "<query>"` | Search your knowledge |
 | `/baton:decision-feedback <id> "<text>"` | Verdict on a decision |
-| `/baton:optimize-prompt [--apply]` | Propose (then deploy) a better planner prompt |
+| `/baton:optimize-prompt [--generations N] [--pool] [--apply]` | Evolve the planner prompt (GEPA pool, propose-then-apply) |
 | `/baton:consolidate-decisions` | Roll decisions into guidance |
 | `/baton:project-init` | Calibrate a new project |
 | `/baton:log-routing <model> <note>` | Note a model's performance |
