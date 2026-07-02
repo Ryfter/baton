@@ -385,10 +385,10 @@ function Invoke-PromptEvolution {
         if (@($missing).Count -gt 0) { $mechReason = "mutation missing placeholder(s): $($missing -join ', ')" }
         elseif ($childTokens -gt $lengthCap) { $mechReason = "length cap exceeded ($childTokens tokens > cap $lengthCap = ${LengthCapMultiplier}x seed $seedTokens)" }
         if ($mechReason) {
-            $child = New-PoolCandidateRecord -Id $childId -Parent ([string]$parent.id) -Origin 'mutation' -Status 'retired' -PromptTokens $childTokens
-            $child.retired_reason = $mechReason
+            $child = New-PoolCandidateRecord -Id $childId -Parent ([string]$parent.id) -Origin 'mutation' -Status 'candidate' -PromptTokens $childTokens
             Set-Content -LiteralPath (Join-Path $PoolDir "$childId.txt") -Value $childText -Encoding utf8NoBOM
             $pool.candidates = @($pool.candidates) + @($child)
+            [void](Set-CandidateRetired -Pool $pool -Id $childId -Reason $mechReason)
             $genRec.child = $childId
             $genRec.reasons = @($mechReason)
             [Console]::Error.WriteLine("optimize-prompt: generation ${g}: $mechReason")
@@ -420,15 +420,14 @@ function Invoke-PromptEvolution {
         $genRec.child = $childId
         $genRec.pass = $gate.pass
         $genRec.reasons = @($gate.reasons)
+        $pool.candidates = @($pool.candidates) + @($child)
         if ($gate.pass) {
             $lastSurvivor = $child
             Write-Host "Generation ${g}: $childId SURVIVED the dual gate (vs champion: $($mbChampion.win_rate), vs parent: $wrVsParent)."
         } else {
-            $child.status = 'retired'
-            $child.retired_reason = (@($gate.reasons) -join '; ')
+            [void](Set-CandidateRetired -Pool $pool -Id $childId -Reason (@($gate.reasons) -join '; '))
             Write-Host "Generation ${g}: $childId retired — $($child.retired_reason)."
         }
-        $pool.candidates = @($pool.candidates) + @($child)
         Save-PromptPool -Pool $pool -PoolDir $PoolDir
     }
 
@@ -442,9 +441,9 @@ function Invoke-PromptEvolution {
         $backupPath = "$PromptPath.bak-$stamp"
         if (Test-Path $PromptPath) { Copy-Item -LiteralPath $PromptPath -Destination $backupPath -Force }
         Set-Content -LiteralPath $PromptPath -Value $survivorText -Encoding utf8NoBOM
+        [void](Set-CandidateRetired -Pool $pool -Id ([string]$pool.champion) -Reason 'superseded' -By ([string]$lastSurvivor.id))
         foreach ($c in @($pool.candidates)) {
-            if ($c.id -eq $pool.champion) { $c.status = 'retired'; $c.retired_reason = 'superseded' }
-            elseif (($c.status -eq 'candidate') -and ($c.id -ne $lastSurvivor.id)) {
+            if (($c.status -eq 'candidate') -and ($c.id -ne $lastSurvivor.id)) {
                 # Scores were measured against the OLD champion: mark stale
                 # (excluded from the Pareto front until re-evaluated).
                 $c.offline.minibatch.win_rate_vs_champion = $null

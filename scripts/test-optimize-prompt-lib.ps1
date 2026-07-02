@@ -257,6 +257,48 @@ try {
         ($mt -match 'DIAG_TEXT') -and ($mt -match 'PARENT_TEXT') -and ($mt -match '\{\{schema\}\}') -and ($mt -match '<new_prompt>')
     )
 
+    # ---- E14/E15: retirement provenance (Slice B single door) ----
+    $prevHomeSB = $env:BATON_HOME
+    try {
+        $sbHome = Join-Path ([System.IO.Path]::GetTempPath()) ("opt-sb-" + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $sbHome | Out-Null
+        $env:BATON_HOME = $sbHome
+        $sbRun = Join-Path $sbHome 'runs/go-sb-1'
+        New-Item -ItemType Directory -Force -Path $sbRun | Out-Null
+        @{ verdict = 'polish'; reason = 'needs tightening'; counts = @{ critical = 0; important = 1; minor = 0 }; polish_brief = 'tighten' } |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sbRun 'acceptance.json') -Encoding utf8NoBOM
+        @{ run_id = 'go-sb-1'; goal = 'test goal'; tasks = @(@{ id = 't1'; desc = 'd' }) } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $sbRun 'plan.json') -Encoding utf8NoBOM
+        $sbPromptDir = Join-Path $sbHome 'prompts'
+        New-Item -ItemType Directory -Force -Path $sbPromptDir | Out-Null
+        $sbPrompt = Join-Path $sbPromptDir 'conductor-planner.txt'
+        Set-Content -LiteralPath $sbPrompt -Value 'LIVE {{schema}} {{evi}} {{Goal}} padpadpadpadpadpad' -Encoding utf8NoBOM
+        $sbPoolDir = Join-Path $sbPromptDir 'pool'
+
+        $sbReflect = { param($p) @{ stdout = '<diagnosis>too vague</diagnosis>'; exit_code = 0 } }
+        $sbPlan = { param($p) @{ stdout = '{"tasks":[]}'; exit_code = 0 } }
+        $sbJudgeA = { param($p) @{ stdout = '<verdict>A</verdict>'; exit_code = 0 } }
+
+        # E14: a mutation that loses the placeholders is mechanically retired — with provenance.
+        $sbMutBad = { param($p) @{ stdout = '<new_prompt>missing everything</new_prompt>'; exit_code = 0 } }
+        [void](Invoke-PromptEvolution -PromptPath $sbPrompt -PoolDir $sbPoolDir `
+            -ReflectDispatcher $sbReflect -MutateDispatcher $sbMutBad -PlanDispatcher $sbPlan -JudgeDispatcher $sbJudgeA)
+        $sbPool1 = (Get-PromptPool -PoolDir $sbPoolDir).pool
+        $sbMech = @($sbPool1.candidates | Where-Object { $_.id -eq 'p002' })[0]
+        Check 'E14 mechanical retirement stamps retired_at, retired_by null' `
+            (($sbMech.status -eq 'retired') -and (([string]$sbMech.retired_at) -match 'Z$') -and ($null -eq $sbMech.retired_by))
+
+        # E15: --apply supersedes the old champion — retired_by = the new champion.
+        $sbMutGood = { param($p) @{ stdout = '<new_prompt>NEW {{schema}} {{evi}} {{Goal}}</new_prompt>'; exit_code = 0 } }
+        [void](Invoke-PromptEvolution -PromptPath $sbPrompt -PoolDir $sbPoolDir `
+            -ReflectDispatcher $sbReflect -MutateDispatcher $sbMutGood -PlanDispatcher $sbPlan -JudgeDispatcher $sbJudgeA -Apply)
+        $sbPool2 = (Get-PromptPool -PoolDir $sbPoolDir).pool
+        $sbOld = @($sbPool2.candidates | Where-Object { $_.id -eq 'p001' })[0]
+        Check 'E15 superseded champion carries retired_by = new champion + retired_at' `
+            (($sbOld.status -eq 'retired') -and ($sbOld.retired_reason -eq 'superseded') -and `
+             ($sbOld.retired_by -eq $sbPool2.champion) -and (([string]$sbOld.retired_at) -match 'Z$'))
+    } finally { $env:BATON_HOME = $prevHomeSB }
+
     if ($null -eq $prevBatonHome) { Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue }
     else { $env:BATON_HOME = $prevBatonHome }
 

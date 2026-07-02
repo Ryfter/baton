@@ -36,6 +36,12 @@ function Get-PromptPool {
     if (-not (Test-Path $manifest)) { return @{ ok = $false; pool = $null; reason = 'absent' } }
     try {
         $pool = Get-Content -Raw $manifest | ConvertFrom-Json -AsHashtable
+        # ConvertFrom-Json auto-parses ISO8601 datetime strings as DateTime objects.
+        # Preserve them as ISO8601 strings (with Z suffix) for timestamp provenance fields.
+        foreach ($c in @($pool.candidates)) {
+            if (($c.created -is [datetime])) { $c.created = $c.created.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
+            if (($c.retired_at -is [datetime])) { $c.retired_at = $c.retired_at.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
+        }
     } catch {
         return @{ ok = $false; pool = $null; reason = "corrupt manifest at ${manifest}: $($_.Exception.Message)" }
     }
