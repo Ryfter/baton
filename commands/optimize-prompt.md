@@ -1,37 +1,33 @@
 ---
-description: GEPA-inspired prompt optimization. Analyzes historical runs with "reject" or "polish" verdicts from the Acceptance Gate and uses natural language reflection to propose — and, with --apply, deploy — a mutated Conductor planner prompt.
-argument-hint: "[--max-runs <n>] [--max-tier local|free|paid] [--apply]"
+description: Evolve the Conductor planner prompt (GEPA candidate pool, propose-then-apply)
+argument-hint: "[--max-runs N] [--max-tier local|free|paid] [--reflect-tier T] [--generations N] [--pool] [--apply]"
 ---
 
-# /baton:optimize-prompt
+Run the GEPA prompt-evolution loop over the Conductor's planner prompt.
 
-You are the **Prompt Optimizer**. You run a GEPA (Genetic Pareto Optimization) reflection loop that proposes improvements to Baton's Conductor planner prompt from recent reject/polish-verdict runs, and — only when asked — deploys them.
+Parse `$ARGUMENTS` for the optional flags, then run ONE PowerShell command
+(keep it under 965 bytes):
 
-## Steps
+- Default / evolve: `pwsh -NoProfile -File ~/.claude/scripts/fleet-optimize-prompt.ps1 [-MaxRuns N] [-MaxCostTier T] [-ReflectTier T] [-Generations N]`
+- `--pool`: `pwsh -NoProfile -File ~/.claude/scripts/fleet-optimize-prompt.ps1 -Pool`
+- `--apply`: append `-Apply` to the evolve form.
 
-1. Parse `$ARGUMENTS` for optional `--max-runs <n>` (default 5), `--max-tier <t>` (default paid), and `--apply`.
+What it does:
 
-2. Run the optimizer engine:
+1. Loads (or seeds, from the live prompt) the box-private candidate pool at
+   `$BATON_HOME/prompts/pool/`.
+2. Per generation: picks a parent from the Pareto front, a cheap reflection
+   model diagnoses recent `polish`/`reject`-gated runs, a stronger mutation
+   model rewrites the prompt, and the child is judged head-to-head
+   (plan-only, position-swapped) against the champion over those runs.
+3. Dual gate: the child must BEAT its parent on the minibatch AND be
+   Pareto-non-dominated (judge win-rate vs prompt tokens). Placeholder loss
+   or a blown length cap retires the child before any evaluation is spent.
+4. Survivors are PROPOSED (`conductor-planner.candidate.txt`); the live
+   prompt is only ever touched by `--apply`, which backs it up and promotes
+   the survivor to champion in the pool.
 
-   ```powershell
-   pwsh -File "$HOME/.claude/scripts/fleet-optimize-prompt.ps1" -Json
-   # add -MaxRuns <n> and/or -MaxCostTier <tier> when the user supplied them
-   # add -Apply only when the user passed --apply
-   ```
-
-3. Read the returned JSON (`success`, `applied`, `candidate_path`, `reason`).
-
-4. Report status to the user.
-   - If `success` is false, tell the user the optimizer failed or found no applicable historical runs, and pass along `reason`.
-   - If `success` is true and `applied` is false (the default), tell the user a candidate prompt was written to `candidate_path` for their review, and that they can re-run with `--apply` once they've looked it over.
-   - If `success` is true and `applied` is true, tell the user the mutated prompt was validated and deployed to the live `BATON_HOME/prompts/conductor-planner.txt`, and that the previous version was backed up alongside it.
-
-## Notes
-
-- This is a **propose-then-apply** flow, not a fully autonomous one: the default run never touches the live prompt.
-- `--apply` first validates the mutation still contains the three required placeholders (`{{schema}}`, `{{evi}}`, `{{Goal}}`) — if any is missing, nothing is deployed. It then backs up the current live prompt (`conductor-planner.txt.bak-<timestamp>`) before overwriting it, so a bad mutation can always be rolled back by hand.
-- The candidate file lives beside the live prompt as `conductor-planner.candidate.txt`.
-
-## Arguments
-
-$ARGUMENTS
+Report the per-generation lines and the proposal/apply outcome to the user
+in plain language. If the run exits 2, relay the reason honestly — "no
+candidate survived the dual gate" is a normal, healthy outcome, not an error
+to retry.
