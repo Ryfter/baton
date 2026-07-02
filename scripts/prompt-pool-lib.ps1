@@ -15,6 +15,9 @@
 
 . "$PSScriptRoot/baton-home.ps1"
 
+# Slice B: minimum gated live runs PER VARIANT before the dollars verdict.
+$script:ShadowMinGatedRuns = 5
+
 function Get-PromptPoolDir {
     param([string]$BatonHome = (Get-BatonHome))
     return (Join-Path $BatonHome 'prompts/pool')
@@ -67,6 +70,8 @@ function New-PoolCandidateRecord {
         created = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         status = $Status
         retired_reason = $null
+        retired_at = $null
+        retired_by = $null
         offline = @{
             times_selected = 0
             prompt_tokens = $PromptTokens
@@ -194,4 +199,155 @@ function Test-DualGate {
     }
     if ($reasons.Count -eq 0) { return @{ pass = $true; reasons = @() } }
     return @{ pass = $false; reasons = @($reasons) }
+}
+
+function Set-CandidateRetired {
+    <# The single retirement door (Slice B): every path that retires a
+       candidate goes through here so why (reason), when (retired_at), and
+       what beat/replaced it (retired_by) are always on the record. Mutates
+       the in-memory pool; the caller saves. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Pool,
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter(Mandatory)][string]$Reason,
+        [string]$By
+    )
+    $hit = @($Pool.candidates | Where-Object { $_.id -eq $Id })
+    if (@($hit).Count -eq 0) { return $false }
+    $c = $hit[0]
+    $c.status = 'retired'
+    $c.retired_reason = $Reason
+    $c.retired_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    # [string]$By coerces $null to '' — normalize back so JSON carries null.
+    $c.retired_by = if ([string]::IsNullOrEmpty($By)) { $null } else { $By }
+    return $true
+}
+
+function Get-ShadowEnabled {
+    <# Kill switch: pool.shadow. ABSENT key reads as enabled (on by default). #>
+    param([Parameter(Mandatory)][hashtable]$Pool)
+    if ($Pool.ContainsKey('shadow')) { return [bool]$Pool.shadow }
+    return $true
+}
+
+function Select-ShadowChallenger {
+    <# The active challenger: highest offline win rate among status='candidate'
+       members with a non-null (non-stale) score; tie -> highest id (newest).
+       $null when nothing is live-testable. #>
+    param([Parameter(Mandatory)][hashtable]$Pool)
+    $scored = @($Pool.candidates | Where-Object {
+        ($_.status -eq 'candidate') -and ($null -ne $_.offline.minibatch.win_rate_vs_champion)
+    })
+    if (@($scored).Count -eq 0) { return $null }
+    return @($scored | Sort-Object `
+        @{ Expression = { [double]$_.offline.minibatch.win_rate_vs_champion }; Descending = $true },
+        @{ Expression = { [string]$_.id }; Descending = $true })[0]
+}
+
+function Resolve-ShadowVariant {
+    <# Which prompt does THIS /baton:go run use? Fail-open by construction:
+       any problem returns shadow=$false and the caller behaves exactly as
+       today. Never throws; never writes the pool (assignment is not
+       evidence — counters move only at accrual). Challenger text is always
+       validated upfront (fail-safe). #>
+    param([string]$PoolDir = (Get-PromptPoolDir))
+    $loaded = Get-PromptPool -PoolDir $PoolDir
+    if (-not $loaded.ok) {
+        $why = if ($loaded.reason -eq 'absent') { 'absent' } else { 'corrupt' }
+        return @{ shadow = $false; reason = $why }
+    }
+    $pool = $loaded.pool
+    if (-not (Get-ShadowEnabled -Pool $pool)) { return @{ shadow = $false; reason = 'disabled' } }
+    $champHit = @($pool.candidates | Where-Object { $_.id -eq $pool.champion })
+    if (@($champHit).Count -eq 0) { return @{ shadow = $false; reason = 'corrupt' } }
+    $champ = $champHit[0]
+    $chall = Select-ShadowChallenger -Pool $pool
+    if ($null -eq $chall) { return @{ shadow = $false; reason = 'no challenger' } }
+    # Validate challenger text upfront (fail-safe): if unreadable, fail open
+    # regardless of who would take the run.
+    $textPath = Join-Path $PoolDir ([string]$chall.file)
+    $text = $null
+    try { if (Test-Path $textPath) { $text = Get-Content -Raw -LiteralPath $textPath } } catch { $text = $null }
+    $okText = $false
+    if (-not [string]::IsNullOrEmpty($text)) {
+        $okText = $text.Contains('{{schema}}') -and $text.Contains('{{evi}}') -and $text.Contains('{{Goal}}')
+    }
+    if (-not $okText) { return @{ shadow = $false; reason = 'challenger unreadable' } }
+    # Alternation: fewer live runs takes this run; tie -> challenger (it is
+    # the one needing evidence). Self-balancing across aborted/ungated runs.
+    if (([int]$champ.live.runs) -lt ([int]$chall.live.runs)) {
+        return @{ shadow = $true; variant_id = [string]$champ.id; role = 'champion'
+                  template = $null; challenger_id = [string]$chall.id }
+    }
+    return @{ shadow = $true; variant_id = [string]$chall.id; role = 'challenger'
+              template = $text; challenger_id = [string]$chall.id }
+}
+
+function Add-LiveRunResult {
+    <# Accrue one live run's realized cost (and verdict, when gated) to a
+       variant's live.* fields. Rework dollars = every dollar spent on a run
+       that ended polish/reject (Kevin's cost-to-accepted-outcome metric).
+       Mutates the in-memory pool; the caller saves. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Pool,
+        [Parameter(Mandatory)][string]$VariantId,
+        [Parameter(Mandatory)][double]$CostUsd,
+        [ValidateSet('accept','polish','reject')][string]$Verdict
+    )
+    $hit = @($Pool.candidates | Where-Object { $_.id -eq $VariantId })
+    if (@($hit).Count -eq 0) { return $false }
+    $live = $hit[0].live
+    $live.runs = ([int]$live.runs) + 1
+    $live.realized_cost_usd = [math]::Round(([double]$live.realized_cost_usd) + $CostUsd, 6)
+    if ($Verdict) {
+        $live[$Verdict] = ([int]$live[$Verdict]) + 1
+        if ($Verdict -in @('polish', 'reject')) {
+            $live.rework_cost_usd = [math]::Round(([double]$live.rework_cost_usd) + $CostUsd, 6)
+        }
+    }
+    return $true
+}
+
+function Get-CostPerAccept {
+    <# The north-star per-variant figure: total realized dollars per ACCEPTED
+       outcome. null when nothing has been accepted yet. #>
+    param([Parameter(Mandatory)]$Live)
+    if (([int]$Live.accept) -le 0) { return $null }
+    return [math]::Round(([double]$Live.realized_cost_usd) / [int]$Live.accept, 4)
+}
+
+function Get-ShadowVerdict {
+    <# The dollars verdict. gated(v) = accept+polish+reject. States:
+       no-challenger | insufficient | promote | retire | stalemate.
+       Pure read — the caller acts (Complete-Run auto-retires; promotion is
+       always human --apply, d070). #>
+    param([Parameter(Mandatory)][hashtable]$Pool)
+    $champHit = @($Pool.candidates | Where-Object { $_.id -eq $Pool.champion })
+    $chall = Select-ShadowChallenger -Pool $Pool
+    if ((@($champHit).Count -eq 0) -or ($null -eq $chall)) {
+        return @{ state = 'no-challenger'; threshold = $script:ShadowMinGatedRuns }
+    }
+    $champ = $champHit[0]
+    $cg = ([int]$champ.live.accept) + ([int]$champ.live.polish) + ([int]$champ.live.reject)
+    $hg = ([int]$chall.live.accept) + ([int]$chall.live.polish) + ([int]$chall.live.reject)
+    $verdict = @{
+        champion_id = [string]$champ.id; challenger_id = [string]$chall.id
+        champion_gated = $cg; challenger_gated = $hg
+        champion_cpa = (Get-CostPerAccept -Live $champ.live)
+        challenger_cpa = (Get-CostPerAccept -Live $chall.live)
+        threshold = $script:ShadowMinGatedRuns
+    }
+    if (($cg -lt $script:ShadowMinGatedRuns) -or ($hg -lt $script:ShadowMinGatedRuns)) {
+        $verdict.state = 'insufficient'
+        return $verdict
+    }
+    $cc = $verdict.champion_cpa
+    $hc = $verdict.challenger_cpa
+    if (($null -eq $cc) -and ($null -eq $hc)) { $verdict.state = 'stalemate' }
+    elseif ($null -eq $hc) { $verdict.state = 'retire' }
+    elseif ($null -eq $cc) { $verdict.state = 'promote' }
+    elseif (([double]$hc) -lt ([double]$cc)) { $verdict.state = 'promote' }
+    elseif (([double]$hc) -gt ([double]$cc)) { $verdict.state = 'retire' }
+    else { $verdict.state = 'stalemate' }
+    return $verdict
 }

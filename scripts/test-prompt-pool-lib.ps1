@@ -113,6 +113,125 @@ $childUnscored = New-TestCand 'p004' 'candidate' $null 90
 $g5 = Test-DualGate -Child $childUnscored -WinRateVsParent 0.9 -Pool $gatePool
 Check 'P29 null vs champion -> fail, no-evidence reason' ((-not $g5.pass) -and ((@($g5.reasons) -join ';') -match 'no evidence'))
 
+# ---- Slice B: Set-CandidateRetired (the single retirement door) ----
+function Set-TestLive($cand, $runs, $accept, $polish, $reject, $cost, $rework) {
+    $cand.live.runs = $runs; $cand.live.accept = $accept; $cand.live.polish = $polish
+    $cand.live.reject = $reject; $cand.live.realized_cost_usd = $cost; $cand.live.rework_cost_usd = $rework
+    return $cand
+}
+
+$sbPool = @{ schema = 1; champion = 'p001'; candidates = @((New-TestCand 'p001' 'champion' 0.5 100), (New-TestCand 'p002' 'candidate' 0.7 90)) }
+$retOk = Set-CandidateRetired -Pool $sbPool -Id 'p002' -Reason 'test loss' -By 'p001'
+$ret = @($sbPool.candidates | Where-Object { $_.id -eq 'p002' })[0]
+Check 'P30 Set-CandidateRetired stamps status/reason/at/by' ($retOk -and ($ret.status -eq 'retired') -and ($ret.retired_reason -eq 'test loss') -and ($ret.retired_at -match 'Z$') -and ($ret.retired_by -eq 'p001'))
+$sbPool2 = @{ schema = 1; champion = 'p001'; candidates = @((New-TestCand 'p001' 'champion' 0.5 100), (New-TestCand 'p002' 'candidate' 0.7 90)) }
+[void](Set-CandidateRetired -Pool $sbPool2 -Id 'p002' -Reason 'mechanical')
+Check 'P31 -By omitted -> retired_by null' ($null -eq @($sbPool2.candidates | Where-Object { $_.id -eq 'p002' })[0].retired_by)
+Check 'P32 unknown id -> false' (-not (Set-CandidateRetired -Pool $sbPool2 -Id 'p999' -Reason 'x'))
+Check 'P33 new records carry retired_at/retired_by null' ((($null -eq (New-TestCand 'p009' 'candidate' 0.5 10).retired_at)) -and ($null -eq (New-TestCand 'p010' 'candidate' 0.5 10).retired_by))
+
+# ---- Slice B: Get-ShadowEnabled ----
+Check 'P34 shadow key absent -> enabled' (Get-ShadowEnabled -Pool @{ schema = 1; champion = 'p001'; candidates = @() })
+Check 'P35 shadow=false -> disabled' (-not (Get-ShadowEnabled -Pool @{ schema = 1; shadow = $false; champion = 'p001'; candidates = @() }))
+
+# ---- Slice B: Resolve-ShadowVariant truth table ----
+$svAbsent = Resolve-ShadowVariant -PoolDir (Join-Path (New-TempDir) 'nope')
+Check 'P36 absent pool -> shadow=false reason=absent' ((-not $svAbsent.shadow) -and ($svAbsent.reason -eq 'absent'))
+
+# a real seeded pool for the rest of the table
+$svDir = New-TempDir
+$svSeed = Join-Path $svDir 'conductor-planner.txt'
+Set-Content -LiteralPath $svSeed -Value 'LIVE {{schema}} {{evi}} {{Goal}}' -Encoding utf8NoBOM
+$svPoolDir = Join-Path $svDir 'pool'
+[void](Initialize-PromptPool -SeedPromptPath $svSeed -PoolDir $svPoolDir)
+
+$svChampOnly = Resolve-ShadowVariant -PoolDir $svPoolDir
+Check 'P37 champion only -> shadow=false reason=no challenger' ((-not $svChampOnly.shadow) -and ($svChampOnly.reason -eq 'no challenger'))
+
+# add a scored challenger + its text file
+$svLoaded = (Get-PromptPool -PoolDir $svPoolDir).pool
+$svChall = New-TestCand 'p002' 'candidate' 0.8 80
+$svLoaded.candidates = @($svLoaded.candidates) + @($svChall)
+Set-Content -LiteralPath (Join-Path $svPoolDir 'p002.txt') -Value 'CHALL {{schema}} {{evi}} {{Goal}}' -Encoding utf8NoBOM
+Save-PromptPool -Pool $svLoaded -PoolDir $svPoolDir
+
+$svTie = Resolve-ShadowVariant -PoolDir $svPoolDir
+Check 'P38 tie on live runs -> challenger takes the run, template carried' ($svTie.shadow -and ($svTie.role -eq 'challenger') -and ($svTie.variant_id -eq 'p002') -and (([string]$svTie.template) -match 'CHALL') -and ($svTie.challenger_id -eq 'p002'))
+
+# champion behind on runs -> champion takes the run, no template
+$svLoaded = (Get-PromptPool -PoolDir $svPoolDir).pool
+$c1 = @($svLoaded.candidates | Where-Object { $_.id -eq 'p002' })[0]
+[void](Set-TestLive $c1 3 1 1 1 0.5 0.2)
+Save-PromptPool -Pool $svLoaded -PoolDir $svPoolDir
+$svChampTurn = Resolve-ShadowVariant -PoolDir $svPoolDir
+Check 'P39 champion fewer runs -> champion role, null template' ($svChampTurn.shadow -and ($svChampTurn.role -eq 'champion') -and ($svChampTurn.variant_id -eq 'p001') -and ($null -eq $svChampTurn.template))
+
+# disabled kill switch
+$svLoaded = (Get-PromptPool -PoolDir $svPoolDir).pool
+$svLoaded.shadow = $false
+Save-PromptPool -Pool $svLoaded -PoolDir $svPoolDir
+$svOff = Resolve-ShadowVariant -PoolDir $svPoolDir
+Check 'P40 shadow=false -> disabled' ((-not $svOff.shadow) -and ($svOff.reason -eq 'disabled'))
+$svLoaded = (Get-PromptPool -PoolDir $svPoolDir).pool
+$svLoaded.shadow = $true
+Save-PromptPool -Pool $svLoaded -PoolDir $svPoolDir
+
+# unreadable / invalid challenger text fails open
+Set-Content -LiteralPath (Join-Path $svPoolDir 'p002.txt') -Value 'MISSING PLACEHOLDERS' -Encoding utf8NoBOM
+$svBadText = Resolve-ShadowVariant -PoolDir $svPoolDir
+Check 'P41 placeholder-missing challenger text -> shadow=false reason=challenger unreadable' ((-not $svBadText.shadow) -and ($svBadText.reason -eq 'challenger unreadable'))
+Remove-Item -LiteralPath (Join-Path $svPoolDir 'p002.txt') -Force
+$svNoFile = Resolve-ShadowVariant -PoolDir $svPoolDir
+Check 'P42 missing challenger file -> shadow=false reason=challenger unreadable' ((-not $svNoFile.shadow) -and ($svNoFile.reason -eq 'challenger unreadable'))
+Set-Content -LiteralPath (Join-Path $svPoolDir 'p002.txt') -Value 'CHALL {{schema}} {{evi}} {{Goal}}' -Encoding utf8NoBOM
+
+# highest-win-rate challenger wins selection; stale (null wr) excluded
+$svLoaded = (Get-PromptPool -PoolDir $svPoolDir).pool
+$svLow = New-TestCand 'p003' 'candidate' 0.6 70
+$svStale = New-TestCand 'p004' 'candidate' $null 60
+$svLoaded.candidates = @($svLoaded.candidates) + @($svLow, $svStale)
+Save-PromptPool -Pool $svLoaded -PoolDir $svPoolDir
+$selChall = Select-ShadowChallenger -Pool (Get-PromptPool -PoolDir $svPoolDir).pool
+Check 'P43 highest-wr scored candidate selected as challenger' ($selChall.id -eq 'p002')
+
+# ---- Slice B: Add-LiveRunResult arithmetic ----
+$arPool = @{ schema = 1; champion = 'p001'; candidates = @((New-TestCand 'p001' 'champion' 0.5 100)) }
+[void](Add-LiveRunResult -Pool $arPool -VariantId 'p001' -CostUsd 0.25 -Verdict accept)
+$arC = $arPool.candidates[0]
+Check 'P44 accept accrual: runs/accept/realized up, rework untouched' ((([int]$arC.live.runs) -eq 1) -and (([int]$arC.live.accept) -eq 1) -and (([double]$arC.live.realized_cost_usd) -eq 0.25) -and (([double]$arC.live.rework_cost_usd) -eq 0.0))
+[void](Add-LiveRunResult -Pool $arPool -VariantId 'p001' -CostUsd 0.5 -Verdict reject)
+Check 'P45 reject accrual doubles into rework' ((([int]$arC.live.reject) -eq 1) -and (([double]$arC.live.realized_cost_usd) -eq 0.75) -and (([double]$arC.live.rework_cost_usd) -eq 0.5))
+[void](Add-LiveRunResult -Pool $arPool -VariantId 'p001' -CostUsd 0.1)
+Check 'P46 ungated accrual: cost + runs only, no verdict counters' ((([int]$arC.live.runs) -eq 3) -and (([int]$arC.live.accept) -eq 1) -and (([int]$arC.live.polish) -eq 0) -and (([double]$arC.live.realized_cost_usd) -eq 0.85))
+Check 'P47 unknown variant -> false' (-not (Add-LiveRunResult -Pool $arPool -VariantId 'p999' -CostUsd 1.0))
+
+# ---- Slice B: Get-CostPerAccept + Get-ShadowVerdict ----
+Check 'P48 cost per accept null at zero accepts' ($null -eq (Get-CostPerAccept -Live @{ accept = 0; realized_cost_usd = 5.0 }))
+Check 'P49 cost per accept = realized/accepts' ((Get-CostPerAccept -Live @{ accept = 4; realized_cost_usd = 1.0 }) -eq 0.25)
+
+function New-VerdictPool($champLive, $challLive) {
+    $ch = Set-TestLive (New-TestCand 'p001' 'champion' 0.5 100) @champLive
+    $cl = Set-TestLive (New-TestCand 'p002' 'candidate' 0.8 90) @challLive
+    return @{ schema = 1; champion = 'p001'; candidates = @($ch, $cl) }
+}
+# args to Set-TestLive after the record: runs accept polish reject cost rework
+$vNoChall = Get-ShadowVerdict -Pool @{ schema = 1; champion = 'p001'; candidates = @((New-TestCand 'p001' 'champion' 0.5 100)) }
+Check 'P50 no challenger -> state no-challenger' ($vNoChall.state -eq 'no-challenger')
+$vIns = Get-ShadowVerdict -Pool (New-VerdictPool @(5,4,1,0,1.0,0.1) @(3,2,1,0,0.5,0.1))
+Check 'P51 below threshold -> insufficient with counts' (($vIns.state -eq 'insufficient') -and ($vIns.challenger_gated -eq 3) -and ($vIns.champion_gated -eq 5))
+$vPro = Get-ShadowVerdict -Pool (New-VerdictPool @(5,4,1,0,2.0,0.4) @(5,4,1,0,1.0,0.2))
+Check 'P52 challenger cheaper per accept -> promote' (($vPro.state -eq 'promote') -and ($vPro.challenger_cpa -eq 0.25) -and ($vPro.champion_cpa -eq 0.5))
+$vRet = Get-ShadowVerdict -Pool (New-VerdictPool @(5,4,1,0,1.0,0.2) @(5,4,1,0,2.0,0.4))
+Check 'P53 challenger dearer per accept -> retire' ($vRet.state -eq 'retire')
+$vAsym = Get-ShadowVerdict -Pool (New-VerdictPool @(5,4,1,0,1.0,0.2) @(5,0,3,2,2.0,2.0))
+Check 'P54 challenger 0 accepts vs champion >0 -> retire' ($vAsym.state -eq 'retire')
+$vAsym2 = Get-ShadowVerdict -Pool (New-VerdictPool @(5,0,3,2,1.0,1.0) @(5,4,1,0,1.0,0.2))
+Check 'P54a champion 0 accepts vs challenger >0 -> promote' ($vAsym2.state -eq 'promote')
+$vStale = Get-ShadowVerdict -Pool (New-VerdictPool @(5,0,3,2,1.0,1.0) @(5,0,4,1,1.0,1.0))
+Check 'P55 both 0 accepts at threshold -> stalemate' ($vStale.state -eq 'stalemate')
+$vEq = Get-ShadowVerdict -Pool (New-VerdictPool @(5,4,1,0,1.0,0.1) @(5,4,1,0,1.0,0.1))
+Check 'P55a equal cost per accept -> stalemate' ($vEq.state -eq 'stalemate')
+
 if ($script:fail -gt 0) { Write-Host "`n$script:fail check(s) FAILED"; exit 1 }
 Write-Host "`nAll checks passed."
 exit 0
