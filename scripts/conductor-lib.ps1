@@ -444,7 +444,10 @@ function Complete-Run {
                     $accrue.Verdict = [string]$Gate.verdict
                 }
                 [void](Add-LiveRunResult @accrue)
-                $sv = Get-ShadowVerdict -Pool $livePool
+                # v1.7.1: judge the challenger this run was ASSIGNED (shadow.json),
+                # not whoever selection would pick now — a mid-run evolution must
+                # not misattribute the verdict.
+                $sv = Get-ShadowVerdict -Pool $livePool -ChallengerId ([string]$assign.challenger_id)
                 if ($sv.state -in @('retire', 'promote')) {
                     $challCpa = if ($null -ne $sv.challenger_cpa) { '{0:n4}' -f [double]$sv.challenger_cpa } else { 'n/a (0 accepts)' }
                     $champCpa = if ($null -ne $sv.champion_cpa) { '{0:n4}' -f [double]$sv.champion_cpa } else { 'n/a (0 accepts)' }
@@ -453,7 +456,13 @@ function Complete-Run {
                         [void](Set-CandidateRetired -Pool $livePool -Id ([string]$sv.challenger_id) -Reason $why -By ([string]$sv.champion_id))
                         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'shadow' -Level 'warn' -Message "challenger $($sv.challenger_id) auto-retired: $why")
                     } else {
-                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'shadow' -Message "challenger $($sv.challenger_id) is winning in dollars (cost_per_accept $challCpa vs $champCpa) — promote via /baton:optimize-prompt --apply")
+                        # v1.7.1: one nudge per candidate — the --pool report still
+                        # shows the live verdict on every invocation.
+                        $challNudge = @($livePool.candidates | Where-Object { $_.id -eq $sv.challenger_id })[0]
+                        if ($null -eq $challNudge.promote_recommended_at) {
+                            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'shadow' -Message "challenger $($sv.challenger_id) is winning in dollars (cost_per_accept $challCpa vs $champCpa) — promote via /baton:optimize-prompt --apply")
+                            $challNudge.promote_recommended_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                        }
                     }
                 }
                 Save-PromptPool -Pool $livePool

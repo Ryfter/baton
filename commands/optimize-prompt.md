@@ -44,7 +44,9 @@ spent on a `polish`/`reject` run also counts as rework. The decision figure is
 At ≥5 gated runs per variant:
 - challenger losing in dollars → **auto-retired** (why/when/what-beat-it recorded);
 - challenger winning → the pool report says `PROMOTE` — deploying still takes
-  your `--apply` (never autonomous).
+  your `--apply` (never autonomous). The PROMOTE nudge is logged once per candidate (`promote_recommended_at` stamps the pool record); `--pool` always shows the current verdict.
+
+**Stale re-scoring (v1.7.1).** After `--apply` swaps the champion, other candidates' offline win rates were measured against the old champion and are nulled as stale. The next evolution run re-scores every stale active against the CURRENT champion (same minibatch evaluator, printed as `rescored pNNN vs champion: <rate>`) before evolving — so a champion swap never permanently hides the rest of the pool. Re-scoring spends model calls only inside explicit `/baton:optimize-prompt` runs, never on `/baton:go`.
 
 `--pool` shows the live columns and the current shadow verdict. `--shadow off`
 pauses the A/B without touching the pool; `--shadow on` resumes it.

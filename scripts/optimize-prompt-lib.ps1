@@ -264,7 +264,9 @@ function Invoke-PromptEvolution {
       fail-opens to "no proposal this generation" with an honest reason; the
       manifest is saved once per generation, never mid-flight.
     .NOTES
-      Returns @{ success; applied; candidate_path; reason; generations }.
+      Returns @{ success; applied; candidate_path; reason; generations; rescored }.
+      rescored = @(@{ id; win_rate }, …) for any stale actives re-scored vs
+      the current champion at run start (empty array when none were stale).
       Seams: -ReflectDispatcher/-MutateDispatcher/-PlanDispatcher/
       -JudgeDispatcher (contract: param($prompt) -> @{ stdout; exit_code }),
       -Draw (parent-selection randomness).
@@ -291,8 +293,9 @@ function Invoke-PromptEvolution {
     )
     if (-not $ReflectTier) { $ReflectTier = Get-DefaultReflectTier -MaxCostTier $MaxCostTier }
     $requiredPlaceholders = @('{{schema}}', '{{evi}}', '{{Goal}}')
+    $rescored = [System.Collections.ArrayList]@()
     $fail = { param($reason, $gens)
-        @{ success = $false; applied = $false; candidate_path = $null; reason = $reason; generations = @($gens) }
+        @{ success = $false; applied = $false; candidate_path = $null; reason = $reason; generations = @($gens); rescored = @($rescored) }
     }
 
     # -- pool: load, seed if absent, refuse if corrupt --
@@ -323,6 +326,40 @@ function Invoke-PromptEvolution {
     if (-not $MutateDispatcher) { $MutateDispatcher = { param($p) Invoke-TierRoutedModel -Tier $MaxCostTier -Prompt $p -FleetPath $FleetPath -ToolsPath $ToolsPath }.GetNewClosure() }
     if (-not $PlanDispatcher) { $PlanDispatcher = { param($p) Invoke-TierRoutedModel -Tier $MaxCostTier -Prompt $p -FleetPath $FleetPath -ToolsPath $ToolsPath }.GetNewClosure() }
     if (-not $JudgeDispatcher) { $JudgeDispatcher = { param($p) Invoke-TierRoutedModel -Tier $MaxCostTier -Prompt $p -FleetPath $FleetPath -ToolsPath $ToolsPath }.GetNewClosure() }
+
+    # -- v1.7.1: re-score stale actives (win rate nulled by a champion swap)
+    # against the CURRENT champion before evolving. Spend happens only inside
+    # this explicit run; the /baton:go path never re-scores. --
+    $staleActives = @($pool.candidates | Where-Object {
+        ($_.status -eq 'candidate') -and ($null -eq $_.offline.minibatch.win_rate_vs_champion)
+    })
+    if (@($staleActives).Count -gt 0) {
+        $champRescoreRec = @($pool.candidates | Where-Object { $_.id -eq $pool.champion })[0]
+        $champRescoreText = $null
+        try { $champRescoreText = Get-Content -Raw -LiteralPath (Join-Path $PoolDir ([string]$champRescoreRec.file)) -ErrorAction Stop } catch { $champRescoreText = $null }
+        if ([string]::IsNullOrEmpty($champRescoreText)) {
+            [Console]::Error.WriteLine("optimize-prompt: re-score skipped — champion file unreadable; stale candidates stay stale.")
+            $staleActives = @()
+        }
+        foreach ($sc in $staleActives) {
+            $scText = $null
+            try { $scText = Get-Content -Raw -LiteralPath (Join-Path $PoolDir ([string]$sc.file)) -ErrorAction Stop } catch { $scText = $null }
+            if ([string]::IsNullOrEmpty($scText)) {
+                [Console]::Error.WriteLine("optimize-prompt: re-score skipped for $($sc.id) — candidate file unreadable.")
+                continue
+            }
+            $mb = Invoke-MinibatchEval -CandidatePrompt $scText -ReferencePrompt $champRescoreText `
+                -Runs @($runs) -PlanDispatcher $PlanDispatcher -JudgeDispatcher $JudgeDispatcher
+            $sc.offline.minibatch = @{
+                wins = $mb.wins; losses = $mb.losses; ties = $mb.ties
+                win_rate_vs_champion = $mb.win_rate; examples = @($mb.examples)
+            }
+            [void]$rescored.Add(@{ id = [string]$sc.id; win_rate = $mb.win_rate })
+            $wrNote = if ($null -ne $mb.win_rate) { $mb.win_rate } else { 'no evidence (stays stale)' }
+            Write-Host "Re-scored $($sc.id) vs champion $($pool.champion): $wrNote"
+        }
+        Save-PromptPool -Pool $pool -PoolDir $PoolDir
+    }
 
     $seedRec = @($pool.candidates | Where-Object { $_.origin -eq 'seed' })
     $seedTokens = if (@($seedRec).Count -gt 0) { [int]$seedRec[0].offline.prompt_tokens }
@@ -454,11 +491,11 @@ function Invoke-PromptEvolution {
         $pool.champion = [string]$lastSurvivor.id
         Save-PromptPool -Pool $pool -PoolDir $PoolDir
         Write-Host "Applied: $($lastSurvivor.id) promoted to champion; live prompt deployed to $PromptPath (backup: $backupPath)."
-        return @{ success = $true; applied = $true; candidate_path = $null; reason = "applied $($lastSurvivor.id) to live prompt"; generations = @($genRecords) }
+        return @{ success = $true; applied = $true; candidate_path = $null; reason = "applied $($lastSurvivor.id) to live prompt"; generations = @($genRecords); rescored = @($rescored) }
     }
 
     $candidatePath = Join-Path (Split-Path -Parent $PromptPath) 'conductor-planner.candidate.txt'
     Set-Content -LiteralPath $candidatePath -Value $survivorText -Encoding utf8NoBOM
     Write-Host "Proposed candidate $($lastSurvivor.id) written to $candidatePath for review. Live prompt untouched."
-    return @{ success = $true; applied = $false; candidate_path = $candidatePath; reason = "candidate $($lastSurvivor.id) proposed for review"; generations = @($genRecords) }
+    return @{ success = $true; applied = $false; candidate_path = $candidatePath; reason = "candidate $($lastSurvivor.id) proposed for review"; generations = @($genRecords); rescored = @($rescored) }
 }

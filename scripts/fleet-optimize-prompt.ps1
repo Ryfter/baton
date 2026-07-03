@@ -68,7 +68,11 @@ if ($Pool) {
     switch ($sv.state) {
         'no-challenger' { Write-Host 'Shadow verdict: no active challenger — run an evolution to produce one.' }
         'insufficient'  { Write-Host ("Shadow verdict: insufficient evidence — challenger {0}/{2}, champion {1}/{2} gated runs." -f $sv.challenger_gated, $sv.champion_gated, $sv.threshold) }
-        'promote'       { Write-Host ("Shadow verdict: PROMOTE $($sv.challenger_id) — cost/accept {0} vs champion {1}. Run --apply to deploy." -f $(if ($null -ne $sv.challenger_cpa) { '{0:n4}' -f [double]$sv.challenger_cpa } else { 'n/a' }), $(if ($null -ne $sv.champion_cpa) { '{0:n4}' -f [double]$sv.champion_cpa } else { 'n/a (0 accepts)' })) }
+        'promote'       {
+            $pcRec = @($loaded.pool.candidates | Where-Object { $_.id -eq $sv.challenger_id })[0]
+            $pcNote = if ($pcRec -and $pcRec.promote_recommended_at) { " (recommended $($pcRec.promote_recommended_at))" } else { '' }
+            Write-Host (("Shadow verdict: PROMOTE $($sv.challenger_id) — cost/accept {0} vs champion {1}. Run --apply to deploy." -f $(if ($null -ne $sv.challenger_cpa) { '{0:n4}' -f [double]$sv.challenger_cpa } else { 'n/a' }), $(if ($null -ne $sv.champion_cpa) { '{0:n4}' -f [double]$sv.champion_cpa } else { 'n/a (0 accepts)' })) + $pcNote)
+        }
         'retire'        { Write-Host ("Shadow verdict: challenger $($sv.challenger_id) is losing in dollars — it will auto-retire on the next gated run.") }
         'stalemate'     { Write-Host 'Shadow verdict: stalemate — no dollars separation at threshold; keep gathering.' }
     }
@@ -83,6 +87,10 @@ if ($Json) {
     ConvertTo-Json -InputObject $res -Depth 10
     if (-not $res.success) { exit 2 }
 } else {
+    foreach ($r in @($res.rescored | Where-Object { $null -ne $_ })) {
+        $wrOut = if ($null -ne $r.win_rate) { $r.win_rate } else { 'no evidence' }
+        Write-Host ("rescored {0} vs champion: {1}" -f $r.id, $wrOut)
+    }
     foreach ($g in @($res.generations)) {
         $status = if ($g.pass) { 'SURVIVED' } else { "retired: $((@($g.reasons)) -join '; ')" }
         Write-Host ("generation {0}: parent {1} -> child {2} — {3}" -f $g.generation, $g.parent, ($g.child ?? '-'), $status)
