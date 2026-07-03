@@ -50,3 +50,12 @@ At ≥5 gated runs per variant:
 
 `--pool` shows the live columns and the current shadow verdict. `--shadow off`
 pauses the A/B without touching the pool; `--shadow on` resumes it.
+
+## Coach footer
+
+Non-JSON output may end with one `Next: <command>` line from the guided-use
+coach — a read-only, zero-model-cost suggestion driven by local state (gate
+verdicts, prompt-pool evidence, budget posture). Each suggestion appears once
+per triggering state. Set the level in `$BATON_HOME/coach/config.json`
+(`{"level":"off"|"quiet"|"teach"}`, default `quiet`; `teach` adds the why).
+Relay the footer to the user verbatim when present.

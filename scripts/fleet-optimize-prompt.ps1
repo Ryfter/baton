@@ -21,6 +21,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'optimize-prompt-lib.ps1')
+try { . (Join-Path $PSScriptRoot 'coach-lib.ps1') } catch { }
+$coachExclude = @('gate-failure', 'promote-pending', 'pool-verdict')
 
 if ($Shadow) {
     $loaded = Get-PromptPool
@@ -76,6 +78,7 @@ if ($Pool) {
         'retire'        { Write-Host ("Shadow verdict: challenger $($sv.challenger_id) is losing in dollars — it will auto-retire on the next gated run.") }
         'stalemate'     { Write-Host 'Shadow verdict: stalemate — no dollars separation at threshold; keep gathering.' }
     }
+    if (Get-Command Write-CoachFooter -ErrorAction SilentlyContinue) { Write-CoachFooter -ExcludeIds $coachExclude }
     exit 0
 }
 
@@ -105,6 +108,7 @@ if ($Json) {
             Write-Host "$($res.reason): $($res.candidate_path)"
             Write-Host "Re-run with -Apply to promote it to champion and deploy."
         }
+        if (Get-Command Write-CoachFooter -ErrorAction SilentlyContinue) { Write-CoachFooter -ExcludeIds $coachExclude }
     } else {
         [Console]::Error.WriteLine("Prompt evolution produced no deployable candidate: $($res.reason)")
         exit 2

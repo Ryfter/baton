@@ -20,6 +20,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'conductor-lib.ps1')
+try { . (Join-Path $PSScriptRoot 'coach-lib.ps1') } catch { }
 
 $theGoal = @($Goal, $Text | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) | Select-Object -First 1
 if ([string]::IsNullOrWhiteSpace($theGoal)) { Write-Error 'Provide a goal via -Goal "<text>" (or -Text).'; exit 2 }
@@ -58,4 +59,5 @@ if ($Json) {
     if ($result.status -like 'interrupted-*') {
         Write-Host "Paused at $($result.pending_task_id). Review, then resume to continue past this guard."
     }
+    if (Get-Command Write-CoachFooter -ErrorAction SilentlyContinue) { Write-CoachFooter }
 }

@@ -29,3 +29,12 @@ only; never blocks and never auto-runs the polish pass.
 3. Summarize in plain language: the verdict and why, the agreed-vs-solo findings,
    and — when the verdict is polish — hand the polish brief to whoever (operator or
    `/baton:go` Conductor) will run the premium pass.
+
+## Coach footer
+
+Non-JSON output may end with one `Next: <command>` line from the guided-use
+coach — a read-only, zero-model-cost suggestion driven by local state (gate
+verdicts, prompt-pool evidence, budget posture). Each suggestion appears once
+per triggering state. Set the level in `$BATON_HOME/coach/config.json`
+(`{"level":"off"|"quiet"|"teach"}`, default `quiet`; `teach` adds the why).
+Relay the footer to the user verbatim when present.

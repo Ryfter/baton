@@ -21,6 +21,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'usage-lib.ps1')
+try { . (Join-Path $PSScriptRoot 'coach-lib.ps1') } catch { }
 
 function Write-StateLine($s) {
     $note = if ($s.eta_human) { $s.eta_human } elseif ($s.reason) { $s.reason } else { '' }
@@ -58,6 +59,9 @@ switch ($Subcommand) {
             Write-Host ("conserve_mode: {0}" -f $conserve)
             Write-Host ("{0,-18} {1,-18} {2}" -f 'WORKER','STATE','ETA/REASON')
             foreach ($s in $states) { Write-StateLine $s }
+        }
+        if (-not $Json) {
+            if (Get-Command Write-CoachFooter -ErrorAction SilentlyContinue) { Write-CoachFooter -ExcludeIds @('budget') }
         }
         return
     }
