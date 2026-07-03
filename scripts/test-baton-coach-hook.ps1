@@ -13,8 +13,14 @@ function Assert($label, $cond) {
 
 function Invoke-CoachHook([string]$Cwd) {
     # Claude Code feeds hooks a JSON payload on stdin; cwd is what the coach reads.
+    # Decode the child's stdout as UTF-8 regardless of the console codepage —
+    # the digest contains em-dashes that OEM codepages mangle.
     $payload = '{"cwd":' + (ConvertTo-Json $Cwd) + ',"hook_event_name":"SessionStart","source":"startup"}'
-    $out = @($payload | & pwsh -NoProfile -File $hook 2>$null)
+    $prevEnc = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        $out = @($payload | & pwsh -NoProfile -File $hook 2>$null)
+    } finally { [Console]::OutputEncoding = $prevEnc }
     return ,@($out | ForEach-Object { "$_" } | Where-Object { $_ -ne '' })
 }
 

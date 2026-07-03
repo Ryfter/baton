@@ -9,6 +9,7 @@
 #>
 $ErrorActionPreference = 'Continue'
 try {
+    try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch { }
     $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
     $libCandidates = @(
         (Join-Path $scriptDir '../coach-lib.ps1'),         # repo/plugin layout: scripts/hooks -> scripts
