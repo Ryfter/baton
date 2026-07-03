@@ -71,8 +71,11 @@ results (guidance must never break the thing it guides).
     `promote_recommended_at` (prompt-pool-lib)
   - `usage` — conserve mode (`Get-ConserveMode`), today's budget position
     (`Get-WorkerBudget` / `Get-UsageForecast`) (usage-lib)
-  - `failure_runs` — count of qualifying polish/reject runs not yet consumed
-    by an evolution (reuse `Get-HistoricalRuns` from optimize-prompt-lib)
+  - `failure_runs` — count of recent polish/reject-verdict runs, via a
+    private hook-weight scanner in coach-lib (`Get-CoachFailureRuns`, same
+    acceptance.json filter as optimize-prompt-lib's `Get-HistoricalRuns`;
+    deliberately duplicated — sourcing optimize-prompt-lib would drag
+    routing-lib + fleet-lib into the SessionStart hook path)
 - `Get-CoachSuggestions (-Context, -SeenPath, [switch]$IncludeSeen)` →
   `@( @{ id; command; why; dedup_key } )`, ordered by the rule table below.
   Filters out entries whose `dedup_key` is stamped in `seen.json` unless
@@ -88,7 +91,7 @@ results (guidance must never break the thing it guides).
 |----|------------------------|----------|-----------|
 | `next-command` | `project.last_run.status` present | existing `NextCommandMap` entry (reuse `Get-NextCommandRecommendation`) | — (digest-only, no stamp) |
 | `gate-failure` | newest run with gate verdict `polish` or `reject` | `/baton:optimize-prompt` — "this failure can feed the prompt optimizer" | `gate-failure:<run_id>` |
-| `promote-pending` | a candidate has `promote_recommended_at` set and is still active | `/baton:optimize-prompt --apply <id>` — "live evidence says this challenger wins" | `promote:<candidate_id>` |
+| `promote-pending` | a candidate has `promote_recommended_at` set and is still active | `/baton:optimize-prompt --apply` — "live evidence says challenger `<id>` wins" (the CLI's `-Apply` takes no id) | `promote:<candidate_id>` |
 | `pool-verdict` | active challenger and both champion + challenger have ≥5 gated live runs | `/baton:optimize-prompt --pool` — "enough live evidence for a verdict" | `pool-verdict:<champion_id>:<challenger_id>` |
 | `budget` | conserve mode ON, or forecast shows today's budget at risk | `/baton:usage` — "see where the spend is going" | `budget:<yyyy-MM-dd>` (daily) |
 | `onboard` | `is_git_repo` and no project record | `/baton:start` — "register this repo so Baton can orient and route for you" | `onboard:<normalized ProjectDir>` |
