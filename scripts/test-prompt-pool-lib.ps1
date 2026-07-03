@@ -232,6 +232,37 @@ Check 'P55 both 0 accepts at threshold -> stalemate' ($vStale.state -eq 'stalema
 $vEq = Get-ShadowVerdict -Pool (New-VerdictPool @(5,4,1,0,1.0,0.1) @(5,4,1,0,1.0,0.1))
 Check 'P55a equal cost per accept -> stalemate' ($vEq.state -eq 'stalemate')
 
+# ---- v1.7.1: promote_recommended_at field + round-trip ----
+Check 'P56 new records carry promote_recommended_at null' ($null -eq (New-TestCand 'p011' 'candidate' 0.5 10).promote_recommended_at)
+$prDir = New-TempDir
+$prSeed = Join-Path $prDir 'seed.txt'
+Set-Content -LiteralPath $prSeed -Value 'S {{schema}} {{evi}} {{Goal}}' -Encoding utf8NoBOM
+$prPool = Join-Path $prDir 'pool'
+[void](Initialize-PromptPool -SeedPromptPath $prSeed -PoolDir $prPool)
+$prP = (Get-PromptPool -PoolDir $prPool).pool
+$prP.candidates[0].promote_recommended_at = '2026-07-03T01:02:03Z'
+Save-PromptPool -Pool $prP -PoolDir $prPool
+$prP2 = (Get-PromptPool -PoolDir $prPool).pool
+Check 'P57 promote_recommended_at survives round-trip as Z string (DateTime trap)' (($prP2.candidates[0].promote_recommended_at -is [string]) -and ($prP2.candidates[0].promote_recommended_at -match 'Z$'))
+
+# ---- v1.7.1: Get-ShadowVerdict -ChallengerId (assigned-challenger attribution) ----
+function New-AttribPool {
+    $ch = Set-TestLive (New-TestCand 'p001' 'champion' 0.5 100) 5 4 1 0 1.0 0.2
+    $as = Set-TestLive (New-TestCand 'p002' 'candidate' 0.6 90) 5 1 2 2 3.0 2.5
+    $nw = New-TestCand 'p003' 'candidate' 0.9 80   # newer, higher wr, 0 gated runs
+    return @{ schema = 1; champion = 'p001'; candidates = @($ch, $as, $nw) }
+}
+$vAssign = Get-ShadowVerdict -Pool (New-AttribPool) -ChallengerId 'p002'
+Check 'P58 -ChallengerId pins the verdict to the assigned candidate' (($vAssign.challenger_id -eq 'p002') -and ($vAssign.state -eq 'retire'))
+$vDefault = Get-ShadowVerdict -Pool (New-AttribPool)
+Check 'P59 no -ChallengerId keeps highest-wr selection' (($vDefault.challenger_id -eq 'p003') -and ($vDefault.state -eq 'insufficient'))
+$goneAttrib = New-AttribPool
+[void](Set-CandidateRetired -Pool $goneAttrib -Id 'p002' -Reason 'x')
+$vGone = Get-ShadowVerdict -Pool $goneAttrib -ChallengerId 'p002'
+Check 'P60 assigned challenger no longer active -> no-challenger (no action)' ($vGone.state -eq 'no-challenger')
+$vEmptyId = Get-ShadowVerdict -Pool (New-AttribPool) -ChallengerId ''
+Check 'P61 empty -ChallengerId degrades to selection path' ($vEmptyId.challenger_id -eq 'p003')
+
 if ($script:fail -gt 0) { Write-Host "`n$script:fail check(s) FAILED"; exit 1 }
 Write-Host "`nAll checks passed."
 exit 0

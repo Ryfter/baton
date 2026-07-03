@@ -41,6 +41,7 @@ function Get-PromptPool {
         foreach ($c in @($pool.candidates)) {
             if (($c.created -is [datetime])) { $c.created = $c.created.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
             if (($c.retired_at -is [datetime])) { $c.retired_at = $c.retired_at.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
+            if (($c.promote_recommended_at -is [datetime])) { $c.promote_recommended_at = $c.promote_recommended_at.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
         }
     } catch {
         return @{ ok = $false; pool = $null; reason = "corrupt manifest at ${manifest}: $($_.Exception.Message)" }
@@ -78,6 +79,7 @@ function New-PoolCandidateRecord {
         retired_reason = $null
         retired_at = $null
         retired_by = $null
+        promote_recommended_at = $null
         offline = @{
             times_selected = 0
             prompt_tokens = $PromptTokens
@@ -326,10 +328,25 @@ function Get-ShadowVerdict {
     <# The dollars verdict. gated(v) = accept+polish+reject. States:
        no-challenger | insufficient | promote | retire | stalemate.
        Pure read — the caller acts (Complete-Run auto-retires; promotion is
-       always human --apply, d070). #>
-    param([Parameter(Mandatory)][hashtable]$Pool)
+       always human --apply, d070). -ChallengerId pins the verdict to the run's
+       ASSIGNED challenger (from shadow.json) so dollars are judged against the
+       variant that actually ran; assigned-but-gone (retired mid-run) reads as
+       no-challenger. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Pool,
+        [string]$ChallengerId
+    )
     $champHit = @($Pool.candidates | Where-Object { $_.id -eq $Pool.champion })
-    $chall = Select-ShadowChallenger -Pool $Pool
+    # -ChallengerId pins the verdict to the run's ASSIGNED challenger (from
+    # shadow.json) so dollars are judged against the variant that actually
+    # ran; assigned-but-gone (retired mid-run) reads as no-challenger.
+    $chall = $null
+    if (-not [string]::IsNullOrEmpty($ChallengerId)) {
+        $hit = @($Pool.candidates | Where-Object { ($_.id -eq $ChallengerId) -and ($_.status -eq 'candidate') })
+        if (@($hit).Count -gt 0) { $chall = $hit[0] }
+    } else {
+        $chall = Select-ShadowChallenger -Pool $Pool
+    }
     if ((@($champHit).Count -eq 0) -or ($null -eq $chall)) {
         return @{ state = 'no-challenger'; threshold = $script:ShadowMinGatedRuns }
     }
