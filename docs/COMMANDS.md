@@ -372,6 +372,7 @@ observations from the noisy journal into the clean catalog.
 - **Under the hood:** GEPA evolution over the Conductor planner prompt. A box-private candidate pool (`$BATON_HOME/prompts/pool/`) tracks every prompt variant: lineage, status (champion / candidate / retired), judge scores, token estimates, and — reserved for the shadow-A/B slice — live cost-to-acceptance stats. Each generation: Pareto-front parent selection → cheap reflection model diagnoses gate-failed runs → stronger mutation model rewrites the prompt → plan-only minibatch judged head-to-head vs the champion (position-swapped) → dual gate (beat parent AND Pareto-non-dominated on quality vs tokens; length cap). Survivors are proposed as `conductor-planner.candidate.txt`; `--apply` backs up the live prompt and promotes the survivor to champion.
 - **Where results land:** `$BATON_HOME/prompts/pool/` (the pool); `$BATON_HOME/prompts/conductor-planner.candidate.txt` (proposal); `$BATON_HOME/prompts/conductor-planner.txt` (live, only with `--apply`).
 - **Plain example:** `/baton:optimize-prompt --generations 3` → runs 3 generations, proposes the best → `/baton:optimize-prompt --apply`.
+- **Shadow A/B (Slice B):** Once a candidate survives the offline dual gate, real `/baton:go` runs alternate between champion and challenger (whichever has fewer runs). Cost and acceptance verdict accrue per variant, and at ≥5 gated runs each, a challenger losing on cost-per-accepted-outcome is auto-retired while a winning challenger gets a `PROMOTE` recommendation (deployment requires your `--apply`).
 - **Gotchas:** Needs at least one run with a `polish`/`reject` verdict. It never deploys on its own; `--apply` is always your call (d070). Redeploys never clobber a tuned live prompt (seed-if-absent).
 
 ---
@@ -415,7 +416,7 @@ observations from the noisy journal into the clean catalog.
 | `/baton:kb-index [--full]` | Refresh search index |
 | `/baton:kb-search "<query>"` | Search your knowledge |
 | `/baton:decision-feedback <id> "<text>"` | Verdict on a decision |
-| `/baton:optimize-prompt [--generations N] [--pool] [--apply]` | Evolve the planner prompt (GEPA pool, propose-then-apply) |
+| `/baton:optimize-prompt [--generations N] [--pool] [--apply] [--shadow on|off]` | Evolve the planner prompt (GEPA pool, propose-then-apply) |
 | `/baton:consolidate-decisions` | Roll decisions into guidance |
 | `/baton:project-init` | Calibrate a new project |
 | `/baton:log-routing <model> <note>` | Note a model's performance |

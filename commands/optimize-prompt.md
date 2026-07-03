@@ -8,7 +8,7 @@ Run the GEPA prompt-evolution loop over the Conductor's planner prompt.
 Parse `$ARGUMENTS` for the optional flags, then run ONE PowerShell command
 (keep it under 965 bytes):
 
-- Default / evolve: `pwsh -NoProfile -File ~/.claude/scripts/fleet-optimize-prompt.ps1 [-MaxRuns N] [-MaxCostTier T] [-ReflectTier T] [-Generations N]`
+- Default / evolve: `pwsh -NoProfile -File ~/.claude/scripts/fleet-optimize-prompt.ps1 [-MaxRuns N] [-MaxCostTier T] [-ReflectTier T] [-Generations N] [-Shadow on|off]`
 - `--pool`: `pwsh -NoProfile -File ~/.claude/scripts/fleet-optimize-prompt.ps1 -Pool`
 - `--apply`: append `-Apply` to the evolve form.
 
@@ -31,3 +31,20 @@ Report the per-generation lines and the proposal/apply outcome to the user
 in plain language. If the run exits 2, relay the reason honestly — "no
 candidate survived the dual gate" is a normal, healthy outcome, not an error
 to retry.
+
+## Live shadow A/B (Slice B)
+
+Once a candidate survives the offline dual gate it becomes the **challenger**:
+real `/baton:go` runs alternate champion/challenger (whichever has fewer live
+runs takes the run), each run's CostResolver-metered realized cost and
+acceptance verdict accrue to the variant that planned it, and every dollar
+spent on a `polish`/`reject` run also counts as rework. The decision figure is
+**cost per accepted outcome** (`realized_cost_usd / accept`).
+
+At ≥5 gated runs per variant:
+- challenger losing in dollars → **auto-retired** (why/when/what-beat-it recorded);
+- challenger winning → the pool report says `PROMOTE` — deploying still takes
+  your `--apply` (never autonomous).
+
+`--pool` shows the live columns and the current shadow verdict. `--shadow off`
+pauses the A/B without touching the pool; `--shadow on` resumes it.
