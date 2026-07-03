@@ -257,6 +257,41 @@ try {
         ($mt -match 'DIAG_TEXT') -and ($mt -match 'PARENT_TEXT') -and ($mt -match '\{\{schema\}\}') -and ($mt -match '<new_prompt>')
     )
 
+    # ---- E16/E17: stale-candidate re-scoring (v1.7.1) ----
+    $fx9 = New-EvoFixture
+    $env:BATON_HOME = $fx9.root
+    [void](Invoke-PromptEvolution -PromptPath $fx9.live -PoolDir $fx9.pool `
+        -ReflectDispatcher $okReflect -MutateDispatcher $okMutate `
+        -PlanDispatcher $echoPlan2 -JudgeDispatcher $judgeBetter -Draw { param($t) 0.0 })
+    $pool9 = (Get-PromptPool -PoolDir $fx9.pool).pool
+    $st9 = @($pool9.candidates | Where-Object { $_.id -eq 'p002' })[0]
+    $st9.offline.minibatch.win_rate_vs_champion = $null   # simulate post-swap staleness
+    Save-PromptPool -Pool $pool9 -PoolDir $fx9.pool
+    $failReflect9 = { param($p) @{ stdout = ''; exit_code = 1 } }
+    $ev9 = Invoke-PromptEvolution -PromptPath $fx9.live -PoolDir $fx9.pool `
+        -ReflectDispatcher $failReflect9 -MutateDispatcher $okMutate `
+        -PlanDispatcher $echoPlan2 -JudgeDispatcher $judgeBetter -Draw { param($t) 0.0 }
+    $pool9b = (Get-PromptPool -PoolDir $fx9.pool).pool
+    $st9b = @($pool9b.candidates | Where-Object { $_.id -eq 'p002' })[0]
+    Check 'E16a stale candidate re-scored vs current champion at run start' (([double]$st9b.offline.minibatch.win_rate_vs_champion) -eq 1.0)
+    Check 'E16b rescored contract names the candidate' ((@($ev9.rescored).Count -eq 1) -and (@($ev9.rescored)[0].id -eq 'p002'))
+    Check 'E16c re-score persisted even though the generation failed' ((-not $ev9.success) -and ($null -ne $st9b.offline.minibatch.win_rate_vs_champion))
+
+    # E17: unreadable stale-candidate file is skipped without aborting the run.
+    $pool9c = (Get-PromptPool -PoolDir $fx9.pool).pool
+    $st9c = @($pool9c.candidates | Where-Object { $_.id -eq 'p002' })[0]
+    $st9c.offline.minibatch.win_rate_vs_champion = $null
+    Save-PromptPool -Pool $pool9c -PoolDir $fx9.pool
+    Remove-Item -LiteralPath (Join-Path $fx9.pool 'p002.txt') -Force
+    $ev10 = Invoke-PromptEvolution -PromptPath $fx9.live -PoolDir $fx9.pool `
+        -ReflectDispatcher $failReflect9 -MutateDispatcher $okMutate `
+        -PlanDispatcher $echoPlan2 -JudgeDispatcher $judgeBetter -Draw { param($t) 0.0 }
+    $pool9d = (Get-PromptPool -PoolDir $fx9.pool).pool
+    $st9d = @($pool9d.candidates | Where-Object { $_.id -eq 'p002' })[0]
+    Check 'E17 unreadable stale file skipped: candidate stays stale, not in rescored' (
+        ($null -eq $st9d.offline.minibatch.win_rate_vs_champion) -and (@($ev10.rescored | Where-Object { $null -ne $_ }).Count -eq 0)
+    )
+
     # ---- E14/E15: retirement provenance (Slice B single door) ----
     $prevHomeSB = $env:BATON_HOME
     try {
