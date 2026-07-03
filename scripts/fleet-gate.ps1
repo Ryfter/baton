@@ -17,6 +17,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'gate-lib.ps1')
+try { . (Join-Path $PSScriptRoot 'coach-lib.ps1') } catch { }
 
 switch ($Subcommand) {
     'run' {
@@ -37,6 +38,7 @@ switch ($Subcommand) {
             Write-Host (Format-GateReport -Result ([hashtable]$res))
             Write-Host '---'
             Write-Host $res.polish_brief
+            if (Get-Command Write-CoachFooter -ErrorAction SilentlyContinue) { Write-CoachFooter }
         }
         return
     }
