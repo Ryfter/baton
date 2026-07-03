@@ -273,6 +273,124 @@ try {
         Remove-Item -LiteralPath $ecRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    # ---- Slice B: shadow A/B ----
+    # SB1/SB2: -Template override on Build-PlannerPrompt
+    $sbTpl = "SHADOWTPL {{schema}} {{evi}} {{Goal}}"
+    $sbOut = Build-PlannerPrompt -Goal 'g1' -Template $sbTpl
+    Check 'SB1 valid -Template used verbatim' ($sbOut -match 'SHADOWTPL' -and $sbOut -match 'g1')
+    $sbOut2 = Build-PlannerPrompt -Goal 'g1' -Template 'BROKEN no placeholders'
+    Check 'SB2 invalid -Template falls back to the normal chain' ($sbOut2 -notmatch 'BROKEN')
+
+    # Hermetic BATON_HOME with a seeded pool + one challenger for the rest.
+    $sbPrevHome = $env:BATON_HOME
+    try {
+        $sbHome = Join-Path ([System.IO.Path]::GetTempPath()) "cond-sb-$([System.IO.Path]::GetRandomFileName())"
+        New-Item -ItemType Directory -Force -Path (Join-Path $sbHome 'prompts') | Out-Null
+        $env:BATON_HOME = $sbHome
+        $sbSeed = Join-Path $sbHome 'prompts/conductor-planner.txt'
+        Set-Content -LiteralPath $sbSeed -Value 'LIVEPROMPT {{schema}} {{evi}} {{Goal}}' -Encoding utf8NoBOM
+        $sbPoolDir = Join-Path $sbHome 'prompts/pool'
+        [void](Initialize-PromptPool -SeedPromptPath $sbSeed -PoolDir $sbPoolDir)
+        $sbP = (Get-PromptPool -PoolDir $sbPoolDir).pool
+        $sbChall = New-PoolCandidateRecord -Id 'p002' -Parent 'p001' -Origin 'mutation' -Status 'candidate' -PromptTokens 10
+        $sbChall.offline.minibatch.win_rate_vs_champion = 0.8
+        $sbP.candidates = @($sbP.candidates) + @($sbChall)
+        Set-Content -LiteralPath (Join-Path $sbPoolDir 'p002.txt') -Value 'CHALLPROMPT {{schema}} {{evi}} {{Goal}}' -Encoding utf8NoBOM
+        Save-PromptPool -Pool $sbP -PoolDir $sbPoolDir
+
+        # SB3: challenger assignment writes shadow.json + event and routes the template.
+        $sbRun1 = Initialize-RunDir -RunId 'go-sb-1' -Root (Join-Path $sbHome 'runs')
+        $sbSeen = @{ prompt = '' }
+        $sbDisp = { param($cand, $prompt) $sbSeen.prompt = $prompt; @{ stdout = '{"tasks":[{"id":"t1","desc":"d"}]}'; exit_code = 0 } }.GetNewClosure()
+        $sbResolver = { @{ shadow = $true; variant_id = 'p002'; role = 'challenger'
+                           template = (Get-Content -Raw (Join-Path $sbPoolDir 'p002.txt')); challenger_id = 'p002' } }.GetNewClosure()
+        $sbFleet = Join-Path $sbHome 'fleet.yaml'
+        Set-Content -LiteralPath $sbFleet -Value "providers:`n  - name: stub`n    kind: cli`n    enabled: true`n    platform: claude`n    cost_tier: free`n    capabilities: [reasoning]" -Encoding utf8NoBOM
+        $sbPlanRes = Invoke-PlanPhase -Goal 'shadow goal' -RunId 'go-sb-1' -FleetPath $sbFleet -ToolsPath (Join-Path $sbHome 'tools.yaml') `
+            -Dispatcher $sbDisp -RunDir $sbRun1 -ShadowResolver $sbResolver
+        $sbShadowJson = Join-Path $sbRun1 'shadow.json'
+        Check 'SB3a shadow.json written with variant/role' ((Test-Path $sbShadowJson) -and ((Get-Content -Raw $sbShadowJson | ConvertFrom-Json).variant_id -eq 'p002'))
+        Check 'SB3b challenger template reached the planner dispatch' ($sbSeen.prompt -match 'CHALLPROMPT' -and $sbSeen.prompt -match 'shadow goal')
+        $sbEv1 = Get-Content -LiteralPath (Join-Path $sbRun1 'events.jsonl') | ForEach-Object { $_ | ConvertFrom-Json }
+        Check 'SB3c shadow event logged' (@($sbEv1 | Where-Object { $_.kind -eq 'shadow' }).Count -eq 1)
+
+        # SB4: resolver says no shadow -> no shadow.json, no event, normal prompt.
+        $sbRun2 = Initialize-RunDir -RunId 'go-sb-2' -Root (Join-Path $sbHome 'runs')
+        [void](Invoke-PlanPhase -Goal 'plain goal' -RunId 'go-sb-2' -FleetPath $sbFleet -ToolsPath (Join-Path $sbHome 'tools.yaml') `
+            -Dispatcher $sbDisp -RunDir $sbRun2 -ShadowResolver { @{ shadow = $false; reason = 'no challenger' } })
+        Check 'SB4 no-shadow run leaves no shadow.json' ((-not (Test-Path (Join-Path $sbRun2 'shadow.json'))) -and ($sbSeen.prompt -match 'LIVEPROMPT'))
+
+        # SB5: champion role -> shadow.json role=champion, live-file prompt used.
+        $sbRun3 = Initialize-RunDir -RunId 'go-sb-3' -Root (Join-Path $sbHome 'runs')
+        [void](Invoke-PlanPhase -Goal 'champ goal' -RunId 'go-sb-3' -FleetPath $sbFleet -ToolsPath (Join-Path $sbHome 'tools.yaml') `
+            -Dispatcher $sbDisp -RunDir $sbRun3 -ShadowResolver { @{ shadow = $true; variant_id = 'p001'; role = 'champion'; template = $null; challenger_id = 'p002' } })
+        Check 'SB5 champion role recorded, live prompt used' (((Get-Content -Raw (Join-Path $sbRun3 'shadow.json') | ConvertFrom-Json).role -eq 'champion') -and ($sbSeen.prompt -match 'LIVEPROMPT'))
+
+        # SB6: Complete-Run on a GATED shadow run accrues verdict + realized cost.
+        $sbPlanObj = @{ run_id = 'go-sb-1'; goal = 'shadow goal'; budget_cap = $null; tasks = @() }
+        $sbGate = @{ verdict = 'accept'; reason = 'fine'; counts = @{ critical = 0; important = 0; minor = 0 }; polish_brief = ''; findings = @(); reviews = @(); unparsed = @() }
+        [void](Complete-Run -RunDir $sbRun1 -Plan $sbPlanObj -Gate $sbGate -TaskCosts @(@{ id = 't1'; worker = 'stub'; cost = 0.10 }))
+        $sbAfter1 = (Get-PromptPool -PoolDir $sbPoolDir).pool
+        $sbC2 = @($sbAfter1.candidates | Where-Object { $_.id -eq 'p002' })[0]
+        Check 'SB6 gated shadow run accrued: runs=1 accept=1 cost=0.10 rework=0' `
+            ((([int]$sbC2.live.runs) -eq 1) -and (([int]$sbC2.live.accept) -eq 1) -and (([double]$sbC2.live.realized_cost_usd) -eq 0.10) -and (([double]$sbC2.live.rework_cost_usd) -eq 0.0))
+
+        # SB7: UNGATED shadow run accrues cost + runs only.
+        $sbRun4 = Initialize-RunDir -RunId 'go-sb-4' -Root (Join-Path $sbHome 'runs')
+        @{ variant_id = 'p002'; role = 'challenger'; challenger_id = 'p002'; assigned = '2026-07-02T00:00:00Z' } |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sbRun4 'shadow.json') -Encoding utf8NoBOM
+        [void](Complete-Run -RunDir $sbRun4 -Plan @{ run_id = 'go-sb-4'; goal = 'g'; budget_cap = $null; tasks = @() } -TaskCosts @(@{ id = 't1'; worker = 'stub'; cost = 0.05 }))
+        $sbC2b = @(((Get-PromptPool -PoolDir $sbPoolDir).pool).candidates | Where-Object { $_.id -eq 'p002' })[0]
+        Check 'SB7 ungated shadow run: cost-only accrual' ((([int]$sbC2b.live.runs) -eq 2) -and (([int]$sbC2b.live.accept) -eq 1) -and (([double]$sbC2b.live.realized_cost_usd) -eq 0.15))
+
+        # SB8: auto-retire fires at threshold when the challenger is losing in dollars.
+        $sbP3 = (Get-PromptPool -PoolDir $sbPoolDir).pool
+        $sbChampRec = @($sbP3.candidates | Where-Object { $_.id -eq 'p001' })[0]
+        $sbChallRec = @($sbP3.candidates | Where-Object { $_.id -eq 'p002' })[0]
+        $sbChampRec.live = @{ runs = 5; accept = 4; polish = 1; reject = 0; realized_cost_usd = 1.0; rework_cost_usd = 0.2 }
+        $sbChallRec.live = @{ runs = 4; accept = 0; polish = 2; reject = 2; realized_cost_usd = 2.0; rework_cost_usd = 2.0 }
+        Save-PromptPool -Pool $sbP3 -PoolDir $sbPoolDir
+        $sbRun5 = Initialize-RunDir -RunId 'go-sb-5' -Root (Join-Path $sbHome 'runs')
+        @{ variant_id = 'p002'; role = 'challenger'; challenger_id = 'p002'; assigned = '2026-07-02T00:00:00Z' } |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sbRun5 'shadow.json') -Encoding utf8NoBOM
+        $sbGateRej = @{ verdict = 'reject'; reason = 'bad'; counts = @{ critical = 1; important = 0; minor = 0 }; polish_brief = ''; findings = @(); reviews = @(); unparsed = @() }
+        [void](Complete-Run -RunDir $sbRun5 -Plan @{ run_id = 'go-sb-5'; goal = 'g'; budget_cap = $null; tasks = @() } -Gate $sbGateRej -TaskCosts @(@{ id = 't1'; worker = 'stub'; cost = 0.10 }))
+        $sbAfter5 = (Get-PromptPool -PoolDir $sbPoolDir).pool
+        $sbRetired = @($sbAfter5.candidates | Where-Object { $_.id -eq 'p002' })[0]
+        Check 'SB8a losing challenger auto-retired with provenance' `
+            (($sbRetired.status -eq 'retired') -and ($sbRetired.retired_reason -match 'live A/B loss vs p001') -and ($sbRetired.retired_by -eq 'p001') -and (([string]$sbRetired.retired_at) -match 'Z$'))
+        $sbEv5 = Get-Content -LiteralPath (Join-Path $sbRun5 'events.jsonl') | ForEach-Object { $_ | ConvertFrom-Json }
+        Check 'SB8b auto-retire logged as warn shadow event' (@($sbEv5 | Where-Object { ($_.kind -eq 'shadow') -and ($_.level -eq 'warn') }).Count -ge 1)
+
+        # SB9: fail-open — corrupt pool never breaks the run.
+        Set-Content -LiteralPath (Join-Path $sbPoolDir 'pool.json') -Value '{ not json !!!' -Encoding utf8NoBOM
+        $sbRun6 = Initialize-RunDir -RunId 'go-sb-6' -Root (Join-Path $sbHome 'runs')
+        @{ variant_id = 'p002'; role = 'challenger'; challenger_id = 'p002'; assigned = '2026-07-02T00:00:00Z' } |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sbRun6 'shadow.json') -Encoding utf8NoBOM
+        $sbRes6 = Complete-Run -RunDir $sbRun6 -Plan @{ run_id = 'go-sb-6'; goal = 'g'; budget_cap = $null; tasks = @() } -Gate $sbGate -TaskCosts @()
+        Check 'SB9 corrupt pool: run completes normally (fail-open)' (($sbRes6.status -eq 'completed') -and (Test-Path (Join-Path $sbRun6 'report.md')))
+
+        # SB10: winning challenger -> promote recommendation event, NOT retired.
+        $sbP4 = @{ schema = 1; champion = 'p001'; candidates = @() }
+        $sbW1 = New-PoolCandidateRecord -Id 'p001' -Parent $null -Origin 'seed' -Status 'champion' -PromptTokens 12
+        $sbW1.offline.minibatch.win_rate_vs_champion = 0.5
+        $sbW1.live = @{ runs = 6; accept = 5; polish = 1; reject = 0; realized_cost_usd = 1.2; rework_cost_usd = 0.2 }
+        $sbW2 = New-PoolCandidateRecord -Id 'p002' -Parent 'p001' -Origin 'mutation' -Status 'candidate' -PromptTokens 10
+        $sbW2.offline.minibatch.win_rate_vs_champion = 0.8
+        $sbW2.live = @{ runs = 5; accept = 5; polish = 0; reject = 0; realized_cost_usd = 0.5; rework_cost_usd = 0.0 }
+        $sbP4.candidates = @($sbW1, $sbW2)
+        Save-PromptPool -Pool $sbP4 -PoolDir $sbPoolDir
+        $sbRun7 = Initialize-RunDir -RunId 'go-sb-7' -Root (Join-Path $sbHome 'runs')
+        @{ variant_id = 'p001'; role = 'champion'; challenger_id = 'p002'; assigned = '2026-07-02T00:00:00Z' } |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sbRun7 'shadow.json') -Encoding utf8NoBOM
+        [void](Complete-Run -RunDir $sbRun7 -Plan @{ run_id = 'go-sb-7'; goal = 'g'; budget_cap = $null; tasks = @() } -Gate $sbGate -TaskCosts @(@{ id = 't1'; worker = 'stub'; cost = 0.10 }))
+        $sbAfter7 = (Get-PromptPool -PoolDir $sbPoolDir).pool
+        $sbEv7 = Get-Content -LiteralPath (Join-Path $sbRun7 'events.jsonl') | ForEach-Object { $_ | ConvertFrom-Json }
+        Check 'SB10 winning challenger: promote event, still a candidate' `
+            ((@($sbAfter7.candidates | Where-Object { $_.id -eq 'p002' })[0].status -eq 'candidate') -and `
+             (@($sbEv7 | Where-Object { ($_.kind -eq 'shadow') -and ($_.message -match 'promote|--apply') }).Count -ge 1))
+    } finally { $env:BATON_HOME = $sbPrevHome }
+
     Write-Host ""
     if ($script:fail -gt 0) { Write-Host "$script:fail CHECK(S) FAILED"; exit 1 } else { Write-Host "ALL CHECKS PASS"; exit 0 }
 } catch {

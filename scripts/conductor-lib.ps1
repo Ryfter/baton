@@ -15,6 +15,7 @@
 . "$PSScriptRoot/gate-lib.ps1"   # Invoke-AcceptanceGate for the acceptance phase (d058)
 . "$PSScriptRoot/effective-cost-lib.ps1"   # run-level effective cost (slice 1)
 . "$PSScriptRoot/cost-resolver-lib.ps1"   # realized-cost metering (slice 2)
+. "$PSScriptRoot/prompt-pool-lib.ps1"   # Slice B: live shadow A/B pool bookkeeping
 
 function New-RunId {
     param([datetime]$Now = (Get-Date))
@@ -268,7 +269,7 @@ function Build-PlannerPrompt {
         - Substitution uses [string]::Replace, NOT -replace: $Goal is untrusted
           user text, and a regex replacement would treat literal '$1'/'$&' in the
           goal as backreferences and corrupt the prompt. #>
-    param([Parameter(Mandatory)][string]$Goal, [string[]]$RegistryLines = @())
+    param([Parameter(Mandatory)][string]$Goal, [string[]]$RegistryLines = @(), [string]$Template)
     $schema = @'
 {
   "run_id": "<id>",
@@ -286,22 +287,31 @@ function Build-PlannerPrompt {
     } else { 'Tools already wired locally: (none)' }
 
     $requiredPlaceholders = @('{{schema}}', '{{evi}}', '{{Goal}}')
-    $template = $null
-    foreach ($candidatePath in @(
-        (Join-Path (Get-BatonHome) 'prompts/conductor-planner.txt'),
-        (Join-Path $PSScriptRoot '../prompts/conductor-planner.txt')
-    )) {
-        if (-not (Test-Path $candidatePath)) { continue }
-        $candidate = $null
-        try { $candidate = Get-Content -Raw -LiteralPath $candidatePath -ErrorAction Stop } catch { continue }
-        if ([string]::IsNullOrEmpty($candidate)) { continue }
-        $hasAll = $true
-        foreach ($ph in $requiredPlaceholders) { if (-not $candidate.Contains($ph)) { $hasAll = $false; break } }
-        if ($hasAll) { $template = $candidate; break }
+    # Slice B: a caller-supplied template (the shadow challenger) wins when it
+    # carries all placeholders; anything less falls through to the live chain.
+    $resolved = $null
+    if (-not [string]::IsNullOrEmpty($Template)) {
+        $hasAllOverride = $true
+        foreach ($ph in $requiredPlaceholders) { if (-not $Template.Contains($ph)) { $hasAllOverride = $false; break } }
+        if ($hasAllOverride) { $resolved = $Template }
     }
-    if ($null -eq $template) { $template = $script:DefaultPlannerPrompt }
+    if ($null -eq $resolved) {
+        foreach ($candidatePath in @(
+            (Join-Path (Get-BatonHome) 'prompts/conductor-planner.txt'),
+            (Join-Path $PSScriptRoot '../prompts/conductor-planner.txt')
+        )) {
+            if (-not (Test-Path $candidatePath)) { continue }
+            $candidate = $null
+            try { $candidate = Get-Content -Raw -LiteralPath $candidatePath -ErrorAction Stop } catch { continue }
+            if ([string]::IsNullOrEmpty($candidate)) { continue }
+            $hasAll = $true
+            foreach ($ph in $requiredPlaceholders) { if (-not $candidate.Contains($ph)) { $hasAll = $false; break } }
+            if ($hasAll) { $resolved = $candidate; break }
+        }
+    }
+    if ($null -eq $resolved) { $resolved = $script:DefaultPlannerPrompt }
 
-    return $template.Replace('{{schema}}', $schema).Replace('{{evi}}', $evi).Replace('{{Goal}}', $Goal)
+    return $resolved.Replace('{{schema}}', $schema).Replace('{{evi}}', $evi).Replace('{{Goal}}', $Goal)
 }
 
 function Invoke-PlanPhase {
@@ -315,7 +325,9 @@ function Invoke-PlanPhase {
         [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
         [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
         [string[]]$RegistryLines = @(),
-        [scriptblock]$Dispatcher
+        [scriptblock]$Dispatcher,
+        [string]$RunDir,
+        [scriptblock]$ShadowResolver
     )
     $dispatch = {
         param($cand, $prompt)
@@ -324,7 +336,26 @@ function Invoke-PlanPhase {
     }
     $cands = Select-Capability -Capability reasoning -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
     if ($null -eq $cands -or @($cands | Where-Object { $null -ne $_ }).Count -lt 1) { return $null }
-    $prompt = Build-PlannerPrompt -Goal $Goal -RegistryLines $RegistryLines
+    # Slice B: shadow A/B assignment (fail-open; no RunDir = no shadow).
+    $shadowTemplate = $null
+    if (-not [string]::IsNullOrWhiteSpace($RunDir)) {
+        $sv = $null
+        try { $sv = if ($ShadowResolver) { & $ShadowResolver } else { Resolve-ShadowVariant } } catch { $sv = $null }
+        if ($sv -and $sv.shadow) {
+            if ($sv.role -eq 'challenger') { $shadowTemplate = [string]$sv.template }
+            try {
+                @{ variant_id = [string]$sv.variant_id; role = [string]$sv.role
+                   challenger_id = [string]$sv.challenger_id
+                   assigned = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') } |
+                    ConvertTo-Json | Set-Content -LiteralPath (Join-Path $RunDir 'shadow.json') -Encoding utf8NoBOM
+                $vsOther = if ($sv.role -eq 'challenger') { 'champion' } else { "challenger $($sv.challenger_id)" }
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'shadow' -Message "prompt variant $($sv.variant_id) ($($sv.role)) — live A/B vs $vsOther")
+            } catch { $shadowTemplate = $null }
+        }
+    }
+    $promptParams = @{ Goal = $Goal; RegistryLines = $RegistryLines }
+    if ($shadowTemplate) { $promptParams.Template = $shadowTemplate }
+    $prompt = Build-PlannerPrompt @promptParams
     $res = & $dispatch $cands[0] $prompt
     if ([int]$res.exit_code -ne 0) { return $null }
     $plan = ConvertTo-PlanObject -RawStdout ([string]$res.stdout)
@@ -378,9 +409,11 @@ function Complete-Run {
     }
     # Effective cost (slice 1): only when a gate produced a verdict (a quality signal).
     $effectiveCost = $null
+    $realizedRunCost = $null
     if ($Gate -and $Gate.verdict) {
         $quality   = Get-QualityScalar -Verdict ([string]$Gate.verdict) -Counts $Gate.counts
         $runCost   = Get-RunCost -Tasks @($TaskCosts) -CostResolver { param($t) Get-RealizedTaskCost -Task $t -RunDir $RunDir }
+        $realizedRunCost = [double]$runCost.cost
         $effective = Get-EffectiveCost -Cost $runCost.cost -Quality $quality
         $breakdown = Get-WorkerBreakdown -Tasks @($TaskCosts)
         $record = New-EffectiveCostRecord -RunId $Plan.run_id -Verdict ([string]$Gate.verdict) `
@@ -391,6 +424,45 @@ function Complete-Run {
         $effectiveCost = $effective
     }
     Set-Content -LiteralPath (Join-Path $RunDir 'report.md') -Value $report -Encoding utf8NoBOM
+
+    # -- Slice B: live shadow A/B accrual + auto-retire. Strictly after the
+    # user-facing report; fail-open — a pool problem never breaks the run. --
+    try {
+        $shadowPath = Join-Path $RunDir 'shadow.json'
+        if (Test-Path $shadowPath) {
+            $assign = Get-Content -Raw -LiteralPath $shadowPath | ConvertFrom-Json -AsHashtable
+            $poolLoaded = Get-PromptPool
+            if (($null -ne $assign) -and $assign.variant_id -and $poolLoaded.ok) {
+                $livePool = $poolLoaded.pool
+                if ($null -eq $realizedRunCost) {
+                    # Ungated run: no effective-cost pass ran, meter here — dollars are real either way.
+                    $rc = Get-RunCost -Tasks @($TaskCosts) -CostResolver { param($t) Get-RealizedTaskCost -Task $t -RunDir $RunDir }
+                    $realizedRunCost = [double]$rc.cost
+                }
+                $accrue = @{ Pool = $livePool; VariantId = [string]$assign.variant_id; CostUsd = $realizedRunCost }
+                if ($Gate -and $Gate.verdict -and (([string]$Gate.verdict) -in @('accept', 'polish', 'reject'))) {
+                    $accrue.Verdict = [string]$Gate.verdict
+                }
+                [void](Add-LiveRunResult @accrue)
+                $sv = Get-ShadowVerdict -Pool $livePool
+                if ($sv.state -in @('retire', 'promote')) {
+                    $challCpa = if ($null -ne $sv.challenger_cpa) { '{0:n4}' -f [double]$sv.challenger_cpa } else { 'n/a (0 accepts)' }
+                    $champCpa = if ($null -ne $sv.champion_cpa) { '{0:n4}' -f [double]$sv.champion_cpa } else { 'n/a (0 accepts)' }
+                    if ($sv.state -eq 'retire') {
+                        $why = "live A/B loss vs $($sv.champion_id): cost_per_accept $challCpa vs $champCpa over $($sv.challenger_gated)/$($sv.champion_gated) gated runs"
+                        [void](Set-CandidateRetired -Pool $livePool -Id ([string]$sv.challenger_id) -Reason $why -By ([string]$sv.champion_id))
+                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'shadow' -Level 'warn' -Message "challenger $($sv.challenger_id) auto-retired: $why")
+                    } else {
+                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'shadow' -Message "challenger $($sv.challenger_id) is winning in dollars (cost_per_accept $challCpa vs $champCpa) — promote via /baton:optimize-prompt --apply")
+                    }
+                }
+                Save-PromptPool -Pool $livePool
+            }
+        }
+    } catch {
+        try { Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'shadow' -Level 'warn' -Message "shadow accrual failed (run unaffected): $($_.Exception.Message)") } catch { }
+    }
+
     return @{ status = $Status; run_id = $Plan.run_id; run_dir = $RunDir; spend = $Spend; pending_task_id = $PendingTaskId; report = $report; acceptance = $Gate; effective_cost = $effectiveCost }
 }
 
@@ -419,7 +491,7 @@ function Invoke-Conductor {
 
     # 1. Plan phase.
     $plan = if ($Planner) { & $Planner $Goal }
-            else { Invoke-PlanPhase -Goal $Goal -RunId $runId -BudgetCap $BudgetCap -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath -Dispatcher $Dispatcher }
+            else { Invoke-PlanPhase -Goal $Goal -RunId $runId -BudgetCap $BudgetCap -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath -Dispatcher $Dispatcher -RunDir $RunDir }
     if ($null -eq $plan) {
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'error' -Level 'error' -Message 'planning failed')
         $empty = @{ run_id = $runId; goal = $Goal; budget_cap = $BudgetCap; tasks = @() }
