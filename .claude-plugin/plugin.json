@@ -1,7 +1,7 @@
 {
   "name": "baton",
   "displayName": "Baton",
-  "version": "1.8.0-rc.1",
+  "version": "1.8.0",
   "description": "Pass the baton. Conduct the fleet. Claude Code as command-and-control for a fleet of coding LLMs — capability routing, cost engine, jobs, decisions, and a knowledge base.",
   "author": { "name": "Kevin Rank", "url": "https://github.com/Ryfter" },
   "repository": "https://github.com/Ryfter/baton",
