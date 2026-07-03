@@ -29,7 +29,11 @@ if ($Shadow) {
         exit 2
     }
     $loaded.pool.shadow = ($Shadow -eq 'on')
-    Save-PromptPool -Pool $loaded.pool
+    try { Save-PromptPool -Pool $loaded.pool }
+    catch {
+        [Console]::Error.WriteLine("Failed to save pool: $($_.Exception.Message)")
+        exit 2
+    }
     Write-Host "Shadow A/B is now $($Shadow.ToUpper())."
     exit 0
 }
