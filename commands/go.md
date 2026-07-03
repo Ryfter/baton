@@ -50,6 +50,8 @@ let the engine and the fleet do the work.
   rides the existing gated-merge flow (per-item branches → PR). The engine itself only
   plans, routes, and logs.
 - Run artifacts are box-private under `BATON_HOME/runs/<run-id>/`.
+- When a prompt challenger is live (see `/baton:optimize-prompt`), the run log
+  carries a `shadow` event naming which prompt variant planned this run.
 
 ## Arguments
 
