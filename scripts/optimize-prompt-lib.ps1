@@ -335,7 +335,12 @@ function Invoke-PromptEvolution {
     })
     if (@($staleActives).Count -gt 0) {
         $champRescoreRec = @($pool.candidates | Where-Object { $_.id -eq $pool.champion })[0]
-        $champRescoreText = Get-Content -Raw (Join-Path $PoolDir ([string]$champRescoreRec.file))
+        $champRescoreText = $null
+        try { $champRescoreText = Get-Content -Raw -LiteralPath (Join-Path $PoolDir ([string]$champRescoreRec.file)) -ErrorAction Stop } catch { $champRescoreText = $null }
+        if ([string]::IsNullOrEmpty($champRescoreText)) {
+            [Console]::Error.WriteLine("optimize-prompt: re-score skipped — champion file unreadable; stale candidates stay stale.")
+            $staleActives = @()
+        }
         foreach ($sc in $staleActives) {
             $scText = $null
             try { $scText = Get-Content -Raw -LiteralPath (Join-Path $PoolDir ([string]$sc.file)) -ErrorAction Stop } catch { $scText = $null }
