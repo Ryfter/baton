@@ -30,3 +30,12 @@ you set and inspect that state.
 
 3. Summarize the resulting state to the user in plain language (which workers are
    available, which are waiting and for how long, and whether conserve mode is on).
+
+## Coach footer
+
+Non-JSON output may end with one `Next: <command>` line from the guided-use
+coach — a read-only, zero-model-cost suggestion driven by local state (gate
+verdicts, prompt-pool evidence, budget posture). Each suggestion appears once
+per triggering state. Set the level in `$BATON_HOME/coach/config.json`
+(`{"level":"off"|"quiet"|"teach"}`, default `quiet`; `teach` adds the why).
+Relay the footer to the user verbatim when present.

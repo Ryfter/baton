@@ -423,3 +423,28 @@ observations from the noisy journal into the clean catalog.
 | `/baton:consolidate-routing` | Update the model catalog |
 | `/baton:consolidate-lessons` | File lessons into the KB |
 | `/baton:cost [<total>]` | Per-project spend ledger |
+
+## Guided use (the coach)
+
+Baton suggests its own commands so features aren't hidden behind command
+names (d074, v1.8.0). One rules engine (`scripts/coach-lib.ps1`), two
+surfaces, zero model calls:
+
+- **Session-start digest** — a SessionStart hook prints 3–5 orientation
+  lines for registered projects (last-run status, prompt-pool state, budget
+  posture, one suggested next command). Unregistered git repos get a single
+  one-shot onboarding line; other directories get silence.
+- **`Next:` footers** — `/baton:usage`, `/baton:gate`, `/baton:go`, and
+  `/baton:optimize-prompt` end their human-readable output with at most one
+  suggestion. Footers are one-shot per triggering state (stamps in
+  `$BATON_HOME/coach/seen.json`) and never appear in `--json` output.
+
+Rules (in priority order): last-run next step, gate `polish`/`reject` →
+`/baton:optimize-prompt`, promote nudge pending → `--apply`, live A/B verdict
+ready → `--pool`, budget at risk → `/baton:usage`, unregistered repo →
+`/baton:start`.
+
+Configure with `$BATON_HOME/coach/config.json`:
+`{"level":"off"}` (silent), `"quiet"` (command only — default), or
+`"teach"` (command + why). The coach is fail-open — it can never break a
+session start or a command.

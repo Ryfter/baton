@@ -228,3 +228,12 @@ happens next, and why.
 ## Arguments
 
 $ARGUMENTS
+
+## Session-start coach digest
+
+A SessionStart hook (`baton-coach.ps1`) prints a short orientation digest
+before any command runs: registered projects get project/pool/budget status
+plus one suggested next command; unregistered git repos get a one-shot
+"Baton available — /baton:start to onboard" line. It is read-only and
+zero-model-cost. The digest honors the same `$BATON_HOME/coach/config.json`
+level as command footers (`off` silences it entirely).
