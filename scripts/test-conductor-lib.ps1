@@ -389,6 +389,41 @@ try {
         Check 'SB10 winning challenger: promote event, still a candidate' `
             ((@($sbAfter7.candidates | Where-Object { $_.id -eq 'p002' })[0].status -eq 'candidate') -and `
              (@($sbEv7 | Where-Object { ($_.kind -eq 'shadow') -and ($_.message -match 'promote|--apply') }).Count -ge 1))
+
+        # SB11: promote nudge is one-shot — second winning run emits no duplicate.
+        $sbC7 = @($sbAfter7.candidates | Where-Object { $_.id -eq 'p002' })[0]
+        Check 'SB11a first promote run stamps promote_recommended_at' (([string]$sbC7.promote_recommended_at) -match 'Z$')
+        $sbRun8 = Initialize-RunDir -RunId 'go-sb-8' -Root (Join-Path $sbHome 'runs')
+        @{ variant_id = 'p001'; role = 'champion'; challenger_id = 'p002'; assigned = '2026-07-03T00:00:00Z' } |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sbRun8 'shadow.json') -Encoding utf8NoBOM
+        [void](Complete-Run -RunDir $sbRun8 -Plan @{ run_id = 'go-sb-8'; goal = 'g'; budget_cap = $null; tasks = @() } -Gate $sbGate -TaskCosts @(@{ id = 't1'; worker = 'stub'; cost = 0.10 }))
+        # events.jsonl is created lazily on first Add-RunEvent; the one-shot nudge
+        # legitimately writes none here, so the file may not exist at all.
+        $sbEv8Path = Join-Path $sbRun8 'events.jsonl'
+        $sbEv8 = if (Test-Path $sbEv8Path) { Get-Content -LiteralPath $sbEv8Path | ForEach-Object { $_ | ConvertFrom-Json } } else { @() }
+        Check 'SB11b second winning run: no duplicate promote event' (@($sbEv8 | Where-Object { ($_.kind -eq 'shadow') -and ($_.message -match 'promote via') }).Count -eq 0)
+
+        # SB12: verdict evaluates the ASSIGNED challenger, not a newer higher-wr rival.
+        $sbP5 = @{ schema = 1; champion = 'p001'; candidates = @() }
+        $sbX1 = New-PoolCandidateRecord -Id 'p001' -Parent $null -Origin 'seed' -Status 'champion' -PromptTokens 12
+        $sbX1.offline.minibatch.win_rate_vs_champion = 0.5
+        $sbX1.live = @{ runs = 5; accept = 4; polish = 1; reject = 0; realized_cost_usd = 1.0; rework_cost_usd = 0.2 }
+        $sbX2 = New-PoolCandidateRecord -Id 'p002' -Parent 'p001' -Origin 'mutation' -Status 'candidate' -PromptTokens 10
+        $sbX2.offline.minibatch.win_rate_vs_champion = 0.6
+        $sbX2.live = @{ runs = 4; accept = 1; polish = 2; reject = 1; realized_cost_usd = 3.0; rework_cost_usd = 2.5 }
+        $sbX3 = New-PoolCandidateRecord -Id 'p003' -Parent 'p001' -Origin 'mutation' -Status 'candidate' -PromptTokens 9
+        $sbX3.offline.minibatch.win_rate_vs_champion = 0.9   # newer, shinier — but NOT the one that ran
+        $sbP5.candidates = @($sbX1, $sbX2, $sbX3)
+        Save-PromptPool -Pool $sbP5 -PoolDir $sbPoolDir
+        $sbRun9 = Initialize-RunDir -RunId 'go-sb-9' -Root (Join-Path $sbHome 'runs')
+        @{ variant_id = 'p002'; role = 'challenger'; challenger_id = 'p002'; assigned = '2026-07-03T00:00:00Z' } |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sbRun9 'shadow.json') -Encoding utf8NoBOM
+        [void](Complete-Run -RunDir $sbRun9 -Plan @{ run_id = 'go-sb-9'; goal = 'g'; budget_cap = $null; tasks = @() } -Gate $sbGateRej -TaskCosts @(@{ id = 't1'; worker = 'stub'; cost = 0.10 }))
+        $sbAfter9 = (Get-PromptPool -PoolDir $sbPoolDir).pool
+        $sbX2b = @($sbAfter9.candidates | Where-Object { $_.id -eq 'p002' })[0]
+        $sbX3b = @($sbAfter9.candidates | Where-Object { $_.id -eq 'p003' })[0]
+        Check 'SB12 assigned challenger judged (auto-retired), rival untouched' `
+            (($sbX2b.status -eq 'retired') -and ($sbX2b.retired_by -eq 'p001') -and ($sbX3b.status -eq 'candidate'))
     } finally { $env:BATON_HOME = $sbPrevHome }
 
     Write-Host ""
