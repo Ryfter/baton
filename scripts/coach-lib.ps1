@@ -254,8 +254,7 @@ function Get-CoachSuggestions {
         $seen = Read-CoachSeen -SeenPath $SeenPath
         $out = @($out | Where-Object { ($null -eq $_.dedup_key) -or (-not $seen.ContainsKey([string]$_.dedup_key)) })
     }
-    if (@($out).Count -eq 0) { return @() }
-    return ,([object[]]$out)
+    return @($out)
 }
 
 function Write-CoachFooter {
