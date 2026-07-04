@@ -19,6 +19,14 @@ Every agent should also read `docs/next-session.md` (the operating loop) and
 `docs/roadmap.md` (status), and use the shared knowledge base (`Ryfter/grimdex-know`, the
 private data repo — see the Grimdex split section below).
 
+> **ACTIVE WORK QUEUE (2026-07-04):** seven spec'd-and-planned work packages are
+> staged for any agent to pick up. Start at
+> `docs/superpowers/plans/2026-07-04-backlog-execution-handoff.md` — it carries the
+> package table, dependency/parallelization rules, the per-package execution
+> protocol, and the binding house-rules digest. Claim a package by setting its
+> Status cell to `IN PROGRESS (<agent>, <date>)` and committing that edit on your
+> feature branch. Merges remain Kevin's word, always.
+
 ## Shared core — identical expectations for EVERY agent
 1. **Orient first:** read `docs/next-session.md` + `docs/roadmap.md`.
 2. **Decision capture:** when you make a significant architectural/scope/approach
