@@ -14,6 +14,7 @@ param(
     [switch]$Json,
     [string]$GateArtifact,
     [string]$GateDiff,
+    [string]$Project,
     [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
     [string]$FleetPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'fleet.yaml' } else { Join-Path $HOME '.baton/fleet.yaml' }),
     [string]$ToolsPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'tools.yaml' } else { Join-Path $HOME '.baton/tools.yaml' })
@@ -21,6 +22,18 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'conductor-lib.ps1')
 try { . (Join-Path $PSScriptRoot 'coach-lib.ps1') } catch { }
+. (Join-Path $PSScriptRoot 'registry-lib.ps1')
+
+$targetFolder = $null
+if (-not [string]::IsNullOrWhiteSpace($Project)) {
+    $resolved = Resolve-ProjectTarget -Slug $Project
+    if ($resolved.status -eq 'resolved') {
+        $targetFolder = $resolved.folder
+    } elseif ($resolved.status -eq 'unknown') {
+        [Console]::Error.WriteLine("No project matches --project '$Project'. Run /baton:project list to see registered projects.")
+        exit 2
+    }
+}
 
 $theGoal = @($Goal, $Text | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) | Select-Object -First 1
 if ([string]::IsNullOrWhiteSpace($theGoal)) { Write-Error 'Provide a goal via -Goal "<text>" (or -Text).'; exit 2 }
@@ -48,7 +61,12 @@ if ($env:BATON_GO_TEST_GATE) {
     if (-not $go.ContainsKey('GateArtifact')) { $go['GateArtifact'] = 'test artifact' }
 }
 
-$result = Invoke-Conductor @go
+if ($targetFolder) { Push-Location -LiteralPath $targetFolder }
+try {
+    $result = Invoke-Conductor @go
+} finally {
+    if ($targetFolder) { Pop-Location }
+}
 
 if ($Json) {
     $result | ConvertTo-Json -Depth 8
