@@ -250,15 +250,17 @@ function Invoke-Fleet-Cli {
     )
     # Decide dispatch path. stdin:true providers already omit {{prompt}};
     # clean-tail interpolating providers are promoted to stdin (prompt-size /
-    # quote hardening) by stripping the trailing quoted {{prompt}} token.
+    # quote hardening) by stripping the trailing quoted {{prompt}} token. For
+    # both stdin cases we resolve {{model}} inline — NOT via Resolve-FleetCommand,
+    # whose mandatory -Prompt would reject the empty prompt a stdin dispatch uses.
     $useStdin = ($Provider.stdin -eq $true) -or (Test-StdinSafe -Provider $Provider)
-    if ($Provider.stdin -eq $true) {
-        $cmd = Resolve-FleetCommand -Provider $Provider -Prompt '' -Model $Model
-    } elseif (Test-StdinSafe -Provider $Provider) {
-        $stripped = ([string]$Provider.command_template) -replace '\s+(["''])\{\{prompt\}\}\1\s*$', ''
+    if ($useStdin) {
+        # stdin:true templates carry no {{prompt}}; Test-StdinSafe templates end in
+        # a standalone quoted {{prompt}} that we strip. Both then resolve {{model}}.
+        $cmd = if ($Provider.stdin -eq $true) { [string]$Provider.command_template }
+               else { ([string]$Provider.command_template) -replace '\s+(["''])\{\{prompt\}\}\1\s*$', '' }
         $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
-        if ($null -ne $resolvedModel) { $stripped = $stripped.Replace('{{model}}', [string]$resolvedModel) }
-        $cmd = $stripped
+        if ($null -ne $resolvedModel) { $cmd = $cmd.Replace('{{model}}', [string]$resolvedModel) }
     } else {
         $cmd = Resolve-FleetCommand -Provider $Provider -Prompt $Prompt -Model $Model
     }

@@ -76,5 +76,13 @@ $rReg = Invoke-Fleet -Name 'stub-cli' -Prompt 'world' -Path $fixture -JournalPat
 Assert "regression: stub-cli still outputs hello-world (legacy path)" (($rReg.stdout | Out-String).Trim() -eq 'hello-world')
 Remove-Item $tmpJ -ErrorAction SilentlyContinue
 
+# --- Regression: stdin:true provider round-trips via stdin (guards the empty-prompt
+#     Resolve-FleetCommand rejection that broke real stdin providers) ---
+$tmpJs = New-TemporaryFile
+$rStdin = Invoke-Fleet -Name 'stub-stdin' -Prompt 'HELLO-VIA-STDIN' -Path $fixture -JournalPath $tmpJs
+Assert "stdin:true provider dispatches without throwing" ($rStdin.exit_code -eq 0)
+Assert "stdin:true provider receives the prompt on stdin" (($rStdin.stdout | Out-String) -match 'HELLO-VIA-STDIN')
+Remove-Item $tmpJs -ErrorAction SilentlyContinue
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green

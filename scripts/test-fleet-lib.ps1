@@ -12,7 +12,7 @@ function Assert($label, $cond) {
 
 # --- Read-Fleet ---
 $fleet = Read-Fleet -Path $fixture
-Assert "Read-Fleet returns 8 providers" ($fleet.Count -eq 8)
+Assert "Read-Fleet returns 9 providers" ($fleet.Count -eq 9)
 Assert "first provider name is stub-cli" ($fleet[0].name -eq 'stub-cli')
 Assert "stub-cli kind is cli" ($fleet[0].kind -eq 'cli')
 Assert "stub-cli enabled is boolean true" ($fleet[0].enabled -eq $true)
