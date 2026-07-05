@@ -181,6 +181,21 @@ function Resolve-FleetCommand {
     return $cmd
 }
 
+function Test-StdinSafe {
+    <# True when a cli provider's template can safely pipe the prompt via stdin:
+       not already stdin, template ends in a standalone quoted {{prompt}}, and the
+       command minus that tail has no shell operators. Keeps embedded-prompt and
+       shell-wrapped templates on the legacy interpolation path. #>
+    param([Parameter(Mandatory)][hashtable]$Provider)
+    if ($Provider.stdin -eq $true) { return $false }
+    $template = [string]$Provider.command_template
+    if (-not $template) { return $false }
+    if ($template -notmatch '\s+(["''])\{\{prompt\}\}\1\s*$') { return $false }
+    $head = $template -replace '\s+(["''])\{\{prompt\}\}\1\s*$', ''
+    if ($head -match '[|><&;`]' -or $head -match '\$\(') { return $false }
+    return $true
+}
+
 function Write-FleetJournalLine {
     <# Append a `fleet` line to the journal, picking up Plan 3 job/phase tags
        by reading the state file directly (honors $env:CAO_STATE_PATH). #>
@@ -233,7 +248,20 @@ function Invoke-Fleet-Cli {
         [string]$Model,
         [int]$TimeoutS = 120
     )
-    $cmd = Resolve-FleetCommand -Provider $Provider -Prompt $Prompt -Model $Model
+    # Decide dispatch path. stdin:true providers already omit {{prompt}};
+    # clean-tail interpolating providers are promoted to stdin (prompt-size /
+    # quote hardening) by stripping the trailing quoted {{prompt}} token.
+    $useStdin = ($Provider.stdin -eq $true) -or (Test-StdinSafe -Provider $Provider)
+    if ($Provider.stdin -eq $true) {
+        $cmd = Resolve-FleetCommand -Provider $Provider -Prompt '' -Model $Model
+    } elseif (Test-StdinSafe -Provider $Provider) {
+        $stripped = ([string]$Provider.command_template) -replace '\s+(["''])\{\{prompt\}\}\1\s*$', ''
+        $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
+        if ($null -ne $resolvedModel) { $stripped = $stripped.Replace('{{model}}', [string]$resolvedModel) }
+        $cmd = $stripped
+    } else {
+        $cmd = Resolve-FleetCommand -Provider $Provider -Prompt $Prompt -Model $Model
+    }
 
     $saved = @{}
     if ($Provider.env) {
@@ -244,7 +272,7 @@ function Invoke-Fleet-Cli {
     }
     $start = Get-Date
     try {
-        if ($Provider.stdin -eq $true) {
+        if ($useStdin) {
             # Robust path: pass the prompt via stdin instead of interpolating it
             # into the command string — immune to embedded quotes/backticks/$.
             # The template is a clean token list (e.g. 'codex exec -') with no
