@@ -32,6 +32,40 @@ try {
     Assert 'R9 scan carries folder+blurb' (($found | Where-Object { $_.slug -eq 'whittle' }).blurb -eq 'A CLI wood-carving planner')
 
     Assert 'R10 missing root → empty' (@(Find-ProjectFolders -Root (Join-Path $root 'nope')).Count -eq 0)
+
+    # --- Task 3: roster / resolution / resume ---
+    $home2 = Join-Path ([IO.Path]::GetTempPath()) ("breg-home-" + [guid]::NewGuid().ToString('N'))
+    $projRoot = Join-Path $home2 'projects'
+    New-Item -ItemType Directory -Force -Path $projRoot | Out-Null
+
+    # a record for Whittle marked archived; WhimsicalCarving has no record (→ inactive)
+    $whittleId = Get-ProjectId -Folder $p2
+    Write-ProjectRecord -Record @{ id=$whittleId; name='Whittle'; folder=$p2; archived=$true } -ProjectsRoot $projRoot
+
+    # make WhimsicalCarving active via a live marker
+    Write-SessionMarker -Agent 'claude' -SessionId 'live-1' -Cwd $p1 -BatonHome $home2
+
+    $roster = Get-ProjectRoster -Root $root -BatonHome $home2
+    Assert 'R11 active group holds the live project' (@($roster.active | Where-Object { $_.folder -eq $p1 }).Count -eq 1)
+    Assert 'R12 archived group holds the archived record' (@($roster.archived | Where-Object { $_.folder -eq $p2 }).Count -eq 1)
+    Assert 'R13 archived project not in inactive' (@($roster.inactive | Where-Object { $_.folder -eq $p2 }).Count -eq 0)
+
+    # resolution precedence
+    $byslug = Resolve-ProjectTarget -Slug 'whimsicalcarving' -Root $root -BatonHome $home2
+    Assert 'R14 --slug resolves to its folder' ($byslug.status -eq 'resolved' -and $byslug.folder -eq $p1)
+    $bad = Resolve-ProjectTarget -Slug 'ghost' -Root $root -BatonHome $home2
+    Assert 'R15 unknown slug → unknown' ($bad.status -eq 'unknown')
+    $cwd = Resolve-ProjectTarget -Cwd $p2 -Root $root -BatonHome $home2
+    Assert 'R16 cwd-is-project resolves to cwd' ($cwd.status -eq 'resolved' -and $cwd.folder -eq $p2)
+    $hb = Resolve-ProjectTarget -Cwd $root -Root $root -BatonHome $home2
+    Assert 'R17 home base (not a project) → picker' ($hb.status -eq 'picker')
+
+    # resume command is agent-tagged
+    Assert 'R18 claude resume command' ((Get-ResumeCommand -Agent 'claude' -SessionId 'abc') -eq 'claude --resume abc')
+    Assert 'R19 codex resume command' ((Get-ResumeCommand -Agent 'codex' -SessionId 'abc') -like 'codex*abc*')
+    Assert 'R20 unknown agent → null' ($null -eq (Get-ResumeCommand -Agent 'mystery' -SessionId 'abc'))
+
+    Remove-Item -Recurse -Force $home2 -ErrorAction SilentlyContinue
 }
 finally { Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue }
 

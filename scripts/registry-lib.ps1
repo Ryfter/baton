@@ -90,3 +90,84 @@ function Find-ProjectFolders {
     if ($out.Count -eq 0) { return @() }
     return [object[]]$out.ToArray()
 }
+
+$script:ResumeCommandMap = @{
+    # Per-agent resume invocation. NOTE: verify exact CLI syntax at build time
+    # against each tool (claude --resume vs --continue; codex resume subcommand).
+    'claude' = 'claude --resume {0}'
+    'codex'  = 'codex resume {0}'
+}
+
+function Get-ResumeCommand {
+    param(
+        [Parameter(Mandatory)][string]$Agent,
+        [Parameter(Mandatory)][string]$SessionId
+    )
+    $key = $Agent.ToLowerInvariant()
+    if (-not $script:ResumeCommandMap.ContainsKey($key)) { return $null }
+    return ($script:ResumeCommandMap[$key] -f $SessionId)
+}
+
+function Get-ProjectRoster {
+    param(
+        [string]$Root = (Get-ProjectHomeRoot),
+        [string]$BatonHome = (Get-BatonHome)
+    )
+    $projectsRoot = Join-Path $BatonHome 'projects'
+    $active = [System.Collections.ArrayList]@()
+    $inactive = [System.Collections.ArrayList]@()
+    $archived = [System.Collections.ArrayList]@()
+    $sessions = @(Get-ActiveSessions -BatonHome $BatonHome)
+
+    foreach ($p in @(Find-ProjectFolders -Root $Root)) {
+        $rec = Read-ProjectRecord -ProjectId $p.id -ProjectsRoot $projectsRoot
+        $isArchived = ($null -ne $rec -and $rec.archived -eq $true)
+        $isHidden   = ($null -ne $rec -and $rec.hidden -eq $true)
+        if ($isHidden) { continue }
+        $blurb = if ($rec -and $rec.blurb) { [string]$rec.blurb } else { [string]$p.blurb }
+        $entry = [ordered]@{
+            id              = $p.id
+            slug            = $p.slug
+            folder          = $p.folder
+            blurb           = $blurb
+            archived        = $isArchived
+            resumable       = ($null -ne $rec -and -not [string]::IsNullOrWhiteSpace($rec.last_session_id))
+            agent           = if ($rec) { [string]$rec.agent } else { $null }
+            last_session_id = if ($rec) { [string]$rec.last_session_id } else { $null }
+        }
+        if ($isArchived) { [void]$archived.Add($entry) }
+        elseif (Test-FolderActive -Folder $p.folder -Sessions $sessions) { [void]$active.Add($entry) }
+        else { [void]$inactive.Add($entry) }
+    }
+    return @{
+        active   = @($active.ToArray())
+        inactive = @($inactive.ToArray())
+        archived = @($archived.ToArray())
+    }
+}
+
+function Resolve-ProjectTarget {
+    param(
+        [string]$Slug,
+        [string]$Cwd,
+        [string]$Root = (Get-ProjectHomeRoot),
+        [string]$BatonHome = (Get-BatonHome)
+    )
+    $found = @(Find-ProjectFolders -Root $Root)
+    # 1. Explicit --slug: match against folder slug, id, or record slug (lenient).
+    if (-not [string]::IsNullOrWhiteSpace($Slug)) {
+        $want = $Slug.ToLowerInvariant()
+        foreach ($p in $found) {
+            if ($p.slug -eq $want -or $p.id -eq $want) {
+                return @{ status = 'resolved'; folder = $p.folder }
+            }
+        }
+        return @{ status = 'unknown'; slug = $Slug }
+    }
+    # 2. cwd is itself a project folder.
+    if (-not [string]::IsNullOrWhiteSpace($Cwd) -and (Test-IsProjectFolder -Folder $Cwd)) {
+        return @{ status = 'resolved'; folder = ([IO.Path]::GetFullPath($Cwd)) }
+    }
+    # 3. Home base / not a project → caller shows the picker.
+    return @{ status = 'picker' }
+}
