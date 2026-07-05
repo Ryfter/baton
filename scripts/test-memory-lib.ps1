@@ -5,6 +5,9 @@ $ErrorActionPreference = 'Stop'
 $script:fail = 0
 function Check($n,$c){ if($c){Write-Host "PASS: $n"} else {Write-Host "FAIL: $n"; $script:fail++} }
 
+$script:savedGrimdexRoot = $env:BATON_GRIMDEX_ROOT
+$env:BATON_GRIMDEX_ROOT = ''
+
 try {
     # ---- Task 1: signature + journal Read/Add (pure) ----
     Check 'T1 lowercases + token-set' ((Get-MemorySignature -Text 'Auth Test') -eq 'auth test')
@@ -151,9 +154,56 @@ try {
     $stamped = @(Read-MemoryJournal -Path (Join-Path $cliHome 'memory-journal.jsonl') | Where-Object { $_.promoted -eq $true }).Count
     Check 'T33 CLI promote <signature> writes lessons + stamps rows' ((Test-Path $env:BATON_MEM_LESSONS) -and $stamped -eq 2)
 
+    # ---- Follow-ups M1: promotion write-target routing ----
+    $gxRoot = Join-Path $tmpDir 'fake-grimdex'
+    New-Item -ItemType Directory -Force -Path $gxRoot | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $gxRoot 'universal') | Out-Null
+
+    $uniAvoid  = [pscustomobject]@{ signature='s one';  kind='avoid';  problem='p'; reason='failed 2x';    rows=@([pscustomobject]@{ scope='universal'; outcome='fail' }) }
+    $uniPrefer = [pscustomobject]@{ signature='s two';  kind='prefer'; problem='p'; reason='succeeded 2x'; rows=@([pscustomobject]@{ scope='universal'; outcome='pass' }) }
+    $projCand  = [pscustomobject]@{ signature='s three';kind='prefer'; problem='p'; reason='succeeded 2x'; rows=@([pscustomobject]@{ scope='project';   outcome='pass' }) }
+    $mixCand   = [pscustomobject]@{ signature='s four'; kind='avoid';  problem='p'; reason='failed 2x';    rows=@([pscustomobject]@{ scope='project'; outcome='fail' }, [pscustomobject]@{ scope='universal'; outcome='fail' }) }
+    $bpPath    = Join-Path $tmpDir 'bp-fallback.md'
+
+    $t1 = Get-PromotionWriteTarget -Candidate $uniAvoid -GrimdexRoot $gxRoot -ProjectId 'proj-x' -FallbackPath $bpPath
+    Check 'T34 universal+avoid -> universal/mistakes.md' ($t1.path -eq (Join-Path $gxRoot 'universal/mistakes.md') -and $t1.tier -eq 'universal-mistakes')
+    $t2 = Get-PromotionWriteTarget -Candidate $uniPrefer -GrimdexRoot $gxRoot -ProjectId 'proj-x' -FallbackPath $bpPath
+    Check 'T35 universal+prefer -> universal/winners.md' ($t2.path -eq (Join-Path $gxRoot 'universal/winners.md') -and $t2.tier -eq 'universal-winners')
+    $t3 = Get-PromotionWriteTarget -Candidate $projCand -GrimdexRoot $gxRoot -ProjectId 'proj-x' -FallbackPath $bpPath
+    Check 'T36 project scope -> projects/<id>/decision-guidance.md' ($t3.path -eq (Join-Path $gxRoot 'projects/proj-x/decision-guidance.md') -and $t3.tier -eq 'project')
+    $t4 = Get-PromotionWriteTarget -Candidate $mixCand -GrimdexRoot $gxRoot -ProjectId 'proj-x' -FallbackPath $bpPath
+    Check 'T37 mixed scopes -> universal wins' ($t4.tier -eq 'universal-mistakes')
+    $t5 = Get-PromotionWriteTarget -Candidate $projCand -GrimdexRoot '' -ProjectId 'proj-x' -FallbackPath $bpPath
+    Check 'T38 empty root -> box-private fallback' ($t5.tier -eq 'box-private' -and $t5.path -eq $bpPath)
+    $t6 = Get-PromotionWriteTarget -Candidate $projCand -GrimdexRoot (Join-Path $tmpDir 'no-such-root') -ProjectId 'proj-x' -FallbackPath $bpPath
+    Check 'T39 absent root -> box-private fallback' ($t6.tier -eq 'box-private')
+    $t7 = Get-PromotionWriteTarget -Candidate $projCand -GrimdexRoot $gxRoot -ProjectId '' -FallbackPath $bpPath
+    Check 'T40 project scope without id -> box-private fallback' ($t7.tier -eq 'box-private')
+
+    $gitProj = Join-Path $tmpDir 'gitproj'
+    New-Item -ItemType Directory -Force -Path $gitProj | Out-Null
+    & git -C $gitProj init --quiet 2>&1 | Out-Null
+    & git -C $gitProj remote add origin https://github.com/Ryfter/Fake.Repo.git 2>&1 | Out-Null
+    Check 'T41 project id from git remote slug' ((Get-MemoryProjectId -ProjectDir $gitProj) -eq 'fake-repo')
+    $plain = Join-Path $tmpDir 'Plain Folder'
+    New-Item -ItemType Directory -Force -Path $plain | Out-Null
+    Check 'T41b project id from folder-name slug' ((Get-MemoryProjectId -ProjectDir $plain) -eq 'plain-folder')
+
+    $w1 = Write-PromotionToGrimdex -Memo '## memo-a' -Candidate $uniAvoid -GrimdexRoot $gxRoot -ProjectDir $plain -LessonsPath $bpPath
+    $mistakesRaw = Get-Content -LiteralPath (Join-Path $gxRoot 'universal/mistakes.md') -Raw
+    Check 'T42 routed append lands in fake root with header' ($w1 -eq (Join-Path $gxRoot 'universal/mistakes.md') -and $mistakesRaw -match 'baton memory-promote' -and $mistakesRaw -match [regex]::Escape('s one') -and $mistakesRaw -match 'memo-a')
+    $w3 = Write-PromotionToGrimdex -Memo '## memo-c' -Candidate $projCand -GrimdexRoot $gxRoot -ProjectDir $plain -LessonsPath $bpPath
+    Check 'T43 project-scope append creates the project tier file' ($w3 -eq (Join-Path $gxRoot 'projects/plain-folder/decision-guidance.md') -and (Test-Path $w3))
+    $badRoot = Join-Path $tmpDir 'root-as-file.txt'
+    Set-Content -LiteralPath $badRoot -Value 'x' -Encoding utf8
+    $warnBag = @()
+    $w2 = Write-PromotionToGrimdex -Memo '## memo-b' -Candidate $uniAvoid -GrimdexRoot $badRoot -ProjectDir $plain -LessonsPath $bpPath -WarningVariable warnBag -WarningAction SilentlyContinue
+    Check 'T44 unwritable root -> box-private fallback + warning' ($w2 -eq $bpPath -and (Test-Path $bpPath) -and @($warnBag).Count -ge 1 -and (Get-Content -LiteralPath $bpPath -Raw) -match 'memo-b')
+
     Remove-Item Env:\BATON_HOME, Env:\BATON_MEM_LESSONS -ErrorAction SilentlyContinue
 }
 finally {
+    if ($null -ne $script:savedGrimdexRoot) { $env:BATON_GRIMDEX_ROOT = $script:savedGrimdexRoot } else { Remove-Item Env:\BATON_GRIMDEX_ROOT -ErrorAction SilentlyContinue }
     if ($tmpDir -and (Test-Path $tmpDir)) { Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }
     if ($script:fail -gt 0) { Write-Host "`n$($script:fail) FAILED" -ForegroundColor Red; exit 1 }
     Write-Host "`nALL CHECKS PASS" -ForegroundColor Green

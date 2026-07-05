@@ -274,17 +274,93 @@ function Set-MemoryPromoted {
     } catch { Write-Warning "memory: failed to stamp promoted in $Path : $($_.Exception.Message)" }
 }
 
+function Get-MemoryProjectId {
+    <# Network-free project id for the Grimdex project tier: git remote repo
+       slug, else folder-name slug. Same derivation as coach-lib's
+       Get-CoachProjectId / job-lib's Resolve-ProjectId — duplicated ON
+       PURPOSE so memory-lib stays a leaf library (no coach/job dot-source). #>
+    param([Parameter(Mandatory)][string]$ProjectDir)
+    try {
+        $remote = (& git -C $ProjectDir remote get-url origin 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $remote) {
+            $clean = "$remote" -replace '^(https?://|git@)', '' -replace ':', '/' -replace '\.git$', ''
+            $parts = $clean -split '/' | Where-Object { $_ }
+            if (@($parts).Count -ge 2) {
+                $repo = [string]$parts[-1]
+                return ($repo.ToLowerInvariant() -replace '[^a-z0-9-]+', '-').Trim('-')
+            }
+        }
+    } catch { }
+    try {
+        $folder = Split-Path -Leaf ([IO.Path]::GetFullPath($ProjectDir))
+        return ($folder.ToLowerInvariant() -replace '[^a-z0-9-]+', '-').Trim('-')
+    } catch { return $null }
+}
+
+function Get-PromotionWriteTarget {
+    <# M1 router (pure decision; only reads Test-Path): candidate scope/kind +
+       Grimdex root -> where the promotion memo belongs.
+         universal + avoid  -> <root>/universal/mistakes.md
+         universal + prefer -> <root>/universal/winners.md
+         project            -> <root>/projects/<ProjectId>/decision-guidance.md
+       No/absent root, or project scope without an id -> box-private fallback.
+       Scope: 'universal' when ANY source row was captured scope=universal
+       (the human said so at capture time); else project (fail-open default). #>
+    param(
+        [Parameter(Mandatory)][pscustomobject]$Candidate,
+        [string]$GrimdexRoot = $env:BATON_GRIMDEX_ROOT,
+        [string]$ProjectId,
+        [string]$FallbackPath = $script:DefaultLessonsPath
+    )
+    $bp = [pscustomobject]@{ path = $FallbackPath; tier = 'box-private' }
+    if ([string]::IsNullOrWhiteSpace($GrimdexRoot) -or -not (Test-Path $GrimdexRoot)) { return $bp }
+    $isUniversal = @(@($Candidate.rows) | Where-Object { [string]$_.scope -eq 'universal' }).Count -gt 0
+    if ($isUniversal) {
+        if ([string]$Candidate.kind -eq 'avoid') {
+            return [pscustomobject]@{ path = (Join-Path $GrimdexRoot 'universal/mistakes.md'); tier = 'universal-mistakes' }
+        }
+        return [pscustomobject]@{ path = (Join-Path $GrimdexRoot 'universal/winners.md'); tier = 'universal-winners' }
+    }
+    if ([string]::IsNullOrWhiteSpace($ProjectId)) { return $bp }
+    return [pscustomobject]@{ path = (Join-Path $GrimdexRoot "projects/$ProjectId/decision-guidance.md"); tier = 'project' }
+}
+
 function Write-PromotionToGrimdex {
-    <# Default promotion writer: append the memo to the box-private Grimdex/KB lessons
-       file. Override via the -Writer seam (tests do). Returns the path written. #>
+    <# Default promotion writer, now a ROUTER (M1): scope/kind-routed append
+       into the Grimdex tree under BATON_GRIMDEX_ROOT, with a dated header
+       (date + signature + provenance). No root / unknown scope / any write
+       fault -> box-private lessons file + warning (a promotion is never
+       lost). Append-only; committing/pushing Grimdex stays human. Override
+       via the -Writer seam (tests do). Returns the path written. #>
     param(
         [Parameter(Mandatory)][string]$Memo,
         [pscustomobject]$Candidate,
-        [string]$LessonsPath = $script:DefaultLessonsPath
+        [string]$LessonsPath = $script:DefaultLessonsPath,
+        [string]$GrimdexRoot = $env:BATON_GRIMDEX_ROOT,
+        [string]$ProjectDir
     )
+    if (-not $ProjectDir) { $ProjectDir = (Get-Location).Path }
+    $projId = $null
+    try { $projId = Get-MemoryProjectId -ProjectDir $ProjectDir } catch { }
+    $target = if ($Candidate) {
+        Get-PromotionWriteTarget -Candidate $Candidate -GrimdexRoot $GrimdexRoot -ProjectId $projId -FallbackPath $LessonsPath
+    } else {
+        [pscustomobject]@{ path = $LessonsPath; tier = 'box-private' }
+    }
+    $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+    $sig = if ($Candidate) { [string]$Candidate.signature } else { '' }
+    $payload = "`n<!-- baton memory-promote $stamp | signature: $sig | source: memory-journal -->`n" + $Memo + "`n"
+    try {
+        $dir = Split-Path -Parent $target.path
+        if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        Add-Content -LiteralPath $target.path -Value $payload -Encoding utf8
+        return $target.path
+    } catch {
+        Write-Warning "memory: routed promotion write failed ($($target.path)) — falling back to box-private: $($_.Exception.Message)"
+    }
     $dir = Split-Path -Parent $LessonsPath
     if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-    Add-Content -LiteralPath $LessonsPath -Value ("`n" + $Memo + "`n") -Encoding utf8
+    Add-Content -LiteralPath $LessonsPath -Value $payload -Encoding utf8
     return $LessonsPath
 }
 
