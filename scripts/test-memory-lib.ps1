@@ -200,6 +200,20 @@ try {
     $w2 = Write-PromotionToGrimdex -Memo '## memo-b' -Candidate $uniAvoid -GrimdexRoot $badRoot -ProjectDir $plain -LessonsPath $bpPath -WarningVariable warnBag -WarningAction SilentlyContinue
     Check 'T44 unwritable root -> box-private fallback + warning' ($w2 -eq $bpPath -and (Test-Path $bpPath) -and @($warnBag).Count -ge 1 -and (Get-Content -LiteralPath $bpPath -Raw) -match 'memo-b')
 
+    # ---- Follow-ups M2: order-stable atomic promoted stamp ----
+    $op = Join-Path $tmpDir 'ordered-journal.jsonl'
+    [void](Add-MemoryEvent -Problem 'ordered row one target' -Approach 'a' -Outcome fail -Path $op)
+    [void](Add-MemoryEvent -Problem 'other row keep verbatim' -Approach 'b' -Outcome pass -Path $op)
+    Add-Content -LiteralPath $op -Value 'this is not json' -Encoding utf8
+    $before = @(Get-Content -LiteralPath $op)
+    $sigOrd = (Read-MemoryJournal -Path $op)[0].signature
+    Set-MemoryPromoted -Signature $sigOrd -Path $op
+    $after = @(Get-Content -LiteralPath $op)
+    Check 'T45 stamped line = original with ONLY promoted flipped (string-level)' ($after[0] -eq ($before[0] -replace '"promoted":false', '"promoted":true'))
+    Check 'T46 untouched row byte-identical' ($after[1] -eq $before[1])
+    Check 'T47 malformed line preserved verbatim' ($after[2] -eq 'this is not json')
+    Check 'T48 no temp file left behind' (@(Get-ChildItem -Path $tmpDir -Filter 'ordered-journal.jsonl.tmp-*').Count -eq 0)
+
     Remove-Item Env:\BATON_HOME, Env:\BATON_MEM_LESSONS -ErrorAction SilentlyContinue
 }
 finally {

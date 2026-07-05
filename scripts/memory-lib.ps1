@@ -259,19 +259,36 @@ function Invoke-MemorySource {
 }
 
 function Set-MemoryPromoted {
-    <# Idempotent journal rewrite: stamp every row with -Signature as promoted=true.
+    <# Idempotent journal rewrite: stamp every row with -Signature as
+       promoted=true. Line-wise: untouched and malformed lines are preserved
+       byte-verbatim; touched rows round-trip through [ordered] preserving
+       the original field order (DateTime values re-stringified 'o' — the
+       ConvertFrom-Json auto-parse trap). Whole-file-atomic: temp + replace.
        Best-effort; warns on fault. #>
     param([Parameter(Mandatory)][string]$Signature, [string]$Path = $script:DefaultMemoryPath)
     if (-not (Test-Path $Path)) { return }
+    $tmp = "$Path.tmp-$([System.IO.Path]::GetRandomFileName())"
     try {
-        $rows = Read-MemoryJournal -Path $Path
-        $lines = foreach ($r in $rows) {
-            $h = @{}; foreach ($p in $r.PSObject.Properties) { $h[$p.Name] = $p.Value }
-            if ([string]$r.signature -eq $Signature) { $h['promoted'] = $true }
+        $outLines = foreach ($line in (Get-Content -LiteralPath $Path)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $row = $null
+            try { $row = $line | ConvertFrom-Json -ErrorAction Stop } catch { $line; continue }
+            if ([string]$row.signature -ne $Signature) { $line; continue }
+            $h = [ordered]@{}
+            foreach ($p in $row.PSObject.Properties) {
+                $v = $p.Value
+                if ($v -is [datetime]) { $v = $v.ToUniversalTime().ToString('o') }
+                $h[$p.Name] = $v
+            }
+            $h['promoted'] = $true
             ($h | ConvertTo-Json -Depth 6 -Compress)
         }
-        Set-Content -LiteralPath $Path -Value $lines -Encoding utf8
-    } catch { Write-Warning "memory: failed to stamp promoted in $Path : $($_.Exception.Message)" }
+        Set-Content -LiteralPath $tmp -Value $outLines -Encoding utf8
+        Move-Item -LiteralPath $tmp -Destination $Path -Force
+    } catch {
+        Write-Warning "memory: failed to stamp promoted in $Path : $($_.Exception.Message)"
+        if (Test-Path $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 function Get-MemoryProjectId {
