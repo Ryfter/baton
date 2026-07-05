@@ -11,23 +11,48 @@
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/fleet-lib.ps1"   # Read-Fleet, Invoke-Fleet, Get-FleetProvider
 
-$script:FleetCanaryPrompt = 'Reply with exactly the word PONG and nothing else.'
-$script:FleetCanaryToken  = 'PONG'
+# The canary battery: 4 trivial challenges. Only PONG's answer appears in the
+# prompt text (the instruction-following check); 42/PARIS/COLD do NOT, so a
+# template that merely echoes the prompt scores 1/4 and correctly fails.
+$script:FleetCanaryChallenges = @(
+    @{ ask = 'Reply with the word PONG.';               token = 'PONG'  }
+    @{ ask = 'What is 6 times 7?';                       token = '42'    }
+    @{ ask = 'What is the capital of France?';           token = 'PARIS' }
+    @{ ask = 'What is the opposite of the word HOT?';    token = 'COLD'  }
+)
+
+# Combined single-dispatch prompt (one round-trip per provider), built from the
+# challenge asks so it stays in sync with the tokens above.
+$script:FleetCanaryPrompt = @(
+    'Answer all four questions. Reply with one answer per line, each a single word or number, with no other text:'
+    for ($n = 0; $n -lt $script:FleetCanaryChallenges.Count; $n++) {
+        "$($n + 1). $($script:FleetCanaryChallenges[$n].ask)"
+    }
+) -join "`n"
 
 function Test-FleetCanary {
-    <# Pure. Classify a dispatch result into a live verdict + reason.
-       Precedence: timeout > nonzero-exit > token-match. #>
+    <# Pure. Score a dispatch result against the canary battery.
+       Precedence: timeout > nonzero-exit > token score.
+       Returns @{ live; reason; score } where score = tokens matched (0..N),
+       or $null when timed out / nonzero exit (no clean answer to score). #>
     param(
         [string]$Output,
         [int]$ExitCode = 0,
         [bool]$TimedOut = $false
     )
-    if ($TimedOut)        { return @{ live = 'live_fail'; reason = 'timeout' } }
-    if ($ExitCode -ne 0)  { return @{ live = 'live_fail'; reason = 'nonzero-exit' } }
-    if (([string]$Output).ToUpperInvariant().Contains($script:FleetCanaryToken)) {
-        return @{ live = 'live_ok'; reason = $null }
+    $total = $script:FleetCanaryChallenges.Count
+    if ($TimedOut)       { return @{ live = 'live_fail'; reason = 'timeout';      score = $null } }
+    if ($ExitCode -ne 0) { return @{ live = 'live_fail'; reason = 'nonzero-exit'; score = $null } }
+    $up = ([string]$Output).ToUpperInvariant()
+    $score = 0
+    $missing = @()
+    foreach ($ch in $script:FleetCanaryChallenges) {
+        if ($up.Contains(([string]$ch.token).ToUpperInvariant())) { $score++ }
+        else { $missing += [string]$ch.token }
     }
-    return @{ live = 'live_fail'; reason = 'no-canary' }
+    if ($score -eq $total) { return @{ live = 'live_ok';   reason = $null;      score = $score } }
+    if ($score -eq 0)      { return @{ live = 'live_fail'; reason = 'no-canary'; score = 0 } }
+    return @{ live = 'live_fail'; reason = "canary $score/$total (missing: $($missing -join ', '))"; score = $score }
 }
 
 function Test-ProviderReachable {
@@ -73,11 +98,11 @@ function Invoke-FleetProbe {
     $name = [string]$Provider.name
     $kind = [string]$Provider.kind
     if ($Provider.enabled -ne $true) {
-        return @{ name = $name; kind = $kind; enabled = $false; reachable = $null; live = 'skip'; reason = 'disabled'; elapsed_s = $null }
+        return @{ name = $name; kind = $kind; enabled = $false; reachable = $null; live = 'skip'; reason = 'disabled'; elapsed_s = $null; score = $null }
     }
     $reach = Test-ProviderReachable -Provider $Provider -UrlProbe $UrlProbe
     if (-not $reach.reachable) {
-        return @{ name = $name; kind = $kind; enabled = $true; reachable = $false; live = 'live_fail'; reason = $reach.reason; elapsed_s = $null }
+        return @{ name = $name; kind = $kind; enabled = $true; reachable = $false; live = 'live_fail'; reason = $reach.reason; elapsed_s = $null; score = $null }
     }
     if (-not $Dispatcher) {
         $Dispatcher = {
@@ -108,8 +133,8 @@ function Invoke-FleetProbe {
     }
     $elapsed = [int]$sw.Elapsed.TotalSeconds
     if ($errored) {
-        return @{ name = $name; kind = $kind; enabled = $true; reachable = $true; live = 'live_fail'; reason = 'dispatch-error'; elapsed_s = $elapsed }
+        return @{ name = $name; kind = $kind; enabled = $true; reachable = $true; live = 'live_fail'; reason = 'dispatch-error'; elapsed_s = $elapsed; score = $null }
     }
     $verdict = Test-FleetCanary -Output $output -ExitCode $exit -TimedOut $timedOut
-    return @{ name = $name; kind = $kind; enabled = $true; reachable = $true; live = $verdict.live; reason = $verdict.reason; elapsed_s = $elapsed }
+    return @{ name = $name; kind = $kind; enabled = $true; reachable = $true; live = $verdict.live; reason = $verdict.reason; elapsed_s = $elapsed; score = $verdict.score }
 }

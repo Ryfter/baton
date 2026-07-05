@@ -33,7 +33,10 @@ if ($Live) {
     } else {
         $render = $rows | ForEach-Object {
             $reach = if ($null -eq $_.reachable) { '-' } elseif ($_.reachable) { 'yes' } else { 'no' }
-            $detail = if ($_.reason) { $_.reason } elseif ($null -ne $_.elapsed_s) { "$($_.elapsed_s)s" } else { '' }
+            $detail = if ($_.reason) { $_.reason }
+                      elseif ($null -ne $_.score -and $null -ne $_.elapsed_s) { "$($_.score)/$($script:FleetCanaryChallenges.Count)`u{00B7}$($_.elapsed_s)s" }
+                      elseif ($null -ne $_.elapsed_s) { "$($_.elapsed_s)s" }
+                      else { '' }
             [pscustomobject]@{ PROVIDER = $_.name; REACHABLE = $reach; LIVE = $_.live; DETAIL = $detail }
         }
         $render | Format-Table PROVIDER, REACHABLE, LIVE, DETAIL -AutoSize | Out-String | Write-Host

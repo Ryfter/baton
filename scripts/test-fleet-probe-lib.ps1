@@ -9,17 +9,19 @@ function Assert($label, $cond) {
     else { Write-Host "FAIL  $label" -ForegroundColor Red; $script:failures++ }
 }
 
-# --- Test-FleetCanary (pure) ---
-$c1 = Test-FleetCanary -Output 'PONG' -ExitCode 0 -TimedOut $false
-Assert "canary: exact token -> live_ok"        ($c1.live -eq 'live_ok' -and $null -eq $c1.reason)
-$c2 = Test-FleetCanary -Output 'the answer is pong.' -ExitCode 0 -TimedOut $false
-Assert "canary: case-insensitive substring -> live_ok" ($c2.live -eq 'live_ok')
-$c3 = Test-FleetCanary -Output 'usage: codex [options]' -ExitCode 0 -TimedOut $false
-Assert "canary: exit 0 but no token -> no-canary" ($c3.live -eq 'live_fail' -and $c3.reason -eq 'no-canary')
-$c4 = Test-FleetCanary -Output 'PONG' -ExitCode 3 -TimedOut $false
-Assert "canary: nonzero exit beats token -> nonzero-exit" ($c4.live -eq 'live_fail' -and $c4.reason -eq 'nonzero-exit')
-$c5 = Test-FleetCanary -Output '' -ExitCode 0 -TimedOut $true
-Assert "canary: timeout beats all -> timeout" ($c5.live -eq 'live_fail' -and $c5.reason -eq 'timeout')
+# --- Test-FleetCanary (battery) ---
+$c1 = Test-FleetCanary -Output 'PONG 42 PARIS COLD' -ExitCode 0 -TimedOut $false
+Assert "canary: all 4 tokens -> live_ok score 4" ($c1.live -eq 'live_ok' -and $c1.score -eq 4)
+$c2 = Test-FleetCanary -Output 'the answer is pong, 42, paris, and cold' -ExitCode 0 -TimedOut $false
+Assert "canary: case-insensitive all 4 -> live_ok" ($c2.live -eq 'live_ok')
+$c3 = Test-FleetCanary -Output 'PONG 42' -ExitCode 0 -TimedOut $false
+Assert "canary: partial 2/4 -> live_fail with score+missing" ($c3.live -eq 'live_fail' -and $c3.score -eq 2 -and $c3.reason -match 'canary 2/4' -and $c3.reason -match 'PARIS' -and $c3.reason -match 'COLD')
+$c4 = Test-FleetCanary -Output 'usage: codex [options]' -ExitCode 0 -TimedOut $false
+Assert "canary: zero tokens -> no-canary score 0" ($c4.live -eq 'live_fail' -and $c4.reason -eq 'no-canary' -and $c4.score -eq 0)
+$c5 = Test-FleetCanary -Output 'PONG 42 PARIS COLD' -ExitCode 3 -TimedOut $false
+Assert "canary: nonzero exit beats full score -> nonzero-exit" ($c5.live -eq 'live_fail' -and $c5.reason -eq 'nonzero-exit')
+$c6 = Test-FleetCanary -Output '' -ExitCode 0 -TimedOut $true
+Assert "canary: timeout beats all -> timeout" ($c6.live -eq 'live_fail' -and $c6.reason -eq 'timeout')
 
 # --- Test-ProviderReachable ---
 $cliOk = Test-ProviderReachable -Provider @{ name='p'; kind='cli'; command_template='pwsh -NoProfile -Command "x"' }
@@ -33,7 +35,8 @@ Assert "reachable: http probe false -> unreachable" ($httpNo.reachable -eq $fals
 
 # --- Invoke-FleetProbe (live round-trip) ---
 # Fake dispatchers returning the Invoke-Fleet shape @{stdout;exit_code}.
-$okDisp    = { param($prov,$fp,$canary,$root) @{ stdout = 'PONG'; exit_code = 0 } }
+$okDisp    = { param($prov,$fp,$canary,$root) @{ stdout = 'PONG 42 PARIS COLD'; exit_code = 0 } }
+$partDisp  = { param($prov,$fp,$canary,$root) @{ stdout = 'PONG 42'; exit_code = 0 } }
 $noTokDisp = { param($prov,$fp,$canary,$root) @{ stdout = 'help text here'; exit_code = 0 } }
 $failDisp  = { param($prov,$fp,$canary,$root) @{ stdout = ''; exit_code = 7 } }
 $slowDisp  = { param($prov,$fp,$canary,$root) Start-Sleep -Seconds 5; @{ stdout = 'PONG'; exit_code = 0 } }
@@ -47,9 +50,14 @@ Assert "probe: disabled -> skip"        ($rSkip.live -eq 'skip' -and $rSkip.reas
 $rOk = Invoke-FleetProbe -Provider $enabledCli -Dispatcher $okDisp
 Assert "probe: token -> live_ok"        ($rOk.live -eq 'live_ok' -and $rOk.reachable -eq $true)
 Assert "probe: live_ok records elapsed" ($rOk.elapsed_s -ge 0)
+Assert "probe: full battery -> live_ok"        ($rOk.live -eq 'live_ok' -and $rOk.score -eq 4)
+
+$rPart = Invoke-FleetProbe -Provider $enabledCli -Dispatcher $partDisp
+Assert "probe: partial battery -> live_fail 2/4" ($rPart.live -eq 'live_fail' -and $rPart.score -eq 2 -and $rPart.reason -match '2/4')
 
 $rNo = Invoke-FleetProbe -Provider $enabledCli -Dispatcher $noTokDisp
 Assert "probe: no token -> no-canary"   ($rNo.live -eq 'live_fail' -and $rNo.reason -eq 'no-canary')
+Assert "probe: no tokens -> no-canary"          ($rNo.reason -eq 'no-canary' -and $rNo.score -eq 0)
 
 $rFail = Invoke-FleetProbe -Provider $enabledCli -Dispatcher $failDisp
 Assert "probe: nonzero exit -> nonzero-exit" ($rFail.reason -eq 'nonzero-exit')
