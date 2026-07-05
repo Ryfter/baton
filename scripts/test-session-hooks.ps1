@@ -33,6 +33,32 @@ try {
     # malformed JSON → still exit 0 (fail-open)
     'not json' | & pwsh -NoProfile -File $startHook
     Assert 'H6 malformed stdin still exits 0' ($LASTEXITCODE -eq 0)
+
+    # Non-project cwd should NOT write a record
+    $nonprojroot = Join-Path ([IO.Path]::GetTempPath()) ("bhk-nonproj-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $nonprojroot | Out-Null
+    try {
+        $home3 = Join-Path ([IO.Path]::GetTempPath()) ("bhk-nonproj-home-" + [guid]::NewGuid().ToString('N'))
+        $oldHome3 = $env:BATON_HOME
+        $env:BATON_HOME = $home3
+        try {
+            New-Item -ItemType Directory -Force -Path (Join-Path $home3 'projects') | Out-Null
+            $payload2 = @{ session_id='nonproj-sess'; cwd=$nonprojroot } | ConvertTo-Json -Compress
+            $payload2 | & pwsh -NoProfile -File $stopHook
+            Assert 'H7 stop hook for non-project still exits 0' ($LASTEXITCODE -eq 0)
+
+            # Verify no record was written
+            . "$here/registry-lib.ps1"
+            $projsDir = Join-Path $home3 'projects'
+            $recordCount = @(Get-ChildItem -Directory -Path $projsDir -ErrorAction SilentlyContinue).Count
+            Assert 'H8 non-project cwd writes no record' ($recordCount -eq 0)
+        }
+        finally {
+            if ($null -eq $oldHome3) { Remove-Item Env:BATON_HOME -ErrorAction SilentlyContinue } else { $env:BATON_HOME = $oldHome3 }
+            Remove-Item -Recurse -Force $home3 -ErrorAction SilentlyContinue
+        }
+    }
+    finally { Remove-Item -Recurse -Force $nonprojroot -ErrorAction SilentlyContinue }
 }
 finally {
     if ($null -eq $oldHome) { Remove-Item Env:BATON_HOME -ErrorAction SilentlyContinue } else { $env:BATON_HOME = $oldHome }

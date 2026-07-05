@@ -20,8 +20,22 @@ function Write-Usage {
 function Get-RecordForSlug {
     param([string]$WantSlug)
     $projectsRoot = Join-Path (Get-BatonHome) 'projects'
+    $want = $WantSlug.ToLowerInvariant()
+    # First pass: exact slug match
     foreach ($p in @(Find-ProjectFolders)) {
-        if ($p.slug -eq $WantSlug.ToLowerInvariant() -or $p.id -eq $WantSlug.ToLowerInvariant()) {
+        if ($p.slug -eq $want) {
+            $rec = Read-ProjectRecord -ProjectId $p.id -ProjectsRoot $projectsRoot
+            $h = @{}
+            if ($rec) { foreach ($pr in $rec.PSObject.Properties) { $h[$pr.Name] = $pr.Value } }
+            $h['id'] = $p.id
+            if (-not $h.ContainsKey('name')) { $h['name'] = (Split-Path -Leaf $p.folder) }
+            if (-not $h.ContainsKey('folder')) { $h['folder'] = $p.folder }
+            return @{ record = $h; projectsRoot = $projectsRoot }
+        }
+    }
+    # Second pass: id match (fallback)
+    foreach ($p in @(Find-ProjectFolders)) {
+        if ($p.id -eq $want) {
             $rec = Read-ProjectRecord -ProjectId $p.id -ProjectsRoot $projectsRoot
             $h = @{}
             if ($rec) { foreach ($pr in $rec.PSObject.Properties) { $h[$pr.Name] = $pr.Value } }

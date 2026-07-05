@@ -65,6 +65,30 @@ try {
     Assert 'R19 codex resume command' ((Get-ResumeCommand -Agent 'codex' -SessionId 'abc') -like 'codex*abc*')
     Assert 'R20 unknown agent → null' ($null -eq (Get-ResumeCommand -Agent 'mystery' -SessionId 'abc'))
 
+    # slug vs id collision: slug must win
+    $root3 = Join-Path ([IO.Path]::GetTempPath()) ("breg-collision-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $root3 | Out-Null
+    try {
+        # Project 1: folder name 'foo' with .git → slug='foo', id='foo'
+        $p_slug_foo = Join-Path $root3 'foo'
+        New-Item -ItemType Directory -Force -Path (Join-Path $p_slug_foo '.git') | Out-Null
+
+        # Project 2: folder name 'bar' with remote pointing to 'foo' → slug='bar', id='foo'
+        $p_id_foo = Join-Path $root3 'bar'
+        New-Item -ItemType Directory -Force -Path (Join-Path $p_id_foo '.git') | Out-Null
+        # Simulate git remote by writing a minimal config
+        $gitConfig = Join-Path $p_id_foo '.git/config'
+        Set-Content -LiteralPath $gitConfig -Value @"
+[remote "origin"]
+	url = https://github.com/example/foo
+"@ -Encoding utf8NoBOM
+
+        # Resolving slug 'foo' should return the folder whose FOLDER slug is 'foo' (p_slug_foo)
+        $resolved = Resolve-ProjectTarget -Slug 'foo' -Root $root3 -BatonHome (Join-Path ([IO.Path]::GetTempPath()) "breg-collision-home")
+        Assert 'R21 slug collision: slug wins over id' ($resolved.status -eq 'resolved' -and $resolved.folder -eq $p_slug_foo)
+    }
+    finally { Remove-Item -Recurse -Force $root3 -ErrorAction SilentlyContinue }
+
     Remove-Item -Recurse -Force $home2 -ErrorAction SilentlyContinue
 }
 finally { Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue }

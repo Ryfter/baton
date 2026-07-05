@@ -27,6 +27,9 @@ try {
     } catch { }
     if (-not $sid) { exit 0 }
 
+    # Guard: only write resume pointer for actual project folders
+    if (-not (Test-IsProjectFolder -Folder $cwd)) { exit 0 }
+
     $cleared = Clear-SessionMarker -SessionId $sid
     $agent = if ($cleared -and $cleared.agent) { [string]$cleared.agent } else { 'claude' }
 

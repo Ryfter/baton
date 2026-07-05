@@ -154,11 +154,18 @@ function Resolve-ProjectTarget {
         [string]$BatonHome = (Get-BatonHome)
     )
     $found = @(Find-ProjectFolders -Root $Root)
-    # 1. Explicit --slug: match against folder slug, id, or record slug (lenient).
+    # 1. Explicit --slug: match against folder slug first, then id (two-pass to avoid collision).
     if (-not [string]::IsNullOrWhiteSpace($Slug)) {
         $want = $Slug.ToLowerInvariant()
+        # First pass: exact slug match
         foreach ($p in $found) {
-            if ($p.slug -eq $want -or $p.id -eq $want) {
+            if ($p.slug -eq $want) {
+                return @{ status = 'resolved'; folder = $p.folder }
+            }
+        }
+        # Second pass: id match (fallback)
+        foreach ($p in $found) {
+            if ($p.id -eq $want) {
                 return @{ status = 'resolved'; folder = $p.folder }
             }
         }
