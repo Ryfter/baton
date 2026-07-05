@@ -56,3 +56,60 @@ function Test-ProviderReachable {
     # Unknown kind: treat as unreachable rather than throwing.
     return @{ reachable = $false; reason = 'unreachable' }
 }
+
+function Invoke-FleetProbe {
+    <# Per-provider live round-trip. Reachability precheck -> dispatch a canary
+       under an enforced timeout -> classify. Diagnostic: never throws. The
+       dispatch runs in a Start-ThreadJob so a hung/slow provider is bounded;
+       a timed-out native child may linger (best-effort Stop-Job) — acceptable
+       for a diagnostic. -Dispatcher injects for tests. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [int]$TimeoutS = 60,
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [scriptblock]$Dispatcher,
+        [scriptblock]$UrlProbe
+    )
+    $name = [string]$Provider.name
+    $kind = [string]$Provider.kind
+    if ($Provider.enabled -ne $true) {
+        return @{ name = $name; kind = $kind; enabled = $false; reachable = $null; live = 'skip'; reason = 'disabled'; elapsed_s = $null }
+    }
+    $reach = Test-ProviderReachable -Provider $Provider -UrlProbe $UrlProbe
+    if (-not $reach.reachable) {
+        return @{ name = $name; kind = $kind; enabled = $true; reachable = $false; live = 'live_fail'; reason = $reach.reason; elapsed_s = $null }
+    }
+    if (-not $Dispatcher) {
+        $Dispatcher = {
+            param($prov, $fleetPath, $canary, $scriptRoot)
+            . (Join-Path $scriptRoot 'fleet-lib.ps1')
+            Invoke-Fleet -Name ([string]$prov.name) -Prompt $canary -Path $fleetPath -NoJournal
+        }
+    }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $timedOut = $false; $output = ''; $exit = 0; $errored = $false
+    $threadJob = $null
+    try {
+        $threadJob = Start-ThreadJob -ScriptBlock $Dispatcher -ArgumentList $Provider, $FleetPath, $script:FleetCanaryPrompt, $PSScriptRoot
+        $done = Wait-Job -Job $threadJob -Timeout $TimeoutS
+        if (-not $done) {
+            $timedOut = $true
+            Stop-Job -Job $threadJob -ErrorAction SilentlyContinue
+        } else {
+            $disp = Receive-Job -Job $threadJob -ErrorAction Stop
+            $output = [string]$disp.stdout
+            $exit = [int]$disp.exit_code
+        }
+    } catch {
+        $errored = $true
+    } finally {
+        if ($threadJob) { Remove-Job -Job $threadJob -Force -ErrorAction SilentlyContinue }
+        $sw.Stop()
+    }
+    $elapsed = [int]$sw.Elapsed.TotalSeconds
+    if ($errored) {
+        return @{ name = $name; kind = $kind; enabled = $true; reachable = $true; live = 'live_fail'; reason = 'dispatch-error'; elapsed_s = $elapsed }
+    }
+    $verdict = Test-FleetCanary -Output $output -ExitCode $exit -TimedOut $timedOut
+    return @{ name = $name; kind = $kind; enabled = $true; reachable = $true; live = $verdict.live; reason = $verdict.reason; elapsed_s = $elapsed }
+}
