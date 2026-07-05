@@ -18,3 +18,16 @@ PROGRAMMING DECISIONS, rules, and lessons → record them in **Grimdex** at
 - Reference decision records by id (e.g. `d012`); do not duplicate them in app repos.
 - Grimdex engine is open source: <https://github.com/Ryfter/Grimdex>.
 <!-- grimdex:end -->
+
+## Project command center (from any agent)
+
+Baton's project registry and front door are harness-neutral. From Codex (or
+any agent), reach the same engine directly:
+
+- Roster: `pwsh -NoProfile -File scripts/fleet-project.ps1 list --json`
+- Start a project by name: `pwsh -NoProfile -File scripts/fleet-go.ps1 --project <slug> --goal "<goal>"`
+
+Active-session detection and resume pointers use a neutral marker contract
+under `$BATON_HOME/sessions/` (`{agent,session_id,cwd,started_at}`). The
+Claude adapter (SessionStart/SessionEnd hooks) ships now; a Codex lifecycle
+adapter writing the same marker shape is the documented follow-on.

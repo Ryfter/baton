@@ -225,6 +225,15 @@ happens next, and why.
     }
     ```
 
+## Picking a project from the home base
+
+Run from `D:\dev` to choose among your projects. `/baton:project list` shows
+them grouped **Active / Inactive / Archived**. Pick an **inactive** project
+and either start fresh (`/baton:go --<slug> <goal>`) or, if it is
+`[resumable]`, resume where you left off with the saved command
+(`claude --resume <id>` for a Claude session). Baton records the resume
+pointer automatically when a session ends.
+
 ## Arguments
 
 $ARGUMENTS
