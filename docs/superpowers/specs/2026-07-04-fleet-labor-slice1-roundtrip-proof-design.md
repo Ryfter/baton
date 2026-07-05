@@ -104,10 +104,19 @@ directly) so both `kind: cli` and `kind: http` providers — including the local
 LM Studio / Ollama boxes — are covered by the same code path. A `-Dispatcher`
 scriptblock seam is injected for tests.
 
-- **Canary prompt (constant):** `Reply with exactly the word PONG and nothing else.`
-- **Canary token (constant):** `PONG`.
-- **Pass (`live_ok`):** dispatch returns exit 0 **and** stdout contains `PONG`
-  (case-insensitive, substring) **and** it completed within the probe timeout.
+- **Canary battery (constant):** a set of 4 trivial challenges, dispatched as one
+  combined numbered prompt (a single round-trip). Only the first challenge's
+  answer appears in the prompt text; the other three do **not**, so a template
+  that merely echoes the prompt cannot score them:
+  1. *Reply with the word PONG.* → token `PONG` (literal instruction-following)
+  2. *What is 6 times 7?* → token `42` (echo-proof)
+  3. *What is the capital of France?* → token `PARIS` (echo-proof)
+  4. *What is the opposite of the word HOT?* → token `COLD` (echo-proof)
+- **Score:** count of the 4 tokens present in stdout (case-insensitive substring).
+- **Pass (`live_ok`):** dispatch returns exit 0 **and** all 4 tokens are present
+  (score 4/4) **and** it completed within the probe timeout. A partial score
+  (`live_fail` reason `canary 2/4 (missing: 42, PARIS)`) tells you exactly how a
+  provider misbehaved; an echo-back scores 1/4 and correctly fails.
 - **Fail (`live_fail`):** with a single-word reason:
   - `not-on-PATH` — reachability check failed (cli binary missing).
   - `unreachable` — reachability check failed (http base_url / env URL down).
@@ -222,8 +231,10 @@ future dashboard tile).
   first; the executor (gap 3) is designed against a pipe known to work.
 - **Extend `fleet doctor --live`** rather than a new command or a `go` preflight —
   one health surface, minimal new code.
-- **Canary-token pass criterion** (`PONG`), judge-free — catches help-text /
-  wrong-template / garbage responses, not just exit 0.
+- **Canary battery pass criterion** (4 challenges scored k/4; `PONG`/`42`/`PARIS`/
+  `COLD`), judge-free — catches help-text / wrong-template / garbage / echo-back
+  responses, not just exit 0. (Revised from a single `PONG` token during review:
+  the token lived inside its own prompt, so an echoing template false-passed.)
 - **Stdin path as the CLI dispatch default** — hardens the pipe for the real
   prompts Slice 2 will send.
 
