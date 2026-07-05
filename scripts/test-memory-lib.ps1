@@ -214,6 +214,26 @@ try {
     Check 'T47 malformed line preserved verbatim' ($after[2] -eq 'this is not json')
     Check 'T48 no temp file left behind' (@(Get-ChildItem -Path $tmpDir -Filter 'ordered-journal.jsonl.tmp-*').Count -eq 0)
 
+    # ---- Follow-ups M3: recall --json coverage ----
+    $jsonHome = Join-Path $tmpDir 'jsonhome'
+    New-Item -ItemType Directory -Force -Path $jsonHome | Out-Null
+    $env:BATON_HOME = $jsonHome
+
+    $emptyRaw = & pwsh -NoProfile -File $cli recall -Text 'never seen task xyz' -Json 2>&1 | Out-String
+    $emptyObj = $null
+    try { $emptyObj = $emptyRaw | ConvertFrom-Json } catch { }
+    Check 'T49 empty journal --json: valid JSON, empty matches array' ($null -ne $emptyObj -and $emptyRaw -match '"matches":\s*\[\]' -and @($emptyObj.matches).Count -eq 0 -and ([string]$emptyObj.signature).Length -gt 0)
+
+    & pwsh -NoProfile -File $cli remember -Problem 'solo json check row' -Approach 'only' -Outcome fail 2>&1 | Out-Null
+    $soloRaw = & pwsh -NoProfile -File $cli recall -Text 'solo json check row' -Json 2>&1 | Out-String
+    $soloObj = $soloRaw | ConvertFrom-Json
+    Check 'T50 single match stays a JSON array of one' ($soloRaw -match '"matches":\s*\[' -and @($soloObj.matches).Count -eq 1 -and $soloObj.matches[0].approach -eq 'only')
+
+    & pwsh -NoProfile -File $cli remember -Problem 'solo json check row' -Approach 'again' -Outcome fail 2>&1 | Out-Null
+    $twoRaw = & pwsh -NoProfile -File $cli recall -Text 'solo json check row' -Json 2>&1 | Out-String
+    $twoObj = $twoRaw | ConvertFrom-Json
+    Check 'T51 populated --json shape: 2 matches + avoid candidate + signature' (@($twoObj.matches).Count -eq 2 -and @($twoObj.candidates | Where-Object { $_.kind -eq 'avoid' }).Count -ge 1 -and ([string]$twoObj.signature) -match 'json')
+
     Remove-Item Env:\BATON_HOME, Env:\BATON_MEM_LESSONS -ErrorAction SilentlyContinue
 }
 finally {
