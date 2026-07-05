@@ -1,6 +1,6 @@
 ---
 description: Manage and invoke the LLM fleet. `doctor` health-checks providers, `test` dispatches a prompt to one provider, `list` shows the registry.
-argument-hint: doctor | test <name> "<prompt>" [--model <m>] | list
+argument-hint: doctor [--live] [--timeout <s>] | test <name> "<prompt>" [--model <m>] | list
 ---
 
 # /baton:fleet
@@ -15,13 +15,13 @@ Operate the fleet defined in `$BATON_HOME/fleet.yaml` (default `~/.baton/fleet.y
 
 2. **Dispatch by subcommand:**
 
-   **`doctor`** — run:
+   **`doctor`** — run (with `--live` to enable canary probes):
 
    ```powershell
-   & pwsh -NoProfile -File "$HOME/.claude/scripts/fleet-doctor.ps1"
+   & pwsh -NoProfile -File "$HOME/.claude/scripts/fleet-doctor.ps1" -Live -TimeoutS 60
    ```
 
-   Echo the table to the user.
+   Echo the table to the user. With `--live`, each enabled provider receives a `PONG` canary and reports `live_ok`, `live_fail(<reason>)`, or `skip`; a `no-canary` reason means the provider ran but didn't answer (often a wrong command template for this box). Plain (no `--live`) performs the fast PATH/reachability check only.
 
    **`list`** — run:
 

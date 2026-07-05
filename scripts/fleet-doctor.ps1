@@ -6,10 +6,13 @@
 #>
 param(
     [string]$Path = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'fleet.yaml' } else { Join-Path $HOME '.baton/fleet.yaml' }),
-    [switch]$Json
+    [switch]$Json,
+    [switch]$Live,
+    [int]$TimeoutS = 60
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'fleet-lib.ps1')
+if ($Live) { . (Join-Path $PSScriptRoot 'fleet-probe-lib.ps1') }
 
 try {
     $fleet = Read-Fleet -Path $Path
@@ -21,6 +24,29 @@ try {
     Write-Host "fleet doctor: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
+
+if ($Live) {
+    $results = foreach ($p in $fleet) { Invoke-FleetProbe -Provider ([hashtable]$p) -TimeoutS $TimeoutS -FleetPath $Path }
+    $rows = @($results)
+    if ($Json) {
+        ConvertTo-Json -InputObject @($rows) -Depth 4
+    } else {
+        $render = $rows | ForEach-Object {
+            $reach = if ($null -eq $_.reachable) { '-' } elseif ($_.reachable) { 'yes' } else { 'no' }
+            $detail = if ($_.reason) { $_.reason }
+                      elseif ($null -ne $_.score -and $null -ne $_.elapsed_s) { "$($_.score)/$($script:FleetCanaryChallenges.Count)`u{00B7}$($_.elapsed_s)s" }
+                      elseif ($null -ne $_.elapsed_s) { "$($_.elapsed_s)s" }
+                      else { '' }
+            [pscustomobject]@{ PROVIDER = $_.name; REACHABLE = $reach; LIVE = $_.live; DETAIL = $detail }
+        }
+        $render | Format-Table PROVIDER, REACHABLE, LIVE, DETAIL -AutoSize | Out-String | Write-Host
+        $enabled = @($fleet | Where-Object { $_.enabled -eq $true }).Count
+        Write-Host "$enabled enabled provider(s); live round-trip."
+    }
+    $anyLiveBad = @($rows | Where-Object { $_.enabled -eq $true -and $_.live -ne 'live_ok' }).Count -gt 0
+    if ($anyLiveBad) { exit 1 } else { exit 0 }
+}
+
 $rows = @()
 $anyBad = $false
 

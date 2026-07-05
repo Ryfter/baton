@@ -63,5 +63,26 @@ Assert "http dispatch exit 0" ($rh.exit_code -eq 0)
 Assert "http dispatch journaled" (@(Get-Content $tmpJournal2 | Where-Object { $_ -match '\| fleet \| stub-http \|' }).Count -ge 1)
 Remove-Item $tmpJournal2 -ErrorAction SilentlyContinue
 
+# --- Test-StdinSafe predicate ---
+Assert "stdin-safe: trailing quoted prompt (codex)" (Test-StdinSafe -Provider @{ name='c'; command_template='codex exec "{{prompt}}"' })
+Assert "stdin-safe: trailing quoted prompt with model (ollama)" (Test-StdinSafe -Provider @{ name='o'; command_template='ollama run {{model}} "{{prompt}}"'; model_default='m' })
+Assert "stdin-safe: embedded prompt -> legacy (test stub)" (-not (Test-StdinSafe -Provider @{ name='s'; command_template='pwsh -NoProfile -Command "Write-Output hello-{{prompt}}"' }))
+Assert "stdin-safe: shell operator in tail -> legacy" (-not (Test-StdinSafe -Provider @{ name='p'; command_template='foo | bar "{{prompt}}"' }))
+Assert "stdin-safe: already stdin:true -> not re-flagged" (-not (Test-StdinSafe -Provider @{ name='h'; stdin=$true; command_template='claude -p --model x' }))
+
+# --- Regression: embedded-prompt stubs still interpolate ---
+$tmpJ = New-TemporaryFile
+$rReg = Invoke-Fleet -Name 'stub-cli' -Prompt 'world' -Path $fixture -JournalPath $tmpJ
+Assert "regression: stub-cli still outputs hello-world (legacy path)" (($rReg.stdout | Out-String).Trim() -eq 'hello-world')
+Remove-Item $tmpJ -ErrorAction SilentlyContinue
+
+# --- Regression: stdin:true provider round-trips via stdin (guards the empty-prompt
+#     Resolve-FleetCommand rejection that broke real stdin providers) ---
+$tmpJs = New-TemporaryFile
+$rStdin = Invoke-Fleet -Name 'stub-stdin' -Prompt 'HELLO-VIA-STDIN' -Path $fixture -JournalPath $tmpJs
+Assert "stdin:true provider dispatches without throwing" ($rStdin.exit_code -eq 0)
+Assert "stdin:true provider receives the prompt on stdin" (($rStdin.stdout | Out-String) -match 'HELLO-VIA-STDIN')
+Remove-Item $tmpJs -ErrorAction SilentlyContinue
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green

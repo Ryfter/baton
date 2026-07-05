@@ -53,3 +53,13 @@ providers:
     cost_tier: local
     usage_class: tight
     command_template: 'pwsh -NoProfile -Command "Write-Output tight-{{prompt}}"'
+
+  # stdin:true provider — the prompt is piped via stdin, template carries no
+  # {{prompt}}. Guards the regression where the stdin path called
+  # Resolve-FleetCommand with an empty prompt and threw. Echoes stdin back.
+  - name: stub-stdin
+    kind: cli
+    enabled: true
+    cost_tier: local
+    stdin: true
+    command_template: 'pwsh -NoProfile -Command [Console]::In.ReadToEnd()'
