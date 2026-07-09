@@ -70,6 +70,104 @@ try {
     Check 'R1 worktree dir removed' (-not (Test-Path $wt.worktree))
     $branches = [string](& git -C $repo branch --list 'baton/run-go-t1')
     Check 'R2 run branch KEPT after removal' ($branches -match 'baton/run-go-t1')
+
+    # ---- New-AgenticSpawner (hermetic: fake dispatcher, temp fleet.yaml, temp BATON_HOME) ----
+    $savedBatonHome = $env:BATON_HOME
+    $env:BATON_HOME = Join-Path $tmpRoot 'baton-home'
+    New-Item -ItemType Directory -Force -Path $env:BATON_HOME | Out-Null
+    try {
+        $fleetPath = Join-Path $env:BATON_HOME 'fleet.yaml'
+        Set-Content -LiteralPath $fleetPath -Encoding utf8NoBOM -Value @'
+general_capabilities: [code-gen, reasoning]
+providers:
+  - name: fake-local
+    kind: cli
+    enabled: true
+    cost_tier: local
+    platform: local
+    command_template: 'echo "{{prompt}}"'
+  - name: fake-agentic
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    command_template: 'echo "{{prompt}}"'
+'@
+        $toolsPath = Join-Path $env:BATON_HOME 'tools.yaml'   # intentionally absent file
+        $repo2 = New-TempRepo -Root (New-Item -ItemType Directory -Force -Path (Join-Path $tmpRoot 'sp')).FullName
+        $wt2 = New-RunWorktree -RepoPath $repo2 -RunId 'go-sp1'
+        $runDir2 = Join-Path $tmpRoot 'run-sp1'
+        New-Item -ItemType Directory -Force -Path $runDir2 | Out-Null
+        $task = [pscustomobject]@{ id = 't1'; desc = 'write the feature'; capability = 'code-gen' }
+
+        # dispatcher that EDITS (writes into its cwd — must be the worktree)
+        $editDisp = { param($pick, $prompt)
+            Set-Content -LiteralPath (Join-Path (Get-Location).Path 'made-by-instrument.txt') -Value 'work' -Encoding utf8NoBOM
+            return @{ stdout = 'done'; stderr = ''; exit_code = 0; duration_s = 0 }
+        }
+        $cwdBefore = (Get-Location).Path
+        $sp = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -MaxCostTier 'paid' -RunDir $runDir2 -Dispatcher $editDisp
+        $r = & $sp $task
+        Check 'P1 edit task ok' ($r.ok -eq $true)
+        Check 'P2 picked the agentic provider (local filtered out)' ($r.chose -eq 'fake-agentic')
+        Check 'P3 why records diff grew' ($r.why -match 'diff grew')
+        Check 'P4 edit landed IN the worktree' (Test-Path (Join-Path $wt2.worktree 'made-by-instrument.txt'))
+        Check 'P5 user repo untouched' (-not (Test-Path (Join-Path $repo2 'made-by-instrument.txt')))
+        Check 'P6 caller cwd untouched' ((Get-Location).Path -eq $cwdBefore)
+        Check 'P7 per-task diff written' (Test-Path (Join-Path $runDir2 'tasks/t1.diff'))
+        Check 'P8 per-task diff names the new file' ((Get-Content -Raw (Join-Path $runDir2 'tasks/t1.diff')) -match 'made-by-instrument\.txt')
+
+        # dispatcher that does NOTHING, exit 0
+        $noopDisp = { param($pick, $prompt) @{ stdout = 'ok'; stderr = ''; exit_code = 0; duration_s = 0 } }
+        $sp2 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -Dispatcher $noopDisp
+        $r2 = & $sp2 $task
+        Check 'P9 no-op exit 0 is ok' ($r2.ok -eq $true)
+        Check 'P10 no-op why says no changes' ($r2.why -match 'no changes')
+
+        # dispatcher that FAILS (exit 1)
+        $failDisp = { param($pick, $prompt) @{ stdout = ''; stderr = 'boom'; exit_code = 1; duration_s = 0 } }
+        $sp3 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -Dispatcher $failDisp
+        $r3 = & $sp3 $task
+        Check 'P11 nonzero exit is NOT ok' ($r3.ok -eq $false)
+        Check 'P12 failure why names provider + exit' ($r3.why -match 'fake-agentic.*exit 1')
+
+        # fleet with ONLY non-agentic providers -> no edit-capable candidate
+        $fleetLocalOnly = Join-Path $env:BATON_HOME 'fleet-local-only.yaml'
+        Set-Content -LiteralPath $fleetLocalOnly -Encoding utf8NoBOM -Value @'
+general_capabilities: [code-gen, reasoning]
+providers:
+  - name: fake-local
+    kind: cli
+    enabled: true
+    cost_tier: local
+    platform: local
+    command_template: 'echo "{{prompt}}"'
+'@
+        $sp4 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetLocalOnly -ToolsPath $toolsPath -Dispatcher $noopDisp
+        $r4 = & $sp4 $task
+        Check 'P13 local-only fleet -> not ok' ($r4.ok -eq $false)
+        Check 'P14 message names the capability' ($r4.why -match "no edit-capable candidate for 'code-gen'")
+
+        # agentic: true override on a local entry -> eligible
+        $fleetOverride = Join-Path $env:BATON_HOME 'fleet-override.yaml'
+        Set-Content -LiteralPath $fleetOverride -Encoding utf8NoBOM -Value @'
+general_capabilities: [code-gen, reasoning]
+providers:
+  - name: fake-local-agentic
+    kind: cli
+    enabled: true
+    cost_tier: local
+    platform: local
+    agentic: true
+    command_template: 'echo "{{prompt}}"'
+'@
+        $sp5 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetOverride -ToolsPath $toolsPath -Dispatcher $noopDisp
+        $r5 = & $sp5 $task
+        Check 'P15 agentic:true override makes a local entry eligible' ($r5.chose -eq 'fake-local-agentic')
+    } finally {
+        if ($null -eq $savedBatonHome) { Remove-Item env:BATON_HOME -ErrorAction SilentlyContinue }
+        else { $env:BATON_HOME = $savedBatonHome }
+    }
 } finally {
     Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
 }

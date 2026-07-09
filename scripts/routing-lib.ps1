@@ -161,6 +161,7 @@ function Select-Capability {
                 cost_tier = [string]$p.cost_tier; quality = $detail.quality
                 quality_detail = $detail
                 role = $p.role; platform = $p.platform
+                agentic = $p.agentic   # Slice 2 (d078) edit-eligibility passthrough (null when absent)
                 budget = $p.budget; saturate = $p.saturate; saturation_target = $p.saturation_target
                 sat_util = $null
                 why = $why

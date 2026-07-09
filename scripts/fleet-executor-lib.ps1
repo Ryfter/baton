@@ -91,3 +91,57 @@ function Remove-RunWorktree {
     $out = & git -C $RepoPath worktree remove @extra $Worktree 2>&1
     if ($LASTEXITCODE -ne 0) { throw "execute: git worktree remove failed: $(@($out) -join ' ')" }
 }
+
+function New-AgenticSpawner {
+    <# Factory: returns a scriptblock matching Invoke-Conductor's -Spawner contract
+       (param($task) -> @{ ok; spend; chose; why; alternatives }). Per task: route the
+       capability, FILTER to edit-eligible providers, dispatch with cwd = the worktree
+       (Push-Location/Pop-Location around the call), and prove labor by the worktree
+       content tree changing (proof-by-diff, d078). Precedence: nonzero exit -> fail;
+       tree changed -> ok; exit 0 + no change -> ok with why 'no changes'.
+       -Dispatcher injects a fake instrument for hermetic tests. #>
+    param(
+        [Parameter(Mandatory)][string]$Worktree,
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
+        [string]$RunDir,
+        [scriptblock]$Dispatcher
+    )
+    return {
+        param($task)
+        $cap = if ($task.capability) { $task.capability } else { 'reasoning' }
+        $cands = @(Select-Capability -Capability $cap -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath |
+                   Where-Object { ($null -ne $_) -and (Test-ProviderAgentic -Provider $_) })
+        if ($cands.Count -lt 1) {
+            return @{ ok = $false; spend = 0.0; chose = ''; why = "no edit-capable candidate for '$cap'"; alternatives = @() }
+        }
+        $pick = $cands[0]
+        $alts = @($cands | Select-Object -Skip 1 | ForEach-Object { $_.name })
+        $prompt = "Task: $($task.desc)"
+        $preTree = Get-WorktreeTreeSha -Worktree $Worktree
+        Push-Location -LiteralPath $Worktree
+        try {
+            $res = if ($Dispatcher) { & $Dispatcher $pick $prompt }
+                   else { Invoke-Fleet -Name $pick.name -Prompt $prompt -Path $FleetPath -NoJournal }
+        } finally { Pop-Location }
+        $postTree = Get-WorktreeTreeSha -Worktree $Worktree
+        $grew = ($null -ne $preTree) -and ($null -ne $postTree) -and ($preTree -ne $postTree)
+        # Best-effort per-task incremental diff for the report; never fails the task.
+        if ($RunDir -and $grew) {
+            try {
+                $tasksDir = Join-Path $RunDir 'tasks'
+                New-Item -ItemType Directory -Force -Path $tasksDir | Out-Null
+                $taskDiff = @(& git -C $Worktree diff $preTree $postTree 2>$null) -join "`n"
+                Set-Content -LiteralPath (Join-Path $tasksDir "$($task.id).diff") -Value $taskDiff -Encoding utf8NoBOM
+            } catch { }
+        }
+        if ([int]$res.exit_code -ne 0) {
+            return @{ ok = $false; spend = 0.0; chose = $pick.name; why = "$($pick.name): exit $($res.exit_code)"; alternatives = $alts }
+        }
+        if ($grew) {
+            return @{ ok = $true; spend = 0.0; chose = $pick.name; why = "routed $cap -> $($pick.name); worktree diff grew"; alternatives = $alts }
+        }
+        return @{ ok = $true; spend = 0.0; chose = $pick.name; why = "$($pick.name): no changes"; alternatives = $alts }
+    }.GetNewClosure()
+}
