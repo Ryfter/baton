@@ -46,6 +46,11 @@
 #                     claims below a capability_floors entry are filtered out
 #   usage_class       (optional) tight (small specialist, fine while Kevin is active)
 #                     | broad (15GB+ generalist, idle-gated in a later slice)
+#   agentic           (optional) true | false — edit-eligibility for /baton:go --execute
+#                     (agentic labor into a run worktree). Authoritative when present;
+#                     absent -> inferred from platform ∈ {claude, codex, gemini}.
+#                     Non-agentic providers are filtered out of edit tasks (their
+#                     diff-apply path arrives in Slice 3).
 #
 # VRAM rule (d043): run ONE model-serving process per box — e.g. never enable
 # ollama AND lm-studio on the same machine; they cannot see each other's VRAM

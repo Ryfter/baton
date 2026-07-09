@@ -492,7 +492,8 @@ function Invoke-Conductor {
         [scriptblock]$Dispatcher,
         [string]$GateArtifact,
         [string]$GateDiff,
-        [scriptblock]$Gater
+        [scriptblock]$Gater,
+        [scriptblock]$DiffProvider
     )
     if (-not $RunDir) { $RunDir = Initialize-RunDir }
     else { New-Item -ItemType Directory -Force -Path $RunDir | Out-Null }
@@ -556,7 +557,20 @@ function Invoke-Conductor {
     #    successful walk and only when a gate target resolves.
     $gate = $null
     $finalStatus = 'completed'
-    $art = Resolve-GateArtifact -Artifact $GateArtifact -Diff $GateDiff
+    # Slice 2 (d078): a -DiffProvider produces the walk's cumulative diff post-walk;
+    # non-empty -> recorded to changes.diff and gated as the artifact. Absent, empty,
+    # or throwing (fail-open) -> the existing -GateArtifact/-GateDiff path unchanged.
+    $art = ''
+    if ($DiffProvider) {
+        $produced = ''
+        try { $produced = [string](& $DiffProvider) }
+        catch { Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Level 'warn' -Message "diff provider failed (fail-open): $($_.Exception.Message)") }
+        if (-not [string]::IsNullOrWhiteSpace($produced)) {
+            Set-Content -LiteralPath (Join-Path $RunDir 'changes.diff') -Value $produced -Encoding utf8NoBOM
+            $art = $produced
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($art)) { $art = Resolve-GateArtifact -Artifact $GateArtifact -Diff $GateDiff }
     if (-not [string]::IsNullOrWhiteSpace($art)) {
         $gateErr = $null
         try {

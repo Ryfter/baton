@@ -426,6 +426,38 @@ try {
             (($sbX2b.status -eq 'retired') -and ($sbX2b.retired_by -eq 'p001') -and ($sbX3b.status -eq 'candidate'))
     } finally { $env:BATON_HOME = $sbPrevHome }
 
+    # ---- Slice 2 (d078): -DiffProvider seam ----
+    $tmpDp = Join-Path ([System.IO.Path]::GetTempPath()) "cond-dp-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $tmpDp | Out-Null
+    try {
+        $dpPlanner = { param($g) @{ run_id='go-dp'; goal=$g; budget_cap=$null; tasks=@([pscustomobject]@{ id='t1'; desc='d'; command=''; capability='code-gen'; model_pick=''; depends_on=@(); est_cost_tier='free'; reversible=$true }) } }
+        $dpSpawn = { param($t) @{ ok=$true; spend=0.0; chose='stub'; why='w'; alternatives=@() } }
+        $dpGater = { param($gArt, $gGoal) @{ verdict='accept'; reason="saw:$gArt"; counts=@{critical=0;important=0;minor=0}; polish_brief=''; findings=@(); reviews=@(); unparsed=@() } }
+
+        $runDp1 = Initialize-RunDir -RunId 'go-dp-1' -Root $tmpDp
+        $dp1 = { "diff --git a/x b/x`n+produced-by-walk" }
+        $rDp1 = Invoke-Conductor -Goal 'g' -RunDir $runDp1 -Planner $dpPlanner -Spawner $dpSpawn -Gater $dpGater -DiffProvider $dp1
+        Check 'DP1 changes.diff written' (Test-Path (Join-Path $runDp1 'changes.diff'))
+        Check 'DP2 gate received the produced diff' ($rDp1.acceptance.reason -match 'produced-by-walk')
+        Check 'DP3 run completed with accept' ($rDp1.status -eq 'completed')
+
+        $runDp2 = Initialize-RunDir -RunId 'go-dp-2' -Root $tmpDp
+        $rDp2 = Invoke-Conductor -Goal 'g' -RunDir $runDp2 -Planner $dpPlanner -Spawner $dpSpawn -Gater $dpGater -DiffProvider { '' }
+        Check 'DP4 empty diff -> no changes.diff' (-not (Test-Path (Join-Path $runDp2 'changes.diff')))
+        Check 'DP5 empty diff + no gate target -> no acceptance section' ($null -eq $rDp2.acceptance)
+
+        $runDp3 = Initialize-RunDir -RunId 'go-dp-3' -Root $tmpDp
+        $rDp3 = Invoke-Conductor -Goal 'g' -RunDir $runDp3 -Planner $dpPlanner -Spawner $dpSpawn -Gater $dpGater -DiffProvider { '' } -GateArtifact 'fallback-artifact'
+        Check 'DP6 empty produced diff falls back to -GateArtifact' ($rDp3.acceptance.reason -match 'fallback-artifact')
+
+        $runDp4 = Initialize-RunDir -RunId 'go-dp-4' -Root $tmpDp
+        $rDp4 = Invoke-Conductor -Goal 'g' -RunDir $runDp4 -Planner $dpPlanner -Spawner $dpSpawn -Gater $dpGater -DiffProvider { throw 'boom' }
+        Check 'DP7 throwing diff provider is fail-open (run completes)' ($rDp4.status -eq 'completed')
+        Check 'DP8 fail-open logged a gate warn event' ((Get-Content -Raw (Join-Path $runDp4 'events.jsonl')) -match 'diff provider failed')
+    } finally {
+        Remove-Item -Recurse -Force $tmpDp -ErrorAction SilentlyContinue
+    }
+
     Write-Host ""
     if ($script:fail -gt 0) { Write-Host "$script:fail CHECK(S) FAILED"; exit 1 } else { Write-Host "ALL CHECKS PASS"; exit 0 }
 } catch {

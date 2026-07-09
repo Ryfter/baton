@@ -1,6 +1,6 @@
 ---
 description: Natural-language front door — describe an outcome and the Conductor plans it into a task DAG, then runs it full-auto under two guards (budget cap + destructive action), narrating as it goes. Interrupts only to cross a budget ceiling or before an irreversible action; guesses through everything else and logs every choice. Run artifacts (plan.json / events.jsonl / decisions.jsonl / report.md / acceptance.json) land under BATON_HOME/runs/<run-id>/.
-argument-hint: "<what you want done>" [--budget <n>] [--max-tier local|free|paid] [--gate-artifact <text> | --gate-diff <range>]
+argument-hint: "<what you want done>" [--execute] [--repo <path>] [--budget <n>] [--max-tier local|free|paid] [--gate-artifact <text> | --gate-diff <range>]
 ---
 
 # /baton:go
@@ -19,6 +19,9 @@ let the engine and the fleet do the work.
    pwsh -File "$HOME/.claude/scripts/fleet-go.ps1" -Goal "<goal>" -Json
    # add -Budget <n> and/or -MaxCostTier <tier> when the user supplied them
    # add -GateArtifact "<text>" or -GateDiff "<range>" to gate the finished work (accept/polish/reject)
+   # add -Execute (and optionally -RepoPath "<path>") when the user wants the fleet to
+   # actually DO the work: agentic instruments edit an isolated worktree, the produced
+   # diff is acceptance-gated, and the changes land on branch baton/run-<id>
    ```
 
 3. Read the returned JSON (`status`, `run_dir`, `spend`, `pending_task_id`, `report`).
@@ -46,9 +49,12 @@ let the engine and the fleet do the work.
 
 ## Notes
 
-- The Conductor never touches the user's checkout directly: real code/merge execution
-  rides the existing gated-merge flow (per-item branches → PR). The engine itself only
-  plans, routes, and logs.
+- The Conductor never touches the user's checkout directly. Without `--execute` the
+  engine only plans, routes, and logs. With `--execute`, agentic instruments (codex,
+  agy, claude-cli — `agentic`/platform-eligible providers) edit a throwaway worktree
+  at `<repo-parent>/.baton-worktrees/<run-id>` on branch `baton/run-<run-id>`; the
+  cumulative diff is written to `<run-dir>/changes.diff` and acceptance-gated. The
+  branch is ALWAYS left for the user to review and merge — Baton never merges.
 - Run artifacts are box-private under `BATON_HOME/runs/<run-id>/`.
 - When a prompt challenger is live (see `/baton:optimize-prompt`), the run log
   carries a `shadow` event naming which prompt variant planned this run.
