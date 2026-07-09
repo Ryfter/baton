@@ -34,3 +34,4 @@ adapter writing the same marker shape is the documented follow-on.
 
 Fleet health (model-agnostic):
 - `fleet doctor --live` — harness-neutral way to verify a box's roster actually answers (canary round-trip per enabled provider), not just that the binaries are installed.
+- `/baton:go --execute` — agentic labor lands in an isolated worktree (branch `baton/run-<id>`, proof-by-diff, acceptance-gated); the branch is always left for the human to merge.
