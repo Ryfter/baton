@@ -111,8 +111,18 @@ function New-AgenticSpawner {
     return {
         param($task)
         $cap = if ($task.capability) { $task.capability } else { 'reasoning' }
-        $cands = @(Select-Capability -Capability $cap -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath |
-                   Where-Object { ($null -ne $_) -and (Test-ProviderAgentic -Provider $_) })
+        # Select-Capability returns via `,([object[]]$ranked)` (comma-operator array
+        # preservation, correct for callers doing a direct `$x = Select-Capability ...`
+        # assignment with 0/1 results). Piping that return straight into Where-Object
+        # does NOT unroll it — PowerShell hands the whole candidate array to Where-Object
+        # as a single $_. Capture to a plain variable first (direct assignment unwraps
+        # correctly) and filter the variable, not the call, to get real per-candidate
+        # enumeration.
+        $raw = Select-Capability -Capability $cap -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
+        # Edit dispatch is fleet-only (Invoke-Fleet resolves names against fleet.yaml);
+        # tools.yaml candidates cannot take edit dispatch even if they infer agentic
+        # via a platform field, so require source='fleet' before the agentic test.
+        $cands = @($raw | Where-Object { ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and (Test-ProviderAgentic -Provider $_) })
         if ($cands.Count -lt 1) {
             return @{ ok = $false; spend = 0.0; chose = ''; why = "no edit-capable candidate for '$cap'"; alternatives = @() }
         }
@@ -121,10 +131,17 @@ function New-AgenticSpawner {
         $prompt = "Task: $($task.desc)"
         $preTree = Get-WorktreeTreeSha -Worktree $Worktree
         Push-Location -LiteralPath $Worktree
+        $dispatchErr = $null
         try {
             $res = if ($Dispatcher) { & $Dispatcher $pick $prompt }
                    else { Invoke-Fleet -Name $pick.name -Prompt $prompt -Path $FleetPath -NoJournal }
+        } catch {
+            $dispatchErr = $_
+            $res = $null
         } finally { Pop-Location }
+        if ($dispatchErr) {
+            return @{ ok = $false; spend = 0.0; chose = $pick.name; why = "$($pick.name): dispatch error: $($dispatchErr.Exception.Message)"; alternatives = $alts }
+        }
         $postTree = Get-WorktreeTreeSha -Worktree $Worktree
         $grew = ($null -ne $preTree) -and ($null -ne $postTree) -and ($preTree -ne $postTree)
         # Best-effort per-task incremental diff for the report; never fails the task.

@@ -164,6 +164,41 @@ providers:
         $sp5 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetOverride -ToolsPath $toolsPath -Dispatcher $noopDisp
         $r5 = & $sp5 $task
         Check 'P15 agentic:true override makes a local entry eligible' ($r5.chose -eq 'fake-local-agentic')
+
+        # ---- I1: tools.yaml candidate with platform: codex must be filtered by source ----
+        $toolsWithPlatform = Join-Path $env:BATON_HOME 'tools-platform.yaml'
+        Set-Content -LiteralPath $toolsWithPlatform -Encoding utf8NoBOM -Value @'
+tools:
+  - name: fake-tool
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    capability: code-gen
+'@
+        # Local-only fleet + a tools.yaml entry that would otherwise infer agentic via
+        # platform: codex — must still yield "no edit-capable candidate" (tool filtered
+        # by source, local fleet entry filtered by platform).
+        $sp6 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetLocalOnly -ToolsPath $toolsWithPlatform -Dispatcher $noopDisp
+        $r6 = & $sp6 $task
+        Check 'I1a tools.yaml platform:codex candidate does not make local-only fleet edit-capable' ($r6.ok -eq $false)
+        Check 'I1a why says no edit-capable candidate' ($r6.why -match 'no edit-capable candidate')
+
+        # Main fleet (has fake-agentic) + the same tools.yaml entry -> must still pick
+        # the fleet candidate, never the tool.
+        $sp7 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetPath -ToolsPath $toolsWithPlatform -Dispatcher $noopDisp
+        $r7 = & $sp7 $task
+        Check 'I1b chose fleet candidate, not the tools.yaml entry' ($r7.chose -eq 'fake-agentic')
+        Check 'I1b never chose fake-tool' ($r7.chose -ne 'fake-tool')
+
+        # ---- M4: dispatcher throw is caught and returned as a failed task, not a crash ----
+        $throwDisp = { param($pick, $prompt) throw 'boom' }
+        $sp8 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -Dispatcher $throwDisp
+        $cwdBeforeThrow = (Get-Location).Path
+        $r8 = & $sp8 $task
+        Check 'M4a dispatcher throw is caught, task returns not-ok' ($r8.ok -eq $false)
+        Check 'M4a why records dispatch error' ($r8.why -match 'dispatch error')
+        Check 'M4b caller cwd unchanged after a dispatch throw' ((Get-Location).Path -eq $cwdBeforeThrow)
     } finally {
         if ($null -eq $savedBatonHome) { Remove-Item env:BATON_HOME -ErrorAction SilentlyContinue }
         else { $env:BATON_HOME = $savedBatonHome }
