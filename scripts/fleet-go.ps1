@@ -17,6 +17,9 @@ param(
     [string]$Project,
     [switch]$Execute,
     [string]$RepoPath,
+    [switch]$PlanGate,
+    [string[]]$PlanReviewers,
+    [bool]$PlanRevise = $true,
     [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
     [string]$FleetPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'fleet.yaml' } else { Join-Path $HOME '.baton/fleet.yaml' }),
     [string]$ToolsPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'tools.yaml' } else { Join-Path $HOME '.baton/tools.yaml' })
@@ -61,6 +64,24 @@ if ($env:BATON_GO_TEST_GATE) {
     $cannedVerdict = $env:BATON_GO_TEST_GATE
     $go['Gater'] = { param($art, $goal) @{ verdict = $cannedVerdict; reason = 'test-stub verdict'; counts = @{ critical = 0; important = 0; minor = 0 }; polish_brief = 'test brief'; findings = @(); reviews = @(); unparsed = @() } }.GetNewClosure()
     if (-not $go.ContainsKey('GateArtifact')) { $go['GateArtifact'] = 'test artifact' }
+}
+
+# Plan Gate (d080, Slice 2): opt-in peer once-over of the plan DAG BEFORE the walk.
+# -PlanReviewers accepts either a native array (-PlanReviewers a,b) or a single
+# comma-joined string (-PlanReviewers "a,b"); both normalize to a trimmed list.
+# -PlanRevise defaults $true; pass -PlanRevise:$false to skip the one auto-revise pass.
+if ($PlanGate) {
+    $go['PlanGate'] = $true
+    $reviewers = @()
+    foreach ($r in @($PlanReviewers)) { $reviewers += (([string]$r) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+    if ($reviewers.Count) { $go['PlanReviewers'] = $reviewers }
+    $go['PlanRevise'] = $PlanRevise
+    # Test seam: dot-source a file defining Invoke-TestPlanGateDispatch($name,$prompt),
+    # then feed it as the gate's reviewer dispatcher (mirrors BATON_GO_TEST_EXEC_DISPATCHER).
+    if ($env:BATON_GO_TEST_PLANGATE) {
+        . $env:BATON_GO_TEST_PLANGATE
+        $go['PlanGateDispatcher'] = { param($n, $p) Invoke-TestPlanGateDispatch $n $p }
+    }
 }
 
 # Execute mode (Slice 2, d078): agentic labor into a throwaway worktree. The

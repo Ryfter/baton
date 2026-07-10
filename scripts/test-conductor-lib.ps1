@@ -523,6 +523,138 @@ ERROR: You have hit your usage limit. Try again later.
         Remove-Item -Recurse -Force $tmpDp -ErrorAction SilentlyContinue
     }
 
+    # ---- PG1-PG8: opt-in Plan Gate phase (d080, Slice 2) ----
+    # Hermetic: -Planner/-Spawner stub the plan + walk, -PlanGateDispatcher stubs the
+    # reviewer roster, -Dispatcher stubs the revise-pass worker. -FleetPath points at the
+    # reference fleet so the revise pass's Select-Capability(reasoning) resolves a candidate
+    # (no network — the dispatch is always stubbed). Zero real model calls.
+    $pgHome = Join-Path ([System.IO.Path]::GetTempPath()) "cond-pg-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $pgHome | Out-Null
+    $refFleetPG = Join-Path $PSScriptRoot '../references/fleet.yaml'
+    $pgTools = Join-Path $pgHome 'tools.yaml'; Set-Content -LiteralPath $pgTools -Value 'tools: []' -Encoding utf8NoBOM
+    $pgCliHome = $null
+    try {
+        $pgTask = { param($id,$deps) [pscustomobject]@{ id=$id; desc="do $id"; command='x'; capability='reasoning'; model_pick=''; depends_on=@($deps); est_cost_tier='free'; reversible=$true } }
+        $pgPlanner = { param($goal) @{ run_id='orig'; goal=$goal; budget_cap=$null; tasks=@( (& $pgTask 't1' @()), (& $pgTask 't2' @('t1')) ) } }
+        $revisedPlanJson = '{"run_id":"ignored","goal":"g","budget_cap":null,"tasks":[{"id":"t1-rev","desc":"revised task","command":"","capability":"reasoning","depends_on":[],"est_cost_tier":"free","reversible":true}]}'
+        $gateAccept    = { param($n,$p) @{ exit_code = 0; stdout = '[]' } }
+        $gateCritical  = { param($n,$p) @{ exit_code = 0; stdout = '[{"severity":"critical","area":"risk","summary":"will delete prod"}]' } }
+        $gateImportant = { param($n,$p) @{ exit_code = 0; stdout = '[{"severity":"important","area":"ordering","summary":"reorder t1 and t2"}]' } }
+
+        # PG1: NO -PlanGate -> byte-for-byte default (no plan-review.json, walk runs).
+        $pgSeen1 = [System.Collections.ArrayList]@()
+        $pgSpawn1 = { param($t) [void]$pgSeen1.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run1 = Join-Path $pgHome 'pg-1'
+        $rPG1 = Invoke-Conductor -Goal 'g' -RunDir $run1 -Planner $pgPlanner -Spawner $pgSpawn1
+        Check 'PG1 no -PlanGate -> completed' ($rPG1.status -eq 'completed')
+        Check 'PG1b no -PlanGate -> no plan-review.json' (-not (Test-Path (Join-Path $run1 'plan-review.json')))
+        Check 'PG1c no -PlanGate -> walk ran both tasks' (@($pgSeen1).Count -eq 2)
+
+        # PG2: accept (2 reviewers, empty findings) -> completed + plan-review.json + event.
+        $pgSeen2 = [System.Collections.ArrayList]@()
+        $pgSpawn2 = { param($t) [void]$pgSeen2.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run2 = Join-Path $pgHome 'pg-2'
+        $rPG2 = Invoke-Conductor -Goal 'g' -RunDir $run2 -Planner $pgPlanner -Spawner $pgSpawn2 -PlanGate -PlanReviewers @('a','b') -PlanGateDispatcher $gateAccept -FleetPath $refFleetPG -ToolsPath $pgTools
+        Check 'PG2 accept -> completed' ($rPG2.status -eq 'completed')
+        Check 'PG2b plan-review.json verdict accept' ((Get-Content -Raw (Join-Path $run2 'plan-review.json') | ConvertFrom-Json).verdict -eq 'accept')
+        Check 'PG2c plan-gate event present' ((Get-Content -Raw (Join-Path $run2 'events.jsonl')) -match '"kind":"plan-gate"')
+        Check 'PG2d walk proceeded' (@($pgSeen2).Count -eq 2)
+
+        # PG3: a critical finding -> plan-rejected, revise_brief.md, NO task dispatch, report.
+        $pgSeen3 = [System.Collections.ArrayList]@()
+        $pgSpawn3 = { param($t) [void]$pgSeen3.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run3 = Join-Path $pgHome 'pg-3'
+        $rPG3 = Invoke-Conductor -Goal 'g' -RunDir $run3 -Planner $pgPlanner -Spawner $pgSpawn3 -PlanGate -PlanReviewers @('a','b') -PlanGateDispatcher $gateCritical -FleetPath $refFleetPG -ToolsPath $pgTools
+        Check 'PG3 critical finding -> plan-rejected' ($rPG3.status -eq 'plan-rejected')
+        Check 'PG3b revise_brief.md written' (Test-Path (Join-Path $run3 'revise_brief.md'))
+        Check 'PG3c NO task dispatch (walk never ran)' (@($pgSeen3).Count -eq 0)
+        Check 'PG3d report.md written' (Test-Path (Join-Path $run3 'report.md'))
+
+        # PG4: an important finding + revise enabled -> exactly ONE revise dispatch,
+        # plan.json overwritten with the revised DAG, walk proceeds on it, completed.
+        $pgReviseCount = @{ n = 0 }
+        $reviseDisp = { param($cand,$prompt) $pgReviseCount.n++; @{ exit_code = 0; stdout = $revisedPlanJson } }
+        $pgSeen4 = [System.Collections.ArrayList]@()
+        $pgSpawn4 = { param($t) [void]$pgSeen4.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run4 = Join-Path $pgHome 'pg-4'
+        $rPG4 = Invoke-Conductor -Goal 'g' -RunDir $run4 -Planner $pgPlanner -Spawner $pgSpawn4 -PlanGate -PlanReviewers @('a','b') -PlanGateDispatcher $gateImportant -Dispatcher $reviseDisp -FleetPath $refFleetPG -ToolsPath $pgTools
+        Check 'PG4 revise -> completed' ($rPG4.status -eq 'completed')
+        Check 'PG4b exactly ONE revise dispatch' ($pgReviseCount.n -eq 1)
+        $pg4Plan = Get-Content -Raw (Join-Path $run4 'plan.json') | ConvertFrom-Json
+        Check 'PG4c plan.json overwritten with revised plan' ((@($pg4Plan.tasks).Count -eq 1) -and ($pg4Plan.tasks[0].id -eq 't1-rev'))
+        Check 'PG4d walk ran the revised plan' ($pgSeen4 -contains 't1-rev')
+
+        # PG5: important finding + -PlanRevise:$false -> no revise dispatch, original walked,
+        # event notes the disabled auto-revise.
+        $pgReviseCount5 = @{ n = 0 }
+        $reviseDisp5 = { param($cand,$prompt) $pgReviseCount5.n++; @{ exit_code = 0; stdout = $revisedPlanJson } }
+        $pgSeen5 = [System.Collections.ArrayList]@()
+        $pgSpawn5 = { param($t) [void]$pgSeen5.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run5 = Join-Path $pgHome 'pg-5'
+        $rPG5 = Invoke-Conductor -Goal 'g' -RunDir $run5 -Planner $pgPlanner -Spawner $pgSpawn5 -PlanGate -PlanReviewers @('a','b') -PlanGateDispatcher $gateImportant -Dispatcher $reviseDisp5 -PlanRevise:$false -FleetPath $refFleetPG -ToolsPath $pgTools
+        Check 'PG5 revise disabled -> completed' ($rPG5.status -eq 'completed')
+        Check 'PG5b no revise dispatch' ($pgReviseCount5.n -eq 0)
+        $pg5Plan = Get-Content -Raw (Join-Path $run5 'plan.json') | ConvertFrom-Json
+        Check 'PG5c original plan walked (t1,t2)' ((@($pg5Plan.tasks).Count -eq 2) -and ($pgSeen5 -contains 't1'))
+        Check 'PG5d event notes auto-revise disabled' ((Get-Content -Raw (Join-Path $run5 'events.jsonl')) -match 'auto-revise disabled')
+
+        # PG6: revise pass returns unparseable garbage -> fail-open to the ORIGINAL plan,
+        # event notes it, walk proceeds, completed.
+        $pgReviseCount6 = @{ n = 0 }
+        $reviseDispBad = { param($cand,$prompt) $pgReviseCount6.n++; @{ exit_code = 0; stdout = 'not json at all' } }
+        $pgSeen6 = [System.Collections.ArrayList]@()
+        $pgSpawn6 = { param($t) [void]$pgSeen6.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run6 = Join-Path $pgHome 'pg-6'
+        $rPG6 = Invoke-Conductor -Goal 'g' -RunDir $run6 -Planner $pgPlanner -Spawner $pgSpawn6 -PlanGate -PlanReviewers @('a','b') -PlanGateDispatcher $gateImportant -Dispatcher $reviseDispBad -FleetPath $refFleetPG -ToolsPath $pgTools
+        Check 'PG6 revise garbage -> completed (fail-open)' ($rPG6.status -eq 'completed')
+        Check 'PG6b revise was attempted once' ($pgReviseCount6.n -eq 1)
+        $pg6Plan = Get-Content -Raw (Join-Path $run6 'plan.json') | ConvertFrom-Json
+        Check 'PG6c original plan walked (revise failed open)' ((@($pg6Plan.tasks).Count -eq 2) -and ($pgSeen6 -contains 't2'))
+        Check 'PG6d event notes revise fail-open' ((Get-Content -Raw (Join-Path $run6 'events.jsonl')) -match 'revise pass failed to parse')
+
+        # PG7: understaffed roster (<2 reviewers) -> fail-open accept, walk proceeds,
+        # plan-review.json flags fail_open.
+        $pgSeen7 = [System.Collections.ArrayList]@()
+        $pgSpawn7 = { param($t) [void]$pgSeen7.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run7 = Join-Path $pgHome 'pg-7'
+        $rPG7 = Invoke-Conductor -Goal 'g' -RunDir $run7 -Planner $pgPlanner -Spawner $pgSpawn7 -PlanGate -PlanReviewers @('one') -FleetPath $refFleetPG -ToolsPath $pgTools
+        Check 'PG7 understaffed roster -> completed (fail-open)' ($rPG7.status -eq 'completed')
+        Check 'PG7b plan-review.json fail_open true' ((Get-Content -Raw (Join-Path $run7 'plan-review.json') | ConvertFrom-Json).fail_open -eq $true)
+        Check 'PG7c walk proceeded' (@($pgSeen7).Count -eq 2)
+
+        # PGcli: fleet-go plumbing + BATON_GO_TEST_PLANGATE seam end-to-end (child process,
+        # accept path). Exercises -PlanGate + comma-joined -PlanReviewers + the env seam.
+        $pgCliHome = Join-Path ([System.IO.Path]::GetTempPath()) "cond-pgcli-$([System.IO.Path]::GetRandomFileName())"
+        New-Item -ItemType Directory -Force -Path $pgCliHome | Out-Null
+        $pgDispFile = Join-Path $pgCliHome 'pgdisp.ps1'
+        Set-Content -LiteralPath $pgDispFile -Encoding utf8NoBOM -Value 'function Invoke-TestPlanGateDispatch { param($Name, $Prompt) @{ exit_code = 0; stdout = "[]" } }'
+        $env:BATON_HOME = $pgCliHome
+        $env:BATON_GO_TEST_PLAN = '{"tasks":[{"id":"t1","desc":"research","command":"research-gate","capability":"research","depends_on":[],"est_cost_tier":"free","reversible":true}]}'
+        $env:BATON_GO_TEST_SPAWN = '1'
+        $env:BATON_GO_TEST_PLANGATE = $pgDispFile
+        $outPG = & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'fleet-go.ps1') -Goal 'convert pdfs' -PlanGate -PlanReviewers 'a,b' -Json 2>&1 | Out-String
+        Check 'PGcli CLI -PlanGate accept -> completed' ($outPG -match 'completed')
+        $pgCliRuns = @(Get-ChildItem -Path (Join-Path $pgCliHome 'runs') -Directory -ErrorAction SilentlyContinue)
+        Check 'PGcli CLI wrote plan-review.json' ((@($pgCliRuns).Count -ge 1) -and (Test-Path (Join-Path $pgCliRuns[0].FullName 'plan-review.json')))
+        Remove-Item Env:\BATON_HOME, Env:\BATON_GO_TEST_PLAN, Env:\BATON_GO_TEST_SPAWN, Env:\BATON_GO_TEST_PLANGATE -ErrorAction SilentlyContinue
+
+        # PG8: a THROW from the gate infrastructure itself is fail-open at the conductor
+        # level — warn event + walk as-is. Shadow Invoke-PlanGate to force the throw; this
+        # is the LAST plan-gate check and the real function is restored right after.
+        function Invoke-PlanGate { throw 'plan gate infrastructure exploded' }
+        $pgSeen8 = [System.Collections.ArrayList]@()
+        $pgSpawn8 = { param($t) [void]$pgSeen8.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run8 = Join-Path $pgHome 'pg-8'
+        $rPG8 = Invoke-Conductor -Goal 'g' -RunDir $run8 -Planner $pgPlanner -Spawner $pgSpawn8 -PlanGate -PlanReviewers @('a','b') -FleetPath $refFleetPG -ToolsPath $pgTools
+        Check 'PG8 gate throw -> completed (fail-open)' ($rPG8.status -eq 'completed')
+        Check 'PG8b gate throw logs warn event + walk ran' (((Get-Content -Raw (Join-Path $run8 'events.jsonl')) -match 'plan gate failed') -and (@($pgSeen8).Count -eq 2))
+        . "$PSScriptRoot/plan-gate-lib.ps1"   # restore the real Invoke-PlanGate after the shadow
+    } finally {
+        Remove-Item Env:\BATON_HOME, Env:\BATON_GO_TEST_PLAN, Env:\BATON_GO_TEST_SPAWN, Env:\BATON_GO_TEST_PLANGATE -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force $pgHome -ErrorAction SilentlyContinue
+        if ($pgCliHome) { Remove-Item -Recurse -Force $pgCliHome -ErrorAction SilentlyContinue }
+    }
+
     Write-Host ""
     if ($script:fail -gt 0) { Write-Host "$script:fail CHECK(S) FAILED"; exit 1 } else { Write-Host "ALL CHECKS PASS"; exit 0 }
 } catch {

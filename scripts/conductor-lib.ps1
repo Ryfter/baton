@@ -13,6 +13,8 @@
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/routing-lib.ps1"   # Select-Capability (+ fleet-lib: Invoke-Fleet)
 . "$PSScriptRoot/gate-lib.ps1"   # Invoke-AcceptanceGate for the acceptance phase (d058)
+. "$PSScriptRoot/plan-gate-lib.ps1"   # Invoke-PlanGate for the opt-in Plan Gate phase (d080).
+                                       # Re-sources gate-lib (harmless in PS — functions just redefine).
 . "$PSScriptRoot/effective-cost-lib.ps1"   # run-level effective cost (slice 1)
 . "$PSScriptRoot/cost-resolver-lib.ps1"   # realized-cost metering (slice 2)
 . "$PSScriptRoot/prompt-pool-lib.ps1"   # Slice B: live shadow A/B pool bookkeeping
@@ -530,6 +532,67 @@ function Complete-Run {
     return @{ status = $Status; run_id = $Plan.run_id; run_dir = $RunDir; spend = $Spend; pending_task_id = $PendingTaskId; report = $report; acceptance = $Gate; effective_cost = $effectiveCost }
 }
 
+function Invoke-PlanRevise {
+    <# One-shot revise pass (d080, Slice 2): re-plan $Goal with the prior plan and the
+       peer-review revise brief appended, parse via ConvertTo-PlanObject, and return the
+       revised plan — overwriting plan.json on success. Fail-open by construction: a
+       missing reviewing worker, a non-zero exit, an unparseable reply, OR a throw from
+       the dispatch all return the ORIGINAL plan ($Run) unchanged and log the fall-back.
+       Never a second attempt, never a throw. Mirrors Invoke-PlanPhase's reasoning
+       routing and its -Dispatcher test seam so hermetic tests can stub the worker. #>
+    param(
+        [Parameter(Mandatory)][string]$Goal,
+        [Parameter(Mandatory)][string]$PlanJson,
+        [Parameter(Mandatory)][string]$ReviseBrief,
+        [Parameter(Mandatory)][hashtable]$Run,
+        [string]$RunDir,
+        [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [string[]]$RegistryLines = @(),
+        [scriptblock]$Dispatcher
+    )
+    $dispatch = {
+        param($cand, $prompt)
+        if ($Dispatcher) { return (& $Dispatcher $cand $prompt) }
+        return Invoke-Fleet -Name $cand.name -Prompt $prompt -Path $FleetPath -NoJournal
+    }
+    $failMsg = 'revise pass failed to parse — proceeding with the original plan'
+    $cands = Select-Capability -Capability reasoning -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
+    if ($null -eq $cands -or @($cands | Where-Object { $null -ne $_ }).Count -lt 1) {
+        if ($RunDir) { Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Message $failMsg) }
+        return $Run
+    }
+    # Reuse the standard planner prompt, then append the prior plan + the brief. Literal
+    # concatenation only — $PlanJson/$ReviseBrief are untrusted; never -replace (a '$1'/'$&'
+    # in the text would be read as a regex backreference and corrupt the prompt).
+    $base = Build-PlannerPrompt -Goal $Goal -RegistryLines $RegistryLines
+    $prompt = $base + "`n`n## Prior plan (JSON)`n" + $PlanJson +
+              "`n`n## Peer review findings — revise the plan to address these`n" + $ReviseBrief +
+              "`n`nEmit the FULL revised plan as JSON in the same schema. Address every finding you can without expanding scope."
+    $revised = $null
+    try {
+        $res = & $dispatch $cands[0] $prompt
+        if ([int]$res.exit_code -eq 0) { $revised = ConvertTo-PlanObject -RawStdout ([string]$res.stdout) }
+    } catch {
+        Write-Debug "revise dispatch failed: $($_.Exception.Message)"
+    }
+    if ($null -eq $revised) {
+        if ($RunDir) { Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Message $failMsg) }
+        return $Run
+    }
+    # Carry the run identity forward from the original plan (the revised reply may have
+    # invented its own run_id/goal/budget_cap — the run's own values win).
+    $revised.run_id = $Run.run_id
+    $revised.goal = $Goal
+    $revised.budget_cap = $Run.budget_cap
+    if ($RunDir) {
+        ($revised | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'plan.json') -Encoding utf8NoBOM
+        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Message 'plan revised once per peer review — walking the revised plan (no re-gate)')
+    }
+    return $revised
+}
+
 function Invoke-Conductor {
     <# Full-auto engine: plan, then walk the DAG under the two interrupt guards,
        logging events/decisions, and render a report. -Planner/-Spawner/-Dispatcher
@@ -548,7 +611,11 @@ function Invoke-Conductor {
         [string]$GateArtifact,
         [string]$GateDiff,
         [scriptblock]$Gater,
-        [scriptblock]$DiffProvider
+        [scriptblock]$DiffProvider,
+        [switch]$PlanGate,
+        [string[]]$PlanReviewers,
+        [bool]$PlanRevise = $true,
+        [scriptblock]$PlanGateDispatcher
     )
     if (-not $RunDir) { $RunDir = Initialize-RunDir }
     else { New-Item -ItemType Directory -Force -Path $RunDir | Out-Null }
@@ -565,6 +632,52 @@ function Invoke-Conductor {
     $plan.run_id = $runId
     ($plan | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'plan.json') -Encoding utf8NoBOM
     Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'started' -Message "plan: $(@($plan.tasks).Count) tasks")
+
+    # 1.5 Plan Gate (d080, Slice 2): OPT-IN peer once-over of the task DAG BEFORE the walk
+    #     — a sibling of the post-work Acceptance Gate (d058), but it reviews the not-yet-run
+    #     PLAN. Advisory + fail-open: a THROW from the gate never kills the run (warn + walk
+    #     as-is). Reject is the ONLY hard stop, and it halts before any worktree edit / DAG
+    #     walk / labor spend. Without -PlanGate this whole block is skipped (default path
+    #     byte-for-byte unchanged).
+    if ($PlanGate) {
+        # The exact plan.json we just wrote is the artifact the reviewers see.
+        $planJsonText = Get-Content -Raw -LiteralPath (Join-Path $RunDir 'plan.json')
+        $pgRes = $null
+        try {
+            $pgRes = Invoke-PlanGate -Goal $Goal -PlanJson $planJsonText -Reviewers $PlanReviewers `
+                -Dispatcher $PlanGateDispatcher -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
+        } catch {
+            # Advisory infrastructure must never kill a run: skip the gate, walk the plan.
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Level 'warn' -Message "plan gate failed (fail-open, walking the plan as-is): $($_.Exception.Message)")
+            $pgRes = $null
+        }
+        if ($null -ne $pgRes) {
+            $pgJson = ConvertTo-Json -Depth 8 -InputObject $pgRes
+            Set-Content -LiteralPath (Join-Path $RunDir 'plan-review.json') -Value $pgJson -Encoding utf8NoBOM
+            $c = $pgRes.counts
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Message "plan verdict: $($pgRes.verdict) — $($pgRes.reason) ($($c.critical) critical, $($c.important) important, $($c.minor) minor)")
+            $verdict = [string]$pgRes.verdict
+            if ($verdict -ne 'accept') {
+                Set-Content -LiteralPath (Join-Path $RunDir 'revise_brief.md') -Value ([string]$pgRes.revise_brief) -Encoding utf8NoBOM
+            }
+            if ($verdict -eq 'reject') {
+                # Hard stop: report the rejection, then exit clean via the same Complete-Run
+                # path plan-failed uses. No walk, no worktree, no spend.
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Level 'warn' -Message "plan rejected before the walk: $($pgRes.reason) — no worktree, no labor, no spend")
+                return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-rejected')
+            }
+            elseif ($verdict -eq 'revise') {
+                if ($PlanRevise) {
+                    # One revise pass, then walk whichever plan survives (no re-gate, Slice 2).
+                    $plan = Invoke-PlanRevise -Goal $Goal -PlanJson $planJsonText -ReviseBrief ([string]$pgRes.revise_brief) `
+                        -Run $plan -RunDir $RunDir -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath -Dispatcher $Dispatcher
+                    $plan.run_id = $runId
+                } else {
+                    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Message 'revise recommended, auto-revise disabled — proceeding with the original plan')
+                }
+            }
+        }
+    }
 
     # 2. Order the DAG.
     try { $order = Resolve-TaskOrder -Tasks @($plan.tasks) }

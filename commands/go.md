@@ -1,6 +1,6 @@
 ---
 description: Natural-language front door — describe an outcome and the Conductor plans it into a task DAG, then runs it full-auto under two guards (budget cap + destructive action), narrating as it goes. Interrupts only to cross a budget ceiling or before an irreversible action; guesses through everything else and logs every choice. Run artifacts (plan.json / events.jsonl / decisions.jsonl / report.md / acceptance.json) land under BATON_HOME/runs/<run-id>/.
-argument-hint: "<what you want done>" [--execute] [--repo <path>] [--budget <n>] [--max-tier local|free|paid] [--gate-artifact <text> | --gate-diff <range>]
+argument-hint: "<what you want done>" [--execute] [--repo <path>] [--budget <n>] [--max-tier local|free|paid] [--gate-artifact <text> | --gate-diff <range>] [--plan-gate] [--plan-reviewers a,b] [--plan-revise:$false]
 ---
 
 # /baton:go
@@ -22,6 +22,9 @@ let the engine and the fleet do the work.
    # add -Execute (and optionally -RepoPath "<path>") when the user wants the fleet to
    # actually DO the work: agentic instruments edit an isolated worktree, the produced
    # diff is acceptance-gated, and the changes land on branch baton/run-<id>
+   # add -PlanGate to have peers (Codex + Grok, the plan-review roster) once-over the
+   # plan DAG BEFORE the walk; -PlanReviewers a,b pins the roster; -PlanRevise:$false
+   # skips the single auto-revise pass. Reject halts the run before any labor (spend 0).
    ```
 
 3. Read the returned JSON (`status`, `run_dir`, `spend`, `pending_task_id`, `report`).
@@ -41,6 +44,10 @@ let the engine and the fleet do the work.
    - `rejected` → the optional acceptance gate reviewed the finished work and rejected it.
      Show the `## Acceptance` section of `report.md` (verdict, findings, polish brief); the
      work already ran — this is an advisory quality verdict, not a rollback.
+   - `plan-rejected` → the optional Plan Gate (`--plan-gate`) peer-reviewed the plan
+     DAG *before* the walk and found a critical defect. Nothing ran — no worktree, no
+     labor, no spend. Show the `revise_brief.md` and the `plan-review.json` verdict, and
+     offer to sharpen the goal or drop the reviewers' objection before rerunning.
    - `plan-failed` / `plan-invalid` → planning produced no usable DAG; show why and
      offer to retry with a sharper goal.
 
@@ -55,6 +62,11 @@ let the engine and the fleet do the work.
   at `<repo-parent>/.baton-worktrees/<run-id>` on branch `baton/run-<run-id>`; the
   cumulative diff is written to `<run-dir>/changes.diff` and acceptance-gated. The
   branch is ALWAYS left for the user to review and merge — Baton never merges.
+- With `--plan-gate`, two extra artifacts land in the run dir: `plan-review.json` (the
+  peer verdict + deduped findings) whenever the gate runs, and `revise_brief.md` whenever
+  the verdict is `revise` or `reject`. On `revise` (auto-revise on) the plan is rewritten
+  once and `plan.json` is overwritten with the revised DAG — the run then walks it with no
+  re-gate. An understaffed roster (<2 plan-review peers) fails open to `accept`.
 - Run artifacts are box-private under `BATON_HOME/runs/<run-id>/`.
 - When a prompt challenger is live (see `/baton:optimize-prompt`), the run log
   carries a `shadow` event naming which prompt variant planned this run.
