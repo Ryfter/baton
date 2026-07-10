@@ -2,7 +2,22 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
-## ⚑ RESUME HERE — 2026-07-09 evening (v1.11.0 shipped; hotfix branch open; live smoke pending)
+## ⚑ RESUME HERE — 2026-07-10 00:20 (LIVE ROUND-TRIP PROVEN; hotfix branch ready for merge word)
+
+**PROVEN 2026-07-10 00:15:** the first real fleet-does-the-labor round-trip. `pwsh -File scripts/fleet-go.ps1 -Goal "Create hello.md…" -Execute` → codex (GPT-5.5) planned the DAG **and** did the labor: `hello.md` created in the run worktree, captured as a new file in `changes.diff`, branch `baton/run-go-2026-07-10T00-15-56` left in the target repo, user tree untouched. Run dir `~/.baton/runs/go-2026-07-10T00-15-56`.
+
+**Branch `fix/planner-parse-multimodel` (5 commits, pushed, awaiting Kevin's merge word → v1.11.1):**
+1. `d08b9a3` planner parse for prompt-echoing providers (balanced blocks last-first)
+2. `c869e51` echoed-schema guard (`est_cost_tier: "local|free|paid"` reject signature)
+3. `bcfa0fd` `stdin: false` veto of the clean-tail promotion (agy regression; agy verified PONG via inline)
+4. `0aaf605` planner schema pins the routing-capability vocabulary (codex had planned capability "code-parallel" — a command name)
+5. `6c18671` codex seed `--sandbox workspace-write` (untrusted worktree dirs downgrade codex to read-only → silent no-op)
+
+Live `~/.baton/fleet.yaml` patched to match (agy `stdin: false` + inline; codex `--sandbox workspace-write -`). All suites green (conductor 121, dispatch, fleet-lib, doctor, probe, executor, go-execute). After merge: bump plugin 1.11.0 → 1.11.1, release, redeploy bootstrap (deployed box still runs unfixed v1.11.0 conductor-lib/fleet-lib).
+
+**Known smoke caveats (not blockers):** acceptance was null in the smoke (codex-only fleet has no `review`-capability provider — gate no-ops fail-open, correct); agy can't take JSON-schema prompts inline (quote fragility — Slice 3 territory); smoke artifacts under `%TEMP%` (`baton-live-smoke-*`, `.baton-worktrees\go-*`, `smoke-fleet*.yaml`) are disposable. Follow-up ideas logged: spawner should persist instrument stdout per task for legibility; consider creating the worktree only after a plan parses.
+
+## (superseded) 2026-07-09 evening entry
 
 **Shipped this session:** v1.11.0 "Fleet Labor Slice 2 — the Agentic Executor" (PR #80 `33c33c1`, d078, tag + GitHub release live, bootstrap-deployed). `/baton:go -Execute [-RepoPath]` = agentic labor into a throwaway worktree (`baton/run-<id>`, proof-by-diff, acceptance-gated, branch always left for the human). Opus review READY TO MERGE + fix wave (fleet-source guard, dispatch-throw containment, pipe-unroll fix). Also: Copilot credit budget spec'd (d079, branch `feature/copilot-credit-budget-spec`) — Kevin's word: **build it after Slice 2 wraps**.
 
