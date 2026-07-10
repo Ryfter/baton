@@ -80,7 +80,16 @@ function ConvertTo-PlanObject {
     $o = $null
     foreach ($block in $candidates) {
         try { $parsed = $block | ConvertFrom-Json -ErrorAction Stop } catch { continue }
-        if ($null -ne $parsed.tasks) { $o = $parsed; break }
+        if ($null -eq $parsed.tasks) { continue }
+        # Reject the planner prompt's own echoed SCHEMA (a provider that dies after
+        # echoing would otherwise hand us its placeholder example as a "plan"):
+        # the schema's est_cost_tier placeholder "local|free|paid" is the signature.
+        $isSchemaEcho = $false
+        foreach ($pt in @($parsed.tasks)) {
+            if ($pt.est_cost_tier -and (([string]$pt.est_cost_tier) -match '\|')) { $isSchemaEcho = $true; break }
+        }
+        if ($isSchemaEcho) { continue }
+        $o = $parsed; break
     }
     if ($null -eq $o) { return $null }
     $tasks = foreach ($t in @($o.tasks)) {

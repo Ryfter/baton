@@ -142,6 +142,28 @@ tokens used
     Check 'T43d tasks-less block still -> null' ($null -eq (ConvertTo-PlanObject -RawStdout $schemaOnly))
     $braceInString = 'noise {"run_id":"r2","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"use {curly} chars","command":"","capability":"","model_pick":"","depends_on":[],"est_cost_tier":"free","reversible":true}]} tail'
     Check 'T43e braces inside JSON strings survive the scan' ((ConvertTo-PlanObject -RawStdout $braceInString).tasks[0].desc -eq 'use {curly} chars')
+    # Echo-ONLY reply (provider died after echoing the prompt, e.g. usage-limit, but
+    # exited 0): the echoed schema must NOT be mistaken for a plan — its placeholder
+    # est_cost_tier "local|free|paid" is the reject signature.
+    $echoOnly = @'
+user
+Schema:
+{
+  "run_id": "<id>",
+  "goal": "<the goal>",
+  "budget_cap": null,
+  "tasks": [
+    { "id": "t1", "desc": "<what>", "command": "<baton command or empty>",
+      "capability": "<capability or empty>", "model_pick": "<model or empty>",
+      "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true }
+  ]
+}
+## Goal
+make hello.md
+
+ERROR: You have hit your usage limit. Try again later.
+'@
+    Check 'T43f echo-only reply (no answer) -> null, schema not mistaken for a plan' ($null -eq (ConvertTo-PlanObject -RawStdout $echoOnly))
 
     Remove-Item -Force $tmpTools -ErrorAction SilentlyContinue
 
