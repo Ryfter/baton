@@ -103,6 +103,46 @@ try {
     $dispBad = { param($c,$p) @{ stdout = 'not json'; stderr=''; exit_code = 0; duration_s = 1 } }
     Check 'T43 unparseable planner reply -> null' ($null -eq (Invoke-PlanPhase -Goal 'x' -FleetPath $refFleet -ToolsPath $tmpTools -Dispatcher $dispBad))
 
+    # ---- Multi-model planner replies (v1.11.1): providers like `codex exec` echo the
+    # prompt (which itself contains the JSON schema) before the answer, and may emit
+    # the answer JSON more than once. Greedy first-{-to-last-} spans echo+answer ->
+    # invalid JSON. The parser must recover the LAST parseable tasks-bearing block. ----
+    $echoSchema = @'
+Reading prompt from stdin...
+OpenAI Codex v0.144.0
+--------
+user
+Respond with ONLY valid JSON matching this schema - no prose, no fences.
+Schema:
+{
+  "run_id": "<id>",
+  "goal": "<the goal>",
+  "budget_cap": null,
+  "tasks": [
+    { "id": "t1", "desc": "<what>", "command": "<baton command or empty>",
+      "capability": "<capability or empty>", "model_pick": "<model or empty>",
+      "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true }
+  ]
+}
+## Goal
+make hello.md
+
+2026-07-09T20:52:19.577311Z ERROR codex_memories_write::phase2: Phase 2 no changes
+codex
+{"run_id":"real","goal":"make hello.md","budget_cap":null,"tasks":[{"id":"t1","desc":"Create hello.md","command":"","capability":"code-gen","model_pick":"","depends_on":[],"est_cost_tier":"local","reversible":true}]}
+{"run_id":"real","goal":"make hello.md","budget_cap":null,"tasks":[{"id":"t1","desc":"Create hello.md","command":"","capability":"code-gen","model_pick":"","depends_on":[],"est_cost_tier":"local","reversible":true}]}
+tokens used
+20,090
+'@
+    $pEcho = ConvertTo-PlanObject -RawStdout $echoSchema
+    Check 'T43a prompt-echoing provider reply parses' ($null -ne $pEcho)
+    Check 'T43b parsed the ANSWER not the echoed schema' (($pEcho.run_id -eq 'real') -and ($pEcho.tasks[0].desc -eq 'Create hello.md'))
+    Check 'T43c single clean JSON still parses (regression)' ($null -ne (ConvertTo-PlanObject -RawStdout $cannedPlan))
+    $schemaOnly = "prose {`n" + '"run_id": "<id>", "tasks": []' + "`n} more prose"
+    Check 'T43d tasks-less block still -> null' ($null -eq (ConvertTo-PlanObject -RawStdout $schemaOnly))
+    $braceInString = 'noise {"run_id":"r2","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"use {curly} chars","command":"","capability":"","model_pick":"","depends_on":[],"est_cost_tier":"free","reversible":true}]} tail'
+    Check 'T43e braces inside JSON strings survive the scan' ((ConvertTo-PlanObject -RawStdout $braceInString).tasks[0].desc -eq 'use {curly} chars')
+
     Remove-Item -Force $tmpTools -ErrorAction SilentlyContinue
 
     # ---- Task 5: the conductor loop (seamed) ----
