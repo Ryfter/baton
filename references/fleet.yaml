@@ -96,13 +96,17 @@ providers:
     platform: claude
     command_template: 'claude -p "{{prompt}}"'
 
+  # --sandbox workspace-write: codex downgrades untrusted dirs (e.g. Baton's
+  # throwaway run worktrees) to a READ-ONLY sandbox and, with approval never,
+  # exits 0 having edited nothing — a silent no-op for /baton:go --execute.
+  # The explicit policy scopes writes to the cwd, which IS the worktree.
   - name: codex
     kind: cli
     enabled: true
     cost_tier: paid
     role: finisher
     platform: codex
-    command_template: 'codex exec "{{prompt}}"'
+    command_template: 'codex exec --sandbox workspace-write "{{prompt}}"'
 
   # agy does NOT read stdin: the clean-tail stdin promotion would turn this into a
   # bare `agy --print` ("flag needs an argument"), and `agy --print -` treats the
