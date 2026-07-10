@@ -2,7 +2,32 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
-## ⚑ RESUME HERE — 2026-07-10 00:20 (LIVE ROUND-TRIP PROVEN; hotfix branch ready for merge word)
+## ⚑ RESUME HERE — 2026-07-10 (Plan Gate + Grok — ready for Claude to build)
+
+**AUTHORIZED BUILD:** Plan Gate (Claude conducts; Codex + Grok once-over plans).
+
+| Artifact | Location | Status |
+|---|---|---|
+| Decision | Grimdex **d080** (`projects/baton/decisions/d080-plan-gate-…`) | recorded + pushed |
+| Design | `docs/superpowers/specs/2026-07-10-plan-gate-design.md` | ready |
+| Plan | `docs/superpowers/plans/2026-07-10-plan-gate.md` | ready (Slices 0–3) |
+| Grok handoff | `GROK.md` + `.grok/rules/baton-handoff.md` + agent-handoffs registry | **shipped** |
+| Grimdex wire | `GROK.md` in wire targets (engine + grimdex-know) | **shipped** |
+| Fleet row / plan-gate code | not started | **build this** |
+
+**Claude: start here**
+
+1. Read d080 (Grimdex) + the design + plan above — do not redesign from chat.
+2. **Slice 0** first: `grok-cli` + `plan-review` on codex/grok in seed **and** live `~/.baton/fleet.yaml`; canary PONG; lock stdin vs inline.
+3. **Slice 1:** `plan-gate-lib` + `/baton:plan-gate` + hermetic suite (no Conductor change).
+4. Stop for review before **Slice 2** (Conductor `--plan-gate` seam).
+5. Do **not** re-author GROK.md / wire-project / d080.
+
+**Still open from earlier (separate track):** branch `fix/planner-parse-multimodel` awaiting merge word → v1.11.1 (see entry below). Copilot credit budget (d079) remains after Slice 2 labor wrap.
+
+---
+
+## ⚑ PRIOR — 2026-07-10 00:20 (LIVE ROUND-TRIP PROVEN; hotfix branch ready for merge word)
 
 **PROVEN 2026-07-10 00:15:** the first real fleet-does-the-labor round-trip. `pwsh -File scripts/fleet-go.ps1 -Goal "Create hello.md…" -Execute` → codex (GPT-5.5) planned the DAG **and** did the labor: `hello.md` created in the run worktree, captured as a new file in `changes.diff`, branch `baton/run-go-2026-07-10T00-15-56` left in the target repo, user tree untouched. Run dir `~/.baton/runs/go-2026-07-10T00-15-56`.
 
