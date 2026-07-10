@@ -169,7 +169,9 @@ function Resolve-FleetCommand {
     if (-not $template) { throw "Provider '$($Provider.name)' has no command_template." }
     # stdin providers pipe the prompt in rather than interpolating it, so they
     # legitimately omit {{prompt}} from the template (e.g. 'codex exec -').
-    if ($template -notmatch '\{\{prompt\}\}' -and $Provider.stdin -ne $true) {
+    # {{prompt_file}} providers are likewise exempt: the prompt rides a temp file
+    # whose path is substituted only inside Invoke-Fleet-Cli, never here.
+    if ($template -notmatch '\{\{prompt\}\}' -and $Provider.stdin -ne $true -and $template -notmatch '\{\{prompt_file\}\}') {
         throw "Provider '$($Provider.name)' command_template lacks the required {{prompt}} placeholder."
     }
     $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
@@ -251,13 +253,23 @@ function Invoke-Fleet-Cli {
         [string]$Model,
         [int]$TimeoutS = 120
     )
-    # Decide dispatch path. stdin:true providers already omit {{prompt}};
-    # clean-tail interpolating providers are promoted to stdin (prompt-size /
-    # quote hardening) by stripping the trailing quoted {{prompt}} token. For
-    # both stdin cases we resolve {{model}} inline — NOT via Resolve-FleetCommand,
-    # whose mandatory -Prompt would reject the empty prompt a stdin dispatch uses.
-    $useStdin = ($Provider.stdin -eq $true) -or (Test-StdinSafe -Provider $Provider)
-    if ($useStdin) {
+    # Decide dispatch path. A {{prompt_file}} template takes precedence over the
+    # stdin decision: the prompt is written to a temp file and its path substituted
+    # (quote-safe + size-safe) for CLIs that neither read stdin nor tolerate inline
+    # quotes (grok). Otherwise: stdin:true providers already omit {{prompt}}; clean-
+    # tail interpolating providers are promoted to stdin (prompt-size / quote
+    # hardening) by stripping the trailing quoted {{prompt}} token. For the stdin
+    # and prompt-file cases we resolve {{model}} inline — NOT via Resolve-FleetCommand,
+    # whose mandatory -Prompt would reject the empty prompt those dispatches use.
+    $usePromptFile = ([string]$Provider.command_template) -match '\{\{prompt_file\}\}'
+    $useStdin = (-not $usePromptFile) -and (($Provider.stdin -eq $true) -or (Test-StdinSafe -Provider $Provider))
+    if ($usePromptFile) {
+        # {{prompt_file}} is substituted with the temp path inside the try below,
+        # where the file lives; resolve {{model}} now, same as the stdin branch.
+        $cmd = [string]$Provider.command_template
+        $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
+        if ($null -ne $resolvedModel) { $cmd = $cmd.Replace('{{model}}', [string]$resolvedModel) }
+    } elseif ($useStdin) {
         # stdin:true templates carry no {{prompt}}; Test-StdinSafe templates end in
         # a standalone quoted {{prompt}} that we strip. Both then resolve {{model}}.
         $cmd = if ($Provider.stdin -eq $true) { [string]$Provider.command_template }
@@ -277,7 +289,22 @@ function Invoke-Fleet-Cli {
     }
     $start = Get-Date
     try {
-        if ($useStdin) {
+        if ($usePromptFile) {
+            # Prompt-file path: write $Prompt to a unique temp file and substitute
+            # its path. Quote-safe (the CLI reads the file, not an arg) and size-safe
+            # (no 965-byte arg ceiling). Literal .Replace() — the path is ours, but
+            # $-sequences in the prompt must never become regex backreferences. The
+            # template carries its own quotes around {{prompt_file}}, so Invoke-
+            # Expression is safe: the substituted value is a path we created.
+            $tmp = [System.IO.Path]::GetTempFileName()
+            try {
+                Set-Content -LiteralPath $tmp -Value $Prompt -Encoding utf8NoBOM
+                $fileCmd = $cmd.Replace('{{prompt_file}}', $tmp)
+                $out = Invoke-Expression $fileCmd 2>&1 | Out-String
+            } finally {
+                Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+            }
+        } elseif ($useStdin) {
             # Robust path: pass the prompt via stdin instead of interpolating it
             # into the command string — immune to embedded quotes/backticks/$.
             # The template is a clean token list (e.g. 'codex exec -') with no

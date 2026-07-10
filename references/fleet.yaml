@@ -8,7 +8,10 @@
 #   kind              cli | http
 #   enabled           true | false (disabled providers are skipped, not invoked)
 #   cost_tier         paid | free | local
-#   command_template  (cli only) {{prompt}} required, {{model}} optional
+#   command_template  (cli only) {{prompt}} required, {{model}} optional. Third
+#                     transport: {{prompt_file}} = the prompt is written to a temp
+#                     file and its path substituted (quote-safe + size-safe) — for
+#                     CLIs that neither read stdin nor tolerate inline quotes (grok).
 #   stdin             (cli only, optional) true = template has no {{prompt}}; the
 #                     prompt is piped via stdin (quote-safe). false = explicit VETO
 #                     of the automatic clean-tail stdin promotion for CLIs that do
@@ -132,10 +135,11 @@ providers:
     command_template: 'agy --print "{{prompt}}"'
 
   # grok (xAI CLI) does NOT read stdin: bare `grok -p` errors ("a value is required
-  # for '--single <PROMPT>'"), so stdin: false vetoes the clean-tail promotion and
-  # the prompt interpolates inline — same shape as agy. CAVEAT: inline breaks on
-  # embedded double quotes; JSON-heavy prompts (plan-review) ride the file-based
-  # transport once wired (grok --prompt-file <path>, proven quote-safe live).
+  # for '--single <PROMPT>'"), and inline `grok -p "{{prompt}}"` breaks on the
+  # embedded double quotes of JSON-heavy plan-review prompts. So the prompt rides a
+  # temp file via the {{prompt_file}} transport (grok --prompt-file <path>, proven
+  # quote-safe live 2026-07-10) — quote-safe and 965-byte-safe, no stdin: false veto
+  # needed (a {{prompt_file}} template is never a stdin-promotion candidate).
   # agentic: true is REQUIRED — platform 'grok' is outside the d078 auto-infer
   # set {claude, codex, gemini}.
   - name: grok-cli
@@ -145,8 +149,7 @@ providers:
     role: finisher
     platform: grok
     agentic: true
-    stdin: false
-    command_template: 'grok -p "{{prompt}}"'
+    command_template: 'grok --prompt-file "{{prompt_file}}"'
     capabilities: [code-gen, reasoning, plan-review, review]
 
   - name: gh-copilot
