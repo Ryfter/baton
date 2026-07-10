@@ -331,7 +331,8 @@ function Build-PlannerPrompt {
   "budget_cap": null,
   "tasks": [
     { "id": "t1", "desc": "<what>", "command": "<baton command or empty>",
-      "capability": "<capability or empty>", "model_pick": "<model or empty>",
+      "capability": "<ROUTING capability: code-gen for creating/editing files or code, code-transform, reasoning, research, summarize, triage, review — or empty. NEVER a baton command name>",
+      "model_pick": "<model or empty>",
       "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true }
   ]
 }

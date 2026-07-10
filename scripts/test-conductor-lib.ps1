@@ -88,6 +88,9 @@ try {
     Check 'T36 planner prompt includes goal' ($pp -match 'convert pdfs to markdown')
     Check 'T37 planner prompt includes registry evidence' ($pp -match 'docling')
     Check 'T38 planner prompt includes schema + reversible rule' (($pp -match '"tasks"') -and ($pp -match 'reversible'))
+    # v1.11.1: codex planned capability "code-parallel" (a baton COMMAND name) and no
+    # provider claims it -> walk failed. The schema must pin the routing vocabulary.
+    Check 'T38a planner schema constrains capability vocabulary' (($pp -match 'code-gen') -and ($pp -notmatch '"capability": "<capability or empty>"'))
 
     $refFleet = Join-Path $PSScriptRoot '../references/fleet.yaml'
     $tmpTools = Join-Path ([System.IO.Path]::GetTempPath()) "cond-tools-$([System.IO.Path]::GetRandomFileName()).yaml"
