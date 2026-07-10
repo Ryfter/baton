@@ -185,9 +185,12 @@ function Test-StdinSafe {
     <# True when a cli provider's template can safely pipe the prompt via stdin:
        not already stdin, template ends in a standalone quoted {{prompt}}, and the
        command minus that tail has no shell operators. Keeps embedded-prompt and
-       shell-wrapped templates on the legacy interpolation path. #>
+       shell-wrapped templates on the legacy interpolation path. An explicit
+       stdin:false is a per-provider VETO of the promotion (e.g. agy: `--print`
+       requires an inline argument and does not read stdin — a promoted bare
+       `agy --print` dies with "flag needs an argument"). #>
     param([Parameter(Mandatory)][hashtable]$Provider)
-    if ($Provider.stdin -eq $true) { return $false }
+    if ($null -ne $Provider.stdin) { return $false }   # true = already stdin; false = veto
     $template = [string]$Provider.command_template
     if (-not $template) { return $false }
     if ($template -notmatch '\s+(["''])\{\{prompt\}\}\1\s*$') { return $false }
