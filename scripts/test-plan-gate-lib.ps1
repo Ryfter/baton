@@ -88,6 +88,22 @@ try {
     Check '5d zero dispatches occurred' ($script:dispatchCount5 -eq 0)
     Check '5e reviewers echoes the lone name' ((($g5.reviewers -join ',') -eq 'only-one'))
 
+    # ---- Case 5.5: duplicate reviewer names collapse to one -> understaffed fail-open,
+    #      ZERO dispatch. `-Reviewers dup,dup` must not pose as a competitive pair. ----
+    $script:dispatchCount55 = 0
+    $disp55 = { param($n,$p) $script:dispatchCount55++; return @{ stdout='[{"severity":"critical","area":"risk","summary":"x"}]'; stderr=''; exit_code=0 } }
+    $g55 = Invoke-PlanGate -Goal 'g' -PlanJson '{}' -Reviewers @('dup','dup') -Dispatcher $disp55
+    Check '5.5a duplicate pair dedupes to understaffed -> fail_open' ($g55.fail_open -eq $true)
+    Check '5.5b dedup fail-open verdict accept' ($g55.verdict -eq 'accept')
+    Check '5.5c dedup reason mentions understaffed' ($g55.reason -match 'understaffed')
+    Check '5.5d ZERO dispatches (never posed as a pair)' ($script:dispatchCount55 -eq 0)
+    Check '5.5e reviewers echoes the single deduped name' ((($g55.reviewers -join ',') -eq 'dup'))
+    # Case-insensitive dedupe: Codex vs codex is the same reviewer.
+    $script:dispatchCount55b = 0
+    $disp55b = { param($n,$p) $script:dispatchCount55b++; return @{ stdout='[]'; stderr=''; exit_code=0 } }
+    $g55b = Invoke-PlanGate -Goal 'g' -PlanJson '{}' -Reviewers @('Codex','codex') -Dispatcher $disp55b
+    Check '5.5f case-insensitive dedupe -> fail_open, zero dispatch' ($g55b.fail_open -eq $true -and $script:dispatchCount55b -eq 0)
+
     # ---- Case 6: roster resolution — no -Reviewers, fixture grants plan-review to 2 ----
     $disp6 = { param($n,$p) return @{ stdout='[]'; stderr=''; exit_code=0 } }
     $g6 = Invoke-PlanGate -Goal 'g' -PlanJson '{}' -FleetPath $fixtureFleet -ToolsPath $fixtureTools -Dispatcher $disp6

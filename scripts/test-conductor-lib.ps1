@@ -622,6 +622,25 @@ ERROR: You have hit your usage limit. Try again later.
         Check 'PG7b plan-review.json fail_open true' ((Get-Content -Raw (Join-Path $run7 'plan-review.json') | ConvertFrom-Json).fail_open -eq $true)
         Check 'PG7c walk proceeded' (@($pgSeen7).Count -eq 2)
 
+        # PG9 (F4): a THROW from the revise pass's roster resolution (Select-Capability on a
+        # malformed fleet/tools file) is fail-open — the WHOLE revise pass sits in one try, so
+        # ANY failure returns the ORIGINAL plan with the fail-open event. Shadow Select-Capability
+        # to throw (the roster call sits before dispatch); the revise dispatcher must NEVER run.
+        # The real function is restored right after via re-dot-sourcing routing-lib.
+        function Select-Capability { throw 'malformed fleet file at revise time' }
+        $pgReviseCount9 = @{ n = 0 }
+        $reviseDisp9 = { param($cand,$prompt) $pgReviseCount9.n++; @{ exit_code = 0; stdout = $revisedPlanJson } }
+        $pgSeen9 = [System.Collections.ArrayList]@()
+        $pgSpawn9 = { param($t) [void]$pgSeen9.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run9 = Join-Path $pgHome 'pg-9'
+        $rPG9 = Invoke-Conductor -Goal 'g' -RunDir $run9 -Planner $pgPlanner -Spawner $pgSpawn9 -PlanGate -PlanReviewers @('a','b') -PlanGateDispatcher $gateImportant -Dispatcher $reviseDisp9 -FleetPath $refFleetPG -ToolsPath $pgTools
+        Check 'PG9 revise roster throw -> completed (fail-open)' ($rPG9.status -eq 'completed')
+        Check 'PG9b revise dispatcher never reached (threw before dispatch)' ($pgReviseCount9.n -eq 0)
+        $pg9Plan = Get-Content -Raw (Join-Path $run9 'plan.json') | ConvertFrom-Json
+        Check 'PG9c original plan walked (t1,t2)' ((@($pg9Plan.tasks).Count -eq 2) -and ($pgSeen9 -contains 't2'))
+        Check 'PG9d event notes revise fail-open' ((Get-Content -Raw (Join-Path $run9 'events.jsonl')) -match 'revise pass failed to parse')
+        . "$PSScriptRoot/routing-lib.ps1"   # restore the real Select-Capability after the shadow
+
         # PGcli: fleet-go plumbing + BATON_GO_TEST_PLANGATE seam end-to-end (child process,
         # accept path). Exercises -PlanGate + comma-joined -PlanReviewers + the env seam.
         $pgCliHome = Join-Path ([System.IO.Path]::GetTempPath()) "cond-pgcli-$([System.IO.Path]::GetRandomFileName())"

@@ -163,6 +163,13 @@ function Invoke-PlanGate {
         $cands = Select-Capability -Capability plan-review -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
         $Reviewers = @($cands | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.name })
     }
+    # Dedupe case-insensitively BEFORE the <2 understaffed check: `-Reviewers codex,codex`
+    # is ONE reviewer posing as a pair — it must fail-open as understaffed, not pretend to
+    # be a competitive review. NB: Select-Object -Unique is CASE-SENSITIVE in PS7 (no
+    # -CaseSensitive knob exists), so an OrdinalIgnoreCase HashSet does the case-insensitive
+    # dedupe while preserving order + first-seen casing (Add() is true only on first sight).
+    $seenReviewers = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $Reviewers = @($Reviewers | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Where-Object { $seenReviewers.Add($_) })
     if (@($Reviewers).Count -lt 2) {
         return [ordered]@{
             verdict = 'accept'; reason = 'understaffed plan-review roster (fewer than 2 reviewers) — fail-open'

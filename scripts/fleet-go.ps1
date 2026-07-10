@@ -115,10 +115,25 @@ try {
 }
 
 if ($Execute -and $wt) {
-    $result.branch = $wt.branch
-    $result.worktree = $wt.worktree
-    $changed = @(& git -C $wt.worktree diff --name-only $wt.base_sha 2>$null)
-    $result.files_changed = @($changed | Where-Object { $_ }).Count
+    if ($result.status -eq 'plan-rejected') {
+        # The Plan Gate rejected BEFORE the walk. The worktree/branch were created up
+        # front but are untouched by construction (the gate precedes any DAG walk /
+        # labor), so discard both — a rejected run must leave nothing behind, and the
+        # report must not advertise a dead branch. Best-effort + guarded: cleanup
+        # failure never crashes the run. ONLY on plan-rejected; every other status keeps
+        # the branch for the human to merge. Remove the worktree first, THEN delete the
+        # branch (git refuses to delete a branch still checked out in a worktree).
+        try { Remove-RunWorktree -Worktree $wt.worktree -RepoPath $repo -Force } catch { }
+        try { & git -C $repo branch -D $wt.branch 2>$null | Out-Null } catch { }
+        $result.branch = $null
+        $result.worktree = $null
+        $result.files_changed = 0
+    } else {
+        $result.branch = $wt.branch
+        $result.worktree = $wt.worktree
+        $changed = @(& git -C $wt.worktree diff --name-only $wt.base_sha 2>$null)
+        $result.files_changed = @($changed | Where-Object { $_ }).Count
+    }
 }
 
 if ($Json) {

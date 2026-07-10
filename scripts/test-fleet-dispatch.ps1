@@ -110,6 +110,19 @@ $pfLingering = @(Get-ChildItem -Path $env:TEMP -Filter '*.tmp' -File -ErrorActio
 Assert "prompt_file temp file cleaned up (no lingering sentinel)" ($pfLingering.Count -eq 0)
 Remove-Item $tmpJpf -ErrorAction SilentlyContinue
 
+# --- {{prompt_file}} argv invocation: subexpression + backticks round-trip VERBATIM ---
+# The argv path (call operator, no Invoke-Expression) must never reparse a $(...)
+# subexpression or backticks in the prompt. Single-quoted so $(Get-Date)/backticks
+# stay literal in PS; the fixture echoes the temp file's raw content back, so a
+# verbatim match proves nothing was evaluated en route.
+$pfEvilCore = 'sub:$(Get-Date) tick:`whoami` end'
+$tmpJpf2 = Join-Path $env:TEMP "fleet-disp-pf2-journal-$(Get-Random).md"
+$rPf2 = Invoke-Fleet -Name 'stub-promptfile' -Prompt $pfEvilCore -Path $fixture -JournalPath $tmpJpf2
+$pfOut2 = ($rPf2.stdout | Out-String)
+Assert "prompt_file argv path: subexpression/backticks round-trip verbatim (no reparse)" ($pfOut2.Contains($pfEvilCore))
+Assert "prompt_file argv path exit 0" ($rPf2.exit_code -eq 0)
+Remove-Item $tmpJpf2 -ErrorAction SilentlyContinue
+
 # A {{prompt_file}} template must NOT be promoted to stdin (no trailing quoted
 # {{prompt}} tail for Test-StdinSafe to strip) — the file branch owns it.
 Assert "stdin-safe: {{prompt_file}} template not promoted to stdin" (-not (Test-StdinSafe -Provider @{ name='pf'; command_template='grok --prompt-file "{{prompt_file}}"' }))

@@ -290,17 +290,39 @@ function Invoke-Fleet-Cli {
     $start = Get-Date
     try {
         if ($usePromptFile) {
-            # Prompt-file path: write $Prompt to a unique temp file and substitute
-            # its path. Quote-safe (the CLI reads the file, not an arg) and size-safe
-            # (no 965-byte arg ceiling). Literal .Replace() — the path is ours, but
-            # $-sequences in the prompt must never become regex backreferences. The
-            # template carries its own quotes around {{prompt_file}}, so Invoke-
-            # Expression is safe: the substituted value is a path we created.
+            # Prompt-file path: write $Prompt to a unique temp file and hand its path
+            # to the CLI. Quote-safe (the CLI reads the file, not an arg) and size-safe
+            # (no 965-byte arg ceiling). Mirror the stdin branch's argv invocation:
+            # split the template into whitespace tokens, find the standalone
+            # {{prompt_file}} token (after stripping surrounding quotes), swap in the
+            # temp path, and invoke via the call operator — NO Invoke-Expression, so a
+            # $(, backtick, or $ in the temp path (username-dependent) is never reparsed.
             $tmp = [System.IO.Path]::GetTempFileName()
             try {
                 Set-Content -LiteralPath $tmp -Value $Prompt -Encoding utf8NoBOM
-                $fileCmd = $cmd.Replace('{{prompt_file}}', $tmp)
-                $out = Invoke-Expression $fileCmd 2>&1 | Out-String
+                $tokens = @($cmd -split '\s+' | Where-Object { $_ -ne '' })
+                # A token is the prompt-file slot when, stripped of surrounding single/
+                # double quotes, it equals {{prompt_file}} exactly (placeholder as its own
+                # argument). An embedded placeholder inside a larger token is NOT argv-safe.
+                $pfIdx = -1
+                for ($ti = 0; $ti -lt $tokens.Count; $ti++) {
+                    if (($tokens[$ti].Trim('"', "'")) -eq '{{prompt_file}}') { $pfIdx = $ti; break }
+                }
+                if ($pfIdx -ge 0) {
+                    $argv = @($tokens)
+                    $argv[$pfIdx] = $tmp
+                    $exe = $argv[0]
+                    $rest = @($argv | Select-Object -Skip 1)
+                    $out = & $exe @rest 2>&1 | Out-String
+                } else {
+                    # Fallback: the placeholder is embedded inside a larger token (no
+                    # standalone argv slot to target), so the call-operator path cannot
+                    # substitute it. Substitute literally and run via Invoke-Expression —
+                    # tolerable here because the substituted value is a temp path we
+                    # created and the template carries its own quoting around the token.
+                    $fileCmd = $cmd.Replace('{{prompt_file}}', $tmp)
+                    $out = Invoke-Expression $fileCmd 2>&1 | Out-String
+                }
             } finally {
                 Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
             }

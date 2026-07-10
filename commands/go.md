@@ -61,12 +61,16 @@ let the engine and the fleet do the work.
   agy, claude-cli — `agentic`/platform-eligible providers) edit a throwaway worktree
   at `<repo-parent>/.baton-worktrees/<run-id>` on branch `baton/run-<run-id>`; the
   cumulative diff is written to `<run-dir>/changes.diff` and acceptance-gated. The
-  branch is ALWAYS left for the user to review and merge — Baton never merges.
+  branch is ALWAYS left for the user to review and merge — Baton never merges. The one
+  exception is a `plan-rejected` run under `--execute`: the worktree/branch are created
+  before the gate but never touched, so on rejection they are discarded and the result's
+  `branch`/`worktree` fields come back null (nothing to merge, nothing advertised).
 - With `--plan-gate`, two extra artifacts land in the run dir: `plan-review.json` (the
   peer verdict + deduped findings) whenever the gate runs, and `revise_brief.md` whenever
   the verdict is `revise` or `reject`. On `revise` (auto-revise on) the plan is rewritten
   once and `plan.json` is overwritten with the revised DAG — the run then walks it with no
-  re-gate. An understaffed roster (<2 plan-review peers) fails open to `accept`.
+  re-gate. An understaffed roster (<2 plan-review peers, or duplicate names that collapse
+  to one) fails open to `accept`.
 - Run artifacts are box-private under `BATON_HOME/runs/<run-id>/`.
 - When a prompt challenger is live (see `/baton:optimize-prompt`), the run log
   carries a `shadow` event naming which prompt variant planned this run.

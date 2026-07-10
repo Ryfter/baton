@@ -558,24 +558,29 @@ function Invoke-PlanRevise {
         return Invoke-Fleet -Name $cand.name -Prompt $prompt -Path $FleetPath -NoJournal
     }
     $failMsg = 'revise pass failed to parse — proceeding with the original plan'
-    $cands = Select-Capability -Capability reasoning -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
-    if ($null -eq $cands -or @($cands | Where-Object { $null -ne $_ }).Count -lt 1) {
-        if ($RunDir) { Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Message $failMsg) }
-        return $Run
-    }
-    # Reuse the standard planner prompt, then append the prior plan + the brief. Literal
-    # concatenation only — $PlanJson/$ReviseBrief are untrusted; never -replace (a '$1'/'$&'
-    # in the text would be read as a regex backreference and corrupt the prompt).
-    $base = Build-PlannerPrompt -Goal $Goal -RegistryLines $RegistryLines
-    $prompt = $base + "`n`n## Prior plan (JSON)`n" + $PlanJson +
-              "`n`n## Peer review findings — revise the plan to address these`n" + $ReviseBrief +
-              "`n`nEmit the FULL revised plan as JSON in the same schema. Address every finding you can without expanding scope."
+    # Widen fail-open (codex): ALL revise-pass work — roster resolution (Select-Capability
+    # can throw on a malformed fleet/tools file), prompt build, dispatch, and parse — runs
+    # inside one try. ANY failure returns the ORIGINAL plan ($Run) with the fail-open event.
+    # A missing worker still short-circuits inside the try with the same message. No behavior
+    # change on the success path.
     $revised = $null
     try {
+        $cands = Select-Capability -Capability reasoning -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
+        if ($null -eq $cands -or @($cands | Where-Object { $null -ne $_ }).Count -lt 1) {
+            if ($RunDir) { Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Message $failMsg) }
+            return $Run
+        }
+        # Reuse the standard planner prompt, then append the prior plan + the brief. Literal
+        # concatenation only — $PlanJson/$ReviseBrief are untrusted; never -replace (a '$1'/'$&'
+        # in the text would be read as a regex backreference and corrupt the prompt).
+        $base = Build-PlannerPrompt -Goal $Goal -RegistryLines $RegistryLines
+        $prompt = $base + "`n`n## Prior plan (JSON)`n" + $PlanJson +
+                  "`n`n## Peer review findings — revise the plan to address these`n" + $ReviseBrief +
+                  "`n`nEmit the FULL revised plan as JSON in the same schema. Address every finding you can without expanding scope."
         $res = & $dispatch $cands[0] $prompt
         if ([int]$res.exit_code -eq 0) { $revised = ConvertTo-PlanObject -RawStdout ([string]$res.stdout) }
     } catch {
-        Write-Debug "revise dispatch failed: $($_.Exception.Message)"
+        Write-Debug "revise pass failed: $($_.Exception.Message)"
     }
     if ($null -eq $revised) {
         if ($RunDir) { Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Message $failMsg) }

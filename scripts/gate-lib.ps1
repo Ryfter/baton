@@ -45,27 +45,42 @@ function Get-FindingsJsonBlocks {
        Returns a plain array via .ToArray() — NO unary-comma wrap; callers collect
        with @() (the exact double-wrap bug that bit conductor-lib's Get-JsonBlocks). #>
     param([Parameter(Mandatory)][string]$Raw)
+    # Resilience (codex): a single linear pass lets an unmatched '[' in echoed prose
+    # keep depth>0 to EOF, swallowing every later VALID array. Instead iterate candidate
+    # START positions: from the cursor, find the next '[', attempt a string-aware balanced
+    # extraction from it; on success emit the block and advance the cursor past it; on
+    # EOF-without-close, advance the cursor to just AFTER that '[' and retry from there.
+    # Small inputs (KB) — O(n^2) worst case is acceptable.
     $blocks = [System.Collections.ArrayList]@()
-    $depth = 0; $blockStart = -1; $inStr = $false; $escaped = $false
-    for ($i = 0; $i -lt $Raw.Length; $i++) {
-        $ch = $Raw[$i]
-        if ($inStr) {
-            if ($escaped) { $escaped = $false }
-            elseif ($ch -eq '\') { $escaped = $true }
-            elseif ($ch -eq '"') { $inStr = $false }
-            continue
-        }
-        if ($ch -eq '"') { if ($depth -gt 0) { $inStr = $true } }
-        elseif ($ch -eq '[') { if ($depth -eq 0) { $blockStart = $i }; $depth++ }
-        elseif ($ch -eq ']') {
-            if ($depth -gt 0) {
+    $len = $Raw.Length
+    $cursor = 0
+    while ($true) {
+        $open = $Raw.IndexOf('[', $cursor)
+        if ($open -lt 0) { break }
+        $depth = 0; $inStr = $false; $escaped = $false; $closed = $false
+        for ($i = $open; $i -lt $len; $i++) {
+            $ch = $Raw[$i]
+            if ($inStr) {
+                if ($escaped) { $escaped = $false }
+                elseif ($ch -eq '\') { $escaped = $true }
+                elseif ($ch -eq '"') { $inStr = $false }
+                continue
+            }
+            if ($ch -eq '"') { if ($depth -gt 0) { $inStr = $true } }
+            elseif ($ch -eq '[') { $depth++ }
+            elseif ($ch -eq ']') {
                 $depth--
-                if ($depth -eq 0 -and $blockStart -ge 0) {
-                    [void]$blocks.Add($Raw.Substring($blockStart, $i - $blockStart + 1))
-                    $blockStart = -1
+                if ($depth -eq 0) {
+                    [void]$blocks.Add($Raw.Substring($open, $i - $open + 1))
+                    $cursor = $i + 1
+                    $closed = $true
+                    break
                 }
             }
         }
+        # EOF reached without balancing this '[' — skip past it and retry, so a later
+        # valid array is not lost behind an unmatched opener in prose.
+        if (-not $closed) { $cursor = $open + 1 }
     }
     return $blocks.ToArray()
 }

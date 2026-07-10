@@ -237,6 +237,20 @@ Referenced tasks: ["t2"]
     Check 'GE5 brackets inside strings do not split blocks' ($blks.Count -eq 1)
     $bs = Get-ReviewFindings -Output $blkStr
     Check 'GE6 string-embedded brackets still parse to one finding' ($bs.parsed -and @($bs.findings).Count -eq 1)
+
+    # F5: an unmatched '[' in echoed prose BEFORE a valid findings array must not swallow
+    # it. The old single linear pass kept depth>0 to EOF and lost the later array; the
+    # cursor-restart scan skips past the lone opener and still finds the valid block.
+    $loneOpen = @'
+Consider the list [ of concerns below before the JSON:
+[
+  { "severity": "important", "area": "risk", "summary": "no rollback path for the migration" }
+]
+'@
+    $loBlocks = @(Get-FindingsJsonBlocks -Raw $loneOpen)
+    Check 'GE7 lone [ in prose does not swallow the later valid array' (@($loBlocks | Where-Object { $_ -match 'no rollback path' }).Count -eq 1)
+    $lo = Get-ReviewFindings -Output $loneOpen
+    Check 'GE8 findings parse past a lone [ in prose' ($lo.parsed -and @($lo.findings).Count -eq 1 -and $lo.findings[0].summary -match 'no rollback path')
 }
 finally {
     if ($script:fail -gt 0) { Write-Host "`n$script:fail FAILED"; exit 1 }
