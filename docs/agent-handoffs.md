@@ -12,8 +12,8 @@ own instruction file). This doc is the source of truth and the anti-drift regist
 | Claude Code (Claude) | `CLAUDE.md` |
 | Codex / ChatGPT (codex CLI) | `AGENTS.md` |
 | Gemini / Antigravity (`agy`) | `GEMINI.md` |
+| Grok (`grok` CLI) | `GROK.md` (Grok-specific role); also loads `AGENTS.md` / `CLAUDE.md` via Grok project-rules discovery, and `.grok/rules/*.md` |
 | GitHub Copilot | `.github/copilot-instructions.md` (add when adopted) |
-| Grok / others / future tools | their own convention — mirror the shared core below |
 
 Every agent should also read `docs/next-session.md` (the operating loop) and
 `docs/roadmap.md` (status), and use the shared knowledge base (`Ryfter/grimdex-know`, the
@@ -61,6 +61,11 @@ it — re-copying is how drift starts.
   Plus `agy` CLI quirks: `agy --print "<prompt>"` needs the prompt as the argument
   (≤965 bytes; it rejects stdin); pass `--add-dir <dir>` for context and
   `--dangerously-skip-permissions` to let it edit — large inline prompts hang.
+- **`GROK.md` — Grok = plan once-over peer + second implementer** (decision d080).
+  Claude conducts; Codex + Grok review plans via `plan-review`. Fleet headless:
+  `grok -p` / `--prompt-file` / `--always-approve`. Register with `agentic: true`
+  (platform `grok` is outside d078's auto-infer set). Grimdex pointer stanza is
+  maintained by `grimdex wire-project` alongside CLAUDE/AGENTS/GEMINI.
 
 ## Drift policy
 - Change a **shared** rule → change it **here** only; the model files don't repeat
