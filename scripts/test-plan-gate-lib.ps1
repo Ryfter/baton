@@ -145,6 +145,58 @@ try {
     }
     $rep10b = Format-PlanGateReport -Result $normalResult
     Check '10c non-fail-open report omits the note' (-not $rep10b.Contains('failed open'))
+
+    # ---- Case 11: CLI child-process smokes (fleet-plan-gate.ps1) — hermetic
+    #      via the BATON_PLANGATE_TEST_DISPATCH env seam, never a real model. ----
+    $cliScript = Join-Path $PSScriptRoot 'fleet-plan-gate.ps1'
+    $planFile = Join-Path $tmpDir 'plan.json'
+    Set-Content -LiteralPath $planFile -Encoding utf8NoBOM -Value '{"tasks":[]}'
+
+    $out11a = & pwsh -NoProfile -File $cliScript run --goal 'g' 2>&1 | Out-String
+    Check '11a missing --plan -> exit 2' ($LASTEXITCODE -eq 2)
+    Check '11a stderr non-empty' ($out11a.Trim().Length -gt 0)
+
+    $missingPlan = Join-Path $tmpDir 'does-not-exist.json'
+    & pwsh -NoProfile -File $cliScript run --goal 'g' --plan $missingPlan 2>$null | Out-Null
+    Check '11b nonexistent plan path -> exit 2' ($LASTEXITCODE -eq 2)
+
+    $dispatchEmpty = Join-Path $tmpDir 'dispatch-empty.ps1'
+    Set-Content -LiteralPath $dispatchEmpty -Encoding utf8NoBOM -Value @'
+function Invoke-TestPlanGateDispatch($name, $prompt) {
+    return @{ stdout = '[]'; stderr = ''; exit_code = 0 }
+}
+'@
+    $env:BATON_PLANGATE_TEST_DISPATCH = $dispatchEmpty
+    try {
+        $out11c = & pwsh -NoProfile -File $cliScript run --goal 'g' --plan $planFile --reviewers p1,p2 2>&1 | Out-String
+        $exit11c = $LASTEXITCODE
+        Check '11c happy path stub reviewers [] -> exit 0' ($exit11c -eq 0)
+        Check '11c stdout shows PLAN GATE ACCEPT' ($out11c -match 'PLAN GATE .* verdict: ACCEPT')
+
+        $out11e = & pwsh -NoProfile -File $cliScript run --goal 'g' --plan $planFile --reviewers p1,p2 --json 2>&1 | Out-String
+        $json11e = $null
+        try { $json11e = $out11e | ConvertFrom-Json } catch { }
+        Check '11e --json output parses and has verdict' ($null -ne $json11e -and $null -ne $json11e.verdict)
+    } finally {
+        Remove-Item Env:\BATON_PLANGATE_TEST_DISPATCH -ErrorAction SilentlyContinue
+    }
+
+    $dispatchCritical = Join-Path $tmpDir 'dispatch-critical.ps1'
+    Set-Content -LiteralPath $dispatchCritical -Encoding utf8NoBOM -Value @'
+function Invoke-TestPlanGateDispatch($name, $prompt) {
+    return @{ stdout = '[{"severity":"critical","area":"risk","summary":"will break prod"}]'; stderr = ''; exit_code = 0 }
+}
+'@
+    $env:BATON_PLANGATE_TEST_DISPATCH = $dispatchCritical
+    try {
+        $out11d = & pwsh -NoProfile -File $cliScript run --goal 'g' --plan $planFile --reviewers p1,p2 2>&1 | Out-String
+        $exit11d = $LASTEXITCODE
+        Check '11d critical finding -> exit 1' ($exit11d -eq 1)
+        Check '11d stdout shows REJECT' ($out11d -match 'REJECT')
+        Check '11d stdout shows revise brief header' ($out11d -match 'REVISE BRIEF')
+    } finally {
+        Remove-Item Env:\BATON_PLANGATE_TEST_DISPATCH -ErrorAction SilentlyContinue
+    }
 }
 finally {
     Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
