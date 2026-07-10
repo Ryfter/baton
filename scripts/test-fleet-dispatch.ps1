@@ -69,6 +69,10 @@ Assert "stdin-safe: trailing quoted prompt with model (ollama)" (Test-StdinSafe 
 Assert "stdin-safe: embedded prompt -> legacy (test stub)" (-not (Test-StdinSafe -Provider @{ name='s'; command_template='pwsh -NoProfile -Command "Write-Output hello-{{prompt}}"' }))
 Assert "stdin-safe: shell operator in tail -> legacy" (-not (Test-StdinSafe -Provider @{ name='p'; command_template='foo | bar "{{prompt}}"' }))
 Assert "stdin-safe: already stdin:true -> not re-flagged" (-not (Test-StdinSafe -Provider @{ name='h'; stdin=$true; command_template='claude -p --model x' }))
+# stdin:false is an explicit VETO of the clean-tail promotion: agy's `--print`
+# requires an inline argument and does NOT read stdin — promotion turns
+# 'agy --print "{{prompt}}"' into bare 'agy --print' (flag needs an argument).
+Assert "stdin-safe: explicit stdin:false vetoes promotion (agy)" (-not (Test-StdinSafe -Provider @{ name='a'; stdin=$false; command_template='agy --print "{{prompt}}"' }))
 
 # --- Regression: embedded-prompt stubs still interpolate ---
 $tmpJ = New-TemporaryFile

@@ -2,6 +2,37 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
+## ⚑ RESUME HERE — 2026-07-10 00:20 (LIVE ROUND-TRIP PROVEN; hotfix branch ready for merge word)
+
+**PROVEN 2026-07-10 00:15:** the first real fleet-does-the-labor round-trip. `pwsh -File scripts/fleet-go.ps1 -Goal "Create hello.md…" -Execute` → codex (GPT-5.5) planned the DAG **and** did the labor: `hello.md` created in the run worktree, captured as a new file in `changes.diff`, branch `baton/run-go-2026-07-10T00-15-56` left in the target repo, user tree untouched. Run dir `~/.baton/runs/go-2026-07-10T00-15-56`.
+
+**Branch `fix/planner-parse-multimodel` (5 commits, pushed, awaiting Kevin's merge word → v1.11.1):**
+1. `d08b9a3` planner parse for prompt-echoing providers (balanced blocks last-first)
+2. `c869e51` echoed-schema guard (`est_cost_tier: "local|free|paid"` reject signature)
+3. `bcfa0fd` `stdin: false` veto of the clean-tail promotion (agy regression; agy verified PONG via inline)
+4. `0aaf605` planner schema pins the routing-capability vocabulary (codex had planned capability "code-parallel" — a command name)
+5. `6c18671` codex seed `--sandbox workspace-write` (untrusted worktree dirs downgrade codex to read-only → silent no-op)
+
+Live `~/.baton/fleet.yaml` patched to match (agy `stdin: false` + inline; codex `--sandbox workspace-write -`). All suites green (conductor 121, dispatch, fleet-lib, doctor, probe, executor, go-execute). After merge: bump plugin 1.11.0 → 1.11.1, release, redeploy bootstrap (deployed box still runs unfixed v1.11.0 conductor-lib/fleet-lib).
+
+**Known smoke caveats (not blockers):** acceptance was null in the smoke (codex-only fleet has no `review`-capability provider — gate no-ops fail-open, correct); agy can't take JSON-schema prompts inline (quote fragility — Slice 3 territory); smoke artifacts under `%TEMP%` (`baton-live-smoke-*`, `.baton-worktrees\go-*`, `smoke-fleet*.yaml`) are disposable. Follow-up ideas logged: spawner should persist instrument stdout per task for legibility; consider creating the worktree only after a plan parses.
+
+## (superseded) 2026-07-09 evening entry
+
+**Shipped this session:** v1.11.0 "Fleet Labor Slice 2 — the Agentic Executor" (PR #80 `33c33c1`, d078, tag + GitHub release live, bootstrap-deployed). `/baton:go -Execute [-RepoPath]` = agentic labor into a throwaway worktree (`baton/run-<id>`, proof-by-diff, acceptance-gated, branch always left for the human). Opus review READY TO MERGE + fix wave (fleet-source guard, dispatch-throw containment, pipe-unroll fix). Also: Copilot credit budget spec'd (d079, branch `feature/copilot-credit-budget-spec`) — Kevin's word: **build it after Slice 2 wraps**.
+
+**OPEN — hotfix branch `fix/planner-parse-multimodel` (pushed, NOT merged — needs Kevin's word):**
+- `d08b9a3` — planner replies from prompt-echoing providers (codex echoes the prompt incl. the JSON schema; greedy parse spanned echo+answer → plan-failed). ConvertTo-PlanObject now tries greedy first, then string-aware balanced blocks LAST-first.
+- `c869e51` — echo-only replies must not parse the echoed schema as a plan (placeholder `est_cost_tier: "local|free|paid"` is the reject signature).
+- Suites green: conductor 119, executor, go-execute, routing. Found via the live `-Execute` smoke — the planner had only ever been driven by `claude -p`.
+
+**OPEN — live smoke not yet green end-to-end (the v1.11.x promotion gate):**
+1. **codex**: healthy (PONG 17s) but usage-limited during testing ("try again at 7:50 PM"); with the parse fix its plan JSON verifiably parses. Re-run after reset: `pwsh -File D:\Dev\Baton\scripts\fleet-go.ps1 -Goal "Create a file named hello.md containing a two-line friendly greeting. One task only." -Execute -RepoPath <scratch> -FleetPath C:\Users\krank\AppData\Local\Temp\smoke-fleet.yaml -Budget 0.50 -Json` (scratch repo used: `C:\Users\krank\AppData\Local\Temp\baton-live-smoke-1852034372`).
+2. **agy BROKEN by Slice 1's stdin promotion**: `agy --print "{{prompt}}"` is clean-tail → promoted to stdin → becomes bare `agy --print` → "flag needs an argument" exit 2. agy does NOT read stdin the codex way. Mid-investigation: `agy --print -` exited 0 with EMPTY output (ambiguous); a stdin-vs-inline comparison probe was still running when the session ended. Likely fix: an explicit `stdin: false` veto in `Invoke-Fleet-Cli`'s `$useStdin` (`($Provider.stdin -eq $true) -or (($Provider.stdin -ne $false) -and (Test-StdinSafe ...))`) + `stdin: false` on the agy entry — but agy inline has the quote-fragility problem for JSON-schema prompts, so verify what agy actually accepts first.
+3. Housekeeping: several dead run worktrees under `%TEMP%\.baton-worktrees\` from failed smokes (plan-failed runs create the worktree first) — prune, and consider creating the worktree only after a plan parses (small fleet-go ordering change).
+
+**Then:** Copilot credit budget build (spec approved, d079) — writing-plans → subagent-driven, per the standing flow.
+
 ## ⚑ Active WIP branch — dashboard/docs refresh (2026-06-20)
 
 The unmerged v1.2.0 docs refresh + dashboard operator-console restyle was preserved on branch `wip/dashboard-docs-refresh` (remote: `origin/wip/dashboard-docs-refresh`, checkpoint commit `cc909d6`). It is also recoverable from patch `D:\tmp\baton-wip-2026-06-20.patch` and stash `stash@{0}: baton WIP snapshot 2026-06-20 before sprint 6`.

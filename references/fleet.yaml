@@ -9,6 +9,11 @@
 #   enabled           true | false (disabled providers are skipped, not invoked)
 #   cost_tier         paid | free | local
 #   command_template  (cli only) {{prompt}} required, {{model}} optional
+#   stdin             (cli only, optional) true = template has no {{prompt}}; the
+#                     prompt is piped via stdin (quote-safe). false = explicit VETO
+#                     of the automatic clean-tail stdin promotion for CLIs that do
+#                     not read stdin (e.g. agy). Absent = promotion applies when the
+#                     template's tail is a standalone quoted {{prompt}}.
 #   model_default     (optional) fallback when --model not given
 #   env               (optional) env vars set before invoking, restored after
 #   base_url          (http only) read by scripts/fleet/<name>.ps1
@@ -91,20 +96,31 @@ providers:
     platform: claude
     command_template: 'claude -p "{{prompt}}"'
 
+  # --sandbox workspace-write: codex downgrades untrusted dirs (e.g. Baton's
+  # throwaway run worktrees) to a READ-ONLY sandbox and, with approval never,
+  # exits 0 having edited nothing — a silent no-op for /baton:go --execute.
+  # The explicit policy scopes writes to the cwd, which IS the worktree.
   - name: codex
     kind: cli
     enabled: true
     cost_tier: paid
     role: finisher
     platform: codex
-    command_template: 'codex exec "{{prompt}}"'
+    command_template: 'codex exec --sandbox workspace-write "{{prompt}}"'
 
+  # agy does NOT read stdin: the clean-tail stdin promotion would turn this into a
+  # bare `agy --print` ("flag needs an argument"), and `agy --print -` treats the
+  # dash as an empty prompt (exit 0, generic greeting — a silent no-op). stdin: false
+  # vetoes the promotion; the prompt interpolates inline. CAVEAT: inline breaks on
+  # embedded double quotes, so route agy quote-free labor prompts, not JSON-schema
+  # prompts (e.g. planning).
   - name: gemini-antigravity
     kind: cli
     enabled: true
     cost_tier: paid
     role: finisher
     platform: gemini
+    stdin: false
     command_template: 'agy --print "{{prompt}}"'
 
   - name: gh-copilot

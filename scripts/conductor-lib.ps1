@@ -30,14 +30,68 @@ function Get-JsonBlock {
     return $Raw.Substring($open, $close - $open + 1)
 }
 
+function Get-JsonBlocks {
+    <# Every balanced top-level {...} candidate in a reply, in order (string-aware
+       depth scan so braces inside JSON string values do not split a block). Needed
+       for providers like `codex exec` that echo the prompt (which itself carries a
+       JSON schema) before the answer — the greedy Get-JsonBlock spans echo+answer
+       into one invalid blob. A mis-scanned candidate simply fails ConvertFrom-Json
+       downstream and is skipped. Emits blocks to the pipeline (callers collect
+       with @() — no unary-comma wrap, per the house rule). #>
+    param([Parameter(Mandatory)][string]$Raw)
+    $blocks = [System.Collections.ArrayList]@()
+    $depth = 0; $blockStart = -1; $inStr = $false; $escaped = $false
+    for ($i = 0; $i -lt $Raw.Length; $i++) {
+        $ch = $Raw[$i]
+        if ($inStr) {
+            if ($escaped) { $escaped = $false }
+            elseif ($ch -eq '\') { $escaped = $true }
+            elseif ($ch -eq '"') { $inStr = $false }
+            continue
+        }
+        if ($ch -eq '"') { if ($depth -gt 0) { $inStr = $true } }
+        elseif ($ch -eq '{') { if ($depth -eq 0) { $blockStart = $i }; $depth++ }
+        elseif ($ch -eq '}') {
+            if ($depth -gt 0) {
+                $depth--
+                if ($depth -eq 0 -and $blockStart -ge 0) {
+                    [void]$blocks.Add($Raw.Substring($blockStart, $i - $blockStart + 1))
+                    $blockStart = -1
+                }
+            }
+        }
+    }
+    return $blocks.ToArray()
+}
+
 function ConvertTo-PlanObject {
     <# Parse a planner reply into a normalized plan hashtable, or $null when there
-       is no valid JSON object or no tasks. Tasks get defaulted fields. #>
+       is no valid JSON object or no tasks. Tasks get defaulted fields.
+       Candidate order (v1.11.1, multi-model): the greedy whole-span block first
+       (the historical fast path — one clean/fenced JSON reply), then balanced
+       blocks LAST-first, because a model's answer follows any prompt echo. The
+       first candidate that parses AND carries tasks wins. #>
     param([Parameter(Mandatory)][string]$RawStdout)
-    $block = Get-JsonBlock -Raw $RawStdout
-    if (-not $block) { return $null }
-    try { $o = $block | ConvertFrom-Json -ErrorAction Stop } catch { return $null }
-    if ($null -eq $o.tasks) { return $null }
+    $candidates = [System.Collections.ArrayList]@()
+    $greedy = Get-JsonBlock -Raw $RawStdout
+    if ($greedy) { [void]$candidates.Add($greedy) }
+    $balanced = @(Get-JsonBlocks -Raw $RawStdout)
+    for ($bi = $balanced.Count - 1; $bi -ge 0; $bi--) { [void]$candidates.Add($balanced[$bi]) }
+    $o = $null
+    foreach ($block in $candidates) {
+        try { $parsed = $block | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        if ($null -eq $parsed.tasks) { continue }
+        # Reject the planner prompt's own echoed SCHEMA (a provider that dies after
+        # echoing would otherwise hand us its placeholder example as a "plan"):
+        # the schema's est_cost_tier placeholder "local|free|paid" is the signature.
+        $isSchemaEcho = $false
+        foreach ($pt in @($parsed.tasks)) {
+            if ($pt.est_cost_tier -and (([string]$pt.est_cost_tier) -match '\|')) { $isSchemaEcho = $true; break }
+        }
+        if ($isSchemaEcho) { continue }
+        $o = $parsed; break
+    }
+    if ($null -eq $o) { return $null }
     $tasks = foreach ($t in @($o.tasks)) {
         [pscustomobject]@{
             id            = [string]$t.id
@@ -277,7 +331,8 @@ function Build-PlannerPrompt {
   "budget_cap": null,
   "tasks": [
     { "id": "t1", "desc": "<what>", "command": "<baton command or empty>",
-      "capability": "<capability or empty>", "model_pick": "<model or empty>",
+      "capability": "<ROUTING capability: code-gen for creating/editing files or code, code-transform, reasoning, research, summarize, triage, review — or empty. NEVER a baton command name>",
+      "model_pick": "<model or empty>",
       "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true }
   ]
 }
