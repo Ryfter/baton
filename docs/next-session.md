@@ -23,7 +23,7 @@ How to pick **Baton** back up and use it on its own backlog.
 4. Stop for review before **Slice 2** (Conductor `--plan-gate` seam).
 5. Do **not** re-author GROK.md / wire-project / d080.
 
-**Still open from earlier (separate track):** branch `fix/planner-parse-multimodel` awaiting merge word → v1.11.1 (see entry below). Copilot credit budget (d079) remains after Slice 2 labor wrap.
+**Resolved from earlier (separate track):** `fix/planner-parse-multimodel` merged (PR #81 `26b6584`) → **v1.11.1 SHIPPED** 2026-07-10 (tagged, released, bootstrap-redeployed, on-box verified). Copilot credit budget (d079) remains authorized ("and then the copilot credit budget") — ordering vs Plan Gate is Kevin's call.
 
 ---
 
