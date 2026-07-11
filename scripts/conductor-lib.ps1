@@ -751,6 +751,12 @@ function Invoke-Conductor {
             return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status 'interrupted-destructive' -PendingTaskId $task.id)
         }
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'started' -Message $task.desc)
+        # Verification (d082 V2): announce the sub-lifecycle before labor so the six-kind
+        # event contract is literal (review M1). Only for a -Verify run on a task that
+        # actually carries a frozen contract — an unprofiled task stays silent here.
+        if ($Verify -and [string]$task.verify_profile) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-verification-started' -Message "verifying: $($task.verify_profile)")
+        }
         $r = if ($Spawner) { & $Spawner $task }
              else { Invoke-TaskViaFleet -Task $task -FleetPath $FleetPath -ToolsPath $ToolsPath -MaxCostTier $MaxCostTier -Dispatcher $Dispatcher }
         $tspend = if ($null -ne $r.spend) { [double]$r.spend } else { $est }

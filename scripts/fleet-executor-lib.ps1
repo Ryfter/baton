@@ -167,30 +167,55 @@ function New-AgenticSpawner {
 function Format-VerifyEvidencePrompt {
     <# The bounded retry brief (codex-ringer §7): original task + deterministic failure
        category + a capped raw-output excerpt + the fix-in-place instruction. No restart,
-       no scope broadening. The excerpt is hard-capped so a flooding check can never blow
-       the retry prompt past the 965-byte-adjacent limits the fleet cares about. #>
+       no scope broadening. The WHOLE prompt is bounded to <=965 UTF-8 bytes ($MaxBytes)
+       so the one retry survives inline-interpolation instruments (e.g. agy) that dispatch
+       the prompt as a single shell arg under the project's hard 965-byte ceiling. The
+       excerpt takes only the byte budget the fixed parts leave; a long task desc is
+       tail-truncated before the prompt is ever allowed to exceed the ceiling. #>
     param(
         [Parameter(Mandatory)][string]$TaskDesc,
         [Parameter(Mandatory)][hashtable]$Verification,
         [string]$OutputPath = '',
-        [int]$MaxExcerpt = 2000
+        [int]$MaxBytes = 900
     )
-    $excerpt = ''
-    if ($OutputPath -and (Test-Path -LiteralPath $OutputPath)) {
-        $raw = Get-Content -LiteralPath $OutputPath -Raw
-        if ($null -eq $raw) { $raw = '' }
-        if ($raw.Length -gt $MaxExcerpt) { $raw = $raw.Substring(0, $MaxExcerpt) + "`n[...truncated...]" }
-        $excerpt = $raw
-    }
-    return @"
-$TaskDesc
+    $enc = [System.Text.Encoding]::UTF8
+    # Budget the desc first: it must not itself consume the whole ceiling. Reserve room
+    # for the boilerplate + failure line + a minimum excerpt floor.
+    $boiler = @"
+{0}
 
 --- Your previous attempt did not pass verification. Fix the EXISTING work; do not
 restart from scratch and do not broaden the change beyond the task's scope. ---
-Failure: $($Verification.failure_category)
+Failure: {1}
 Check output:
-$excerpt
+{2}
 "@
+    $fail = [string]$Verification.failure_category
+    # Bytes the template consumes with empty desc/excerpt — measure so the two variable
+    # parts share exactly the remaining budget.
+    $fixedBytes = $enc.GetByteCount(($boiler -f '', $fail, ''))
+    $descCap = [Math]::Max(120, [int](($MaxBytes - $fixedBytes) * 0.55))
+    $desc = $TaskDesc
+    while ($enc.GetByteCount($desc) -gt $descCap -and $desc.Length -gt 0) {
+        $desc = $desc.Substring(0, [Math]::Max(0, $desc.Length - 16))
+    }
+    $excerptCap = $MaxBytes - $fixedBytes - $enc.GetByteCount($desc)
+    if ($excerptCap -lt 0) { $excerptCap = 0 }
+    $excerpt = ''
+    if ($OutputPath -and (Test-Path -LiteralPath $OutputPath) -and $excerptCap -gt 0) {
+        $raw = Get-Content -LiteralPath $OutputPath -Raw
+        if ($null -eq $raw) { $raw = '' }
+        while ($enc.GetByteCount($raw) -gt $excerptCap -and $raw.Length -gt 0) {
+            $raw = $raw.Substring(0, [Math]::Max(0, $raw.Length - 16))
+        }
+        $excerpt = $raw
+    }
+    $prompt = $boiler -f $desc, $fail, $excerpt
+    # Final safety clamp: if multibyte rounding pushed us over, trim the tail to fit.
+    while ($enc.GetByteCount($prompt) -gt $MaxBytes -and $prompt.Length -gt 0) {
+        $prompt = $prompt.Substring(0, [Math]::Max(0, $prompt.Length - 8))
+    }
+    return $prompt
 }
 
 function Add-VerifyAttemptRow {
@@ -247,18 +272,23 @@ function New-VerifyingSpawner {
         New-Item -ItemType Directory -Force -Path $taskDir | Out-Null
         $allowed = @($task.allowed_paths | Where-Object { $_ } | ForEach-Object { [string]$_ })
 
+        # A5 baseline (review I1): freeze the PRE-TASK state ONCE, before attempt 1, and
+        # judge BOTH attempts against it — codex-ringer §7 / design A5 both specify the
+        # pre-task baseline. Re-freezing per attempt judged attempt 2 against attempt 1's
+        # end-state, which false-passed an add-then-revert retry (net-zero vs base — the
+        # exact A5 loophole) and false-failed a legitimate no-further-edit repair.
+        $protPre0   = Get-VerifyPathHashes -WorktreeRoot $Worktree -Paths @($contract.protected_paths)
+        $expectPre0 = Get-VerifyPathHashes -WorktreeRoot $Worktree -Paths @($contract.expect_files)
+        $taskStartTree = Get-WorktreeTreeSha -Worktree $Worktree
+
         $runAttempt = {
             param($atask, $attemptNo)
-            # Freeze pre-hashes just before THIS attempt — the worktree evolves between
-            # attempts, so attempt 2 re-freezes against attempt 1's end-state.
-            $protPre = Get-VerifyPathHashes -WorktreeRoot $Worktree -Paths @($contract.protected_paths)
-            $expectPre = Get-VerifyPathHashes -WorktreeRoot $Worktree -Paths @($contract.expect_files)
-            $preTree = Get-WorktreeTreeSha -Worktree $Worktree
             $ir = & $InnerSpawner $atask
             $postTree = Get-WorktreeTreeSha -Worktree $Worktree
-            $grew = ($null -ne $preTree) -and ($null -ne $postTree) -and ($preTree -ne $postTree)
+            # Cumulative vs the frozen task-start tree — never vs the previous attempt.
+            $grew = ($null -ne $taskStartTree) -and ($null -ne $postTree) -and ($taskStartTree -ne $postTree)
             $diffFiles = @()
-            if ($grew) { $diffFiles = @(& git -C $Worktree diff --name-only $preTree $postTree 2>$null | Where-Object { $_ }) }
+            if ($grew) { $diffFiles = @(& git -C $Worktree diff --name-only $taskStartTree $postTree 2>$null | Where-Object { $_ }) }
             # Test hook: a hermetic override of the real runner (BATON_VERIFY_TEST_HOOK
             # points at a file defining Invoke-TestVerify -Task -Attempt -Grew).
             if ($env:BATON_VERIFY_TEST_HOOK -and (Test-Path -LiteralPath $env:BATON_VERIFY_TEST_HOOK)) {
@@ -266,20 +296,22 @@ function New-VerifyingSpawner {
                 $v = Invoke-TestVerify -Task $atask -Attempt $attemptNo -Grew $grew
             } else {
                 $v = Invoke-VerificationContract -Contract $contract -WorktreeRoot $Worktree -RunTaskDir $taskDir `
-                        -DiffFiles $diffFiles -AllowedPaths $allowed -ExpectPreHashes $expectPre -ProtectedPreHashes $protPre
+                        -DiffFiles $diffFiles -AllowedPaths $allowed -ExpectPreHashes $expectPre0 -ProtectedPreHashes $protPre0
             }
-            # A5 (adjudication): an edit task's PASS also requires a non-empty task diff.
-            # A "passing" check over an unchanged tree is demoted to a retry-eligible
-            # no-change failure (closes the V1 zero-change loophole).
+            # A5 (adjudication): an edit task's PASS also requires a non-empty task diff
+            # vs the pre-task baseline. A "passing" check over a tree unchanged since task
+            # start is demoted to a retry-eligible no-change failure (closes the V1
+            # zero-change loophole on BOTH attempts).
             if ([string]$v.verdict -eq 'pass' -and -not $grew) {
                 $v.verdict = 'fail'; $v.ok = $false; $v.grade = 'invalid'; $v.failure_category = 'no-change'
             }
             return @{ v = $v; inner = $ir; grew = $grew }
         }
         # NOTE: no .GetNewClosure() here — a nested GetNewClosure does not re-capture the
-        # enclosing spawner-closure's variables ($Worktree/$InnerSpawner), so it would run
-        # them empty. $runAttempt is invoked in this same scope, so plain dynamic scoping
-        # resolves $contract/$taskDir/$allowed/$Worktree/$InnerSpawner from the live parent.
+        # enclosing spawner-closure's variables ($Worktree/$InnerSpawner/$taskStartTree),
+        # so it would run them empty. $runAttempt is invoked in this same scope, so plain
+        # dynamic scoping resolves the pre-task baseline + $contract/$taskDir/$allowed from
+        # the live parent.
 
         $a1 = & $runAttempt $task 1
         Add-VerifyAttemptRow -RunTaskDir $taskDir -Attempt 1 -Row @{
@@ -289,6 +321,9 @@ function New-VerifyingSpawner {
         $final = $a1
         $retried = $false
         $firstFail = [string]$a1.v.failure_category
+        # Spend accrues across ALL attempts (review M2) — a retry's labor must not drop
+        # attempt 1's spend once realized cost lands via the Get-RunCost seam.
+        $totalSpend = [double]$a1.inner.spend
 
         # Retry precedence: pass -> done. scope/oracle violation or spawn/infra failure ->
         # fail-closed, NO retry. check-failed / check-timeout / no-change / expected-file-*
@@ -305,6 +340,7 @@ function New-VerifyingSpawner {
                 verdict = $a2.v.verdict; grade = $a2.v.grade; failure_category = $a2.v.failure_category; duration_ms = $a2.v.duration_ms
             }
             $final = $a2
+            $totalSpend += [double]$a2.inner.spend
         }
 
         $v = $final.v
@@ -319,7 +355,7 @@ function New-VerifyingSpawner {
         $why = if ($passed) { "$($final.inner.why); verified (grade $($v.grade))" }
                else { "$($final.inner.why); verification $($v.verdict): $($v.failure_category)" }
         return @{
-            ok = $passed; spend = [double]$final.inner.spend; chose = [string]$final.inner.chose
+            ok = $passed; spend = [double]$totalSpend; chose = [string]$final.inner.chose
             why = $why; alternatives = @($final.inner.alternatives)
             verification = $verObj; unverified = $false
         }

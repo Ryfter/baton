@@ -316,14 +316,95 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
         Check 'VS6 delegated inner ok' ($rv6.ok -eq $true)
 
         # VS7 evidence prompt: carries the failure category, the fix-in-place instruction,
-        # the original task, and caps the raw-output excerpt.
+        # the original task, and the WHOLE prompt stays <=965 UTF-8 bytes even with a
+        # flooding excerpt or an oversized desc (review I2 — survives inline instruments).
+        $utf8 = [System.Text.Encoding]::UTF8
         $vs7out = Join-Path $tmpRoot 'vs7-out.txt'
         Set-Content -LiteralPath $vs7out -Value ('E' * 5000) -Encoding utf8NoBOM
-        $vs7prompt = Format-VerifyEvidencePrompt -TaskDesc 'Original task text' -Verification @{ failure_category = 'check-failed' } -OutputPath $vs7out -MaxExcerpt 100
+        $vs7prompt = Format-VerifyEvidencePrompt -TaskDesc 'Original task text' -Verification @{ failure_category = 'check-failed' } -OutputPath $vs7out
         Check 'VS7 includes failure category' ($vs7prompt -match 'check-failed')
         Check 'VS7 includes fix-in-place instruction' ($vs7prompt -match 'Fix the EXISTING work')
         Check 'VS7 includes original task' ($vs7prompt -match 'Original task text')
-        Check 'VS7 excerpt capped/truncated' ($vs7prompt -match 'truncated')
+        Check 'VS7 whole prompt <=965 UTF-8 bytes (flooding excerpt)' ($utf8.GetByteCount($vs7prompt) -le 965)
+        $vs7big = Format-VerifyEvidencePrompt -TaskDesc ('D' * 4000) -Verification @{ failure_category = 'check-failed' } -OutputPath $vs7out
+        Check 'VS7 whole prompt <=965 UTF-8 bytes (oversized desc)' ($utf8.GetByteCount($vs7big) -le 965)
+
+        # VS8 (review I1/edge#4): add-then-revert nets to ZERO vs the pre-task baseline —
+        # must NOT pass. Attempt 1 adds a file (hook forces check-failed -> retry); attempt 2
+        # deletes it back to the task-start tree (hook forces pass). A5 must demote the
+        # attempt-2 pass to no-change because the diff vs TASK START (not vs attempt 1) is empty.
+        $hookPF = Join-Path $tmpRoot 'hookPF.ps1'
+        Set-Content -LiteralPath $hookPF -Encoding utf8NoBOM -Value @'
+function Invoke-TestVerify { param($Task, $Attempt, $Grew)
+    if ($Attempt -ge 2) { return @{ verdict='pass'; ok=$true; grade='bounded'; failure_category=''; proves='hooked pass'; output_path=''; duration_ms=5 } }
+    return @{ verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'; proves='hooked'; output_path=''; duration_ms=5 }
+}
+'@
+        $ctr8 = Join-Path $tmpRoot 'ctr8.txt'; Set-Content -LiteralPath $ctr8 -Value '0' -Encoding utf8NoBOM
+        $disp8 = {
+            param($pick, $prompt)
+            $n = [int]((Get-Content -LiteralPath $ctr8 -Raw).Trim()) + 1
+            Set-Content -LiteralPath $ctr8 -Value "$n" -Encoding utf8NoBOM
+            $target = Join-Path (Get-Location).Path 'x8.txt'
+            if ($n -eq 1) { Set-Content -LiteralPath $target -Value 'v1' -Encoding utf8NoBOM }
+            else { Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue }
+            @{ stdout = 'ok'; stderr = ''; exit_code = 0; duration_s = 0 }
+        }.GetNewClosure()
+        $fx8 = New-VerifyFixture -Name 'vs8' -VProfile $passProfile
+        $in8 = New-AgenticSpawner -Worktree $fx8.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fx8.runDir -Dispatcher $disp8
+        $vs8 = New-VerifyingSpawner -InnerSpawner $in8 -Worktree $fx8.wt.worktree -BaseSha $fx8.wt.base_sha -RunDir $fx8.runDir -FrozenContracts $fx8.frozen
+        $env:BATON_VERIFY_TEST_HOOK = $hookPF
+        try { $rv8 = & $vs8 (New-VerifyTask) } finally { Remove-Item env:BATON_VERIFY_TEST_HOOK -ErrorAction SilentlyContinue }
+        Check 'VS8 add-then-revert does NOT pass (net-zero vs task start)' ($rv8.ok -eq $false)
+        Check 'VS8 verdict fail' ($rv8.verification.verdict -eq 'fail')
+        Check 'VS8 demoted to no-change' ($rv8.verification.failure_category -eq 'no-change')
+
+        # VS9 (review I1/edge#4): a legitimate repair whose attempt 2 makes NO further edit
+        # must PASS. Attempt 1 makes the real change (hook forces check-failed -> retry);
+        # attempt 2 edits nothing and the check passes. The diff vs TASK START is non-empty,
+        # so A5 must NOT demote it (the old per-attempt baseline false-failed this).
+        $ctr9 = Join-Path $tmpRoot 'ctr9.txt'; Set-Content -LiteralPath $ctr9 -Value '0' -Encoding utf8NoBOM
+        $disp9 = {
+            param($pick, $prompt)
+            $n = [int]((Get-Content -LiteralPath $ctr9 -Raw).Trim()) + 1
+            Set-Content -LiteralPath $ctr9 -Value "$n" -Encoding utf8NoBOM
+            if ($n -eq 1) { Set-Content -LiteralPath (Join-Path (Get-Location).Path 'x9.txt') -Value 'real change' -Encoding utf8NoBOM }
+            @{ stdout = 'ok'; stderr = ''; exit_code = 0; duration_s = 0 }
+        }.GetNewClosure()
+        $fx9 = New-VerifyFixture -Name 'vs9' -VProfile $passProfile
+        $in9 = New-AgenticSpawner -Worktree $fx9.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fx9.runDir -Dispatcher $disp9
+        $vs9 = New-VerifyingSpawner -InnerSpawner $in9 -Worktree $fx9.wt.worktree -BaseSha $fx9.wt.base_sha -RunDir $fx9.runDir -FrozenContracts $fx9.frozen
+        $env:BATON_VERIFY_TEST_HOOK = $hookPF
+        try { $rv9 = & $vs9 (New-VerifyTask) } finally { Remove-Item env:BATON_VERIFY_TEST_HOOK -ErrorAction SilentlyContinue }
+        Check 'VS9 legit no-further-edit repair PASSES (non-empty vs task start)' ($rv9.ok -eq $true)
+        Check 'VS9 verdict pass' ($rv9.verification.verdict -eq 'pass')
+        Check 'VS9 retried true' ($rv9.verification.retried -eq $true)
+
+        # VS10 (review M2): spend accrues across BOTH attempts. Hook forces retry-then-pass;
+        # a dispatcher stamps a distinct spend per attempt; the returned spend is their sum.
+        $ctrS = Join-Path $tmpRoot 'ctrS.txt'; Set-Content -LiteralPath $ctrS -Value '0' -Encoding utf8NoBOM
+        $dispS = {
+            param($pick, $prompt)
+            $n = [int]((Get-Content -LiteralPath $ctrS -Raw).Trim()) + 1
+            Set-Content -LiteralPath $ctrS -Value "$n" -Encoding utf8NoBOM
+            Set-Content -LiteralPath (Join-Path (Get-Location).Path "s-$n.txt") -Value "$n" -Encoding utf8NoBOM
+            @{ stdout = 'ok'; stderr = ''; exit_code = 0; duration_s = 0 }
+        }.GetNewClosure()
+        $fxS = New-VerifyFixture -Name 'vsS' -VProfile $passProfile
+        # New-AgenticSpawner sets spend from the cost estimate; both attempts share the same
+        # tier, so summed spend == 2x a single attempt. Assert attempt-2 spend was not dropped.
+        $inS = New-AgenticSpawner -Worktree $fxS.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fxS.runDir -Dispatcher $dispS
+        $vsS = New-VerifyingSpawner -InnerSpawner $inS -Worktree $fxS.wt.worktree -BaseSha $fxS.wt.base_sha -RunDir $fxS.runDir -FrozenContracts $fxS.frozen
+        $inS1 = & $inS (New-VerifyTask)   # measure a single inner attempt's spend in isolation
+        $singleSpend = [double]$inS1.spend
+        Set-Content -LiteralPath $ctrS -Value '0' -Encoding utf8NoBOM
+        $fxS2 = New-VerifyFixture -Name 'vsS2' -VProfile $passProfile
+        $inS2 = New-AgenticSpawner -Worktree $fxS2.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fxS2.runDir -Dispatcher $dispS
+        $vsS2 = New-VerifyingSpawner -InnerSpawner $inS2 -Worktree $fxS2.wt.worktree -BaseSha $fxS2.wt.base_sha -RunDir $fxS2.runDir -FrozenContracts $fxS2.frozen
+        $env:BATON_VERIFY_TEST_HOOK = $hook2
+        try { $rvS = & $vsS2 (New-VerifyTask) } finally { Remove-Item env:BATON_VERIFY_TEST_HOOK -ErrorAction SilentlyContinue }
+        Check 'VS10 retried true' ($rvS.verification.retried -eq $true)
+        Check 'VS10 spend summed across both attempts' ([Math]::Abs([double]$rvS.spend - (2 * $singleSpend)) -lt 0.0001)
     } finally {
         if ($null -eq $savedBatonHome) { Remove-Item env:BATON_HOME -ErrorAction SilentlyContinue }
         else { $env:BATON_HOME = $savedBatonHome }

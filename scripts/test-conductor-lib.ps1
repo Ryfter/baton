@@ -695,6 +695,7 @@ ERROR: You have hit your usage limit. Try again later.
     $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp -Verify -VerifyPreflight { param($p) @{ ok=$true } }
     Check 'VF2 status completed' ($res.status -eq 'completed')
     Check 'VF2 passed event' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-verification-passed' }).Count -ge 1)
+    Check 'VF2 started event (review M1 — 6-kind contract literal)' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-verification-started' }).Count -ge 1)
     Remove-Item $d -Recurse -Force
 
     # VF3: -Verify check-fail (verdict fail) -> verification-failed status + event
