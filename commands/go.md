@@ -25,6 +25,12 @@ let the engine and the fleet do the work.
    # add -PlanGate to have peers (Codex + Grok, the plan-review roster) once-over the
    # plan DAG BEFORE the walk; -PlanReviewers a,b pins the roster; -PlanRevise:$false
    # skips the single auto-revise pass. Reject halts the run before any labor (spend 0).
+   # add -Verify when the plan contains tasks with verify_profile (opt-in verification).
+   # Verification freezes each task's contract at the base revision, runs the check after
+   # every attempt, and on failure retries once with evidence. Scope or oracle violations
+   # fail closed (no retry); pass requires the check to succeed AND the task diff to be
+   # non-empty. Evidence artifacts land under tasks/<id>/{contract.json,attempts.jsonl,
+   # verification.json,check-output.txt}.
    ```
 
 3. Read the returned JSON (`status`, `run_dir`, `spend`, `pending_task_id`, `report`).
@@ -87,6 +93,17 @@ You can launch a run against any registered project without `cd`-ing into it:
   project.
 
 See `/baton:project list` for the roster.
+
+## Verified labor (`-Verify`)
+
+Opt-in verification applies a freeze-then-check-then-retry contract to individual tasks:
+
+- **Task fields:** A plan task with a `verify_profile` (names a profile in the repo's committed `.baton/verification.json`) and optional `allowed_paths` (constrains the task's allowed file changes) will be verification-carrying.
+- **Freeze & preflight:** Before the walk, all referenced profiles resolve from the base revision and validate — unknown, missing, or lint-failing contracts halt the run with status `plan-invalid` before any spend.
+- **Per-attempt check:** After each agentic attempt, the frozen contract runs. On pass (and non-empty task diff), the task succeeds. On fail, one retry runs with bounded evidence (the original task description + failure category + excerpt from check output + fix-in-place instruction); no scope broadening, same worktree.
+- **Outcome:** Pass survives (green). Scope or protected-oracle violation fails closed (no retry, status `verification-failed`). Check failure on both attempts fails closed. Pass without a diff (A5 rule) fails on attempt 1 but is retry-eligible.
+- **Evidence:** Durable per-task evidence lands under `<run-dir>/tasks/<task-id>/`: `contract.json` (the frozen spec), `attempts.jsonl` (one row per attempt: worker, verdict, grade, failure category, timing), `verification.json` (rollup: final verdict, grade, proves, retried flag), `check-output.txt` (raw check output). The `## Verification` section of `report.md` narrates the results.
+- **Default path unchanged:** Without `-Verify` or when no task carries a `verify_profile`, behavior is byte-for-byte identical to an unverified run.
 
 ## Arguments
 

@@ -291,6 +291,24 @@ function Format-AcceptanceSection {
     return $sb.ToString().TrimEnd()
 }
 
+function Format-VerificationSection {
+    <# The Gemini CLI narration block (adjudication A2): per verified task, route ->
+       worker -> check -> retry -> proves, read from tasks/<id>/verification.json.
+       Returns '' when no task was verified (section omitted). #>
+    param([Parameter(Mandatory)][string]$RunDir, [Parameter(Mandatory)][hashtable]$Plan)
+    $lines = [System.Collections.ArrayList]@()
+    foreach ($t in @($Plan.tasks)) {
+        $vp = Join-Path $RunDir "tasks/$($t.id)/verification.json"
+        if (-not (Test-Path -LiteralPath $vp)) { continue }
+        try { $v = Get-Content -Raw -LiteralPath $vp | ConvertFrom-Json } catch { continue }
+        $mark = if ([string]$v.verdict -eq 'pass') { "PASS (grade $($v.grade))" } else { "FAIL ($($v.failure_category))" }
+        $retry = if ($v.retried) { ' after 1 retry' } else { '' }
+        [void]$lines.Add("- $($t.id): $mark$retry — proves: $($v.proves)")
+    }
+    if (@($lines).Count -eq 0) { return '' }
+    return "## Verification`n" + (@($lines) -join "`n")
+}
+
 # Fail-open fallback for Build-PlannerPrompt: the exact conductor-planner.txt
 # template text, baked in so a missing/corrupt/malformed prompt file on disk
 # can never take the planner phase down. Kept in sync by hand with
@@ -465,6 +483,10 @@ function Complete-Run {
     if ($Gate) {
         $report = $report + "`n`n" + (Format-AcceptanceSection -Gate $Gate)
         ($Gate | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'acceptance.json') -Encoding utf8NoBOM
+    }
+    $verSection = Format-VerificationSection -RunDir $RunDir -Plan $Plan
+    if ($verSection) {
+        $report = $report + "`n`n" + $verSection
     }
     # Effective cost (slice 1): only when a gate produced a verdict (a quality signal).
     $effectiveCost = $null

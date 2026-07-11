@@ -739,6 +739,20 @@ ERROR: You have hit your usage limit. Try again later.
     Check 'VF7 no verification events' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-verification' }).Count -eq 0)
     Remove-Item $d -Recurse -Force
 
+    # ---- VF8: verification.json under tasks/<id>/ renders a ## Verification report section ----
+    $d = New-VfRun
+    $td = Join-Path $d 'tasks/t1'; New-Item -ItemType Directory -Force $td | Out-Null
+    @{ verdict='pass'; grade='strong'; failure_category=''; proves='the suite passes'; retried=$true } | ConvertTo-Json | Set-Content (Join-Path $td 'verification.json') -Encoding utf8NoBOM
+    $plan = & $vfPlan 'g'
+    $sec = Format-VerificationSection -RunDir $d -Plan $plan
+    Check 'VF8a section present' ($sec -match '## Verification')
+    Check 'VF8b pass+grade rendered' ($sec -match 'PASS \(grade strong\)')
+    Check 'VF8c retry noted' ($sec -match 'after 1 retry')
+    Check 'VF8d proves rendered' ($sec -match 'the suite passes')
+    $empty = Format-VerificationSection -RunDir (New-VfRun) -Plan $plan
+    Check 'VF8e no verified task -> empty' ($empty -eq '')
+    Remove-Item $d -Recurse -Force
+
     Write-Host ""
     if ($script:fail -gt 0) { Write-Host "$script:fail CHECK(S) FAILED"; exit 1 } else { Write-Host "ALL CHECKS PASS"; exit 0 }
 } catch {
