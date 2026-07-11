@@ -159,6 +159,11 @@ providers:
     role: bulk
     platform: github
     command_template: 'gh copilot suggest "{{prompt}}"'
+    # Copilot credit budget (d079) — BOX-PRIVATE: set real values ONLY in your live
+    # ~/.baton/fleet.yaml. The allowance/reset-day are per-account.
+    # budget: 1500            # monthly Copilot AI-credit allowance (credits; 1 = $0.01)
+    # credit_reset_day: 10    # billing-cycle reset day-of-month (1-28)
+    # credit_warn_pct: 80     # optional warn threshold (default 80)
 
   # ── Triage workers (Sprint 1): explicit model pins for the triage role. ──
   # stdin: true so the JSON-schema-heavy triage prompt is piped, never
