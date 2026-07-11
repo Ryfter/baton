@@ -199,6 +199,131 @@ tools:
         Check 'M4a dispatcher throw is caught, task returns not-ok' ($r8.ok -eq $false)
         Check 'M4a why records dispatch error' ($r8.why -match 'dispatch error')
         Check 'M4b caller cwd unchanged after a dispatch throw' ((Get-Location).Path -eq $cwdBeforeThrow)
+
+        # ================= New-VerifyingSpawner (VS-series, d082 V2) =================
+        # Hermetic: a temp repo with a committed .baton/verification.json (a `unit` profile
+        # whose argv runs a committed pwsh check), a REAL frozen contract, and an inner
+        # dispatcher that edits the worktree. Real V1 runner throughout except VS2/VS3,
+        # where BATON_VERIFY_TEST_HOOK forces the verdict sequence.
+        function New-VerifyFixture {
+            param([string]$Name, [hashtable]$VProfile, [string]$CheckBody = 'exit 0')
+            $r = New-TempRepo -Root (New-Item -ItemType Directory -Force -Path (Join-Path $tmpRoot $Name)).FullName
+            Set-Content -LiteralPath (Join-Path $r 'check.ps1') -Value $CheckBody -Encoding utf8NoBOM
+            $cfgD = Join-Path $r '.baton'; New-Item -ItemType Directory -Force -Path $cfgD | Out-Null
+            $cfg = @{ schema = 1; profiles = @{ unit = $VProfile } }
+            ConvertTo-Json -InputObject $cfg -Depth 8 | Set-Content -LiteralPath (Join-Path $cfgD 'verification.json') -Encoding utf8NoBOM
+            & git -C $r add -A 2>$null | Out-Null
+            & git -C $r commit -q -m 'add verify config' 2>$null | Out-Null
+            $w = New-RunWorktree -RepoPath $r -RunId "$Name-wt"
+            $rd = Join-Path $tmpRoot "$Name-run"; New-Item -ItemType Directory -Force -Path $rd | Out-Null
+            $fc = Get-FrozenVerificationContract -RepoPath $r -BaseSha $w.base_sha -ProfileName 'unit' -WorktreeRoot $w.worktree -RunTaskDir (Join-Path $rd 'tasks/t1')
+            return @{ repo = $r; wt = $w; runDir = $rd; frozen = @{ 't1' = @{ contract = $fc.contract; contract_path = $fc.contract_path } }; fcOk = $fc.ok }
+        }
+        function New-VerifyTask { param([string[]]$Allowed = @(), [string]$Profile = 'unit')
+            [pscustomobject]@{ id = 't1'; desc = 'implement the feature'; command = ''; capability = 'code-gen'
+                depends_on = @(); est_cost_tier = 'free'; reversible = $true; verify_profile = $Profile; allowed_paths = $Allowed }
+        }
+        $writeDisp = { param($pick, $prompt)
+            Set-Content -LiteralPath (Join-Path (Get-Location).Path "w-$([guid]::NewGuid()).txt") -Value $prompt -Encoding utf8NoBOM
+            @{ stdout = 'ok'; stderr = ''; exit_code = 0; duration_s = 0 }
+        }
+        $noopDisp2 = { param($pick, $prompt) @{ stdout = 'ok'; stderr = ''; exit_code = 0; duration_s = 0 } }
+        $forbidDisp = { param($pick, $prompt)
+            Set-Content -LiteralPath (Join-Path (Get-Location).Path 'forbidden.txt') -Value 'x' -Encoding utf8NoBOM
+            @{ stdout = 'ok'; stderr = ''; exit_code = 0; duration_s = 0 }
+        }
+        $passProfile = @{ argv = @('pwsh', '-NoProfile', '-File', 'check.ps1'); proves = 'the unit check passes' }
+        function Get-Attempts { param($rd) @(Get-Content -LiteralPath (Join-Path $rd 'tasks/t1/attempts.jsonl')) }
+
+        # VS1 pass: check exits 0, inner writes a file -> ok, verdict pass, 1 attempt row.
+        $fx1 = New-VerifyFixture -Name 'vs1' -VProfile $passProfile
+        Check 'VS0 fixture frozen contract resolved' ($fx1.fcOk -eq $true)
+        $in1 = New-AgenticSpawner -Worktree $fx1.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fx1.runDir -Dispatcher $writeDisp
+        $vs1 = New-VerifyingSpawner -InnerSpawner $in1 -Worktree $fx1.wt.worktree -BaseSha $fx1.wt.base_sha -RunDir $fx1.runDir -FrozenContracts $fx1.frozen
+        $rv1 = & $vs1 (New-VerifyTask)
+        Check 'VS1 ok true' ($rv1.ok -eq $true)
+        Check 'VS1 verdict pass' ($rv1.verification.verdict -eq 'pass')
+        Check 'VS1 not retried' ($rv1.verification.retried -eq $false)
+        Check 'VS1 verification.json written' (Test-Path (Join-Path $fx1.runDir 'tasks/t1/verification.json'))
+        $a1rows = @(Get-Attempts $fx1.runDir)
+        Check 'VS1 one attempt row' ($a1rows.Count -eq 1)
+        Check 'VS1 attempt first_try true' ((@($a1rows)[0] | ConvertFrom-Json).first_try -eq $true)
+
+        # VS2 retry-then-pass (forced verdict via hook; inner writes each attempt -> grew).
+        $hook2 = Join-Path $tmpRoot 'hook2.ps1'
+        Set-Content -LiteralPath $hook2 -Encoding utf8NoBOM -Value @'
+function Invoke-TestVerify { param($Task, $Attempt, $Grew)
+    if ($Attempt -ge 2) { return @{ verdict='pass'; ok=$true; grade='bounded'; failure_category=''; proves='hooked pass'; output_path=''; duration_ms=5 } }
+    return @{ verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'; proves='hooked'; output_path=''; duration_ms=5 }
+}
+'@
+        $fx2 = New-VerifyFixture -Name 'vs2' -VProfile $passProfile
+        $in2 = New-AgenticSpawner -Worktree $fx2.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fx2.runDir -Dispatcher $writeDisp
+        $vs2 = New-VerifyingSpawner -InnerSpawner $in2 -Worktree $fx2.wt.worktree -BaseSha $fx2.wt.base_sha -RunDir $fx2.runDir -FrozenContracts $fx2.frozen
+        $env:BATON_VERIFY_TEST_HOOK = $hook2
+        try { $rv2 = & $vs2 (New-VerifyTask) } finally { Remove-Item env:BATON_VERIFY_TEST_HOOK -ErrorAction SilentlyContinue }
+        Check 'VS2 retried true' ($rv2.verification.retried -eq $true)
+        Check 'VS2 final ok true' ($rv2.ok -eq $true)
+        Check 'VS2 two attempt rows' (@(Get-Attempts $fx2.runDir).Count -eq 2)
+        Check 'VS2 first_failure_category check-failed' ($rv2.verification.first_failure_category -eq 'check-failed')
+
+        # VS3 retry-then-fail (hook fails both attempts).
+        $hook3 = Join-Path $tmpRoot 'hook3.ps1'
+        Set-Content -LiteralPath $hook3 -Encoding utf8NoBOM -Value @'
+function Invoke-TestVerify { param($Task, $Attempt, $Grew)
+    return @{ verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'; proves='hooked'; output_path=''; duration_ms=5 }
+}
+'@
+        $fx3 = New-VerifyFixture -Name 'vs3' -VProfile $passProfile
+        $in3 = New-AgenticSpawner -Worktree $fx3.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fx3.runDir -Dispatcher $writeDisp
+        $vs3 = New-VerifyingSpawner -InnerSpawner $in3 -Worktree $fx3.wt.worktree -BaseSha $fx3.wt.base_sha -RunDir $fx3.runDir -FrozenContracts $fx3.frozen
+        $env:BATON_VERIFY_TEST_HOOK = $hook3
+        try { $rv3 = & $vs3 (New-VerifyTask) } finally { Remove-Item env:BATON_VERIFY_TEST_HOOK -ErrorAction SilentlyContinue }
+        Check 'VS3 not ok' ($rv3.ok -eq $false)
+        Check 'VS3 verdict fail' ($rv3.verification.verdict -eq 'fail')
+        Check 'VS3 retried true' ($rv3.verification.retried -eq $true)
+        Check 'VS3 two attempt rows' (@(Get-Attempts $fx3.runDir).Count -eq 2)
+
+        # VS4 scope-violation -> fail closed, NO retry (inner writes an out-of-scope file).
+        $fx4 = New-VerifyFixture -Name 'vs4' -VProfile $passProfile
+        $in4 = New-AgenticSpawner -Worktree $fx4.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fx4.runDir -Dispatcher $forbidDisp
+        $vs4 = New-VerifyingSpawner -InnerSpawner $in4 -Worktree $fx4.wt.worktree -BaseSha $fx4.wt.base_sha -RunDir $fx4.runDir -FrozenContracts $fx4.frozen
+        $rv4 = & $vs4 (New-VerifyTask -Allowed @('allowed.txt'))
+        Check 'VS4 verdict scope-violation' ($rv4.verification.verdict -eq 'scope-violation')
+        Check 'VS4 not ok' ($rv4.ok -eq $false)
+        Check 'VS4 not retried' ($rv4.verification.retried -eq $false)
+        Check 'VS4 exactly one attempt row (no retry)' (@(Get-Attempts $fx4.runDir).Count -eq 1)
+
+        # VS5 A5 no-change: check exits 0 but inner writes nothing -> demoted to no-change,
+        # retry-eligible (2 rows), still fails.
+        $fx5 = New-VerifyFixture -Name 'vs5' -VProfile $passProfile
+        $in5 = New-AgenticSpawner -Worktree $fx5.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fx5.runDir -Dispatcher $noopDisp2
+        $vs5 = New-VerifyingSpawner -InnerSpawner $in5 -Worktree $fx5.wt.worktree -BaseSha $fx5.wt.base_sha -RunDir $fx5.runDir -FrozenContracts $fx5.frozen
+        $rv5 = & $vs5 (New-VerifyTask)
+        Check 'VS5 verdict fail' ($rv5.verification.verdict -eq 'fail')
+        Check 'VS5 failure_category no-change' ($rv5.verification.failure_category -eq 'no-change')
+        Check 'VS5 first_failure no-change' ($rv5.verification.first_failure_category -eq 'no-change')
+        Check 'VS5 retried (two rows)' (@(Get-Attempts $fx5.runDir).Count -eq 2)
+
+        # VS6 unverified: task with verify_profile='' delegates to inner, unverified=true,
+        # no verification key.
+        $fx6 = New-VerifyFixture -Name 'vs6' -VProfile $passProfile
+        $in6 = New-AgenticSpawner -Worktree $fx6.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fx6.runDir -Dispatcher $writeDisp
+        $vs6 = New-VerifyingSpawner -InnerSpawner $in6 -Worktree $fx6.wt.worktree -BaseSha $fx6.wt.base_sha -RunDir $fx6.runDir -FrozenContracts @{}
+        $rv6 = & $vs6 (New-VerifyTask -Profile '')
+        Check 'VS6 unverified true' ($rv6.unverified -eq $true)
+        Check 'VS6 no verification key' (-not $rv6.ContainsKey('verification'))
+        Check 'VS6 delegated inner ok' ($rv6.ok -eq $true)
+
+        # VS7 evidence prompt: carries the failure category, the fix-in-place instruction,
+        # the original task, and caps the raw-output excerpt.
+        $vs7out = Join-Path $tmpRoot 'vs7-out.txt'
+        Set-Content -LiteralPath $vs7out -Value ('E' * 5000) -Encoding utf8NoBOM
+        $vs7prompt = Format-VerifyEvidencePrompt -TaskDesc 'Original task text' -Verification @{ failure_category = 'check-failed' } -OutputPath $vs7out -MaxExcerpt 100
+        Check 'VS7 includes failure category' ($vs7prompt -match 'check-failed')
+        Check 'VS7 includes fix-in-place instruction' ($vs7prompt -match 'Fix the EXISTING work')
+        Check 'VS7 includes original task' ($vs7prompt -match 'Original task text')
+        Check 'VS7 excerpt capped/truncated' ($vs7prompt -match 'truncated')
     } finally {
         if ($null -eq $savedBatonHome) { Remove-Item env:BATON_HOME -ErrorAction SilentlyContinue }
         else { $env:BATON_HOME = $savedBatonHome }

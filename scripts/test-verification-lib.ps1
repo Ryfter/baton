@@ -58,6 +58,13 @@ try {
     Assert "S27 pwsh -NoProfile -File allowed (real script run)" ((Test-VerifyArgvSafe -Argv @('pwsh', '-NoProfile', '-File', 'scripts/x.ps1')).ok)
     Assert "S28 node script.js allowed (no eval flag)" ((Test-VerifyArgvSafe -Argv @('node', 'server.js', '--port', '3000')).ok)
     Assert "S29 python -C (uppercase, not -c) allowed" ((Test-VerifyArgvSafe -Argv @('python', '-C', 'foo')).ok)
+    # C-carry: env-wrapper hardening — assignments/flags before the interpreter must not
+    # let a shell/eval escape slip past the one-token shift (V1 review carry-forward).
+    Assert "S30 env NAME=val python -c rejected" (-not (Test-VerifyArgvSafe -Argv @('env', 'FOO=bar', 'python', '-c', 'x')).ok)
+    Assert "S31 env -i pwsh -Command rejected" (-not (Test-VerifyArgvSafe -Argv @('env', '-i', 'pwsh', '-Command', 'x')).ok)
+    Assert "S32 env -u X node --eval= rejected" (-not (Test-VerifyArgvSafe -Argv @('env', '-u', 'X', 'node', '--eval=1')).ok)
+    Assert "S33 env NAME=val pytest still allowed (no over-block)" ((Test-VerifyArgvSafe -Argv @('env', 'FOO=bar', 'pytest', 'tests/', '-q')).ok)
+    Assert "S34 env -C dir sh -c rejected (flag-with-value + escape)" (-not (Test-VerifyArgvSafe -Argv @('env', '-C', '/tmp', 'sh', '-c', 'x')).ok)
 
     # --- C: containment ---
     Set-Content -LiteralPath (Join-Path $wt 'inside.txt') -Value 'x' -Encoding utf8NoBOM
