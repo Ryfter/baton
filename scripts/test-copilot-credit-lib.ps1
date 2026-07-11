@@ -53,6 +53,7 @@ try {
     Check 'C1 404 -> insufficient-scope' ((Get-CopilotFetchReason -ErrorText 'HTTP 404: Not Found') -eq 'insufficient-scope')
     Check 'C2 user-scope text -> insufficient-scope' ((Get-CopilotFetchReason -ErrorText "needs the 'user' scope") -eq 'insufficient-scope')
     Check 'C3 network error -> fetch-failed' ((Get-CopilotFetchReason -ErrorText 'connection refused') -eq 'fetch-failed')
+    Check 'C3b 403 not-accessible -> insufficient-scope' ((Get-CopilotFetchReason -ErrorText 'HTTP 403: Resource not accessible by personal access token') -eq 'insufficient-scope')
 
     # ---- config reader ----
     $cfg = Get-CopilotCreditConfig -FleetPath $fleetFull
@@ -116,6 +117,7 @@ try {
     # ---- panel render (capture via Out-String on a child scope) ----
     $pOk = (Write-CopilotCreditPanel -Forecast $f) *>&1 | Out-String
     Check 'P1 ok panel shows used/budget/pct + run-rate + models' ($pOk -match '1018 / 1500' -and $pOk -match '68%' -and $pOk -match 'run-rate 101.8/day' -and $pOk -match 'GPT-5 612')
+    Check 'P1b ok panel body is ASCII-only (console-encoding safety)' ($pOk -notmatch '[^\x00-\x7F]')
     $pWarn = (Write-CopilotCreditPanel -Forecast $fw) *>&1 | Out-String
     Check 'P2 warn line at threshold' ($pWarn -match 'WARNING: over 80%')
     $scope = [ordered]@{ status='unavailable'; reason='insufficient-scope' }

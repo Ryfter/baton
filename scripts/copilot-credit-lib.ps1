@@ -16,7 +16,7 @@ function Get-CopilotFetchReason {
     <# Classify a fetch error into the spec's reason vocabulary. Pure. #>
     param([string]$ErrorText)
     $t = [string]$ErrorText
-    if ($t -match '404' -or $t -match "user['']?\s+scope" -or $t -match 'Not Found') {
+    if ($t -match '404' -or $t -match '403' -or $t -match "user['']?\s+scope" -or $t -match 'Not Found' -or $t -match 'not accessible') {
         return 'insufficient-scope'
     }
     return 'fetch-failed'
@@ -186,14 +186,14 @@ function Write-CopilotCreditPanel {
     Write-Host $head
     if ($Forecast.status -eq 'ok') {
         $line = '  run-rate ' + $Forecast.run_rate + '/day'
-        if ($null -ne $Forecast.days_to_exhaustion) { $line += ' · ~' + $Forecast.days_to_exhaustion + ' days to exhaustion' }
-        $line += ' · resets ' + $Forecast.reset_date + ' (' + $Forecast.days_left_in_cycle + 'd)'
+        if ($null -ne $Forecast.days_to_exhaustion) { $line += ' | ~' + $Forecast.days_to_exhaustion + ' days to exhaustion' }
+        $line += ' | resets ' + $Forecast.reset_date + ' (' + $Forecast.days_left_in_cycle + 'd)'
         Write-Host $line
     }
     if (@($Forecast.by_model).Count -gt 0) {
         $mparts = @()
         foreach ($m in @($Forecast.by_model)) { $mparts += ($m.model + ' ' + $m.credits) }
-        Write-Host ('  by model: ' + ($mparts -join ' · '))
+        Write-Host ('  by model: ' + ($mparts -join ' | '))
     }
     if ($Forecast.warn) {
         Write-Host ('  WARNING: over ' + $Forecast.warn_pct + '% - check the Copilot code-review ruleset (biggest metered driver)')
