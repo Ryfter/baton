@@ -2,6 +2,15 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
+## ⚑ SYSTEM MODEL HANDOFF — 2026-07-11 (CLI control plane — framing for main build)
+
+**Authority doc (not a build sprint):**  
+[`docs/superpowers/specs/2026-07-11-cli-control-plane-system-model-design.md`](superpowers/specs/2026-07-11-cli-control-plane-system-model-design.md)
+
+Baton as **CLI control plane**: dispatch agent-shaped work → harness → act → verify → remember → budget. Fuses Chris Noring (CLI-first systems + guardrails + human merge) and Nate B. Jones (harness > more agents; dispatch rule). Use when sequencing features or writing child specs; does **not** override Kevin’s live priority order (Plan Gate, direct-model, copilot d079, V3/V4, …).
+
+---
+
 ## ⚑ RESUME HERE — 2026-07-10 (Plan Gate + Grok — ready for Claude to build)
 
 **AUTHORIZED BUILD:** Plan Gate (Claude conducts; Codex + Grok once-over plans).
