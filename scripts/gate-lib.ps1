@@ -34,31 +34,125 @@ function Get-FindingsJsonBlock {
     return $Raw.Substring($open, $close - $open + 1)
 }
 
+function Get-FindingsJsonBlocks {
+    <# Every balanced top-level [...] candidate in a reply, in order (string-aware
+       depth scan so brackets inside JSON string values do not split a block). The
+       array sibling of conductor-lib's Get-JsonBlocks: needed for providers like
+       `codex exec` that echo the prompt (which itself carries the findings SCHEMA
+       array AND the plan's own arrays) before the answer — the greedy
+       Get-FindingsJsonBlock then spans echo+answer into one invalid blob. A
+       mis-scanned candidate simply fails ConvertFrom-Json downstream and is skipped.
+       Returns a plain array via .ToArray() — NO unary-comma wrap; callers collect
+       with @() (the exact double-wrap bug that bit conductor-lib's Get-JsonBlocks). #>
+    param([Parameter(Mandatory)][string]$Raw)
+    # Resilience (codex): a single linear pass lets an unmatched '[' in echoed prose
+    # keep depth>0 to EOF, swallowing every later VALID array. Instead iterate candidate
+    # START positions: from the cursor, find the next '[', attempt a string-aware balanced
+    # extraction from it; on success emit the block and advance the cursor past it; on
+    # EOF-without-close, advance the cursor to just AFTER that '[' and retry from there.
+    # Small inputs (KB) — O(n^2) worst case is acceptable.
+    $blocks = [System.Collections.ArrayList]@()
+    $len = $Raw.Length
+    $cursor = 0
+    while ($true) {
+        $open = $Raw.IndexOf('[', $cursor)
+        if ($open -lt 0) { break }
+        $depth = 0; $inStr = $false; $escaped = $false; $closed = $false
+        for ($i = $open; $i -lt $len; $i++) {
+            $ch = $Raw[$i]
+            if ($inStr) {
+                if ($escaped) { $escaped = $false }
+                elseif ($ch -eq '\') { $escaped = $true }
+                elseif ($ch -eq '"') { $inStr = $false }
+                continue
+            }
+            if ($ch -eq '"') { if ($depth -gt 0) { $inStr = $true } }
+            elseif ($ch -eq '[') { $depth++ }
+            elseif ($ch -eq ']') {
+                $depth--
+                if ($depth -eq 0) {
+                    [void]$blocks.Add($Raw.Substring($open, $i - $open + 1))
+                    $cursor = $i + 1
+                    $closed = $true
+                    break
+                }
+            }
+        }
+        # EOF reached without balancing this '[' — skip past it and retry, so a later
+        # valid array is not lost behind an unmatched opener in prose.
+        if (-not $closed) { $cursor = $open + 1 }
+    }
+    return $blocks.ToArray()
+}
+
 function Get-ReviewFindings {
     <# Parse one reviewer's output into @{parsed; findings; raw}. Tolerant: accepts a
        bare or prose-embedded JSON array. Each finding normalized to
        @{severity;area;summary}; unknown severities floored to 'minor' (never dropped).
-       Unparseable -> parsed=$false, findings=@(). Empty array -> parsed=$true, @(). #>
+       Unparseable -> parsed=$false, findings=@(). Empty array -> parsed=$true, @().
+
+       Candidate order (mirrors conductor-lib's ConvertTo-PlanObject, adapted to
+       arrays): the greedy whole-span block first (the historical fast path — one
+       clean/fenced reply; cheap, preserves today's semantics), then the balanced
+       [...] blocks LAST-first, because a prompt-echoing reviewer (e.g. `codex exec`,
+       which echoes the schema + plan arrays) puts its ANSWER after the echo. The
+       first candidate that parses AND clears the schema-echo + shape filters wins.
+
+       Known accepted residual (do NOT try to solve): an echo-ONLY reply — the
+       reviewer echoed the prompt and answered nothing — can false-ACCEPT as a clean
+       [] via the prompt's own literal "Return []" text forming a bare empty array.
+       It fails toward accept on ONE reviewer; the multi-reviewer merge + advisory
+       posture bound the blast radius. #>
     param([string]$Output)
     $result = @{ parsed = $false; findings = @(); raw = [string]$Output }
     $text = [string]$Output
     if ([string]::IsNullOrWhiteSpace($text)) { return $result }
-    $block = Get-FindingsJsonBlock -Raw $text
-    if (-not $block) { return $result }
-    try { $arr = $block | ConvertFrom-Json -ErrorAction Stop } catch { return $result }
-    $norm = [System.Collections.ArrayList]@()
-    foreach ($f in @($arr)) {
-        if ($null -eq $f) { continue }
-        $sev = ([string]$f.severity).Trim().ToLowerInvariant()
-        if ((Get-FindingSeverityRank $sev) -eq 0) { $sev = 'minor' }  # unknown -> floor, never drop
-        [void]$norm.Add(@{
-            severity = $sev
-            area     = ([string]$f.area).Trim()
-            summary  = ([string]$f.summary).Trim()
-        })
+
+    $candidates = [System.Collections.ArrayList]@()
+    $greedy = Get-FindingsJsonBlock -Raw $text
+    if ($greedy) { [void]$candidates.Add($greedy) }
+    $balanced = @(Get-FindingsJsonBlocks -Raw $text)
+    for ($bi = $balanced.Count - 1; $bi -ge 0; $bi--) { [void]$candidates.Add($balanced[$bi]) }
+
+    foreach ($block in $candidates) {
+        $arr = $null
+        try { $arr = $block | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        $elements = @($arr)
+        # Schema-echo reject: the prompt's placeholder severity "critical|important|minor"
+        # — a reviewer that dies after echoing would otherwise hand us the schema as findings.
+        $isSchemaEcho = $false
+        foreach ($el in $elements) {
+            if ($null -ne $el -and (([string]$el.severity) -match '\|')) { $isSchemaEcho = $true; break }
+        }
+        if ($isSchemaEcho) { continue }
+        # Shape validation: a NON-empty candidate survives only if EVERY non-null element
+        # is an object exposing BOTH a severity and a non-empty summary (excludes echoed
+        # plan fragments like ["t2"] and prose-adjacent brackets like [3]). An EMPTY
+        # array [] is a valid clean review and survives.
+        $shapeOk = $true
+        foreach ($el in $elements) {
+            if ($null -eq $el) { continue }
+            $names = @($el.PSObject.Properties.Name)
+            if (($names -notcontains 'severity') -or ($names -notcontains 'summary') -or `
+                [string]::IsNullOrWhiteSpace([string]$el.summary)) { $shapeOk = $false; break }
+        }
+        if (-not $shapeOk) { continue }
+        # Survivor: normalize (unknown severity floored to 'minor', never dropped).
+        $norm = [System.Collections.ArrayList]@()
+        foreach ($f in $elements) {
+            if ($null -eq $f) { continue }
+            $sev = ([string]$f.severity).Trim().ToLowerInvariant()
+            if ((Get-FindingSeverityRank $sev) -eq 0) { $sev = 'minor' }  # unknown -> floor, never drop
+            [void]$norm.Add(@{
+                severity = $sev
+                area     = ([string]$f.area).Trim()
+                summary  = ([string]$f.summary).Trim()
+            })
+        }
+        $result.parsed = $true
+        $result.findings = @($norm.ToArray())
+        return $result
     }
-    $result.parsed = $true
-    $result.findings = @($norm.ToArray())
     return $result
 }
 

@@ -152,6 +152,105 @@ providers:
         Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue
         Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
     }
+
+    # ---- Task E: findings parse hardening for prompt-echoing reviewers (codex) ----
+    # A realistic codex-shaped raw reply: CLI banner + echoed prompt (carrying the
+    # findings SCHEMA array whose severity has '|', and the plan's own arrays incl.
+    # ["t1"]) + the ANSWER array + a duplicated answer whose closing ] is split from
+    # the objects by a `tokens used` trailer (invalid JSON). Cribbed from codex-raw.txt.
+    $codexRaw = @'
+OpenAI Codex v0.144.0
+--------
+model: gpt-5.6-sol
+--------
+user
+Respond with ONLY a JSON array matching this schema exactly — no prose.
+
+Schema:
+[
+  { "severity": "critical|important|minor",
+    "area": "scope|ordering|cost",
+    "summary": "<one line: the specific issue>" }
+]
+
+## Plan (JSON)
+{
+  "tasks": [
+    { "id": "t1", "description": "delete the existing test suite", "depends_on": [] },
+    { "id": "t2", "description": "add the --csv flag", "depends_on": ["t1"] }
+  ]
+}
+
+codex
+[
+  { "severity": "critical", "area": "scope", "summary": "t1 destructively deletes the usage test suite" },
+  { "severity": "important", "area": "ordering", "summary": "t2 depends on the unrelated deletion t1" }
+]
+[
+  { "severity": "critical", "area": "scope", "summary": "t1 destructively deletes the usage test suite" },
+  { "severity": "important", "area": "ordering", "summary": "t2 depends on the unrelated deletion t1" }
+tokens used
+14,350
+]
+'@
+    $ce = Get-ReviewFindings -Output $codexRaw
+    Check 'GE1 codex echo: parsed from the ANSWER, not echo' ($ce.parsed -and @($ce.findings).Count -eq 2)
+    $ceSev = @($ce.findings | ForEach-Object { $_.severity })
+    Check 'GE2 codex echo: answer severities (critical+important), no schema placeholder' (
+        ($ceSev -contains 'critical') -and ($ceSev -contains 'important') -and
+        (-not (@($ce.findings | Where-Object { $_.summary -match 'one line' }).Count)))
+
+    # Echoed schema only, no answer array (and no bare []) -> not parsed.
+    $schemaOnly = @'
+OpenAI Codex v0.144.0
+user
+Respond with ONLY a JSON array matching this schema.
+
+Schema:
+[
+  { "severity": "critical|important|minor",
+    "area": "scope|ordering",
+    "summary": "the specific issue" }
+]
+
+codex
+'@
+    $so = Get-ReviewFindings -Output $schemaOnly
+    Check 'GE3 echoed-schema-only reply -> not parsed' (-not $so.parsed -and @($so.findings).Count -eq 0)
+
+    # Last balanced block is an echoed plan fragment ["t2"]; the earlier valid findings
+    # array must win via shape validation.
+    $tailNoise = @'
+Here is my review of the plan:
+[
+  { "severity": "minor", "area": "style", "summary": "rename foo to bar for clarity" }
+]
+Referenced tasks: ["t2"]
+'@
+    $tn = Get-ReviewFindings -Output $tailNoise
+    Check 'GE4 findings win over trailing ["t2"] fragment' (
+        $tn.parsed -and @($tn.findings).Count -eq 1 -and $tn.findings[0].summary -match 'rename foo')
+
+    # Get-FindingsJsonBlocks: brackets inside a JSON string do not split a block.
+    $blkStr = '[{"severity":"minor","area":"style","summary":"index expr a[0] is fine"}]'
+    $blks = @(Get-FindingsJsonBlocks -Raw $blkStr)
+    Check 'GE5 brackets inside strings do not split blocks' ($blks.Count -eq 1)
+    $bs = Get-ReviewFindings -Output $blkStr
+    Check 'GE6 string-embedded brackets still parse to one finding' ($bs.parsed -and @($bs.findings).Count -eq 1)
+
+    # F5: an unmatched '[' in echoed prose BEFORE a valid findings array must not swallow
+    # it. The old single linear pass kept depth>0 to EOF and lost the later array; the
+    # cursor-restart scan skips past the lone opener and still finds the valid block.
+    $loneOpen = @'
+Consider the list [ of concerns below before the JSON:
+[
+  { "severity": "important", "area": "risk", "summary": "no rollback path for the migration" }
+]
+'@
+    $loBlocks = @(Get-FindingsJsonBlocks -Raw $loneOpen)
+    Check 'GE7 lone [ in prose does not swallow the later valid array' (@($loBlocks | Where-Object { $_ -match 'no rollback path' }).Count -eq 1)
+    $lo = Get-ReviewFindings -Output $loneOpen
+    Check 'GE8 findings parse past a lone [ in prose' ($lo.parsed -and @($lo.findings).Count -eq 1 -and $lo.findings[0].summary -match 'no rollback path')
 }
 finally {
     if ($script:fail -gt 0) { Write-Host "`n$script:fail FAILED"; exit 1 }

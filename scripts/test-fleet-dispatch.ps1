@@ -88,5 +88,44 @@ Assert "stdin:true provider dispatches without throwing" ($rStdin.exit_code -eq 
 Assert "stdin:true provider receives the prompt on stdin" (($rStdin.stdout | Out-String) -match 'HELLO-VIA-STDIN')
 Remove-Item $tmpJs -ErrorAction SilentlyContinue
 
+# --- {{prompt_file}} transport: quote-heavy round-trip + temp cleanup ---
+# A prompt carrying embedded double quotes, {braces}, and a literal $1 — the exact
+# shapes that break inline interpolation — must survive intact through the temp
+# file. $pfCore is single-quoted so $1 stays literal (no PS expansion).
+$pfCore = 'quote:"inner" brace:{x} dollar:$1'
+$pfSentinel = 'PFSENT' + [guid]::NewGuid().ToString('N')
+$pfPrompt = $pfCore + ' ' + $pfSentinel
+# Journal to a .md path (not New-TemporaryFile) so it is not itself a *.tmp the
+# cleanup scan below would mistake for a leaked prompt temp file — the sentinel
+# rides the journal's prompt summary too.
+$tmpJpf = Join-Path $env:TEMP "fleet-disp-pf-journal-$(Get-Random).md"
+$rPf = Invoke-Fleet -Name 'stub-promptfile' -Prompt $pfPrompt -Path $fixture -JournalPath $tmpJpf
+$pfOut = ($rPf.stdout | Out-String)
+Assert "prompt_file round-trips quote-heavy text intact" ($pfOut.Contains($pfCore))
+Assert "prompt_file dispatch exit 0" ($rPf.exit_code -eq 0)
+# Temp cleanup: the finally in Invoke-Fleet-Cli deletes the temp file, so no *.tmp
+# in $env:TEMP should still hold the unique sentinel after dispatch.
+$pfLingering = @(Get-ChildItem -Path $env:TEMP -Filter '*.tmp' -File -ErrorAction SilentlyContinue |
+    Where-Object { try { (Get-Content -LiteralPath $_.FullName -Raw -ErrorAction Stop).Contains($pfSentinel) } catch { $false } })
+Assert "prompt_file temp file cleaned up (no lingering sentinel)" ($pfLingering.Count -eq 0)
+Remove-Item $tmpJpf -ErrorAction SilentlyContinue
+
+# --- {{prompt_file}} argv invocation: subexpression + backticks round-trip VERBATIM ---
+# The argv path (call operator, no Invoke-Expression) must never reparse a $(...)
+# subexpression or backticks in the prompt. Single-quoted so $(Get-Date)/backticks
+# stay literal in PS; the fixture echoes the temp file's raw content back, so a
+# verbatim match proves nothing was evaluated en route.
+$pfEvilCore = 'sub:$(Get-Date) tick:`whoami` end'
+$tmpJpf2 = Join-Path $env:TEMP "fleet-disp-pf2-journal-$(Get-Random).md"
+$rPf2 = Invoke-Fleet -Name 'stub-promptfile' -Prompt $pfEvilCore -Path $fixture -JournalPath $tmpJpf2
+$pfOut2 = ($rPf2.stdout | Out-String)
+Assert "prompt_file argv path: subexpression/backticks round-trip verbatim (no reparse)" ($pfOut2.Contains($pfEvilCore))
+Assert "prompt_file argv path exit 0" ($rPf2.exit_code -eq 0)
+Remove-Item $tmpJpf2 -ErrorAction SilentlyContinue
+
+# A {{prompt_file}} template must NOT be promoted to stdin (no trailing quoted
+# {{prompt}} tail for Test-StdinSafe to strip) — the file branch owns it.
+Assert "stdin-safe: {{prompt_file}} template not promoted to stdin" (-not (Test-StdinSafe -Provider @{ name='pf'; command_template='grok --prompt-file "{{prompt_file}}"' }))
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green

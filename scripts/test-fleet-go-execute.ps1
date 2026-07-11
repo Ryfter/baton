@@ -65,6 +65,31 @@ function Invoke-TestExecDispatcher {
     $branches = [string](& git -C $repo branch --list 'baton/run-*')
     Check 'E9 run branch exists in the target repo' ($branches -match 'baton/run-')
 
+    # ---- F3: plan-gate reject under -Execute leaves NO worktree/branch behind ----
+    # The worktree/branch are created before the gate; a plan-rejected run must discard
+    # both (nothing was walked). Force reject via the BATON_GO_TEST_PLANGATE seam.
+    $pgReject = Join-Path $tmpRoot 'pg-reject.ps1'
+    Set-Content -LiteralPath $pgReject -Encoding utf8NoBOM -Value @'
+function Invoke-TestPlanGateDispatch($name, $prompt) {
+    return @{ stdout = '[{"severity":"critical","area":"risk","summary":"will break prod"}]'; stderr = ''; exit_code = 0 }
+}
+'@
+    $wtDir = Join-Path (Split-Path (Resolve-Path $repo).Path -Parent) '.baton-worktrees'
+    $wtBefore = @(Get-ChildItem -Path $wtDir -Directory -ErrorAction SilentlyContinue).Count
+    $brBefore = @(& git -C $repo branch --list 'baton/run-*').Count
+    $env:BATON_GO_TEST_PLANGATE = $pgReject
+    try {
+        $rawR = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $repo -PlanGate -PlanReviewers p1,p2 -Json | Out-String
+    } finally { Remove-Item Env:\BATON_GO_TEST_PLANGATE -ErrorAction SilentlyContinue }
+    $resR = $rawR | ConvertFrom-Json
+    $wtAfter = @(Get-ChildItem -Path $wtDir -Directory -ErrorAction SilentlyContinue).Count
+    $brAfter = @(& git -C $repo branch --list 'baton/run-*').Count
+    Check 'E13 plan-rejected status' ($resR.status -eq 'plan-rejected')
+    Check 'E14 branch field nulled on reject' ([string]::IsNullOrEmpty([string]$resR.branch))
+    Check 'E15 worktree field nulled on reject' ([string]::IsNullOrEmpty([string]$resR.worktree))
+    Check 'E16 rejected run left no new worktree dir' ($wtAfter -eq $wtBefore)
+    Check 'E17 rejected run left no new branch' ($brAfter -eq $brBefore)
+
     # ---- non-repo -> exit 2, no partial state ----
     $plain = Join-Path $tmpRoot 'plain'
     New-Item -ItemType Directory -Force -Path $plain | Out-Null

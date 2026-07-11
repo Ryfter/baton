@@ -8,7 +8,10 @@
 #   kind              cli | http
 #   enabled           true | false (disabled providers are skipped, not invoked)
 #   cost_tier         paid | free | local
-#   command_template  (cli only) {{prompt}} required, {{model}} optional
+#   command_template  (cli only) {{prompt}} required, {{model}} optional. Third
+#                     transport: {{prompt_file}} = the prompt is written to a temp
+#                     file and its path substituted (quote-safe + size-safe) — for
+#                     CLIs that neither read stdin nor tolerate inline quotes (grok).
 #   stdin             (cli only, optional) true = template has no {{prompt}}; the
 #                     prompt is piped via stdin (quote-safe). false = explicit VETO
 #                     of the automatic clean-tail stdin promotion for CLIs that do
@@ -29,7 +32,7 @@
 #                     budget) only in your live ~/.baton/fleet.yaml.
 #   saturation_target (optional, float) utilization % the driver pushes toward before it
 #                     stops boosting. Default 99.9.
-#   platform          (optional) claude | codex | gemini | github | local — Lever 4
+#   platform          (optional) claude | codex | gemini | grok | github | local — Lever 4
 #                     identity; journaled now, consumed by the cost/speed advisor later.
 #   timeout_s         (http only, optional) per-request timeout; default 300 in the
 #                     lm-studio hatch (large pinned models cold-load before generating).
@@ -40,10 +43,14 @@
 #                     code-gen, code-transform, commit-msg, extract-json,
 #                     summarize-short, summarize-long, synthesize, write-personal,
 #                     write-scientific, write-formal, ocr, embed, judge, reasoning,
-#                     vision, triage, classify, review
+#                     vision, triage, classify, review, plan-review
 #   triage / classify  — structured task classification (issue → type/priority/risk)
 #   review            — competitive acceptance review: emit JSON findings
 #                       (severity/area/summary) for the Acceptance/Polish Gate
+#   plan-review       — competitive PLAN once-over (Plan Gate, d080): critique a
+#                       conductor plan.json BEFORE labor runs; emit JSON findings
+#                       (severity/area/summary). Separate from post-work `review` so
+#                       acceptance reviewers are not auto-drafted as plan peers.
 #   budget            (optional, int) usage budget per reset window — read by the
 #                     Usage Governor forecast (days-to-exhaustion). BOX-PRIVATE: set
 #                     real values only in your live ~/.baton/fleet.yaml, never here.
@@ -100,6 +107,9 @@ providers:
   # throwaway run worktrees) to a READ-ONLY sandbox and, with approval never,
   # exits 0 having edited nothing — a silent no-op for /baton:go --execute.
   # The explicit policy scopes writes to the cwd, which IS the worktree.
+  # capabilities: explicit list REPLACES the blanket general_capabilities grant, so
+  # the general trio is restated alongside the Plan Gate grants (d080: codex is a
+  # default plan-review peer — do not rely on the blanket grant for that roster).
   - name: codex
     kind: cli
     enabled: true
@@ -107,6 +117,7 @@ providers:
     role: finisher
     platform: codex
     command_template: 'codex exec --sandbox workspace-write "{{prompt}}"'
+    capabilities: [code-gen, reasoning, summarize, plan-review, review]
 
   # agy does NOT read stdin: the clean-tail stdin promotion would turn this into a
   # bare `agy --print` ("flag needs an argument"), and `agy --print -` treats the
@@ -122,6 +133,24 @@ providers:
     platform: gemini
     stdin: false
     command_template: 'agy --print "{{prompt}}"'
+
+  # grok (xAI CLI) does NOT read stdin: bare `grok -p` errors ("a value is required
+  # for '--single <PROMPT>'"), and inline `grok -p "{{prompt}}"` breaks on the
+  # embedded double quotes of JSON-heavy plan-review prompts. So the prompt rides a
+  # temp file via the {{prompt_file}} transport (grok --prompt-file <path>, proven
+  # quote-safe live 2026-07-10) — quote-safe and 965-byte-safe, no stdin: false veto
+  # needed (a {{prompt_file}} template is never a stdin-promotion candidate).
+  # agentic: true is REQUIRED — platform 'grok' is outside the d078 auto-infer
+  # set {claude, codex, gemini}.
+  - name: grok-cli
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    role: finisher
+    platform: grok
+    agentic: true
+    command_template: 'grok --prompt-file "{{prompt_file}}"'
+    capabilities: [code-gen, reasoning, plan-review, review]
 
   - name: gh-copilot
     kind: cli

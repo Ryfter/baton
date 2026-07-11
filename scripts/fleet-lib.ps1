@@ -169,7 +169,9 @@ function Resolve-FleetCommand {
     if (-not $template) { throw "Provider '$($Provider.name)' has no command_template." }
     # stdin providers pipe the prompt in rather than interpolating it, so they
     # legitimately omit {{prompt}} from the template (e.g. 'codex exec -').
-    if ($template -notmatch '\{\{prompt\}\}' -and $Provider.stdin -ne $true) {
+    # {{prompt_file}} providers are likewise exempt: the prompt rides a temp file
+    # whose path is substituted only inside Invoke-Fleet-Cli, never here.
+    if ($template -notmatch '\{\{prompt\}\}' -and $Provider.stdin -ne $true -and $template -notmatch '\{\{prompt_file\}\}') {
         throw "Provider '$($Provider.name)' command_template lacks the required {{prompt}} placeholder."
     }
     $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
@@ -251,13 +253,23 @@ function Invoke-Fleet-Cli {
         [string]$Model,
         [int]$TimeoutS = 120
     )
-    # Decide dispatch path. stdin:true providers already omit {{prompt}};
-    # clean-tail interpolating providers are promoted to stdin (prompt-size /
-    # quote hardening) by stripping the trailing quoted {{prompt}} token. For
-    # both stdin cases we resolve {{model}} inline — NOT via Resolve-FleetCommand,
-    # whose mandatory -Prompt would reject the empty prompt a stdin dispatch uses.
-    $useStdin = ($Provider.stdin -eq $true) -or (Test-StdinSafe -Provider $Provider)
-    if ($useStdin) {
+    # Decide dispatch path. A {{prompt_file}} template takes precedence over the
+    # stdin decision: the prompt is written to a temp file and its path substituted
+    # (quote-safe + size-safe) for CLIs that neither read stdin nor tolerate inline
+    # quotes (grok). Otherwise: stdin:true providers already omit {{prompt}}; clean-
+    # tail interpolating providers are promoted to stdin (prompt-size / quote
+    # hardening) by stripping the trailing quoted {{prompt}} token. For the stdin
+    # and prompt-file cases we resolve {{model}} inline — NOT via Resolve-FleetCommand,
+    # whose mandatory -Prompt would reject the empty prompt those dispatches use.
+    $usePromptFile = ([string]$Provider.command_template) -match '\{\{prompt_file\}\}'
+    $useStdin = (-not $usePromptFile) -and (($Provider.stdin -eq $true) -or (Test-StdinSafe -Provider $Provider))
+    if ($usePromptFile) {
+        # {{prompt_file}} is substituted with the temp path inside the try below,
+        # where the file lives; resolve {{model}} now, same as the stdin branch.
+        $cmd = [string]$Provider.command_template
+        $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
+        if ($null -ne $resolvedModel) { $cmd = $cmd.Replace('{{model}}', [string]$resolvedModel) }
+    } elseif ($useStdin) {
         # stdin:true templates carry no {{prompt}}; Test-StdinSafe templates end in
         # a standalone quoted {{prompt}} that we strip. Both then resolve {{model}}.
         $cmd = if ($Provider.stdin -eq $true) { [string]$Provider.command_template }
@@ -277,7 +289,44 @@ function Invoke-Fleet-Cli {
     }
     $start = Get-Date
     try {
-        if ($useStdin) {
+        if ($usePromptFile) {
+            # Prompt-file path: write $Prompt to a unique temp file and hand its path
+            # to the CLI. Quote-safe (the CLI reads the file, not an arg) and size-safe
+            # (no 965-byte arg ceiling). Mirror the stdin branch's argv invocation:
+            # split the template into whitespace tokens, find the standalone
+            # {{prompt_file}} token (after stripping surrounding quotes), swap in the
+            # temp path, and invoke via the call operator — NO Invoke-Expression, so a
+            # $(, backtick, or $ in the temp path (username-dependent) is never reparsed.
+            $tmp = [System.IO.Path]::GetTempFileName()
+            try {
+                Set-Content -LiteralPath $tmp -Value $Prompt -Encoding utf8NoBOM
+                $tokens = @($cmd -split '\s+' | Where-Object { $_ -ne '' })
+                # A token is the prompt-file slot when, stripped of surrounding single/
+                # double quotes, it equals {{prompt_file}} exactly (placeholder as its own
+                # argument). An embedded placeholder inside a larger token is NOT argv-safe.
+                $pfIdx = -1
+                for ($ti = 0; $ti -lt $tokens.Count; $ti++) {
+                    if (($tokens[$ti].Trim('"', "'")) -eq '{{prompt_file}}') { $pfIdx = $ti; break }
+                }
+                if ($pfIdx -ge 0) {
+                    $argv = @($tokens)
+                    $argv[$pfIdx] = $tmp
+                    $exe = $argv[0]
+                    $rest = @($argv | Select-Object -Skip 1)
+                    $out = & $exe @rest 2>&1 | Out-String
+                } else {
+                    # Fallback: the placeholder is embedded inside a larger token (no
+                    # standalone argv slot to target), so the call-operator path cannot
+                    # substitute it. Substitute literally and run via Invoke-Expression —
+                    # tolerable here because the substituted value is a temp path we
+                    # created and the template carries its own quoting around the token.
+                    $fileCmd = $cmd.Replace('{{prompt_file}}', $tmp)
+                    $out = Invoke-Expression $fileCmd 2>&1 | Out-String
+                }
+            } finally {
+                Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+            }
+        } elseif ($useStdin) {
             # Robust path: pass the prompt via stdin instead of interpolating it
             # into the command string — immune to embedded quotes/backticks/$.
             # The template is a clean token list (e.g. 'codex exec -') with no

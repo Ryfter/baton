@@ -63,3 +63,13 @@ providers:
     cost_tier: local
     stdin: true
     command_template: 'pwsh -NoProfile -Command [Console]::In.ReadToEnd()'
+
+  # {{prompt_file}} provider — the prompt is written to a temp file and its path
+  # substituted (quote-safe, no arg-size ceiling). The fixture script echoes the
+  # file's raw content back, so a dispatch proves the round-trip. Path is relative
+  # to the repo root; the suites are run from D:\Dev\Baton.
+  - name: stub-promptfile
+    kind: cli
+    enabled: true
+    cost_tier: local
+    command_template: 'pwsh -NoProfile -File scripts/fixtures/echo-promptfile.ps1 "{{prompt_file}}"'
