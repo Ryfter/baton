@@ -31,6 +31,29 @@ you set and inspect that state.
 3. Summarize the resulting state to the user in plain language (which workers are
    available, which are waiting and for how long, and whether conserve mode is on).
 
+## Copilot Credits panel (d079)
+
+When the `gh-copilot` fleet entry carries a `budget` (your monthly AI-credit
+allowance), `status` appends a Copilot Credits panel: used / allowance / % /
+~dollar spend, a cycle-anchored run-rate with days-to-exhaustion, the per-model
+split (the finest granularity GitHub exposes for a personal account), and a
+warning once usage crosses `credit_warn_pct` (default 80). No `budget` → the
+panel (and the fetch) never runs. `--json` adds the same data under
+`copilot_credits`.
+
+Box-private fields on the `gh-copilot` entry in `~/.baton/fleet.yaml`:
+
+- `budget: 1500` — monthly allowance in credits (1 credit = $0.01)
+- `credit_reset_day: 10` — billing-cycle reset day-of-month (1–28)
+- `credit_warn_pct: 80` — optional warn threshold
+
+Auth: rides the ambient `gh` login; the endpoint needs the token to carry the
+`user` scope — if missing, the panel shows the exact fix
+(`gh auth refresh -h github.com -s user`). `BATON_GH_BILLING_TOKEN` (a PAT) is
+the headless fallback. All failures collapse to one honest
+`Copilot Credits — unavailable (<reason>)` line; the panel never changes the
+command's exit code.
+
 ## Coach footer
 
 Non-JSON output may end with one `Next: <command>` line from the guided-use

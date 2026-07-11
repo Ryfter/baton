@@ -147,3 +147,4 @@ must know:
   `baton_fleet_test`). Bundled in the plugin via `.mcp.json` — auto-registered in every
   Claude Code session. Codex and Cursor registration documented in README. All tools read
   the same `BATON_HOME`; bridge shims into existing PS libs via `scripts/mcp-bridge.ps1`.
+- `/baton:usage` shows a Copilot Credits panel (d079) when the `gh-copilot` fleet row has a `budget`; needs `gh` token `user` scope (`gh auth refresh -h github.com -s user`).
