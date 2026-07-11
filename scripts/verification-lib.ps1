@@ -39,26 +39,59 @@ function Get-VerifyPresets {
     return @{}
 }
 
+function Get-VerifyInterpreterLeaf {
+    <# argv[0]'s basename, lowercased, with a trailing interpreter-wrapper extension
+       (.exe/.cmd/.bat/.ps1) stripped. This is how the lint identifies which
+       interpreter's flag-binding rules apply — so `pwsh.cmd` and `C:\x\python.exe`
+       bind exactly as `pwsh` / `python` do. #>
+    param([Parameter(Mandatory)][string]$Token)
+    $leaf = [System.IO.Path]::GetFileName([string]$Token).ToLowerInvariant()
+    foreach ($ext in @('.exe', '.cmd', '.bat', '.ps1')) {
+        if ($leaf.EndsWith($ext)) { $leaf = $leaf.Substring(0, $leaf.Length - $ext.Length); break }
+    }
+    return $leaf
+}
+
 function Test-VerifyArgvSafe {
     <# argv-only gate (codex-ringer §5): shell/eval escapes turn an argument vector
-       back into command construction, which full-auto must never execute. The leaf
-       of argv[0] (basename, .exe stripped, case-folded) picks the rule set. #>
+       back into command construction, which full-auto must never execute. Model how
+       each interpreter actually BINDS its flags rather than enumerating exact
+       spellings — pwsh prefix-matches its parameters (`-com`/`-en` reach
+       -Command/-EncodedCommand), and python/node/perl accept attached values
+       (`-cCODE`, `--eval=CODE`, `-eCODE`). An `env`/`/usr/bin/env` wrapper shifts the
+       window so argv[1] is the real interpreter. #>
     param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Argv)
     foreach ($tok in $Argv) {
         if ($null -eq $tok -or ($tok -isnot [string]) -or [string]::IsNullOrWhiteSpace([string]$tok)) {
             return @{ ok = $false; reason = 'argv contains a null/empty/non-string element' }
         }
     }
-    $leaf = [System.IO.Path]::GetFileName([string]$Argv[0]).ToLowerInvariant()
-    if ($leaf.EndsWith('.exe')) { $leaf = $leaf.Substring(0, $leaf.Length - 4) }
-    $rest = @($Argv | Select-Object -Skip 1 | ForEach-Object { ([string]$_).ToLowerInvariant() })
+    $argvList = @($Argv)
+    $skip = 1
+    $leaf = Get-VerifyInterpreterLeaf $argvList[0]
+    if ($leaf -eq 'env' -and $argvList.Count -ge 2) {
+        # `env [VAR=val]... <interp> ...` wrapper: the real interpreter is the next token.
+        $skip = 2
+        $leaf = Get-VerifyInterpreterLeaf $argvList[1]
+    }
+    $rest = @($argvList | Select-Object -Skip $skip | ForEach-Object { [string]$_ })
+    # pwsh binds parameters by unambiguous PREFIX; -Command/-EncodedCommand/-CommandWithArgs
+    # all execute. Reject any dashed token whose de-dashed, case-folded value is a prefix of
+    # one of those (min 1 char), or the -cwa alias.
+    $pwshDanger = {
+        param($t)
+        if ([string]$t -notmatch '^-') { return $false }
+        $v = ([string]$t).TrimStart('-').ToLowerInvariant()
+        if ($v.Length -lt 1) { return $false }
+        return ('command'.StartsWith($v) -or 'encodedcommand'.StartsWith($v) -or 'commandwithargs'.StartsWith($v) -or $v -eq 'cwa')
+    }
     $hit = switch ($leaf) {
-        { $_ -in @('sh', 'bash', 'zsh', 'dash', 'ksh') } { @($rest | Where-Object { $_ -eq '-c' }) }
-        'cmd'                                            { @($rest | Where-Object { $_ -in @('/c', '/k') }) }
-        { $_ -in @('pwsh', 'powershell') }               { @($rest | Where-Object { $_ -match '^-{1,2}(c|command|e|ec|enc\w*)$' }) }
-        { $_ -in @('python', 'python3', 'py') }          { @($rest | Where-Object { $_ -eq '-c' }) }
-        'node'                                           { @($rest | Where-Object { $_ -in @('-e', '--eval', '-p', '--print') }) }
-        { $_ -in @('perl', 'ruby') }                     { @($rest | Where-Object { $_ -eq '-e' }) }
+        { $_ -in @('sh', 'bash', 'zsh', 'dash', 'ksh') } { @($rest | Where-Object { ([string]$_).ToLowerInvariant() -eq '-c' }) }
+        'cmd'                                            { @($rest | Where-Object { ([string]$_).ToLowerInvariant() -in @('/c', '/k') }) }
+        { $_ -in @('pwsh', 'powershell') }               { @($rest | Where-Object { & $pwshDanger $_ }) }
+        { $_ -in @('python', 'python3', 'py') }          { @($rest | Where-Object { [string]$_ -cmatch '^-c' }) }
+        { $_ -in @('node', 'nodejs', 'deno', 'bun') }    { @($rest | Where-Object { [string]$_ -match '^(-e|-p|--eval|--print)(=|$)' }) }
+        { $_ -in @('perl', 'ruby') }                     { @($rest | Where-Object { [string]$_ -cmatch '^-e' }) }
         default                                          { @() }
     }
     if (@($hit).Count -gt 0) {
@@ -67,10 +100,41 @@ function Test-VerifyArgvSafe {
     return @{ ok = $true; reason = '' }
 }
 
+function Get-VerifyLinkResolvedPath {
+    <# Fully link-resolved absolute path. `[Path]::GetFullPath` is pure string
+       normalization — it does NOT follow junctions/symlinks — so a junction on ANY
+       ancestor component (not just the leaf) would otherwise escape a string-only
+       containment check. Walk the path component by component from the root; whenever
+       an existing component is a reparse point, replace the accumulated path with its
+       resolved target before appending the remaining segments. Non-existent tail
+       segments are appended as-is. #>
+    param([Parameter(Mandatory)][string]$FullPath)
+    $full = [System.IO.Path]::GetFullPath($FullPath)
+    $root = [System.IO.Path]::GetPathRoot($full)
+    if ([string]::IsNullOrEmpty($root)) { return $full }
+    $rest = $full.Substring($root.Length)
+    $segments = $rest.Split([char[]]@('\', '/'), [System.StringSplitOptions]::RemoveEmptyEntries)
+    $current = $root
+    foreach ($seg in $segments) {
+        $current = Join-Path $current $seg
+        if (Test-Path -LiteralPath $current) {
+            try {
+                $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+                if ($item.LinkType) {
+                    $resolved = $item.ResolveLinkTarget($true)
+                    if ($null -ne $resolved) { $current = [System.IO.Path]::GetFullPath($resolved.FullName) }
+                }
+            } catch { }
+        }
+    }
+    return [System.IO.Path]::GetFullPath($current)
+}
+
 function Test-VerifyPathContained {
     <# Containment: a contract-relative path must resolve inside -Root. Rejects
-       rooted input, `..` escape, and (for existing items) links whose final
-       target escapes. Returns the resolved full path, or $null on violation. #>
+       rooted input, `..` escape, and links (junction/symlink) on ANY component whose
+       real target escapes the root. Returns the (string-normalized) full path, or
+       $null on violation. #>
     param(
         [Parameter(Mandatory)][string]$Root,
         [Parameter(Mandatory)][string]$Relative
@@ -80,19 +144,15 @@ function Test-VerifyPathContained {
     $rootFull = [System.IO.Path]::GetFullPath($Root)
     $sep = [System.IO.Path]::DirectorySeparatorChar
     $combined = [System.IO.Path]::GetFullPath((Join-Path $rootFull $Relative))
+    # First gate: pure-string containment (catches `..` escapes cheaply).
     $rootPrefix = $rootFull.TrimEnd('\', '/') + $sep
     if (-not ($combined + $sep).StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
-    if (Test-Path -LiteralPath $combined) {
-        $item = Get-Item -LiteralPath $combined -Force
-        if ($item.LinkType) {
-            $target = $null
-            try { $target = $item.ResolveLinkTarget($true) } catch { }
-            if ($null -ne $target) {
-                $tFull = [System.IO.Path]::GetFullPath($target.FullName)
-                if (-not ($tFull + $sep).StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
-            }
-        }
-    }
+    # Second gate: link-resolve every component of BOTH paths and re-check containment,
+    # so an intermediate junction/symlink cannot smuggle the real target outside the root.
+    $rootReal = Get-VerifyLinkResolvedPath $rootFull
+    $combinedReal = Get-VerifyLinkResolvedPath $combined
+    $rootRealPrefix = $rootReal.TrimEnd('\', '/') + $sep
+    if (-not ($combinedReal + $sep).StartsWith($rootRealPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
     return $combined
 }
 
@@ -245,16 +305,56 @@ function Invoke-VerifyCommand {
         return @{ started = $false; exit_code = -1; timed_out = $false; duration_ms = 0; output_truncated = $false; spawn_error = $_.Exception.Message }
     }
     $proc.StandardInput.Close()
-    $outTask = $proc.StandardOutput.ReadToEndAsync()
-    $errTask = $proc.StandardError.ReadToEndAsync()
-    $timedOut = -not $proc.WaitForExit($TimeoutS * 1000)
+    # Bounded drain: read both streams concurrently in fixed-size chunks and stop
+    # ACCUMULATING once each builder reaches the cap (keep draining into the reusable
+    # buffer so the child never blocks on a full pipe). ReadToEndAsync would buffer the
+    # entire flood in memory before the file cap ever applied — this bounds memory by
+    # the cap (+ one chunk), not by how much a hostile check chooses to emit. WaitAny
+    # with the remaining time budget enforces the timeout even on a silent (no-output)
+    # or a continuously-flooding child.
+    $chunk = 8192
+    $outSb = [System.Text.StringBuilder]::new()
+    $errSb = [System.Text.StringBuilder]::new()
+    $outBuf = [char[]]::new($chunk)
+    $errBuf = [char[]]::new($chunk)
+    $outReader = $proc.StandardOutput
+    $errReader = $proc.StandardError
+    $outTask = $outReader.ReadAsync($outBuf, 0, $chunk)
+    $errTask = $errReader.ReadAsync($errBuf, 0, $chunk)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutS)
+    $timedOut = $false
+    while ($null -ne $outTask -or $null -ne $errTask) {
+        $pending = [System.Collections.Generic.List[System.Threading.Tasks.Task]]::new()
+        if ($null -ne $outTask) { $pending.Add($outTask) }
+        if ($null -ne $errTask) { $pending.Add($errTask) }
+        $remainMs = [int][Math]::Ceiling(($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+        if ($remainMs -le 0) { $timedOut = $true; break }
+        $which = [System.Threading.Tasks.Task]::WaitAny($pending.ToArray(), $remainMs)
+        if ($which -lt 0) { $timedOut = $true; break }
+        if ($null -ne $outTask -and $outTask.IsCompleted) {
+            $n = $outTask.Result
+            if ($n -le 0) { $outTask = $null }
+            else {
+                if ($outSb.Length -lt $MaxOutputBytes) { [void]$outSb.Append($outBuf, 0, $n) }
+                $outTask = $outReader.ReadAsync($outBuf, 0, $chunk)
+            }
+        }
+        if ($null -ne $errTask -and $errTask.IsCompleted) {
+            $n = $errTask.Result
+            if ($n -le 0) { $errTask = $null }
+            else {
+                if ($errSb.Length -lt $MaxOutputBytes) { [void]$errSb.Append($errBuf, 0, $n) }
+                $errTask = $errReader.ReadAsync($errBuf, 0, $chunk)
+            }
+        }
+    }
     if ($timedOut) {
         try { $proc.Kill($true) } catch { try { & taskkill /PID $proc.Id /T /F 2>$null | Out-Null } catch { } }
     }
-    $proc.WaitForExit()   # flush async stream reads after any WaitForExit(ms)
+    $proc.WaitForExit()   # settle exit code + let any pending reads observe EOF
     $sw.Stop()
-    $text = [string]$outTask.Result
-    $errText = [string]$errTask.Result
+    $text = $outSb.ToString()
+    $errText = $errSb.ToString()
     if ($errText) { $text = $text + "`n--- stderr ---`n" + $errText }
     $enc = [System.Text.Encoding]::UTF8
     $bytes = $enc.GetBytes($text)
@@ -281,11 +381,15 @@ function Get-VerificationGrade {
         [Parameter(Mandatory)][bool]$ProtectedDeclared,
         [Parameter(Mandatory)][bool]$ProtectedIntact,
         [Parameter(Mandatory)][bool]$ScopeEnforced,
-        [Parameter(Mandatory)][bool]$ScopeOk
+        [Parameter(Mandatory)][bool]$ScopeOk,
+        # A declared protected path with no pre-hash was never verified: the oracle
+        # integrity is UNKNOWN, so it cannot earn `strong`. Defaults true so callers
+        # without protected paths are unaffected.
+        [bool]$ProtectedVerified = $true
     )
     if (-not $Passed) { return 'invalid' }
     $rank = @{ strong = 3; bounded = 2; weak = 1 }
-    $computed = if ($ProtectedDeclared -and $ProtectedIntact -and $ScopeEnforced -and $ScopeOk) { 'strong' } else { 'bounded' }
+    $computed = if ($ProtectedDeclared -and $ProtectedIntact -and $ProtectedVerified -and $ScopeEnforced -and $ScopeOk) { 'strong' } else { 'bounded' }
     $ceiling = [string]$Contract.grade_ceiling
     if (-not $rank.ContainsKey($ceiling)) { $ceiling = 'strong' }
     if ($rank[$computed] -le $rank[$ceiling]) { return $computed }
@@ -318,6 +422,10 @@ function Invoke-VerificationContract {
     }
 
     # 1. Scope (checked first: a scope violation fails closed regardless of the check)
+    #    V1 gap (deferred to V2, adjudication A5): DiffFiles is used only for the
+    #    scope-SUBSET test, never for non-emptiness — a no-op change with empty
+    #    expect_files can still pass. The proof-by-diff (non-empty task diff) half of
+    #    A5 closes that zero-change loophole in V2.
     $scopeEnforced = (@($AllowedPaths).Count -gt 0)
     $scopeOk = $true
     if ($scopeEnforced) {
@@ -353,12 +461,16 @@ function Invoke-VerificationContract {
     #    oracle must fail closed and V2 must not retry it)
     $protDeclared = (@($Contract.protected_paths).Count -gt 0)
     $protPost = Get-VerifyPathHashes -WorktreeRoot $WorktreeRoot -Paths @($Contract.protected_paths)
-    $protIntact = $true
+    $protIntact = $true          # no declared path's hash was observed to change
+    $protVerified = $true        # every declared path had a pre-hash to compare against
     foreach ($k in @($protPost.Keys)) {
         $pre = if ($ProtectedPreHashes.ContainsKey($k)) { [string]$ProtectedPreHashes[$k] } else { $null }
-        if ($null -ne $pre -and $pre -ne [string]$protPost[$k]) { $protIntact = $false; break }
+        if ($null -eq $pre) { $protVerified = $false; continue }
+        if ($pre -ne [string]$protPost[$k]) { $protIntact = $false; break }
     }
-    $result.protected_ok = $protIntact
+    # An unverified declared oracle is NOT certified: fail-closed on the grade
+    # (never claim integrity we did not check), but keep a usable pass signal.
+    $result.protected_ok = ($protIntact -and (-not $protDeclared -or $protVerified))
     if ($protDeclared -and -not $protIntact) {
         $result.verdict = 'scope-violation'; $result.failure_category = 'protected-path-mutated'
         return $result
@@ -388,7 +500,7 @@ function Invoke-VerificationContract {
     # 6. Pass + grade
     $result.verdict = 'pass'; $result.ok = $true
     $result.grade = Get-VerificationGrade -Contract $Contract -Passed $true `
-        -ProtectedDeclared $protDeclared -ProtectedIntact $protIntact `
+        -ProtectedDeclared $protDeclared -ProtectedIntact $protIntact -ProtectedVerified $protVerified `
         -ScopeEnforced $scopeEnforced -ScopeOk $scopeOk
     return $result
 }

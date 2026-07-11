@@ -37,6 +37,27 @@ try {
     Assert "S8 powershell.exe path form rejected" (-not (Test-VerifyArgvSafe -Argv @('C:\wp\powershell.exe', '-command', '1')).ok)
     Assert "S9 pwsh -File allowed" ((Test-VerifyArgvSafe -Argv @('pwsh', '-NoProfile', '-File', 'x.ps1')).ok)
     Assert "S10 empty element rejected" (-not (Test-VerifyArgvSafe -Argv @('git', '')).ok)
+    # C1: pwsh parameter-prefix abbreviations execute -Command/-EncodedCommand and must be rejected.
+    Assert "S11 pwsh -com (Command prefix) rejected" (-not (Test-VerifyArgvSafe -Argv @('pwsh', '-com', 'Write-Output X')).ok)
+    Assert "S12 pwsh -comm (Command prefix) rejected" (-not (Test-VerifyArgvSafe -Argv @('pwsh', '-comm', 'Write-Output X')).ok)
+    Assert "S13 pwsh -comma (Command prefix) rejected" (-not (Test-VerifyArgvSafe -Argv @('pwsh', '-comma', 'Write-Output X')).ok)
+    Assert "S14 pwsh -comman (Command prefix) rejected" (-not (Test-VerifyArgvSafe -Argv @('pwsh', '-comman', 'Write-Output X')).ok)
+    Assert "S15 pwsh -en (EncodedCommand prefix) rejected" (-not (Test-VerifyArgvSafe -Argv @('pwsh', '-en', 'AAA=')).ok)
+    Assert "S16 pwsh -cwa (CommandWithArgs alias) rejected" (-not (Test-VerifyArgvSafe -Argv @('pwsh', '-cwa', 'x')).ok)
+    Assert "S17 python -cCODE (attached) rejected" (-not (Test-VerifyArgvSafe -Argv @('python', '-cprint(1)')).ok)
+    Assert "S18 python3 -cCODE (attached) rejected" (-not (Test-VerifyArgvSafe -Argv @('python3', '-cimport os')).ok)
+    Assert "S19 node --eval=CODE (attached) rejected" (-not (Test-VerifyArgvSafe -Argv @('node', '--eval=1')).ok)
+    Assert "S20 env python -c rejected (env-wrapper shift)" (-not (Test-VerifyArgvSafe -Argv @('env', 'python', '-c', 'print(1)')).ok)
+    Assert "S21 /usr/bin/env node -e rejected (env path shift)" (-not (Test-VerifyArgvSafe -Argv @('/usr/bin/env', 'node', '-e', '1')).ok)
+    Assert "S22 pwsh.cmd -com rejected (.cmd wrapper stripped)" (-not (Test-VerifyArgvSafe -Argv @('C:\wp\pwsh.cmd', '-com', 'x')).ok)
+    Assert "S23 perl -eCODE (attached) rejected" (-not (Test-VerifyArgvSafe -Argv @('perl', '-eprint 1')).ok)
+    Assert "S24 deno -e rejected" (-not (Test-VerifyArgvSafe -Argv @('deno', '-e', '1')).ok)
+    # C1 regressions: legitimate commands must NOT be over-blocked.
+    Assert "S25 real pytest invocation allowed" ((Test-VerifyArgvSafe -Argv @('python', '-m', 'pytest', 'tests/', '-q')).ok)
+    Assert "S26 gcc -c foo.c allowed (gcc is not an interpreter)" ((Test-VerifyArgvSafe -Argv @('gcc', '-c', 'foo.c')).ok)
+    Assert "S27 pwsh -NoProfile -File allowed (real script run)" ((Test-VerifyArgvSafe -Argv @('pwsh', '-NoProfile', '-File', 'scripts/x.ps1')).ok)
+    Assert "S28 node script.js allowed (no eval flag)" ((Test-VerifyArgvSafe -Argv @('node', 'server.js', '--port', '3000')).ok)
+    Assert "S29 python -C (uppercase, not -c) allowed" ((Test-VerifyArgvSafe -Argv @('python', '-C', 'foo')).ok)
 
     # --- C: containment ---
     Set-Content -LiteralPath (Join-Path $wt 'inside.txt') -Value 'x' -Encoding utf8NoBOM
@@ -55,6 +76,20 @@ try {
     } else {
         Assert "C6 junction whose target escapes is rejected (skipped: junction unavailable)" $true
     }
+    # I2: a junction at an INTERMEDIATE component escapes containment (leaf is a real file).
+    Set-Content -LiteralPath (Join-Path $outDir 'secret.txt') -Value 'top-secret' -Encoding utf8NoBOM
+    $juncMid = Join-Path $wt 'linkdir'
+    $null = New-Item -ItemType Junction -Path $juncMid -Target $outDir -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $juncMid) {
+        Assert "C7 intermediate-component junction escape is rejected" ($null -eq (Test-VerifyPathContained -Root $wt -Relative 'linkdir\secret.txt'))
+    } else {
+        Assert "C7 intermediate-component junction escape is rejected (skipped: junction unavailable)" $true
+    }
+    # I2 regression: a legitimate deeply-nested REAL directory still resolves inside.
+    $realDeep = Join-Path $wt 'realsub\deep'
+    New-Item -ItemType Directory -Force -Path $realDeep | Out-Null
+    Set-Content -LiteralPath (Join-Path $realDeep 'ok.txt') -Value 'y' -Encoding utf8NoBOM
+    Assert "C8 legitimate nested real dir still resolves inside" ($null -ne (Test-VerifyPathContained -Root $wt -Relative 'realsub\deep\ok.txt'))
 
     # --- N: normalize + lint ---
     $rawOk = @{ argv = @('git', 'status'); proves = 'demo'; expect_files = @('inside.txt') }
@@ -122,6 +157,28 @@ try {
     $r4 = Invoke-VerifyCommand -Argv @('pwsh', '-NoProfile', '-File', $sleeper) -WorkingDir $repo -TimeoutS 2 -OutputPath (Join-Path $tmpRoot 'r4.txt')
     $elapsed = ((Get-Date) - $t0).TotalSeconds
     Assert "R4 timeout kills the tree quickly" ($r4.timed_out -and $elapsed -lt 30)
+    # M1: prove the timeout kills the WHOLE tree (a grandchild), not just the direct child.
+    $gcPidFile = Join-Path $tmpRoot 'gcpid.txt'
+    $treeSleeper = Join-Path $tmpRoot 'tree-sleeper.ps1'
+    $treeBody = @"
+`$c = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 120' -PassThru
+Set-Content -LiteralPath '$gcPidFile' -Value `$c.Id -Encoding utf8NoBOM
+Start-Sleep -Seconds 120
+"@
+    Set-Content -LiteralPath $treeSleeper -Value $treeBody -Encoding utf8NoBOM
+    $t0b = Get-Date
+    $r4b = Invoke-VerifyCommand -Argv @('pwsh', '-NoProfile', '-File', $treeSleeper) -WorkingDir $repo -TimeoutS 6 -OutputPath (Join-Path $tmpRoot 'r4b.txt')
+    $elapsedB = ((Get-Date) - $t0b).TotalSeconds
+    $gcPid = $null
+    if (Test-Path -LiteralPath $gcPidFile) { $gcPid = ([string](Get-Content -LiteralPath $gcPidFile -Raw)).Trim() }
+    $gcGone = $false
+    if ($gcPid) {
+        for ($i = 0; $i -lt 50; $i++) {
+            if ($null -eq (Get-Process -Id ([int]$gcPid) -ErrorAction SilentlyContinue)) { $gcGone = $true; break }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    Assert "R4b timeout reaps the grandchild (whole-tree kill)" ($r4b.timed_out -and $elapsedB -lt 30 -and $gcPid -and $gcGone)
     # argv literality: spaces, quotes, $() reach the child untouched
     $echoer = Join-Path $tmpRoot 'echoer.ps1'
     Set-Content -LiteralPath $echoer -Value 'param($P) [Console]::Out.Write($P)' -Encoding utf8NoBOM
@@ -134,6 +191,13 @@ try {
     Set-Content -LiteralPath $blaster -Value "[Console]::Out.Write(('x' * 400000))" -Encoding utf8NoBOM
     $r6 = Invoke-VerifyCommand -Argv @('pwsh', '-NoProfile', '-File', $blaster) -WorkingDir $repo -TimeoutS 60 -OutputPath (Join-Path $tmpRoot 'r6.txt') -MaxOutputBytes 1000
     Assert "R6 output truncated at the byte cap" ($r6.output_truncated -and (Get-Item (Join-Path $tmpRoot 'r6.txt')).Length -lt 5000)
+    # I3: a check that floods far beyond the cap is bounded — file <= cap+margin, flag set,
+    #     exit code still captured, process completes cleanly (memory bounded by the cap).
+    $flood = Join-Path $tmpRoot 'flood.ps1'
+    Set-Content -LiteralPath $flood -Value "[Console]::Out.Write(('x' * 2000000)); exit 0" -Encoding utf8NoBOM
+    $r7out = Join-Path $tmpRoot 'r7.txt'
+    $r7 = Invoke-VerifyCommand -Argv @('pwsh', '-NoProfile', '-File', $flood) -WorkingDir $repo -TimeoutS 60 -OutputPath $r7out -MaxOutputBytes 1000
+    Assert "R7 flooded output is bounded (truncated flag, file<=cap+margin, exit 0 captured)" ($r7.output_truncated -and (-not $r7.timed_out) -and $r7.exit_code -eq 0 -and (Get-Item $r7out).Length -le 1200)
 
     # --- E/G/V: façade end-to-end ---
     $demo = $f1.contract
@@ -148,6 +212,13 @@ try {
     Set-Content -LiteralPath (Join-Path $repo 'oracle.txt') -Value 'TAMPERED' -Encoding utf8NoBOM
     $v4 = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v4') -ProtectedPreHashes $protPre
     Assert "V4 mutated protected oracle -> scope-violation/protected-path-mutated" ($v4.verdict -eq 'scope-violation' -and $v4.failure_category -eq 'protected-path-mutated')
+    Set-Content -LiteralPath (Join-Path $repo 'oracle.txt') -Value 'oracle-v1' -Encoding utf8NoBOM
+    # I1: contract DECLARES a protected path but NO pre-hashes are supplied -> the oracle
+    #     was never verified. A concurrent mutation goes undetected, so the library must NOT
+    #     certify strong: protected_ok is false and the grade is capped below strong.
+    Set-Content -LiteralPath (Join-Path $repo 'oracle.txt') -Value 'MUTATED-NO-PREHASH' -Encoding utf8NoBOM
+    $v4b = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v4b') -DiffFiles @('src/a.ps1') -AllowedPaths @('src/a.ps1')
+    Assert "V4b declared-but-unverified protected oracle -> protected_ok false, grade NOT strong" ((-not $v4b.protected_ok) -and $v4b.grade -ne 'strong')
     Set-Content -LiteralPath (Join-Path $repo 'oracle.txt') -Value 'oracle-v1' -Encoding utf8NoBOM
     # Expected files: missing / empty / unchanged (A5) / changed
     $expC = [ordered]@{ argv = @('git', '--version'); cwd = '.'; timeout_s = 60; expect_files = @('out.txt'); protected_paths = @(); proves = 'p'; grade_ceiling = 'strong' }
