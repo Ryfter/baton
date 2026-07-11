@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "presets": {
+    "pytest": {
+      "windows": ["python", "-m", "pytest", "-q"],
+      "posix": ["python3", "-m", "pytest", "-q"],
+      "args_append": true,
+      "timeout_s": 600,
+      "proves": "the named pytest target passes",
+      "grade_ceiling": "strong"
+    },
+    "pwsh-suite": {
+      "windows": ["pwsh", "-NoProfile", "-File"],
+      "posix": ["pwsh", "-NoProfile", "-File"],
+      "args_append": true,
+      "timeout_s": 600,
+      "proves": "the named PowerShell test suite exits 0",
+      "grade_ceiling": "strong"
+    },
+    "node-test": {
+      "windows": ["node", "--test"],
+      "posix": ["node", "--test"],
+      "args_append": true,
+      "timeout_s": 600,
+      "proves": "node --test passes for the named target",
+      "grade_ceiling": "strong"
+    },
+    "file-exists-nonempty": {
+      "windows": ["pwsh", "-NoProfile", "-File", "{{lib_dir}}/verify-noop.ps1"],
+      "posix": ["pwsh", "-NoProfile", "-File", "{{lib_dir}}/verify-noop.ps1"],
+      "args_append": false,
+      "timeout_s": 60,
+      "proves": "the expected files exist with non-empty, changed content",
+      "grade_ceiling": "weak"
+    }
+  }
+}
