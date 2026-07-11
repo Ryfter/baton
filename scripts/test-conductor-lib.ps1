@@ -24,6 +24,15 @@ try {
     Check 'T10 garbage -> null' ($null -eq (ConvertTo-PlanObject -RawStdout 'not json'))
     Check 'T11 no tasks key -> null' ($null -eq (ConvertTo-PlanObject -RawStdout '{"goal":"x"}'))
 
+    # ---- VF1: verify_profile + allowed_paths normalization (d082 V2) ----
+    $pj = '{"tasks":[{"id":"t1","desc":"edit","capability":"code-gen","verify_profile":"unit","allowed_paths":["src/a.py","tests/a.py"]},{"id":"t2","desc":"doc","capability":"summarize"}]}'
+    $vfPlan1 = ConvertTo-PlanObject -RawStdout $pj
+    $vft1 = @($vfPlan1.tasks)[0]; $vft2 = @($vfPlan1.tasks)[1]
+    Check 'VF1a verify_profile preserved' ($vft1.verify_profile -eq 'unit')
+    Check 'VF1b allowed_paths preserved' (@($vft1.allowed_paths).Count -eq 2 -and $vft1.allowed_paths[0] -eq 'src/a.py')
+    Check 'VF1c absent verify_profile -> empty' ($vft2.verify_profile -eq '')
+    Check 'VF1d absent allowed_paths -> empty' (@($vft2.allowed_paths).Count -eq 0)
+
     # ---- Task 2: DAG order + guards (pure) ----
     $mk = { param($id,$deps,$tier='free',$rev=$true) [pscustomobject]@{ id=$id; desc=$id; command=''; capability=''; model_pick=''; depends_on=@($deps); est_cost_tier=$tier; reversible=$rev } }
     $tasks = @( (& $mk 't2' @('t1')), (& $mk 't1' @()), (& $mk 't3' @('t1','t2')) )
@@ -673,6 +682,62 @@ ERROR: You have hit your usage limit. Try again later.
         Remove-Item -Recurse -Force $pgHome -ErrorAction SilentlyContinue
         if ($pgCliHome) { Remove-Item -Recurse -Force $pgCliHome -ErrorAction SilentlyContinue }
     }
+
+    # ---- VF2-VF7: Conductor -Verify preflight + event/status seam (d082 V2) ----
+    # Hermetic: stub -Spawner returns canned verification metadata, stub -VerifyPreflight
+    # short-circuits the real freeze. No worktree, no real runner.
+    function New-VfRun { $d = Join-Path $env:TEMP "vf-$([guid]::NewGuid())"; New-Item -ItemType Directory -Force $d | Out-Null; $d }
+    $vfPlan = { param($g) @{ goal=$g; budget_cap=$null; tasks=@([pscustomobject]@{ id='t1'; desc='edit'; command=''; capability='code-gen'; depends_on=@(); est_cost_tier='free'; reversible=$true; verify_profile='unit'; allowed_paths=@() }) } }
+
+    # VF2: -Verify pass -> completed + task-verification-passed event
+    $d = New-VfRun
+    $sp = { param($t) @{ ok=$true; spend=0.0; chose='w'; why='ok'; alternatives=@(); verification=@{ verdict='pass'; grade='strong'; failure_category=''; proves='suite passes'; retried=$false } } }
+    $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp -Verify -VerifyPreflight { param($p) @{ ok=$true } }
+    Check 'VF2 status completed' ($res.status -eq 'completed')
+    Check 'VF2 passed event' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-verification-passed' }).Count -ge 1)
+    Remove-Item $d -Recurse -Force
+
+    # VF3: -Verify check-fail (verdict fail) -> verification-failed status + event
+    $d = New-VfRun
+    $sp = { param($t) @{ ok=$false; spend=0.0; chose='w'; why='fail'; alternatives=@(); verification=@{ verdict='fail'; grade='invalid'; failure_category='check-failed'; proves='x'; retried=$true; first_failure_category='check-failed' } } }
+    $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp -Verify -VerifyPreflight { param($p) @{ ok=$true } }
+    Check 'VF3 status verification-failed' ($res.status -eq 'verification-failed')
+    Check 'VF3 retry event' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-retry-started' }).Count -ge 1)
+    Check 'VF3 failed event' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-verification-failed' }).Count -ge 1)
+    Remove-Item $d -Recurse -Force
+
+    # VF4: scope-violation -> verification-failed + task-scope-violation event, no 'failed'
+    $d = New-VfRun
+    $sp = { param($t) @{ ok=$false; spend=0.0; chose='w'; why='scope'; alternatives=@(); verification=@{ verdict='scope-violation'; grade='invalid'; failure_category='protected-path-mutated'; proves='x'; retried=$false } } }
+    $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp -Verify -VerifyPreflight { param($p) @{ ok=$true } }
+    Check 'VF4 status verification-failed' ($res.status -eq 'verification-failed')
+    Check 'VF4 scope event' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-scope-violation' }).Count -ge 1)
+    Remove-Item $d -Recurse -Force
+
+    # VF5: preflight fail -> plan-invalid before the walk (spawner never called)
+    $d = New-VfRun
+    $called = [ref]$false
+    $sp = { param($t) $called.Value = $true; @{ ok=$true; spend=0.0; chose='w'; why=''; alternatives=@() } }
+    $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp -Verify -VerifyPreflight { param($p) @{ ok=$false; reason="unknown-profile 'unit'" } }
+    Check 'VF5 status plan-invalid' ($res.status -eq 'plan-invalid')
+    Check 'VF5 spawner not called' (-not $called.Value)
+    Remove-Item $d -Recurse -Force
+
+    # VF6: unverified task (no contract) -> completed + task-unverified event
+    $d = New-VfRun
+    $sp = { param($t) @{ ok=$true; spend=0.0; chose='w'; why='ok'; alternatives=@(); unverified=$true } }
+    $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp -Verify -VerifyPreflight { param($p) @{ ok=$true } }
+    Check 'VF6 status completed' ($res.status -eq 'completed')
+    Check 'VF6 unverified event' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-unverified' }).Count -ge 1)
+    Remove-Item $d -Recurse -Force
+
+    # VF7: -Verify ABSENT -> byte-for-byte unchanged (no verification events even if $r carries them)
+    $d = New-VfRun
+    $sp = { param($t) @{ ok=$true; spend=0.0; chose='w'; why='ok'; alternatives=@(); verification=@{ verdict='pass'; grade='strong'; failure_category=''; proves='x'; retried=$false } } }
+    $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp   # no -Verify
+    Check 'VF7 status completed' ($res.status -eq 'completed')
+    Check 'VF7 no verification events' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-verification' }).Count -eq 0)
+    Remove-Item $d -Recurse -Force
 
     Write-Host ""
     if ($script:fail -gt 0) { Write-Host "$script:fail CHECK(S) FAILED"; exit 1 } else { Write-Host "ALL CHECKS PASS"; exit 0 }

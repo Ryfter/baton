@@ -104,6 +104,8 @@ function ConvertTo-PlanObject {
             depends_on    = @($t.depends_on | Where-Object { $_ })
             est_cost_tier = if ($t.est_cost_tier) { [string]$t.est_cost_tier } else { 'free' }
             reversible    = if ($null -eq $t.reversible) { $true } else { [bool]$t.reversible }
+            verify_profile = if ($t.verify_profile) { [string]$t.verify_profile } else { '' }
+            allowed_paths  = @($t.allowed_paths | Where-Object { $_ } | ForEach-Object { [string]$_ })
         }
     }
     if (@($tasks).Count -lt 1) { return $null }
@@ -620,7 +622,9 @@ function Invoke-Conductor {
         [switch]$PlanGate,
         [string[]]$PlanReviewers,
         [bool]$PlanRevise = $true,
-        [scriptblock]$PlanGateDispatcher
+        [scriptblock]$PlanGateDispatcher,
+        [switch]$Verify,
+        [scriptblock]$VerifyPreflight
     )
     if (-not $RunDir) { $RunDir = Initialize-RunDir }
     else { New-Item -ItemType Directory -Force -Path $RunDir | Out-Null }
@@ -684,6 +688,25 @@ function Invoke-Conductor {
         }
     }
 
+    # 1.7 Verification preflight (d082 V2): OPT-IN. Freeze every referenced verify
+    #     profile from the base revision and validate it BEFORE the walk — an unknown,
+    #     missing, or lint-failing contract fails the plan closed (plan-invalid) before
+    #     any labor spend. Fail-CLOSED (unlike the advisory gates): a task that demands
+    #     verification cannot run without a resolvable oracle. Without -Verify this block
+    #     is skipped entirely (default path unchanged).
+    if ($Verify -and $VerifyPreflight) {
+        $pf = $null
+        try { $pf = & $VerifyPreflight $plan }
+        catch {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'verification' -Level 'error' -Message "verification preflight threw: $($_.Exception.Message)")
+            return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-invalid')
+        }
+        if ($null -ne $pf -and -not $pf.ok) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'verification' -Level 'error' -Message "verification preflight failed: $($pf.reason) — no walk, no spend")
+            return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-invalid')
+        }
+    }
+
     # 2. Order the DAG.
     try { $order = Resolve-TaskOrder -Tasks @($plan.tasks) }
     catch {
@@ -720,10 +743,33 @@ function Invoke-Conductor {
         # (0.0) today; realized cost arrives later via Get-RunCost's -CostResolver seam.
         [void]$taskCosts.Add(@{ id = $task.id; worker = ([string]$r.chose); cost = $est })
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'spent' -Message ("{0:0.00}" -f $tspend))
+        # Verification (d082 V2): the verifying spawner attaches a `verification`
+        # result and/or an `unverified` mark to $r. Emit the legible event trail and
+        # map a verification failure to its own terminal status. When -Verify is off
+        # or the task carried no contract, $r has neither key and this is inert.
+        if ($Verify -and $r.unverified) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-unverified' -Message "no verification contract — proceeding unverified")
+        }
+        if ($Verify -and $r.verification) {
+            $v = $r.verification
+            if ($v.retried) {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-retry-started' -Message "verification failed ($($v.first_failure_category)) — one evidence-informed retry")
+            }
+            if ([string]$v.verdict -eq 'pass') {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-verification-passed' -Message "verified (grade: $($v.grade)) — $($v.proves)")
+            }
+            elseif ([string]$v.failure_category -in @('scope-violation','protected-path-mutated')) {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-scope-violation' -Level 'warn' -Message "scope/oracle violation ($($v.failure_category)) — fail-closed, no retry")
+            }
+            else {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-verification-failed' -Level 'warn' -Message "verification failed ($($v.failure_category))")
+            }
+        }
         $kind = if ($r.ok) { 'finished' } else { 'error' }
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind $kind -Message $task.desc)
         if (-not $r.ok) {
-            return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status 'failed' -PendingTaskId $task.id)
+            $failStatus = if ($Verify -and $r.verification -and [string]$r.verification.verdict -ne 'pass') { 'verification-failed' } else { 'failed' }
+            return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status $failStatus -PendingTaskId $task.id)
         }
     }
     # 4. Acceptance phase (d058): opt-in, advisory, fail-open. Runs only after a
