@@ -26,7 +26,7 @@ function Initialize-BatonHome {
         if (-not (Test-Path $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
     }
     $seeded = [System.Collections.ArrayList]@()
-    foreach ($cfg in @('fleet.yaml', 'tools.yaml', 'prime-hours.yaml')) {
+    foreach ($cfg in @('fleet.yaml', 'tools.yaml', 'prime-hours.yaml', 'verify-presets.json')) {
         $src = Join-Path $ReferencesDir $cfg
         $dst = Join-Path $root $cfg
         if ((Test-Path $src) -and -not (Test-Path $dst)) {
