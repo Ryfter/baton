@@ -66,6 +66,63 @@ inherit the deploy-assert safety net. Each doc: writes `$ARGUMENTS` to a temp fi
 long, invokes `fleet-ask.ps1`, respects the 965-byte rule. `gemini` maps to the
 `gemini-antigravity` (agy) row; a `commands/agy.md` alias delegates to the same runner.
 
+## 3.3 Model tier + thinking-effort selection (Kevin 2026-07-11)
+
+Kevin wants to pick a provider's model **and** thinking-effort the way he picks
+Fable/Opus/Sonnet/Haiku on Claude — e.g. Codex `5.6 | Sol / Tera / Luna` at a chosen
+effort. This is the concrete realization of "effort as an unmodeled routing dimension"
+(`reference_aa_coding_index_effort_curves.md`: Luna-high dominated score-per-cost) and it
+enables **testing the boundaries** of each new model — run the same task across tiers and
+watch the score/cost curve.
+
+**Ground truth (probed 2026-07-11):**
+- `codex exec` — `-m/--model <MODEL>`; effort via `-c model_reasoning_effort=<low|medium|high>`
+  (a config override, not a flag); `--profile` layers a config profile. Live default seen:
+  `gpt-5.6-sol`.
+- `grok` — `-m/--model <MODEL>` **and** first-class `--reasoning-effort`/`--effort <EFFORT>`;
+  `grok models` lists available.
+
+**Existing plumbing to build on:** `Resolve-FleetCommand` already substitutes `{{model}}`
+from `-Model` / `$Provider.model_default` (fleet-lib.ps1:161-182, mirrored on the stdin +
+prompt-file branches). So model selection is 80% wired; tiers add friendly naming + effort.
+
+**Design — per-provider `tiers` map + `{{tier_args}}` template token.** Keep the
+provider-specific flag *syntax* in config (codex's `-c …` vs grok's `--effort`), not in code:
+
+```yaml
+- name: codex
+  command_template: 'codex exec {{tier_args}} --sandbox workspace-write -'
+  default_tier: sol
+  tiers:
+    sol:  '-m gpt-5.6-sol'
+    tera: '-m gpt-5.6-tera -c model_reasoning_effort=high'
+    luna: '-m gpt-5.6-luna -c model_reasoning_effort=high'
+- name: grok-cli
+  default_tier: fast
+  tiers:
+    fast:  '-m grok-4-fast'
+    heavy: '-m grok-4 --effort high'
+```
+
+- `Resolve-FleetCommand` (+ the stdin/prompt-file branches) gain a `{{tier_args}}`
+  substitution: `Invoke-Fleet -Name codex -Tier luna` looks up `tiers.luna` and injects its
+  argv; omitted `-Tier` uses `default_tier`; a template without `{{tier_args}}` is unchanged
+  (backward compatible). Commands expose `--tier <name>`: `/baton:codex --tier luna "<p>"`.
+- **Safety:** tier argv are **trusted, box-private** config tokens (Kevin authors them), and
+  they are plain flag tokens (no quotes / shell operators) → they tokenize cleanly under the
+  existing clean-token-list predicate that already gates the stdin path. Real
+  model/tier names stay in the live `~/.baton/fleet.yaml`; the shared seed carries commented
+  **placeholder** tier names only (box-private rule).
+- **Unknown tier** → `[Console]::Error.WriteLine("unknown tier '<t>' for provider '<p>' — valid: <list>")` + exit 2.
+- The journal line + footer already carry the resolved model via `{{model}}`; add the tier
+  name so a run records *which tier did the work* (needed for the boundary-testing curve).
+
+**Boundary-testing helper (small, optional):** a `--tier all` mode on the runner dispatches
+the same prompt across every configured tier and prints a compact table
+(`tier · model · duration · tokens · exit`) — the cheap way to eyeball a model's score/cost
+frontier. This is the observe-only seed for later tier-aware routing (a named follow-up, not
+this slice).
+
 ## 4. Token telemetry
 
 ### 4.1 New optional `fleet.yaml` row field
@@ -103,9 +160,11 @@ token_usage: 'tokens used[:\s]+([\d,]+)'   # CLI rows: ONE capture group over st
 
 ## 5. Scope
 
-**In:** the three commands + shared runner; token capture field + exact/estimate basis;
-journal + return-shape threading; bootstrap deploy-asserts for the new runner + command
-docs; command-doc + AGENTS.md line; plugin minor bump.
+**In:** the three commands + shared runner; **model-tier + effort selection** (`tiers`
+map + `{{tier_args}}` + `--tier`, plus the `--tier all` boundary-testing table); token
+capture field + exact/estimate basis; journal + return-shape threading (model **and** tier
+recorded); bootstrap deploy-asserts for the new runner + command docs; command-doc +
+AGENTS.md line; plugin minor bump.
 
 **Out (named follow-ups, not this slice):**
 - Governor tick using tokens instead of call-count budgets.
