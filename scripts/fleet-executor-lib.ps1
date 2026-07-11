@@ -173,7 +173,7 @@ function Format-VerifyEvidencePrompt {
        excerpt takes only the byte budget the fixed parts leave; a long task desc is
        tail-truncated before the prompt is ever allowed to exceed the ceiling. #>
     param(
-        [Parameter(Mandatory)][string]$TaskDesc,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$TaskDesc,
         [Parameter(Mandatory)][hashtable]$Verification,
         [string]$OutputPath = '',
         [int]$MaxBytes = 900

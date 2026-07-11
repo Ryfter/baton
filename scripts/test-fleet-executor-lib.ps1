@@ -328,6 +328,12 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
         Check 'VS7 whole prompt <=965 UTF-8 bytes (flooding excerpt)' ($utf8.GetByteCount($vs7prompt) -le 965)
         $vs7big = Format-VerifyEvidencePrompt -TaskDesc ('D' * 4000) -Verification @{ failure_category = 'check-failed' } -OutputPath $vs7out
         Check 'VS7 whole prompt <=965 UTF-8 bytes (oversized desc)' ($utf8.GetByteCount($vs7big) -le 965)
+        # An empty desc must NOT crash the retry (mandatory [string] rejects '' — the house
+        # trap the V2 live smoke surfaced; a desc-less task must degrade, not kill the run).
+        $vs7empty = $null
+        $vs7ok = $true
+        try { $vs7empty = Format-VerifyEvidencePrompt -TaskDesc '' -Verification @{ failure_category = 'check-failed' } -OutputPath $vs7out } catch { $vs7ok = $false }
+        Check 'VS7 empty desc does not throw' ($vs7ok -and $null -ne $vs7empty)
 
         # VS8 (review I1/edge#4): add-then-revert nets to ZERO vs the pre-task baseline —
         # must NOT pass. Attempt 1 adds a file (hook forces check-failed -> retry); attempt 2
