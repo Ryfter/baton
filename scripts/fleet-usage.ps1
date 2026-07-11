@@ -22,6 +22,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'usage-lib.ps1')
 try { . (Join-Path $PSScriptRoot 'coach-lib.ps1') } catch { }
+try { . (Join-Path $PSScriptRoot 'copilot-credit-lib.ps1') } catch { }   # panel is optional (d079)
 
 function Write-StateLine($s) {
     $note = if ($s.eta_human) { $s.eta_human } elseif ($s.reason) { $s.reason } else { '' }
@@ -54,11 +55,25 @@ switch ($Subcommand) {
     'status' {
         $states = Get-AllWorkerStates -UsagePath $UsagePath -FleetPath $FleetPath
         $conserve = Get-ConserveMode -UsagePath $UsagePath
-        if ($Json) { [pscustomobject]@{ conserve_mode = $conserve; workers = @($states) } | ConvertTo-Json -Depth 6 }
+        # Copilot credit panel (d079): gate on a locally-configured budget BEFORE any
+        # fetch, so an unconfigured box renders byte-for-byte as before. Fail-open.
+        $ccForecast = $null
+        if (Get-Command Get-CopilotCreditForecast -ErrorAction SilentlyContinue) {
+            $ccBudget = Get-WorkerBudget -Worker 'gh-copilot' -FleetPath $FleetPath
+            if ($null -ne $ccBudget) {
+                try { $ccForecast = Get-CopilotCreditForecast -FleetPath $FleetPath } catch { $ccForecast = $null }
+            }
+        }
+        if ($Json) {
+            $obj = [ordered]@{ conserve_mode = $conserve; workers = @($states) }
+            if ($null -ne $ccForecast) { $obj.copilot_credits = $ccForecast }
+            [pscustomobject]$obj | ConvertTo-Json -Depth 6
+        }
         else {
             Write-Host ("conserve_mode: {0}" -f $conserve)
             Write-Host ("{0,-18} {1,-18} {2}" -f 'WORKER','STATE','ETA/REASON')
             foreach ($s in $states) { Write-StateLine $s }
+            if ($null -ne $ccForecast) { Write-CopilotCreditPanel -Forecast $ccForecast }
         }
         if (-not $Json) {
             if (Get-Command Write-CoachFooter -ErrorAction SilentlyContinue) { Write-CoachFooter -ExcludeIds @('budget') }

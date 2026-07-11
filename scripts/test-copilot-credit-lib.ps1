@@ -123,6 +123,36 @@ try {
     Check 'P3 insufficient-scope shows the exact fix hint' ($pScope -match 'gh auth refresh -h github.com -s user')
     $pUn = (Write-CopilotCreditPanel -Forecast $fUn) *>&1 | Out-String
     Check 'P4 unavailable is one honest line' ($pUn -match 'unavailable \(fetch-failed\)')
+
+    # ---- R-series: /baton:usage runner integration (child process, hermetic) ----
+    $runner = Join-Path $PSScriptRoot 'fleet-usage.ps1'
+
+    $outBare = & pwsh -NoProfile -File $runner status -UsagePath (Join-Path $tmp 'empty.jsonl') -FleetPath $fleetBare 2>&1 | Out-String
+    Check 'R1 no budget -> no panel, no fetch' ($outBare -notmatch 'Copilot Credits')
+
+    $env:BATON_COPILOT_TEST_USAGE = $fixturePath
+    $outFull = & pwsh -NoProfile -File $runner status -UsagePath (Join-Path $tmp 'empty.jsonl') -FleetPath $fleetFull 2>&1 | Out-String
+    Check 'R2 budget configured -> panel renders numbers' ($outFull -match 'Copilot Credits' -and $outFull -match '1018 / 1500')
+
+    $outJson = & pwsh -NoProfile -File $runner status -Json -UsagePath (Join-Path $tmp 'empty.jsonl') -FleetPath $fleetFull 2>&1 | Out-String
+    $j = $null; try { $j = $outJson | ConvertFrom-Json } catch { }
+    Check 'R3 --json carries copilot_credits' ($null -ne $j -and $null -ne $j.copilot_credits -and [double]$j.copilot_credits.used -eq 1018)
+
+    $outJsonBare = & pwsh -NoProfile -File $runner status -Json -UsagePath (Join-Path $tmp 'empty.jsonl') -FleetPath $fleetBare 2>&1 | Out-String
+    $jb = $null; try { $jb = $outJsonBare | ConvertFrom-Json } catch { }
+    Check 'R4 --json without budget has NO copilot_credits key' ($null -ne $jb -and -not ($jb.PSObject.Properties.Name -contains 'copilot_credits'))
+
+    $badFix = Join-Path $tmp 'bad-fixture.json'
+    Set-Content -Path $badFix -Value 'not json at all' -Encoding utf8NoBOM
+    $env:BATON_COPILOT_TEST_USAGE = $badFix
+    $outBad = & pwsh -NoProfile -File $runner status -UsagePath (Join-Path $tmp 'empty.jsonl') -FleetPath $fleetFull 2>&1 | Out-String
+    Check 'R5 fetch failure -> honest one-liner, runner exit 0' ($outBad -match 'unavailable \(fetch-failed\)' -and $LASTEXITCODE -eq 0)
+
+    $outNoR = $null
+    $env:BATON_COPILOT_TEST_USAGE = $fixturePath
+    $outNoR = & pwsh -NoProfile -File $runner status -UsagePath (Join-Path $tmp 'empty.jsonl') -FleetPath $fleetNoRst 2>&1 | Out-String
+    Check 'R6 no reset anchor -> numbers without run-rate line' ($outNoR -match '1018 / 1500' -and $outNoR -notmatch 'run-rate')
+    $env:BATON_COPILOT_TEST_USAGE = $null
 } finally {
     $env:BATON_HOME = $savedHome
     $env:BATON_COPILOT_TEST_USAGE = $savedSeam
