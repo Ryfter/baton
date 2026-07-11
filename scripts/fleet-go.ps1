@@ -17,6 +17,7 @@ param(
     [string]$Project,
     [switch]$Execute,
     [string]$RepoPath,
+    [switch]$Verify,
     [switch]$PlanGate,
     [string[]]$PlanReviewers,
     [bool]$PlanRevise = $true,
@@ -84,6 +85,12 @@ if ($PlanGate) {
     }
 }
 
+if ($env:BATON_GO_TEST_VERIFY) {
+    # Dot-source a file defining Invoke-TestVerify($task, $worktree) -> a verification
+    # result hashtable; New-VerifyingSpawner honors it instead of the real runner.
+    $env:BATON_VERIFY_TEST_HOOK = $env:BATON_GO_TEST_VERIFY
+}
+
 # Execute mode (Slice 2, d078): agentic labor into a throwaway worktree. The
 # spawner routes each task to an edit-eligible instrument running with cwd =
 # the worktree; the DiffProvider feeds the produced diff to the acceptance
@@ -105,6 +112,29 @@ if ($Execute) {
     }
     $go['Spawner'] = New-AgenticSpawner @spawnArgs
     $go['DiffProvider'] = { Get-RunDiff -Worktree $wt.worktree -BaseSha $wt.base_sha }.GetNewClosure()
+    if ($Verify) {
+        # Shared frozen-contracts map: the preflight closure populates+validates it from
+        # the base revision; the verifying spawner reads it per task. Both close over the
+        # same hashtable reference (built here so they share it).
+        $frozen = @{}
+        $go['Verify'] = $true
+        $go['VerifyPreflight'] = {
+            param($plan)
+            foreach ($tk in @($plan.tasks)) {
+                $prof = [string]$tk.verify_profile
+                if (-not $prof) { continue }
+                $taskDir = Join-Path $runDir "tasks/$($tk.id)"
+                $fc = Get-FrozenVerificationContract -RepoPath $repo -BaseSha $wt.base_sha `
+                        -ProfileName $prof -WorktreeRoot $wt.worktree -RunTaskDir $taskDir
+                if (-not $fc.ok) { return @{ ok = $false; reason = "task $($tk.id): $($fc.reason)" } }
+                $frozen[[string]$tk.id] = @{ contract = $fc.contract; contract_path = $fc.contract_path }
+            }
+            return @{ ok = $true }
+        }.GetNewClosure()
+        $baseSpawner = $go['Spawner']
+        $go['Spawner'] = New-VerifyingSpawner -InnerSpawner $baseSpawner -Worktree $wt.worktree `
+            -BaseSha $wt.base_sha -RunDir $runDir -FrozenContracts $frozen
+    }
 }
 
 if ($targetFolder) { Push-Location -LiteralPath $targetFolder }

@@ -104,6 +104,8 @@ function ConvertTo-PlanObject {
             depends_on    = @($t.depends_on | Where-Object { $_ })
             est_cost_tier = if ($t.est_cost_tier) { [string]$t.est_cost_tier } else { 'free' }
             reversible    = if ($null -eq $t.reversible) { $true } else { [bool]$t.reversible }
+            verify_profile = if ($t.verify_profile) { [string]$t.verify_profile } else { '' }
+            allowed_paths  = @($t.allowed_paths | Where-Object { $_ } | ForEach-Object { [string]$_ })
         }
     }
     if (@($tasks).Count -lt 1) { return $null }
@@ -289,6 +291,24 @@ function Format-AcceptanceSection {
     return $sb.ToString().TrimEnd()
 }
 
+function Format-VerificationSection {
+    <# The Gemini CLI narration block (adjudication A2): per verified task, route ->
+       worker -> check -> retry -> proves, read from tasks/<id>/verification.json.
+       Returns '' when no task was verified (section omitted). #>
+    param([Parameter(Mandatory)][string]$RunDir, [Parameter(Mandatory)][hashtable]$Plan)
+    $lines = [System.Collections.ArrayList]@()
+    foreach ($t in @($Plan.tasks)) {
+        $vp = Join-Path $RunDir "tasks/$($t.id)/verification.json"
+        if (-not (Test-Path -LiteralPath $vp)) { continue }
+        try { $v = Get-Content -Raw -LiteralPath $vp | ConvertFrom-Json } catch { continue }
+        $mark = if ([string]$v.verdict -eq 'pass') { "PASS (grade $($v.grade))" } else { "FAIL ($($v.failure_category))" }
+        $retry = if ($v.retried) { ' after 1 retry' } else { '' }
+        [void]$lines.Add("- $($t.id): $mark$retry — proves: $($v.proves)")
+    }
+    if (@($lines).Count -eq 0) { return '' }
+    return "## Verification`n" + (@($lines) -join "`n")
+}
+
 # Fail-open fallback for Build-PlannerPrompt: the exact conductor-planner.txt
 # template text, baked in so a missing/corrupt/malformed prompt file on disk
 # can never take the planner phase down. Kept in sync by hand with
@@ -464,6 +484,10 @@ function Complete-Run {
         $report = $report + "`n`n" + (Format-AcceptanceSection -Gate $Gate)
         ($Gate | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'acceptance.json') -Encoding utf8NoBOM
     }
+    $verSection = Format-VerificationSection -RunDir $RunDir -Plan $Plan
+    if ($verSection) {
+        $report = $report + "`n`n" + $verSection
+    }
     # Effective cost (slice 1): only when a gate produced a verdict (a quality signal).
     $effectiveCost = $null
     $realizedRunCost = $null
@@ -620,7 +644,9 @@ function Invoke-Conductor {
         [switch]$PlanGate,
         [string[]]$PlanReviewers,
         [bool]$PlanRevise = $true,
-        [scriptblock]$PlanGateDispatcher
+        [scriptblock]$PlanGateDispatcher,
+        [switch]$Verify,
+        [scriptblock]$VerifyPreflight
     )
     if (-not $RunDir) { $RunDir = Initialize-RunDir }
     else { New-Item -ItemType Directory -Force -Path $RunDir | Out-Null }
@@ -684,6 +710,25 @@ function Invoke-Conductor {
         }
     }
 
+    # 1.7 Verification preflight (d082 V2): OPT-IN. Freeze every referenced verify
+    #     profile from the base revision and validate it BEFORE the walk — an unknown,
+    #     missing, or lint-failing contract fails the plan closed (plan-invalid) before
+    #     any labor spend. Fail-CLOSED (unlike the advisory gates): a task that demands
+    #     verification cannot run without a resolvable oracle. Without -Verify this block
+    #     is skipped entirely (default path unchanged).
+    if ($Verify -and $VerifyPreflight) {
+        $pf = $null
+        try { $pf = & $VerifyPreflight $plan }
+        catch {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'verification' -Level 'error' -Message "verification preflight threw: $($_.Exception.Message)")
+            return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-invalid')
+        }
+        if ($null -ne $pf -and -not $pf.ok) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'verification' -Level 'error' -Message "verification preflight failed: $($pf.reason) — no walk, no spend")
+            return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-invalid')
+        }
+    }
+
     # 2. Order the DAG.
     try { $order = Resolve-TaskOrder -Tasks @($plan.tasks) }
     catch {
@@ -706,6 +751,12 @@ function Invoke-Conductor {
             return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status 'interrupted-destructive' -PendingTaskId $task.id)
         }
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'started' -Message $task.desc)
+        # Verification (d082 V2): announce the sub-lifecycle before labor so the six-kind
+        # event contract is literal (review M1). Only for a -Verify run on a task that
+        # actually carries a frozen contract — an unprofiled task stays silent here.
+        if ($Verify -and [string]$task.verify_profile) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-verification-started' -Message "verifying: $($task.verify_profile)")
+        }
         $r = if ($Spawner) { & $Spawner $task }
              else { Invoke-TaskViaFleet -Task $task -FleetPath $FleetPath -ToolsPath $ToolsPath -MaxCostTier $MaxCostTier -Dispatcher $Dispatcher }
         $tspend = if ($null -ne $r.spend) { [double]$r.spend } else { $est }
@@ -720,10 +771,33 @@ function Invoke-Conductor {
         # (0.0) today; realized cost arrives later via Get-RunCost's -CostResolver seam.
         [void]$taskCosts.Add(@{ id = $task.id; worker = ([string]$r.chose); cost = $est })
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'spent' -Message ("{0:0.00}" -f $tspend))
+        # Verification (d082 V2): the verifying spawner attaches a `verification`
+        # result and/or an `unverified` mark to $r. Emit the legible event trail and
+        # map a verification failure to its own terminal status. When -Verify is off
+        # or the task carried no contract, $r has neither key and this is inert.
+        if ($Verify -and $r.unverified) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-unverified' -Message "no verification contract — proceeding unverified")
+        }
+        if ($Verify -and $r.verification) {
+            $v = $r.verification
+            if ($v.retried) {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-retry-started' -Message "verification failed ($($v.first_failure_category)) — one evidence-informed retry")
+            }
+            if ([string]$v.verdict -eq 'pass') {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-verification-passed' -Message "verified (grade: $($v.grade)) — $($v.proves)")
+            }
+            elseif ([string]$v.failure_category -in @('scope-violation','protected-path-mutated')) {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-scope-violation' -Level 'warn' -Message "scope/oracle violation ($($v.failure_category)) — fail-closed, no retry")
+            }
+            else {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-verification-failed' -Level 'warn' -Message "verification failed ($($v.failure_category))")
+            }
+        }
         $kind = if ($r.ok) { 'finished' } else { 'error' }
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind $kind -Message $task.desc)
         if (-not $r.ok) {
-            return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status 'failed' -PendingTaskId $task.id)
+            $failStatus = if ($Verify -and $r.verification -and [string]$r.verification.verdict -ne 'pass') { 'verification-failed' } else { 'failed' }
+            return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status $failStatus -PendingTaskId $task.id)
         }
     }
     # 4. Acceptance phase (d058): opt-in, advisory, fail-open. Runs only after a

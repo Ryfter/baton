@@ -70,9 +70,21 @@ function Test-VerifyArgvSafe {
     $skip = 1
     $leaf = Get-VerifyInterpreterLeaf $argvList[0]
     if ($leaf -eq 'env' -and $argvList.Count -ge 2) {
-        # `env [VAR=val]... <interp> ...` wrapper: the real interpreter is the next token.
-        $skip = 2
-        $leaf = Get-VerifyInterpreterLeaf $argvList[1]
+        # `env [NAME=val]... [-i|-u N|-C dir|--]... <interp> ...` wrapper: the real
+        # interpreter is the first token that is NOT an assignment or an env option.
+        # (Defense-in-depth, V1 review carry-forward: the old one-token shift let
+        # `env FOO=bar python -c ...` and `env -i pwsh -Command ...` fall through to the
+        # allow-by-default branch. V2 has no untrusted argv path, so this is not
+        # triggerable today — closed anyway so a future argv source can't reopen it.)
+        $j = 1
+        while ($j -lt $argvList.Count) {
+            $tk = [string]$argvList[$j]
+            if ($tk -match '^[A-Za-z_][A-Za-z0-9_]*=') { $j++; continue }         # NAME=value
+            if ($tk -in @('-i', '--ignore-environment', '--')) { $j++; continue } # flags w/o value
+            if ($tk -in @('-u', '-C', '--unset', '--chdir')) { $j += 2; continue }# flags w/ value
+            break
+        }
+        if ($j -lt $argvList.Count) { $skip = $j + 1; $leaf = Get-VerifyInterpreterLeaf $argvList[$j] }
     }
     $rest = @($argvList | Select-Object -Skip $skip | ForEach-Object { [string]$_ })
     # pwsh binds parameters by unambiguous PREFIX; -Command/-EncodedCommand/-CommandWithArgs
