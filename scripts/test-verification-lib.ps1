@@ -74,6 +74,107 @@ try {
     Assert "N7 unknown preset rejected" ((-not $n7.ok) -and $n7.reason -match 'unknown-preset')
     $n8 = Get-VerificationContract -Raw @{ preset = 'file-exists-nonempty'; expect_files = @('inside.txt') } -WorktreeRoot $wt
     Assert "N8 noop preset resolves {{lib_dir}} and keeps weak ceiling" ($n8.ok -and $n8.contract.grade_ceiling -eq 'weak' -and ($n8.contract.argv -join ' ') -match 'verify-noop')
+
+    # --- helpers for part 2 ---
+    function New-TestGitRepo([string]$Path) {
+        New-Item -ItemType Directory -Force -Path $Path | Out-Null
+        & git -C $Path init -q 2>$null | Out-Null
+        & git -C $Path config user.email t@t 2>$null | Out-Null
+        & git -C $Path config user.name t 2>$null | Out-Null
+    }
+    $repo = Join-Path $tmpRoot 'repo'
+    New-TestGitRepo $repo
+    $cfgDir = Join-Path $repo '.baton'
+    New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+    $cfg = @{ schema = 1; profiles = @{ demo = @{ argv = @('git', 'status'); proves = 'repo status readable'; protected_paths = @('oracle.txt') } } }
+    ConvertTo-Json -InputObject $cfg -Depth 6 | Set-Content -LiteralPath (Join-Path $cfgDir 'verification.json') -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $repo 'oracle.txt') -Value 'oracle-v1' -Encoding utf8NoBOM
+    & git -C $repo add -A 2>$null | Out-Null
+    & git -C $repo commit -q -m base 2>$null | Out-Null
+    $baseSha = ([string](& git -C $repo rev-parse HEAD)).Trim()
+    $taskDir = Join-Path $tmpRoot 'run\tasks\t1'
+
+    # --- F: frozen contract ---
+    $f1 = Get-FrozenVerificationContract -RepoPath $repo -BaseSha $baseSha -ProfileName 'demo' -WorktreeRoot $repo -RunTaskDir $taskDir
+    Assert "F1 freeze resolves the profile from the base commit" ($f1.ok -and (Test-Path $f1.contract_path))
+    $f2 = Get-FrozenVerificationContract -RepoPath $repo -BaseSha $baseSha -ProfileName 'nope' -WorktreeRoot $repo -RunTaskDir $taskDir
+    Assert "F2 unknown profile fails closed" ((-not $f2.ok) -and $f2.reason -match 'unknown-profile')
+    # Worker edits the WORKTREE copy after freeze -> frozen contract still governs
+    $mut = @{ schema = 1; profiles = @{ demo = @{ argv = @('sh', '-c', 'evil'); proves = 'x' } } }
+    ConvertTo-Json -InputObject $mut -Depth 6 | Set-Content -LiteralPath (Join-Path $cfgDir 'verification.json') -Encoding utf8NoBOM
+    $f3 = Get-FrozenVerificationContract -RepoPath $repo -BaseSha $baseSha -ProfileName 'demo' -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\t1b')
+    Assert "F3 frozen contract authority: worktree mutation is invisible" ($f3.ok -and ($f3.contract.argv[0] -eq 'git'))
+    $f4 = Get-FrozenVerificationContract -RepoPath $repo -BaseSha '0000000000000000000000000000000000000000' -ProfileName 'demo' -WorktreeRoot $repo -RunTaskDir $taskDir
+    Assert "F4 bad base sha -> no-verification-config" ((-not $f4.ok) -and $f4.reason -match 'no-verification-config')
+
+    # --- R: runner ---
+    $rOut = Join-Path $tmpRoot 'r1.txt'
+    $r1 = Invoke-VerifyCommand -Argv @('git', '--version') -WorkingDir $repo -TimeoutS 60 -OutputPath $rOut
+    Assert "R1 plain command exits 0 with captured output" ($r1.exit_code -eq 0 -and (Get-Content $rOut -Raw) -match 'git version')
+    $r2 = Invoke-VerifyCommand -Argv @('git', 'definitely-not-a-verb') -WorkingDir $repo -TimeoutS 60 -OutputPath (Join-Path $tmpRoot 'r2.txt')
+    Assert "R2 failing command reports nonzero exit" ($r2.started -and $r2.exit_code -ne 0)
+    $r3 = Invoke-VerifyCommand -Argv @("no-such-exe-$(Get-Random)") -WorkingDir $repo -TimeoutS 60 -OutputPath (Join-Path $tmpRoot 'r3.txt')
+    Assert "R3 missing executable -> started=false (spawn error)" (-not $r3.started)
+    # Timeout + tree kill: pwsh -File on a sleeper script (argv-safe form)
+    $sleeper = Join-Path $tmpRoot 'sleeper.ps1'
+    Set-Content -LiteralPath $sleeper -Value 'Start-Sleep -Seconds 120' -Encoding utf8NoBOM
+    $t0 = Get-Date
+    $r4 = Invoke-VerifyCommand -Argv @('pwsh', '-NoProfile', '-File', $sleeper) -WorkingDir $repo -TimeoutS 2 -OutputPath (Join-Path $tmpRoot 'r4.txt')
+    $elapsed = ((Get-Date) - $t0).TotalSeconds
+    Assert "R4 timeout kills the tree quickly" ($r4.timed_out -and $elapsed -lt 30)
+    # argv literality: spaces, quotes, $() reach the child untouched
+    $echoer = Join-Path $tmpRoot 'echoer.ps1'
+    Set-Content -LiteralPath $echoer -Value 'param($P) [Console]::Out.Write($P)' -Encoding utf8NoBOM
+    $lit = 'a b "q" $(Get-Date) `tick'
+    $r5out = Join-Path $tmpRoot 'r5.txt'
+    $r5 = Invoke-VerifyCommand -Argv @('pwsh', '-NoProfile', '-File', $echoer, $lit) -WorkingDir $repo -TimeoutS 60 -OutputPath $r5out
+    Assert "R5 argv passes spaces/quotes/dollar literally (no reparse)" ($r5.exit_code -eq 0 -and (Get-Content $r5out -Raw).Contains($lit))
+    # Output cap
+    $blaster = Join-Path $tmpRoot 'blaster.ps1'
+    Set-Content -LiteralPath $blaster -Value "[Console]::Out.Write(('x' * 400000))" -Encoding utf8NoBOM
+    $r6 = Invoke-VerifyCommand -Argv @('pwsh', '-NoProfile', '-File', $blaster) -WorkingDir $repo -TimeoutS 60 -OutputPath (Join-Path $tmpRoot 'r6.txt') -MaxOutputBytes 1000
+    Assert "R6 output truncated at the byte cap" ($r6.output_truncated -and (Get-Item (Join-Path $tmpRoot 'r6.txt')).Length -lt 5000)
+
+    # --- E/G/V: façade end-to-end ---
+    $demo = $f1.contract
+    $protPre = Get-VerifyPathHashes -WorktreeRoot $repo -Paths @($demo.protected_paths)
+    $v1 = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v1') -ProtectedPreHashes $protPre
+    Assert "V1 clean pass; protected intact; grade bounded (no scope enforcement)" ($v1.ok -and $v1.verdict -eq 'pass' -and $v1.grade -eq 'bounded')
+    $v2 = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v2') -ProtectedPreHashes $protPre -DiffFiles @('src/a.ps1') -AllowedPaths @('src/a.ps1')
+    Assert "V2 scope enforced + protected intact -> STRONG" ($v2.ok -and $v2.grade -eq 'strong')
+    $v3 = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v3') -ProtectedPreHashes $protPre -DiffFiles @('src/a.ps1', 'other/b.ps1') -AllowedPaths @('src/a.ps1')
+    Assert "V3 diff outside allowed paths -> scope-violation, fail closed" ($v3.verdict -eq 'scope-violation' -and $v3.failure_category -eq 'scope-violation' -and -not $v3.ok)
+    # Protected-oracle mutation
+    Set-Content -LiteralPath (Join-Path $repo 'oracle.txt') -Value 'TAMPERED' -Encoding utf8NoBOM
+    $v4 = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v4') -ProtectedPreHashes $protPre
+    Assert "V4 mutated protected oracle -> scope-violation/protected-path-mutated" ($v4.verdict -eq 'scope-violation' -and $v4.failure_category -eq 'protected-path-mutated')
+    Set-Content -LiteralPath (Join-Path $repo 'oracle.txt') -Value 'oracle-v1' -Encoding utf8NoBOM
+    # Expected files: missing / empty / unchanged (A5) / changed
+    $expC = [ordered]@{ argv = @('git', '--version'); cwd = '.'; timeout_s = 60; expect_files = @('out.txt'); protected_paths = @(); proves = 'p'; grade_ceiling = 'strong' }
+    $v5 = Invoke-VerificationContract -Contract $expC -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v5')
+    Assert "V5 missing expected file fails" ($v5.failure_category -eq 'expected-file-missing')
+    Set-Content -LiteralPath (Join-Path $repo 'out.txt') -Value '' -NoNewline -Encoding utf8NoBOM
+    $v6 = Invoke-VerificationContract -Contract $expC -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v6')
+    Assert "V6 empty expected file fails" ($v6.failure_category -eq 'expected-file-empty')
+    Set-Content -LiteralPath (Join-Path $repo 'out.txt') -Value 'stale' -Encoding utf8NoBOM
+    $prePre = Get-VerifyPathHashes -WorktreeRoot $repo -Paths @('out.txt')
+    $v7 = Invoke-VerificationContract -Contract $expC -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v7') -ExpectPreHashes $prePre
+    Assert "V7 pre-existing expected file UNCHANGED fails (A5 content bar)" ($v7.failure_category -eq 'expected-file-unchanged')
+    Set-Content -LiteralPath (Join-Path $repo 'out.txt') -Value 'fresh content' -Encoding utf8NoBOM
+    $v8 = Invoke-VerificationContract -Contract $expC -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v8') -ExpectPreHashes $prePre
+    Assert "V8 changed expected file passes" ($v8.ok -and $v8.expected_files_ok)
+    # Check failure + weak ceiling + spawn failure verdicts
+    $failC = [ordered]@{ argv = @('git', 'definitely-not-a-verb'); cwd = '.'; timeout_s = 60; expect_files = @(); protected_paths = @(); proves = 'p'; grade_ceiling = 'strong' }
+    $v9 = Invoke-VerificationContract -Contract $failC -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v9')
+    Assert "V9 failing check -> fail/check-failed, grade invalid" ($v9.verdict -eq 'fail' -and $v9.failure_category -eq 'check-failed' -and $v9.grade -eq 'invalid')
+    $noopC = (Get-VerificationContract -Raw @{ preset = 'file-exists-nonempty'; expect_files = @('out.txt') } -WorktreeRoot $repo).contract
+    $v10 = Invoke-VerificationContract -Contract $noopC -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v10') -ExpectPreHashes $prePre
+    Assert "V10 weak ceiling caps a passing existence check at WEAK" ($v10.ok -and $v10.grade -eq 'weak')
+    $spawnC = [ordered]@{ argv = @("no-such-exe-$(Get-Random)"); cwd = '.'; timeout_s = 30; expect_files = @(); protected_paths = @(); proves = 'p'; grade_ceiling = 'strong' }
+    $v11 = Invoke-VerificationContract -Contract $spawnC -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v11')
+    Assert "V11 missing verifier exe -> infrastructure-error, not model-quality fail" ($v11.verdict -eq 'infrastructure-error' -and $v11.failure_category -eq 'spawn-failed')
+    $v12 = Invoke-VerificationContract -Contract ([ordered]@{ argv = @('pwsh', '-NoProfile', '-File', $sleeper); cwd = '.'; timeout_s = 2; expect_files = @(); protected_paths = @(); proves = 'p'; grade_ceiling = 'strong' }) -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v12')
+    Assert "V12 check timeout -> fail/check-timeout (retry-eligible category)" ($v12.verdict -eq 'fail' -and $v12.failure_category -eq 'check-timeout' -and $v12.timed_out)
 } finally {
     if ($null -eq $savedPresetsEnv) { Remove-Item env:BATON_VERIFY_PRESETS -ErrorAction SilentlyContinue }
     else { $env:BATON_VERIFY_PRESETS = $savedPresetsEnv }

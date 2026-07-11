@@ -169,3 +169,226 @@ function Get-VerificationContract {
     }
     return @{ ok = $true; contract = $contract; reason = '' }
 }
+
+function Get-FrozenVerificationContract {
+    <# Resolve a named profile from the BASE COMMIT's .baton/verification.json —
+       `git show <sha>:<path>`, never the mutable worktree copy (a worker edit to
+       the config cannot change the current run's oracle). Writes the immutable
+       contract copy to <RunTaskDir>/contract.json. Fail-closed via ok=$false. #>
+    param(
+        [Parameter(Mandatory)][string]$RepoPath,
+        [Parameter(Mandatory)][string]$BaseSha,
+        [Parameter(Mandatory)][string]$ProfileName,
+        [Parameter(Mandatory)][string]$WorktreeRoot,
+        [Parameter(Mandatory)][string]$RunTaskDir,
+        [string]$PresetsPath = (Get-VerifyPresetsPath)
+    )
+    $raw = & git -C $RepoPath show "$($BaseSha):.baton/verification.json" 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace((@($raw) -join ''))) {
+        return @{ ok = $false; contract = $null; contract_path = ''; reason = 'no-verification-config (base revision has no .baton/verification.json)' }
+    }
+    try { $doc = (@($raw) -join "`n") | ConvertFrom-Json -AsHashtable -ErrorAction Stop }
+    catch { return @{ ok = $false; contract = $null; contract_path = ''; reason = 'verification-config-unparseable' } }
+    if ($doc.schema -ne 1) { return @{ ok = $false; contract = $null; contract_path = ''; reason = "unsupported schema '$($doc.schema)'" } }
+    $prof = $null
+    if ($doc.profiles -is [hashtable]) { $prof = $doc.profiles[$ProfileName] }
+    if ($null -eq $prof) { return @{ ok = $false; contract = $null; contract_path = ''; reason = "unknown-profile '$ProfileName'" } }
+    $norm = Get-VerificationContract -Raw $prof -WorktreeRoot $WorktreeRoot -PresetsPath $PresetsPath
+    if (-not $norm.ok) { return @{ ok = $false; contract = $null; contract_path = ''; reason = $norm.reason } }
+    New-Item -ItemType Directory -Force -Path $RunTaskDir | Out-Null
+    $cpath = Join-Path $RunTaskDir 'contract.json'
+    ConvertTo-Json -InputObject $norm.contract -Depth 6 | Set-Content -LiteralPath $cpath -Encoding utf8NoBOM
+    return @{ ok = $true; contract = $norm.contract; contract_path = $cpath; reason = '' }
+}
+
+function Get-VerifyPathHashes {
+    <# SHA256 per worktree-relative path; 'ABSENT' when the file does not exist.
+       Used pre-labor (freeze) and post-check (integrity + the A5 content bar). #>
+    param(
+        [Parameter(Mandatory)][string]$WorktreeRoot,
+        [string[]]$Paths
+    )
+    $map = @{}
+    foreach ($rel in @($Paths)) {
+        if ([string]::IsNullOrWhiteSpace([string]$rel)) { continue }
+        $full = Test-VerifyPathContained -Root $WorktreeRoot -Relative ([string]$rel)
+        if ($null -eq $full -or -not (Test-Path -LiteralPath $full -PathType Leaf)) { $map[[string]$rel] = 'ABSENT'; continue }
+        $map[[string]$rel] = (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash
+    }
+    return $map
+}
+
+function Invoke-VerifyCommand {
+    <# The argv runner: System.Diagnostics.Process + ArgumentList (never a shell
+       string — nothing is reparsed), stdin closed (headless checks must not hang),
+       stdout+stderr captured to a byte-capped file, timeout kills the whole
+       process tree ($proc.Kill($true); taskkill /T /F fallback). #>
+    param(
+        [Parameter(Mandatory)][string[]]$Argv,
+        [Parameter(Mandatory)][string]$WorkingDir,
+        [int]$TimeoutS = 300,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [int]$MaxOutputBytes = 262144
+    )
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $Argv[0]
+    foreach ($a in @($Argv | Select-Object -Skip 1)) { [void]$psi.ArgumentList.Add([string]$a) }
+    $psi.WorkingDirectory = $WorkingDir
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.RedirectStandardInput = $true
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $proc = $null
+    try { $proc = [System.Diagnostics.Process]::Start($psi) }
+    catch {
+        return @{ started = $false; exit_code = -1; timed_out = $false; duration_ms = 0; output_truncated = $false; spawn_error = $_.Exception.Message }
+    }
+    $proc.StandardInput.Close()
+    $outTask = $proc.StandardOutput.ReadToEndAsync()
+    $errTask = $proc.StandardError.ReadToEndAsync()
+    $timedOut = -not $proc.WaitForExit($TimeoutS * 1000)
+    if ($timedOut) {
+        try { $proc.Kill($true) } catch { try { & taskkill /PID $proc.Id /T /F 2>$null | Out-Null } catch { } }
+    }
+    $proc.WaitForExit()   # flush async stream reads after any WaitForExit(ms)
+    $sw.Stop()
+    $text = [string]$outTask.Result
+    $errText = [string]$errTask.Result
+    if ($errText) { $text = $text + "`n--- stderr ---`n" + $errText }
+    $enc = [System.Text.Encoding]::UTF8
+    $bytes = $enc.GetBytes($text)
+    $truncated = $false
+    if ($bytes.Length -gt $MaxOutputBytes) {
+        $text = $enc.GetString($bytes, 0, $MaxOutputBytes) + "`n[output truncated at $MaxOutputBytes bytes]"
+        $truncated = $true
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutputPath) | Out-Null
+    Set-Content -LiteralPath $OutputPath -Value $text -Encoding utf8NoBOM
+    $exit = if ($timedOut) { -1 } else { $proc.ExitCode }
+    return @{ started = $true; exit_code = $exit; timed_out = $timedOut; duration_ms = [int]$sw.ElapsedMilliseconds; output_truncated = $truncated; spawn_error = $null }
+}
+
+function Get-VerificationGrade {
+    <# Deterministic evidence grade (codex-ringer §6, V1 simplification recorded in
+       the plan): any violation/failure -> invalid; STRONG requires a declared AND
+       intact protected oracle plus full diff scoping; everything else that passed
+       is BOUNDED; the contract's grade_ceiling (e.g. file-exists-nonempty -> weak)
+       caps the result. The worker never selects its own grade. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Contract,
+        [Parameter(Mandatory)][bool]$Passed,
+        [Parameter(Mandatory)][bool]$ProtectedDeclared,
+        [Parameter(Mandatory)][bool]$ProtectedIntact,
+        [Parameter(Mandatory)][bool]$ScopeEnforced,
+        [Parameter(Mandatory)][bool]$ScopeOk
+    )
+    if (-not $Passed) { return 'invalid' }
+    $rank = @{ strong = 3; bounded = 2; weak = 1 }
+    $computed = if ($ProtectedDeclared -and $ProtectedIntact -and $ScopeEnforced -and $ScopeOk) { 'strong' } else { 'bounded' }
+    $ceiling = [string]$Contract.grade_ceiling
+    if (-not $rank.ContainsKey($ceiling)) { $ceiling = 'strong' }
+    if ($rank[$computed] -le $rank[$ceiling]) { return $computed }
+    return $ceiling
+}
+
+function Invoke-VerificationContract {
+    <# The façade V2 consumes. Orchestrates: run argv -> expected files (A5 content
+       bar) -> protected-oracle integrity -> diff scope -> deterministic grade.
+       Pre-hashes are captured PRE-LABOR by the caller (freeze time); when omitted,
+       expected-file change detection degrades gracefully (absent pre-hash = new
+       file, only existence+non-empty required). Never throws. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Contract,
+        [Parameter(Mandatory)][string]$WorktreeRoot,
+        [Parameter(Mandatory)][string]$RunTaskDir,
+        [string[]]$DiffFiles = @(),
+        [string[]]$AllowedPaths = @(),
+        [hashtable]$ExpectPreHashes = @{},
+        [hashtable]$ProtectedPreHashes = @{}
+    )
+    New-Item -ItemType Directory -Force -Path $RunTaskDir | Out-Null
+    $outputPath = Join-Path $RunTaskDir 'check-output.txt'
+    $result = [ordered]@{
+        ok = $false; grade = 'invalid'; verdict = 'fail'
+        exit_code = -1; timed_out = $false; duration_ms = 0
+        output_path = $outputPath; output_truncated = $false
+        expected_files_ok = $false; protected_ok = $false; scope_ok = $false
+        failure_category = ''; proves = [string]$Contract.proves
+    }
+
+    # 1. Scope (checked first: a scope violation fails closed regardless of the check)
+    $scopeEnforced = (@($AllowedPaths).Count -gt 0)
+    $scopeOk = $true
+    if ($scopeEnforced) {
+        $allowedSet = @($AllowedPaths | ForEach-Object { ([string]$_).Replace('\', '/').ToLowerInvariant() })
+        foreach ($df in @($DiffFiles)) {
+            if ([string]::IsNullOrWhiteSpace([string]$df)) { continue }
+            if ((([string]$df).Replace('\', '/').ToLowerInvariant()) -notin $allowedSet) { $scopeOk = $false; break }
+        }
+    }
+    $result.scope_ok = $scopeOk
+    if (-not $scopeOk) {
+        $result.verdict = 'scope-violation'; $result.failure_category = 'scope-violation'
+        return $result
+    }
+
+    # 2. Run the check
+    $cwdFull = Test-VerifyPathContained -Root $WorktreeRoot -Relative ([string]$Contract.cwd)
+    if ($null -eq $cwdFull) {
+        $result.verdict = 'infrastructure-error'; $result.failure_category = 'spawn-failed'
+        return $result
+    }
+    $run = Invoke-VerifyCommand -Argv @($Contract.argv) -WorkingDir $cwdFull -TimeoutS ([int]$Contract.timeout_s) -OutputPath $outputPath
+    $result.exit_code = $run.exit_code
+    $result.timed_out = [bool]$run.timed_out
+    $result.duration_ms = [int]$run.duration_ms
+    $result.output_truncated = [bool]$run.output_truncated
+    if (-not $run.started) {
+        $result.verdict = 'infrastructure-error'; $result.failure_category = 'spawn-failed'
+        return $result
+    }
+
+    # 3. Protected-oracle integrity (evaluated even on check failure — a mutated
+    #    oracle must fail closed and V2 must not retry it)
+    $protDeclared = (@($Contract.protected_paths).Count -gt 0)
+    $protPost = Get-VerifyPathHashes -WorktreeRoot $WorktreeRoot -Paths @($Contract.protected_paths)
+    $protIntact = $true
+    foreach ($k in @($protPost.Keys)) {
+        $pre = if ($ProtectedPreHashes.ContainsKey($k)) { [string]$ProtectedPreHashes[$k] } else { $null }
+        if ($null -ne $pre -and $pre -ne [string]$protPost[$k]) { $protIntact = $false; break }
+    }
+    $result.protected_ok = $protIntact
+    if ($protDeclared -and -not $protIntact) {
+        $result.verdict = 'scope-violation'; $result.failure_category = 'protected-path-mutated'
+        return $result
+    }
+
+    # 4. Check outcome
+    if ($run.timed_out) { $result.failure_category = 'check-timeout'; return $result }
+    if ([int]$run.exit_code -ne 0) { $result.failure_category = 'check-failed'; return $result }
+
+    # 5. Expected files: exist + non-empty + (A5) pre-existing content must have CHANGED
+    foreach ($rel in @($Contract.expect_files)) {
+        $full = Test-VerifyPathContained -Root $WorktreeRoot -Relative ([string]$rel)
+        if ($null -eq $full -or -not (Test-Path -LiteralPath $full -PathType Leaf)) {
+            $result.failure_category = 'expected-file-missing'; return $result
+        }
+        if ((Get-Item -LiteralPath $full).Length -lt 1) {
+            $result.failure_category = 'expected-file-empty'; return $result
+        }
+        $pre = if ($ExpectPreHashes.ContainsKey([string]$rel)) { [string]$ExpectPreHashes[[string]$rel] } else { $null }
+        if ($null -ne $pre -and $pre -ne 'ABSENT') {
+            $post = (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash
+            if ($post -eq $pre) { $result.failure_category = 'expected-file-unchanged'; return $result }
+        }
+    }
+    $result.expected_files_ok = $true
+
+    # 6. Pass + grade
+    $result.verdict = 'pass'; $result.ok = $true
+    $result.grade = Get-VerificationGrade -Contract $Contract -Passed $true `
+        -ProtectedDeclared $protDeclared -ProtectedIntact $protIntact `
+        -ScopeEnforced $scopeEnforced -ScopeOk $scopeOk
+    return $result
+}
