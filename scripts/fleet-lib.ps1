@@ -242,6 +242,9 @@ function Write-FleetJournalLine {
         # journal merged across the Tailscale fleet stays attributable per node.
         # Override via CAO_FLEET_HOST; falls back to the OS hostname.
         [string]$OriginHost = $(if ($env:CAO_FLEET_HOST) { $env:CAO_FLEET_HOST } elseif ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [System.Net.Dns]::GetHostName() })
+        ,
+        [int]$Tokens = 0,
+        [string]$TokensBasis = 'estimate'
     )
     # Summarise + sanitise the prompt (max 100 chars, pipes -> ¦, newlines -> space)
     $summary = ($Prompt -replace '\|', '¦' -replace "`r?`n", ' ').Trim()
@@ -263,6 +266,10 @@ function Write-FleetJournalLine {
             }
         }
     } catch { }
+
+    # Trailing token field (observe-only). Appended AFTER host:/job:/phase: so every
+    # consumer that splits on ' | ' and prefix-matches ignores it (spec §4.2).
+    $line += " | tok:$Tokens($TokensBasis)"
 
     $dir = Split-Path -Parent $JournalPath
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
@@ -375,10 +382,11 @@ function Invoke-Fleet-Cli {
         }
         $exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
         $duration = [int]((Get-Date) - $start).TotalSeconds
-        return @{ stdout = $out; stderr = ''; exit_code = $exit; duration_s = $duration }
+        $tok = Get-FleetTokenUsage -Provider $Provider -Prompt $Prompt -Stdout ([string]$out)
+        return @{ stdout = $out; stderr = ''; exit_code = $exit; duration_s = $duration; tokens = $tok.tokens; tokens_basis = $tok.tokens_basis }
     } catch {
         $duration = [int]((Get-Date) - $start).TotalSeconds
-        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = -1; duration_s = $duration }
+        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = -1; duration_s = $duration; tokens = 0; tokens_basis = 'estimate' }
     } finally {
         foreach ($k in $saved.Keys) {
             if ($null -eq $saved[$k]) { Remove-Item "env:$k" -ErrorAction SilentlyContinue }
@@ -420,9 +428,19 @@ function Invoke-Fleet {
         throw "Provider '$Name' has unknown kind '$($provider.kind)'."
     }
 
+    # Normalize token fields so both cli and http paths carry them. HTTP hatches
+    # that do not emit native counts fall back to an honest estimate (exact native
+    # counts are a named follow-up, spec §4.1).
+    if (-not $result.ContainsKey('tokens')) {
+        $tok = Get-FleetTokenUsage -Provider $provider -Prompt $Prompt -Stdout ([string]$result.stdout)
+        $result.tokens = $tok.tokens
+        $result.tokens_basis = $tok.tokens_basis
+    }
+
     if (-not $NoJournal) {
         Write-FleetJournalLine -Provider $Name -DurationS $result.duration_s `
-            -ExitCode $result.exit_code -Prompt $Prompt -JournalPath $JournalPath
+            -ExitCode $result.exit_code -Prompt $Prompt -JournalPath $JournalPath `
+            -Tokens $result.tokens -TokensBasis $result.tokens_basis
     }
     return $result
 }

@@ -179,5 +179,27 @@ Assert "token regex-no-match: falls back to estimate" ($r3.tokens_basis -eq 'est
 $r4 = Get-FleetTokenUsage -Provider $estProvider -Prompt '' -Stdout ''
 Assert "token empty: zero tokens, no crash" ($r4.tokens -eq 0 -and $r4.tokens_basis -eq 'estimate')
 
+# ===== token threading: journal tok: field + Invoke-Fleet return =====
+$tokJournal = Join-Path $env:TEMP "fleet-tok-$(Get-Random).md"
+$env:CAO_STATE_PATH = (Join-Path $env:TEMP "notok-$(Get-Random).json")
+try {
+    Write-FleetJournalLine -Provider 'stub-cli' -DurationS 1 -ExitCode 0 -Prompt 'p' `
+        -JournalPath $tokJournal -Tokens 4242 -TokensBasis 'exact'
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+$tline = @(Get-Content $tokJournal)[-1]
+Assert "journal tok field present"     ($tline -match '\| tok:4242\(exact\)\s*$')
+Assert "journal tok is the LAST field" ($tline.TrimEnd() -match 'tok:4242\(exact\)$')
+Remove-Item $tokJournal -ErrorAction SilentlyContinue
+
+# Invoke-Fleet threads tokens/basis into its return (stub-cli has no regex -> estimate)
+$tokState = Join-Path $env:TEMP "fleet-tokret-$(Get-Random).json"
+$env:CAO_STATE_PATH = $tokState
+try {
+    $tr = Invoke-Fleet -Name 'stub-cli' -Prompt 'hello' -Path $fixture -NoJournal
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+Assert "Invoke-Fleet return has tokens key"     ($tr.ContainsKey('tokens'))
+Assert "Invoke-Fleet return has tokens_basis"   ($tr.tokens_basis -eq 'estimate')
+Assert "Invoke-Fleet estimate tokens > 0"       ($tr.tokens -gt 0)
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green
