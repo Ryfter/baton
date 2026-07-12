@@ -163,7 +163,8 @@ function Resolve-FleetCommand {
     param(
         [Parameter(Mandatory)][hashtable]$Provider,
         [Parameter(Mandatory)][string]$Prompt,
-        [string]$Model
+        [string]$Model,
+        [string]$Tier
     )
     $template = $Provider.command_template
     if (-not $template) { throw "Provider '$($Provider.name)' has no command_template." }
@@ -180,6 +181,7 @@ function Resolve-FleetCommand {
     # still a known limitation; Plan 5 hardens prompt passing via stdin.
     $cmd = $template.Replace('{{prompt}}', $Prompt)
     if ($null -ne $resolvedModel) { $cmd = $cmd.Replace('{{model}}', [string]$resolvedModel) }
+    $cmd = $cmd.Replace('{{tier_args}}', (Get-FleetProviderTier -Provider $Provider -Tier $Tier))
     return $cmd
 }
 
@@ -226,6 +228,29 @@ function Get-FleetTokenUsage {
     }
     $len = $Prompt.Length + $Stdout.Length
     return @{ tokens = [int][math]::Ceiling($len / 4); tokens_basis = 'estimate' }
+}
+
+function Get-FleetProviderTierNames {
+    <# Named tiers on a provider = its flat `tier_<name>` keys, excluding the
+       `tier_default` selector. Returns a sorted string[] (empty if none). #>
+    param([Parameter(Mandatory)][hashtable]$Provider)
+    return @($Provider.Keys |
+        Where-Object { $_ -like 'tier_*' -and $_ -ne 'tier_default' } |
+        ForEach-Object { $_.Substring(5) } | Sort-Object)
+}
+
+function Get-FleetProviderTier {
+    <# The arg fragment for a named tier. -Tier missing -> the `tier_default`
+       tier's fragment; unknown/absent -> '' (an empty {{tier_args}} slot). #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [string]$Tier
+    )
+    $name = if ($Tier) { $Tier } else { [string]$Provider.tier_default }
+    if (-not $name) { return '' }
+    $val = $Provider["tier_$name"]
+    if ($null -eq $val) { return '' }
+    return [string]$val
 }
 
 function Write-FleetJournalLine {
@@ -285,6 +310,7 @@ function Invoke-Fleet-Cli {
         [Parameter(Mandatory)][hashtable]$Provider,
         [Parameter(Mandatory)][string]$Prompt,
         [string]$Model,
+        [string]$Tier,
         [int]$TimeoutS = 120
     )
     # Decide dispatch path. A {{prompt_file}} template takes precedence over the
@@ -303,6 +329,7 @@ function Invoke-Fleet-Cli {
         $cmd = [string]$Provider.command_template
         $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
         if ($null -ne $resolvedModel) { $cmd = $cmd.Replace('{{model}}', [string]$resolvedModel) }
+        $cmd = $cmd.Replace('{{tier_args}}', (Get-FleetProviderTier -Provider $Provider -Tier $Tier))
     } elseif ($useStdin) {
         # stdin:true templates carry no {{prompt}}; Test-StdinSafe templates end in
         # a standalone quoted {{prompt}} that we strip. Both then resolve {{model}}.
@@ -310,8 +337,9 @@ function Invoke-Fleet-Cli {
                else { ([string]$Provider.command_template) -replace '\s+(["''])\{\{prompt\}\}\1\s*$', '' }
         $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
         if ($null -ne $resolvedModel) { $cmd = $cmd.Replace('{{model}}', [string]$resolvedModel) }
+        $cmd = $cmd.Replace('{{tier_args}}', (Get-FleetProviderTier -Provider $Provider -Tier $Tier))
     } else {
-        $cmd = Resolve-FleetCommand -Provider $Provider -Prompt $Prompt -Model $Model
+        $cmd = Resolve-FleetCommand -Provider $Provider -Prompt $Prompt -Model $Model -Tier $Tier
     }
 
     $saved = @{}
@@ -401,6 +429,7 @@ function Invoke-Fleet {
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$Prompt,
         [string]$Model,
+        [string]$Tier,
         [string]$Path = $script:DefaultFleetPath,
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md'),
         [switch]$NoJournal
@@ -410,7 +439,7 @@ function Invoke-Fleet {
     if ($provider.enabled -ne $true) { throw "Provider '$Name' is disabled in fleet.yaml. Set enabled: true to use." }
 
     if ($provider.kind -eq 'cli') {
-        $result = Invoke-Fleet-Cli -Provider $provider -Prompt $Prompt -Model $Model
+        $result = Invoke-Fleet-Cli -Provider $provider -Prompt $Prompt -Model $Model -Tier $Tier
     } elseif ($provider.kind -eq 'http') {
         # Dot-source the per-provider escape hatch + call Invoke-<PascalName>.
         # Escape hatches live next to this library (scripts/fleet/), NOT next to

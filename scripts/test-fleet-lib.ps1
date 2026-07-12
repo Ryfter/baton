@@ -201,5 +201,44 @@ Assert "Invoke-Fleet return has tokens key"     ($tr.ContainsKey('tokens'))
 Assert "Invoke-Fleet return has tokens_basis"   ($tr.tokens_basis -eq 'estimate')
 Assert "Invoke-Fleet estimate tokens > 0"       ($tr.tokens -gt 0)
 
+# ===== named tiers ({{tier_args}}) =====
+$tierP = @{ name = 't'; command_template = 'run {{tier_args}} "{{prompt}}"';
+            tier_low = '-e low'; tier_high = '-e high'; tier_default = 'low' }
+Assert "tier names exclude tier_default" (@(Get-FleetProviderTierNames -Provider $tierP) -join ',' -eq 'high,low')
+Assert "tier fragment by name"           ((Get-FleetProviderTier -Provider $tierP -Tier 'high') -eq '-e high')
+Assert "tier fragment falls to default"  ((Get-FleetProviderTier -Provider $tierP) -eq '-e low')
+Assert "unknown tier -> empty fragment"  ((Get-FleetProviderTier -Provider $tierP -Tier 'nope') -eq '')
+
+# {{tier_args}} resolves through Resolve-FleetCommand
+$rc = Resolve-FleetCommand -Provider $tierP -Prompt 'hi' -Tier 'high'
+Assert "Resolve substitutes {{tier_args}}" ($rc -eq 'run -e high "hi"')
+$rcDefault = Resolve-FleetCommand -Provider $tierP -Prompt 'hi'
+Assert "Resolve uses tier_default"         ($rcDefault -eq 'run -e low "hi"')
+
+# a row with no tiers: {{tier_args}} -> '' (byte-for-byte no-op besides spacing)
+$noTierP = @{ name = 'n'; command_template = 'run {{tier_args}} "{{prompt}}"' }
+$rcNone = Resolve-FleetCommand -Provider $noTierP -Prompt 'x'
+Assert "no tiers -> {{tier_args}} empty" ($rcNone -eq 'run  "x"')
+
+# dispatch through a temp fleet.yaml with a tier provider (stdin-promoted stub)
+$tierDir = Join-Path $env:TEMP "baton-tier-$(Get-Random)"
+New-Item -ItemType Directory -Force -Path $tierDir | Out-Null
+$tierYaml = Join-Path $tierDir 'fleet.yaml'
+Set-Content -Path $tierYaml -Encoding utf8NoBOM -Value @'
+providers:
+  - name: tierstub
+    kind: cli
+    enabled: true
+    cost_tier: free
+    tier_hi: '-Command "Write-Output tier-hi"'
+    command_template: 'pwsh -NoProfile {{tier_args}} "{{prompt}}"'
+'@
+$env:CAO_STATE_PATH = (Join-Path $tierDir 'nostate.json')
+try {
+    $td = Invoke-Fleet -Name 'tierstub' -Prompt 'ignored' -Path $tierYaml -Tier 'hi' -NoJournal
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+Assert "tier fragment reaches dispatch" (($td.stdout | Out-String) -match 'tier-hi')
+Remove-Item $tierDir -Recurse -Force -ErrorAction SilentlyContinue
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green
