@@ -158,5 +158,26 @@ capability_floors:
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 
+# ===== Get-FleetTokenUsage (token telemetry) =====
+# exact: row has a token_usage regex with a numeric first capture group over stdout
+$tokProvider = @{ name = 'tok'; token_usage = 'tokens used[:\s]+([\d,]+)' }
+$r1 = Get-FleetTokenUsage -Provider $tokProvider -Prompt 'hi' -Stdout "did work`ntokens used: 14,350`ndone"
+Assert "token exact: parses captured count" ($r1.tokens -eq 14350)
+Assert "token exact: basis is exact"        ($r1.tokens_basis -eq 'exact')
+
+# no regex on the row -> estimate over (prompt+stdout) length / 4
+$estProvider = @{ name = 'est' }
+$r2 = Get-FleetTokenUsage -Provider $estProvider -Prompt 'abcd' -Stdout 'efgh'   # 8 chars -> ceil(8/4)=2
+Assert "token estimate: len/4"        ($r2.tokens -eq 2)
+Assert "token estimate: basis is estimate" ($r2.tokens_basis -eq 'estimate')
+
+# regex present but no match in stdout -> estimate (honest fallback, d059)
+$r3 = Get-FleetTokenUsage -Provider $tokProvider -Prompt '' -Stdout 'no counter here'
+Assert "token regex-no-match: falls back to estimate" ($r3.tokens_basis -eq 'estimate')
+
+# empty prompt + empty stdout -> 0 tokens, no divide error
+$r4 = Get-FleetTokenUsage -Provider $estProvider -Prompt '' -Stdout ''
+Assert "token empty: zero tokens, no crash" ($r4.tokens -eq 0 -and $r4.tokens_basis -eq 'estimate')
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green

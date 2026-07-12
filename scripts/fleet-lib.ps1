@@ -201,6 +201,33 @@ function Test-StdinSafe {
     return $true
 }
 
+function Get-FleetTokenUsage {
+    <# Derive a token count + basis from a CLI provider's stdout.
+       Returns @{ tokens = <int>; tokens_basis = 'exact'|'estimate' }.
+       exact  : the row has a `token_usage` regex whose FIRST capture group is a
+                number (commas/whitespace stripped) present in stdout.
+       estimate: no field / no match -> ceil((len(prompt)+len(stdout))/4). The d059
+                honesty rule: an estimate is never labelled exact. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [string]$Prompt = '',
+        [string]$Stdout = ''
+    )
+    $regex = [string]$Provider.token_usage
+    if ($regex) {
+        $m = [regex]::Match($Stdout, $regex)
+        if ($m.Success -and $m.Groups.Count -ge 2) {
+            $digits = $m.Groups[1].Value -replace '[,\s]', ''
+            $n = 0
+            if ([int]::TryParse($digits, [ref]$n)) {
+                return @{ tokens = $n; tokens_basis = 'exact' }
+            }
+        }
+    }
+    $len = $Prompt.Length + $Stdout.Length
+    return @{ tokens = [int][math]::Ceiling($len / 4); tokens_basis = 'estimate' }
+}
+
 function Write-FleetJournalLine {
     <# Append a `fleet` line to the journal, picking up Plan 3 job/phase tags
        by reading the state file directly (honors $env:CAO_STATE_PATH). #>
