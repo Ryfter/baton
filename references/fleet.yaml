@@ -116,7 +116,17 @@ providers:
     cost_tier: paid
     role: finisher
     platform: codex
-    command_template: 'codex exec --sandbox workspace-write "{{prompt}}"'
+    command_template: 'codex exec --sandbox workspace-write {{tier_args}} "{{prompt}}"'
+    # Per-model token capture (observe-only). ONE capture group over stdout; commas
+    # stripped. No match -> honest len/4 estimate (never labelled exact).
+    token_usage: 'tokens used[:\s]+([\d,]+)'
+    # Named tiers: --tier <name> substitutes the fragment at {{tier_args}}; --tier all
+    # runs every tier (boundary tester). Real model IDs (5.6 | Sol/Tera/Luna) are
+    # BOX-PRIVATE — add `tier_sol/tera/luna: '-m <model-id> ...'` in your live
+    # ~/.baton/fleet.yaml. These effort-only examples are generic codex flags:
+    tier_low:  '-c model_reasoning_effort=low'
+    tier_med:  '-c model_reasoning_effort=medium'
+    tier_high: '-c model_reasoning_effort=high'
     capabilities: [code-gen, reasoning, summarize, plan-review, review]
 
   # agy does NOT read stdin: the clean-tail stdin promotion would turn this into a

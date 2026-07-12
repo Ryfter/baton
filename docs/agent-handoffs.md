@@ -148,3 +148,4 @@ must know:
   Claude Code session. Codex and Cursor registration documented in README. All tools read
   the same `BATON_HOME`; bridge shims into existing PS libs via `scripts/mcp-bridge.ps1`.
 - `/baton:usage` shows a Copilot Credits panel (d079) when the `gh-copilot` fleet row has a `budget`; needs `gh` token `user` scope (`gh auth refresh -h github.com -s user`).
+- **Direct-model commands (#2, v1.15.0):** `/baton:codex|grok|gemini|agy "<prompt>" [--tier <name>|all]` → `scripts/fleet-ask.ps1` → `Invoke-Fleet` (journaled + metered). Per-model tokens land as a trailing `tok:N(exact|estimate)` field on the fleet journal line (observe-only). Tiers = flat `tier_<name>` fleet.yaml keys → `{{tier_args}}`.
