@@ -163,7 +163,8 @@ function Resolve-FleetCommand {
     param(
         [Parameter(Mandatory)][hashtable]$Provider,
         [Parameter(Mandatory)][string]$Prompt,
-        [string]$Model
+        [string]$Model,
+        [string]$Tier
     )
     $template = $Provider.command_template
     if (-not $template) { throw "Provider '$($Provider.name)' has no command_template." }
@@ -180,6 +181,7 @@ function Resolve-FleetCommand {
     # still a known limitation; Plan 5 hardens prompt passing via stdin.
     $cmd = $template.Replace('{{prompt}}', $Prompt)
     if ($null -ne $resolvedModel) { $cmd = $cmd.Replace('{{model}}', [string]$resolvedModel) }
+    $cmd = $cmd.Replace('{{tier_args}}', (Get-FleetProviderTier -Provider $Provider -Tier $Tier))
     return $cmd
 }
 
@@ -201,6 +203,85 @@ function Test-StdinSafe {
     return $true
 }
 
+function Get-FleetTokenUsage {
+    <# Derive a token count + basis from a CLI provider's stdout.
+       Returns @{ tokens = <int>; tokens_basis = 'exact'|'estimate' }.
+       exact  : the row has a `token_usage` regex whose FIRST capture group is a
+                number (commas/whitespace stripped) present in stdout.
+       estimate: no field / no match -> ceil((len(prompt)+len(stdout))/4). The d059
+                honesty rule: an estimate is never labelled exact.
+       Hardening: regex runs with a short MatchTimeout (ReDoS guard); invalid pattern
+       or timeout falls through to estimate; negative captures are refused. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [string]$Prompt = '',
+        [string]$Stdout = ''
+    )
+    $regex = [string]$Provider.token_usage
+    if ($regex) {
+        try {
+            # 100ms ceiling — a pathological token_usage pattern must not hang dispatch.
+            $re = [regex]::new($regex, [System.Text.RegularExpressions.RegexOptions]::None, [timespan]::FromMilliseconds(100))
+            $m = $re.Match([string]$Stdout)
+            if ($m.Success -and $m.Groups.Count -ge 2) {
+                $digits = $m.Groups[1].Value -replace '[,\s]', ''
+                $n = 0
+                if ([int]::TryParse($digits, [ref]$n) -and $n -ge 0) {
+                    return @{ tokens = $n; tokens_basis = 'exact' }
+                }
+            }
+        } catch {
+            # Invalid regex, timeout, or other match failure → honest estimate below.
+        }
+    }
+    $len = ([string]$Prompt).Length + ([string]$Stdout).Length
+    return @{ tokens = [int][math]::Ceiling($len / 4); tokens_basis = 'estimate' }
+}
+
+function Get-FleetProviderTierNames {
+    <# Named tiers on a provider = its flat `tier_<name>` keys, excluding the
+       `tier_default` selector. Returns a sorted string[] (empty if none). #>
+    param([Parameter(Mandatory)][hashtable]$Provider)
+    return @($Provider.Keys |
+        Where-Object { $_ -like 'tier_*' -and $_ -ne 'tier_default' } |
+        ForEach-Object { $_.Substring(5) } | Sort-Object)
+}
+
+function Test-FleetTierName {
+    <# True when a tier name is a safe flat key suffix (word chars, dot, hyphen).
+       Rejects shell/path metacharacters so tier_$name never becomes a weird key. #>
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $false }
+    return [bool]($Name -match '^[\w.-]+$')
+}
+
+function Test-FleetTierFragment {
+    <# Tier argv fragments are trusted box-private config, but refuse shell
+       metacharacters so a mistyped fleet.yaml cannot inject via the legacy
+       Invoke-Expression path. Plain flag tokens (-m, -c key=val) pass. #>
+    param([string]$Fragment)
+    if ([string]::IsNullOrEmpty($Fragment)) { return $true }
+    return -not [bool]($Fragment -match '[|><&;`\$\(\)]')
+}
+
+function Get-FleetProviderTier {
+    <# The arg fragment for a named tier. -Tier missing -> the `tier_default`
+       tier's fragment; unknown/absent -> '' (an empty {{tier_args}} slot).
+       Unsafe names or fragments (shell metacharacters) also resolve to ''. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [string]$Tier
+    )
+    $name = if ($Tier) { $Tier } else { [string]$Provider.tier_default }
+    if (-not $name) { return '' }
+    if (-not (Test-FleetTierName -Name $name)) { return '' }
+    $val = $Provider["tier_$name"]
+    if ($null -eq $val) { return '' }
+    $frag = [string]$val
+    if (-not (Test-FleetTierFragment -Fragment $frag)) { return '' }
+    return $frag
+}
+
 function Write-FleetJournalLine {
     <# Append a `fleet` line to the journal, picking up Plan 3 job/phase tags
        by reading the state file directly (honors $env:CAO_STATE_PATH). #>
@@ -215,6 +296,11 @@ function Write-FleetJournalLine {
         # journal merged across the Tailscale fleet stays attributable per node.
         # Override via CAO_FLEET_HOST; falls back to the OS hostname.
         [string]$OriginHost = $(if ($env:CAO_FLEET_HOST) { $env:CAO_FLEET_HOST } elseif ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [System.Net.Dns]::GetHostName() })
+        ,
+        [int]$Tokens = 0,
+        [string]$TokensBasis = 'estimate',
+        # Optional named tier that did the work (direct-model / boundary tester).
+        [string]$Tier = ''
     )
     # Summarise + sanitise the prompt (max 100 chars, pipes -> ¦, newlines -> space)
     $summary = ($Prompt -replace '\|', '¦' -replace "`r?`n", ' ').Trim()
@@ -237,6 +323,18 @@ function Write-FleetJournalLine {
         }
     } catch { }
 
+    # Optional tier tag (safe names only) — before tok: so tok remains the LAST field.
+    if ($Tier -and (Test-FleetTierName -Name $Tier)) {
+        $line += " | tier:$Tier"
+    }
+
+    # Trailing token field (observe-only). Appended AFTER host:/job:/phase:/tier: so every
+    # consumer that splits on ' | ' and prefix-matches ignores it (spec §4.2).
+    # Harden: clamp tokens + allowlist basis so a bad caller cannot inject ' | ' fields.
+    $tokSafe = if ($Tokens -lt 0) { 0 } else { $Tokens }
+    $basisSafe = if (($TokensBasis -eq 'exact') -and ($Tokens -ge 0)) { 'exact' } else { 'estimate' }
+    $line += " | tok:$tokSafe($basisSafe)"
+
     $dir = Split-Path -Parent $JournalPath
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     if (-not (Test-Path $JournalPath)) {
@@ -251,6 +349,7 @@ function Invoke-Fleet-Cli {
         [Parameter(Mandatory)][hashtable]$Provider,
         [Parameter(Mandatory)][string]$Prompt,
         [string]$Model,
+        [string]$Tier,
         [int]$TimeoutS = 120
     )
     # Decide dispatch path. A {{prompt_file}} template takes precedence over the
@@ -269,6 +368,7 @@ function Invoke-Fleet-Cli {
         $cmd = [string]$Provider.command_template
         $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
         if ($null -ne $resolvedModel) { $cmd = $cmd.Replace('{{model}}', [string]$resolvedModel) }
+        $cmd = $cmd.Replace('{{tier_args}}', (Get-FleetProviderTier -Provider $Provider -Tier $Tier))
     } elseif ($useStdin) {
         # stdin:true templates carry no {{prompt}}; Test-StdinSafe templates end in
         # a standalone quoted {{prompt}} that we strip. Both then resolve {{model}}.
@@ -276,8 +376,9 @@ function Invoke-Fleet-Cli {
                else { ([string]$Provider.command_template) -replace '\s+(["''])\{\{prompt\}\}\1\s*$', '' }
         $resolvedModel = if ($Model) { $Model } else { $Provider.model_default }
         if ($null -ne $resolvedModel) { $cmd = $cmd.Replace('{{model}}', [string]$resolvedModel) }
+        $cmd = $cmd.Replace('{{tier_args}}', (Get-FleetProviderTier -Provider $Provider -Tier $Tier))
     } else {
-        $cmd = Resolve-FleetCommand -Provider $Provider -Prompt $Prompt -Model $Model
+        $cmd = Resolve-FleetCommand -Provider $Provider -Prompt $Prompt -Model $Model -Tier $Tier
     }
 
     $saved = @{}
@@ -348,10 +449,11 @@ function Invoke-Fleet-Cli {
         }
         $exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
         $duration = [int]((Get-Date) - $start).TotalSeconds
-        return @{ stdout = $out; stderr = ''; exit_code = $exit; duration_s = $duration }
+        $tok = Get-FleetTokenUsage -Provider $Provider -Prompt $Prompt -Stdout ([string]$out)
+        return @{ stdout = $out; stderr = ''; exit_code = $exit; duration_s = $duration; tokens = $tok.tokens; tokens_basis = $tok.tokens_basis }
     } catch {
         $duration = [int]((Get-Date) - $start).TotalSeconds
-        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = -1; duration_s = $duration }
+        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = -1; duration_s = $duration; tokens = 0; tokens_basis = 'estimate' }
     } finally {
         foreach ($k in $saved.Keys) {
             if ($null -eq $saved[$k]) { Remove-Item "env:$k" -ErrorAction SilentlyContinue }
@@ -366,6 +468,7 @@ function Invoke-Fleet {
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$Prompt,
         [string]$Model,
+        [string]$Tier,
         [string]$Path = $script:DefaultFleetPath,
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md'),
         [switch]$NoJournal
@@ -375,7 +478,7 @@ function Invoke-Fleet {
     if ($provider.enabled -ne $true) { throw "Provider '$Name' is disabled in fleet.yaml. Set enabled: true to use." }
 
     if ($provider.kind -eq 'cli') {
-        $result = Invoke-Fleet-Cli -Provider $provider -Prompt $Prompt -Model $Model
+        $result = Invoke-Fleet-Cli -Provider $provider -Prompt $Prompt -Model $Model -Tier $Tier
     } elseif ($provider.kind -eq 'http') {
         # Dot-source the per-provider escape hatch + call Invoke-<PascalName>.
         # Escape hatches live next to this library (scripts/fleet/), NOT next to
@@ -393,9 +496,19 @@ function Invoke-Fleet {
         throw "Provider '$Name' has unknown kind '$($provider.kind)'."
     }
 
+    # Normalize token fields so both cli and http paths carry them. HTTP hatches
+    # that do not emit native counts fall back to an honest estimate (exact native
+    # counts are a named follow-up, spec §4.1).
+    if (-not $result.ContainsKey('tokens')) {
+        $tok = Get-FleetTokenUsage -Provider $provider -Prompt $Prompt -Stdout ([string]$result.stdout)
+        $result.tokens = $tok.tokens
+        $result.tokens_basis = $tok.tokens_basis
+    }
+
     if (-not $NoJournal) {
         Write-FleetJournalLine -Provider $Name -DurationS $result.duration_s `
-            -ExitCode $result.exit_code -Prompt $Prompt -JournalPath $JournalPath
+            -ExitCode $result.exit_code -Prompt $Prompt -JournalPath $JournalPath `
+            -Tokens $result.tokens -TokensBasis $result.tokens_basis -Tier $Tier
     }
     return $result
 }

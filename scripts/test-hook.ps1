@@ -20,6 +20,7 @@ function Assert-Match($label, $actual, $pattern) {
     }
 }
 
+$env:CAO_STATE_PATH = Join-Path $env:TEMP "test-hook-nostate-$(Get-Random).json"
 try {
     # Test 1: Bash tool calling ollama → hook records it
     $event1 = @{
@@ -115,6 +116,7 @@ try {
     Assert-Match 'pipe in description was sanitized to ¦' $line 'fix ¦ bug in module'
 
 } finally {
+    Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue
     Remove-Item $tmpLog, $tmpErr -ErrorAction SilentlyContinue
 }
 

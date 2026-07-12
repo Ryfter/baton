@@ -158,5 +158,120 @@ capability_floors:
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 
+# ===== Get-FleetTokenUsage (token telemetry) =====
+# exact: row has a token_usage regex with a numeric first capture group over stdout
+$tokProvider = @{ name = 'tok'; token_usage = 'tokens used[:\s]+([\d,]+)' }
+$r1 = Get-FleetTokenUsage -Provider $tokProvider -Prompt 'hi' -Stdout "did work`ntokens used: 14,350`ndone"
+Assert "token exact: parses captured count" ($r1.tokens -eq 14350)
+Assert "token exact: basis is exact"        ($r1.tokens_basis -eq 'exact')
+
+# no regex on the row -> estimate over (prompt+stdout) length / 4
+$estProvider = @{ name = 'est' }
+$r2 = Get-FleetTokenUsage -Provider $estProvider -Prompt 'abcd' -Stdout 'efgh'   # 8 chars -> ceil(8/4)=2
+Assert "token estimate: len/4"        ($r2.tokens -eq 2)
+Assert "token estimate: basis is estimate" ($r2.tokens_basis -eq 'estimate')
+
+# regex present but no match in stdout -> estimate (honest fallback, d059)
+$r3 = Get-FleetTokenUsage -Provider $tokProvider -Prompt '' -Stdout 'no counter here'
+Assert "token regex-no-match: falls back to estimate" ($r3.tokens_basis -eq 'estimate')
+
+# empty prompt + empty stdout -> 0 tokens, no divide error
+$r4 = Get-FleetTokenUsage -Provider $estProvider -Prompt '' -Stdout ''
+Assert "token empty: zero tokens, no crash" ($r4.tokens -eq 0 -and $r4.tokens_basis -eq 'estimate')
+
+# negative capture refused -> estimate
+$negProvider = @{ name = 'neg'; token_usage = 'tokens used[:\s]+(-?[\d,]+)' }
+$rNeg = Get-FleetTokenUsage -Provider $negProvider -Prompt '' -Stdout 'tokens used: -9'
+Assert "token negative capture: estimate not exact" ($rNeg.tokens_basis -eq 'estimate')
+
+# invalid regex does not throw; falls back to estimate
+$badProvider = @{ name = 'bad'; token_usage = '(unclosed' }
+$rBad = Get-FleetTokenUsage -Provider $badProvider -Prompt 'ab' -Stdout 'cd'
+Assert "token invalid regex: estimate fallback" ($rBad.tokens_basis -eq 'estimate' -and $rBad.tokens -eq 1)
+
+# ===== token threading: journal tok: field + Invoke-Fleet return =====
+$tokJournal = Join-Path $env:TEMP "fleet-tok-$(Get-Random).md"
+$env:CAO_STATE_PATH = (Join-Path $env:TEMP "notok-$(Get-Random).json")
+try {
+    Write-FleetJournalLine -Provider 'stub-cli' -DurationS 1 -ExitCode 0 -Prompt 'p' `
+        -JournalPath $tokJournal -Tokens 4242 -TokensBasis 'exact' -Tier 'high'
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+$tline = @(Get-Content $tokJournal)[-1]
+Assert "journal tok field present"     ($tline -match '\| tok:4242\(exact\)\s*$')
+Assert "journal tok is the LAST field" ($tline.TrimEnd() -match 'tok:4242\(exact\)$')
+Assert "journal tier field before tok" ($tline -match '\| tier:high \| tok:')
+Remove-Item $tokJournal -ErrorAction SilentlyContinue
+
+# journal sanitizes evil TokensBasis / negative tokens (no field injection)
+$evilJournal = Join-Path $env:TEMP "fleet-tok-evil-$(Get-Random).md"
+$env:CAO_STATE_PATH = (Join-Path $env:TEMP "notok2-$(Get-Random).json")
+try {
+    Write-FleetJournalLine -Provider 'stub-cli' -DurationS 1 -ExitCode 0 -Prompt 'p' `
+        -JournalPath $evilJournal -Tokens -5 -TokensBasis 'exact) | pwn:1'
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+$eline = @(Get-Content $evilJournal)[-1]
+Assert "journal clamps negative tokens" ($eline -match '\| tok:0\(estimate\)\s*$')
+Assert "journal refuses basis injection" ($eline -notmatch 'pwn:')
+Remove-Item $evilJournal -ErrorAction SilentlyContinue
+
+# Invoke-Fleet threads tokens/basis into its return (stub-cli has no regex -> estimate)
+$tokState = Join-Path $env:TEMP "fleet-tokret-$(Get-Random).json"
+$env:CAO_STATE_PATH = $tokState
+try {
+    $tr = Invoke-Fleet -Name 'stub-cli' -Prompt 'hello' -Path $fixture -NoJournal
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+Assert "Invoke-Fleet return has tokens key"     ($tr.ContainsKey('tokens'))
+Assert "Invoke-Fleet return has tokens_basis"   ($tr.tokens_basis -eq 'estimate')
+Assert "Invoke-Fleet estimate tokens > 0"       ($tr.tokens -gt 0)
+
+# ===== named tiers ({{tier_args}}) =====
+$tierP = @{ name = 't'; command_template = 'run {{tier_args}} "{{prompt}}"';
+            tier_low = '-e low'; tier_high = '-e high'; tier_default = 'low' }
+Assert "tier names exclude tier_default" (@(Get-FleetProviderTierNames -Provider $tierP) -join ',' -eq 'high,low')
+Assert "tier fragment by name"           ((Get-FleetProviderTier -Provider $tierP -Tier 'high') -eq '-e high')
+Assert "tier fragment falls to default"  ((Get-FleetProviderTier -Provider $tierP) -eq '-e low')
+Assert "unknown tier -> empty fragment"  ((Get-FleetProviderTier -Provider $tierP -Tier 'nope') -eq '')
+Assert "tier name with metachar -> empty" ((Get-FleetProviderTier -Provider $tierP -Tier 'hi;rm') -eq '')
+Assert "Test-FleetTierName accepts dotted" (Test-FleetTierName -Name 'gpt-5.6')
+Assert "Test-FleetTierName rejects shell" (-not (Test-FleetTierName -Name 'a|b'))
+
+# shell metacharacters in a fragment are refused (legacy IEX guard)
+$evilTierP = @{ name = 'e'; command_template = 'run {{tier_args}} "{{prompt}}"';
+                tier_bad = '-e high; Remove-Item -Recurse C:\' }
+Assert "unsafe tier fragment -> empty" ((Get-FleetProviderTier -Provider $evilTierP -Tier 'bad') -eq '')
+Assert "Test-FleetTierFragment rejects ;" (-not (Test-FleetTierFragment -Fragment 'x;y'))
+Assert "Test-FleetTierFragment accepts flags" (Test-FleetTierFragment -Fragment '-c model_reasoning_effort=low')
+
+# {{tier_args}} resolves through Resolve-FleetCommand
+$rc = Resolve-FleetCommand -Provider $tierP -Prompt 'hi' -Tier 'high'
+Assert "Resolve substitutes {{tier_args}}" ($rc -eq 'run -e high "hi"')
+$rcDefault = Resolve-FleetCommand -Provider $tierP -Prompt 'hi'
+Assert "Resolve uses tier_default"         ($rcDefault -eq 'run -e low "hi"')
+
+# a row with no tiers: {{tier_args}} -> '' (byte-for-byte no-op besides spacing)
+$noTierP = @{ name = 'n'; command_template = 'run {{tier_args}} "{{prompt}}"' }
+$rcNone = Resolve-FleetCommand -Provider $noTierP -Prompt 'x'
+Assert "no tiers -> {{tier_args}} empty" ($rcNone -eq 'run  "x"')
+
+# dispatch through a temp fleet.yaml with a tier provider (stdin-promoted stub)
+$tierDir = Join-Path $env:TEMP "baton-tier-$(Get-Random)"
+New-Item -ItemType Directory -Force -Path $tierDir | Out-Null
+$tierYaml = Join-Path $tierDir 'fleet.yaml'
+Set-Content -Path $tierYaml -Encoding utf8NoBOM -Value @'
+providers:
+  - name: tierstub
+    kind: cli
+    enabled: true
+    cost_tier: free
+    tier_hi: '-Command "Write-Output tier-hi"'
+    command_template: 'pwsh -NoProfile {{tier_args}} "{{prompt}}"'
+'@
+$env:CAO_STATE_PATH = (Join-Path $tierDir 'nostate.json')
+try {
+    $td = Invoke-Fleet -Name 'tierstub' -Prompt 'ignored' -Path $tierYaml -Tier 'hi' -NoJournal
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+Assert "tier fragment reaches dispatch" (($td.stdout | Out-String) -match 'tier-hi')
+Remove-Item $tierDir -Recurse -Force -ErrorAction SilentlyContinue
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green

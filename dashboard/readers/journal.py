@@ -31,17 +31,30 @@ def _strip_quotes(value: str) -> str:
 
 
 def _extract_trailing_tags(parts: list[str]) -> Tuple[list[str], Optional[str], Optional[str]]:
-    """Strip trailing `job:<id>` and `phase:<phase>` fields from the end of `parts`.
-    Returns (remaining_parts, job_id, phase). Either tag can be absent."""
+    """Strip trailing job/phase tags (and ignore-only observe tags) from the end of `parts`.
+
+    Returns (remaining_parts, job_id, phase). Either tag can be absent.
+
+    Observe-only trailing fields from the fleet journal (host:, tier:, tok:) are
+    peeled so they never block job:/phase: extraction when present after them
+    or when a future fleet consumer reuses this helper. Unknown trailing tags
+    stop the peel (fail-closed for novel fields that might be payload).
+    """
     job_id: Optional[str] = None
     phase: Optional[str] = None
-    # Tags appear at the end. Each is a single pipe field like 'job:foo' or 'phase:research'.
-    while parts and (parts[-1].startswith('job:') or parts[-1].startswith('phase:')):
-        last = parts.pop()
-        if last.startswith('job:'):
+    # Peel from the end. job:/phase: are captured; host:/tier:/tok: are dropped.
+    while parts:
+        last = parts[-1]
+        if last.startswith("job:"):
+            parts.pop()
             job_id = last[4:].strip() or None
-        elif last.startswith('phase:'):
+        elif last.startswith("phase:"):
+            parts.pop()
             phase = last[6:].strip() or None
+        elif last.startswith("host:") or last.startswith("tier:") or last.startswith("tok:"):
+            parts.pop()
+        else:
+            break
     return parts, job_id, phase
 
 
