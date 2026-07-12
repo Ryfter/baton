@@ -130,3 +130,18 @@ def test_untagged_lines_still_parse():
     assert isinstance(e, HookEntry)
     assert e.job_id is None
     assert e.phase is None
+
+
+def test_observe_only_trailing_tags_do_not_block_job_phase():
+    """Fleet-style host:/tier:/tok: after job/phase must not hide the tags (v1.15 harden)."""
+    from dashboard.readers.journal import parse_journal_line
+    from dashboard.models.events import HookEntry
+    line = (
+        '2026-07-11T12:00:00-06:00 | hook | bash:codex exec | 3s | exit:0 | '
+        '"prompt" | host:FIREFLY | job:j-foo | phase:code | tier:high | tok:42(exact)'
+    )
+    e = parse_journal_line(line)
+    assert isinstance(e, HookEntry)
+    assert e.job_id == 'j-foo'
+    assert e.phase == 'code'
+    assert e.brief == 'prompt'

@@ -121,9 +121,9 @@ providers:
     # stripped. No match -> honest len/4 estimate (never labelled exact).
     token_usage: 'tokens used[:\s]+([\d,]+)'
     # Named tiers: --tier <name> substitutes the fragment at {{tier_args}}; --tier all
-    # runs every tier (boundary tester). Real model IDs (5.6 | Sol/Tera/Luna) are
-    # BOX-PRIVATE — add `tier_sol/tera/luna: '-m <model-id> ...'` in your live
-    # ~/.baton/fleet.yaml. These effort-only examples are generic codex flags:
+    # runs every tier (boundary tester). Real model IDs are BOX-PRIVATE — add
+    # `tier_<name>: '-m <model-id> ...'` rows in your live ~/.baton/fleet.yaml.
+    # These effort-only examples are generic codex flags:
     tier_low:  '-c model_reasoning_effort=low'
     tier_med:  '-c model_reasoning_effort=medium'
     tier_high: '-c model_reasoning_effort=high'

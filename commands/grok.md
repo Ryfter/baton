@@ -11,7 +11,7 @@ journaled + Governor-metered. Grok's prompt rides a temp file (quote-safe).
 ## Steps
 
 1. **Parse `$ARGUMENTS`.** Split off optional `--tier <name>`/`--tier all`; the
-   rest is the prompt. Empty → usage, stop.
+   rest is the prompt. Empty → usage, stop. Unknown tier → exit 2 with valid list.
 
 2. **Dispatch** (long/quote-heavy prompts via `-PromptFile`, the 965-byte rule):
 

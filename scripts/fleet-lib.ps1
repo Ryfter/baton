@@ -209,7 +209,9 @@ function Get-FleetTokenUsage {
        exact  : the row has a `token_usage` regex whose FIRST capture group is a
                 number (commas/whitespace stripped) present in stdout.
        estimate: no field / no match -> ceil((len(prompt)+len(stdout))/4). The d059
-                honesty rule: an estimate is never labelled exact. #>
+                honesty rule: an estimate is never labelled exact.
+       Hardening: regex runs with a short MatchTimeout (ReDoS guard); invalid pattern
+       or timeout falls through to estimate; negative captures are refused. #>
     param(
         [Parameter(Mandatory)][hashtable]$Provider,
         [string]$Prompt = '',
@@ -217,16 +219,22 @@ function Get-FleetTokenUsage {
     )
     $regex = [string]$Provider.token_usage
     if ($regex) {
-        $m = [regex]::Match($Stdout, $regex)
-        if ($m.Success -and $m.Groups.Count -ge 2) {
-            $digits = $m.Groups[1].Value -replace '[,\s]', ''
-            $n = 0
-            if ([int]::TryParse($digits, [ref]$n)) {
-                return @{ tokens = $n; tokens_basis = 'exact' }
+        try {
+            # 100ms ceiling — a pathological token_usage pattern must not hang dispatch.
+            $re = [regex]::new($regex, [System.Text.RegularExpressions.RegexOptions]::None, [timespan]::FromMilliseconds(100))
+            $m = $re.Match([string]$Stdout)
+            if ($m.Success -and $m.Groups.Count -ge 2) {
+                $digits = $m.Groups[1].Value -replace '[,\s]', ''
+                $n = 0
+                if ([int]::TryParse($digits, [ref]$n) -and $n -ge 0) {
+                    return @{ tokens = $n; tokens_basis = 'exact' }
+                }
             }
+        } catch {
+            # Invalid regex, timeout, or other match failure → honest estimate below.
         }
     }
-    $len = $Prompt.Length + $Stdout.Length
+    $len = ([string]$Prompt).Length + ([string]$Stdout).Length
     return @{ tokens = [int][math]::Ceiling($len / 4); tokens_basis = 'estimate' }
 }
 
@@ -239,18 +247,39 @@ function Get-FleetProviderTierNames {
         ForEach-Object { $_.Substring(5) } | Sort-Object)
 }
 
+function Test-FleetTierName {
+    <# True when a tier name is a safe flat key suffix (word chars, dot, hyphen).
+       Rejects shell/path metacharacters so tier_$name never becomes a weird key. #>
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $false }
+    return [bool]($Name -match '^[\w.-]+$')
+}
+
+function Test-FleetTierFragment {
+    <# Tier argv fragments are trusted box-private config, but refuse shell
+       metacharacters so a mistyped fleet.yaml cannot inject via the legacy
+       Invoke-Expression path. Plain flag tokens (-m, -c key=val) pass. #>
+    param([string]$Fragment)
+    if ([string]::IsNullOrEmpty($Fragment)) { return $true }
+    return -not [bool]($Fragment -match '[|><&;`\$\(\)]')
+}
+
 function Get-FleetProviderTier {
     <# The arg fragment for a named tier. -Tier missing -> the `tier_default`
-       tier's fragment; unknown/absent -> '' (an empty {{tier_args}} slot). #>
+       tier's fragment; unknown/absent -> '' (an empty {{tier_args}} slot).
+       Unsafe names or fragments (shell metacharacters) also resolve to ''. #>
     param(
         [Parameter(Mandatory)][hashtable]$Provider,
         [string]$Tier
     )
     $name = if ($Tier) { $Tier } else { [string]$Provider.tier_default }
     if (-not $name) { return '' }
+    if (-not (Test-FleetTierName -Name $name)) { return '' }
     $val = $Provider["tier_$name"]
     if ($null -eq $val) { return '' }
-    return [string]$val
+    $frag = [string]$val
+    if (-not (Test-FleetTierFragment -Fragment $frag)) { return '' }
+    return $frag
 }
 
 function Write-FleetJournalLine {
@@ -269,7 +298,9 @@ function Write-FleetJournalLine {
         [string]$OriginHost = $(if ($env:CAO_FLEET_HOST) { $env:CAO_FLEET_HOST } elseif ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [System.Net.Dns]::GetHostName() })
         ,
         [int]$Tokens = 0,
-        [string]$TokensBasis = 'estimate'
+        [string]$TokensBasis = 'estimate',
+        # Optional named tier that did the work (direct-model / boundary tester).
+        [string]$Tier = ''
     )
     # Summarise + sanitise the prompt (max 100 chars, pipes -> ¦, newlines -> space)
     $summary = ($Prompt -replace '\|', '¦' -replace "`r?`n", ' ').Trim()
@@ -292,9 +323,17 @@ function Write-FleetJournalLine {
         }
     } catch { }
 
-    # Trailing token field (observe-only). Appended AFTER host:/job:/phase: so every
+    # Optional tier tag (safe names only) — before tok: so tok remains the LAST field.
+    if ($Tier -and (Test-FleetTierName -Name $Tier)) {
+        $line += " | tier:$Tier"
+    }
+
+    # Trailing token field (observe-only). Appended AFTER host:/job:/phase:/tier: so every
     # consumer that splits on ' | ' and prefix-matches ignores it (spec §4.2).
-    $line += " | tok:$Tokens($TokensBasis)"
+    # Harden: clamp tokens + allowlist basis so a bad caller cannot inject ' | ' fields.
+    $tokSafe = if ($Tokens -lt 0) { 0 } else { $Tokens }
+    $basisSafe = if (($TokensBasis -eq 'exact') -and ($Tokens -ge 0)) { 'exact' } else { 'estimate' }
+    $line += " | tok:$tokSafe($basisSafe)"
 
     $dir = Split-Path -Parent $JournalPath
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
@@ -469,7 +508,7 @@ function Invoke-Fleet {
     if (-not $NoJournal) {
         Write-FleetJournalLine -Provider $Name -DurationS $result.duration_s `
             -ExitCode $result.exit_code -Prompt $Prompt -JournalPath $JournalPath `
-            -Tokens $result.tokens -TokensBasis $result.tokens_basis
+            -Tokens $result.tokens -TokensBasis $result.tokens_basis -Tier $Tier
     }
     return $result
 }

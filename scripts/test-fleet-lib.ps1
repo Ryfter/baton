@@ -179,17 +179,40 @@ Assert "token regex-no-match: falls back to estimate" ($r3.tokens_basis -eq 'est
 $r4 = Get-FleetTokenUsage -Provider $estProvider -Prompt '' -Stdout ''
 Assert "token empty: zero tokens, no crash" ($r4.tokens -eq 0 -and $r4.tokens_basis -eq 'estimate')
 
+# negative capture refused -> estimate
+$negProvider = @{ name = 'neg'; token_usage = 'tokens used[:\s]+(-?[\d,]+)' }
+$rNeg = Get-FleetTokenUsage -Provider $negProvider -Prompt '' -Stdout 'tokens used: -9'
+Assert "token negative capture: estimate not exact" ($rNeg.tokens_basis -eq 'estimate')
+
+# invalid regex does not throw; falls back to estimate
+$badProvider = @{ name = 'bad'; token_usage = '(unclosed' }
+$rBad = Get-FleetTokenUsage -Provider $badProvider -Prompt 'ab' -Stdout 'cd'
+Assert "token invalid regex: estimate fallback" ($rBad.tokens_basis -eq 'estimate' -and $rBad.tokens -eq 1)
+
 # ===== token threading: journal tok: field + Invoke-Fleet return =====
 $tokJournal = Join-Path $env:TEMP "fleet-tok-$(Get-Random).md"
 $env:CAO_STATE_PATH = (Join-Path $env:TEMP "notok-$(Get-Random).json")
 try {
     Write-FleetJournalLine -Provider 'stub-cli' -DurationS 1 -ExitCode 0 -Prompt 'p' `
-        -JournalPath $tokJournal -Tokens 4242 -TokensBasis 'exact'
+        -JournalPath $tokJournal -Tokens 4242 -TokensBasis 'exact' -Tier 'high'
 } finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
 $tline = @(Get-Content $tokJournal)[-1]
 Assert "journal tok field present"     ($tline -match '\| tok:4242\(exact\)\s*$')
 Assert "journal tok is the LAST field" ($tline.TrimEnd() -match 'tok:4242\(exact\)$')
+Assert "journal tier field before tok" ($tline -match '\| tier:high \| tok:')
 Remove-Item $tokJournal -ErrorAction SilentlyContinue
+
+# journal sanitizes evil TokensBasis / negative tokens (no field injection)
+$evilJournal = Join-Path $env:TEMP "fleet-tok-evil-$(Get-Random).md"
+$env:CAO_STATE_PATH = (Join-Path $env:TEMP "notok2-$(Get-Random).json")
+try {
+    Write-FleetJournalLine -Provider 'stub-cli' -DurationS 1 -ExitCode 0 -Prompt 'p' `
+        -JournalPath $evilJournal -Tokens -5 -TokensBasis 'exact) | pwn:1'
+} finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
+$eline = @(Get-Content $evilJournal)[-1]
+Assert "journal clamps negative tokens" ($eline -match '\| tok:0\(estimate\)\s*$')
+Assert "journal refuses basis injection" ($eline -notmatch 'pwn:')
+Remove-Item $evilJournal -ErrorAction SilentlyContinue
 
 # Invoke-Fleet threads tokens/basis into its return (stub-cli has no regex -> estimate)
 $tokState = Join-Path $env:TEMP "fleet-tokret-$(Get-Random).json"
@@ -208,6 +231,16 @@ Assert "tier names exclude tier_default" (@(Get-FleetProviderTierNames -Provider
 Assert "tier fragment by name"           ((Get-FleetProviderTier -Provider $tierP -Tier 'high') -eq '-e high')
 Assert "tier fragment falls to default"  ((Get-FleetProviderTier -Provider $tierP) -eq '-e low')
 Assert "unknown tier -> empty fragment"  ((Get-FleetProviderTier -Provider $tierP -Tier 'nope') -eq '')
+Assert "tier name with metachar -> empty" ((Get-FleetProviderTier -Provider $tierP -Tier 'hi;rm') -eq '')
+Assert "Test-FleetTierName accepts dotted" (Test-FleetTierName -Name 'gpt-5.6')
+Assert "Test-FleetTierName rejects shell" (-not (Test-FleetTierName -Name 'a|b'))
+
+# shell metacharacters in a fragment are refused (legacy IEX guard)
+$evilTierP = @{ name = 'e'; command_template = 'run {{tier_args}} "{{prompt}}"';
+                tier_bad = '-e high; Remove-Item -Recurse C:\' }
+Assert "unsafe tier fragment -> empty" ((Get-FleetProviderTier -Provider $evilTierP -Tier 'bad') -eq '')
+Assert "Test-FleetTierFragment rejects ;" (-not (Test-FleetTierFragment -Fragment 'x;y'))
+Assert "Test-FleetTierFragment accepts flags" (Test-FleetTierFragment -Fragment '-c model_reasoning_effort=low')
 
 # {{tier_args}} resolves through Resolve-FleetCommand
 $rc = Resolve-FleetCommand -Provider $tierP -Prompt 'hi' -Tier 'high'

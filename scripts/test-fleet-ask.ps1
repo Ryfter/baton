@@ -23,6 +23,10 @@ try {
     & pwsh -NoProfile -File $runner -Provider 'does-not-exist' -Prompt 'x' -FleetPath $fixture 2>$null | Out-Null
     Assert "unknown provider exits 2" ($LASTEXITCODE -eq 2)
 
+    # disabled provider -> exit 2
+    & pwsh -NoProfile -File $runner -Provider 'stub-disabled' -Prompt 'x' -FleetPath $fixture 2>$null | Out-Null
+    Assert "disabled provider exits 2" ($LASTEXITCODE -eq 2)
+
     # missing prompt -> exit 2
     & pwsh -NoProfile -File $runner -Provider 'stub-cli' -FleetPath $fixture 2>$null | Out-Null
     Assert "missing prompt exits 2" ($LASTEXITCODE -eq 2)
@@ -33,6 +37,36 @@ try {
     $out2 = & pwsh -NoProfile -File $runner -Provider 'stub-cli' -PromptFile $pf -FleetPath $fixture 2>&1 | Out-String
     Assert "-PromptFile is honored" ($out2 -match 'hello-fromfile')
     Remove-Item $pf -ErrorAction SilentlyContinue
+
+    # missing PromptFile path -> exit 2
+    & pwsh -NoProfile -File $runner -Provider 'stub-cli' -PromptFile (Join-Path $env:TEMP "ask-missing-$(Get-Random).txt") -FleetPath $fixture 2>$null | Out-Null
+    Assert "missing PromptFile exits 2" ($LASTEXITCODE -eq 2)
+
+    # unknown tier hard-fail (design §3.3) — use a temp fleet with named tiers
+    $tierDir = Join-Path $env:TEMP "ask-tier-$(Get-Random)"
+    New-Item -ItemType Directory -Force -Path $tierDir | Out-Null
+    $tierYaml = Join-Path $tierDir 'fleet.yaml'
+    Set-Content -Path $tierYaml -Encoding utf8NoBOM -Value @'
+providers:
+  - name: tierstub
+    kind: cli
+    enabled: true
+    cost_tier: free
+    tier_hi: '-Command "Write-Output tier-hi"'
+    tier_lo: '-Command "Write-Output tier-lo"'
+    command_template: 'pwsh -NoProfile {{tier_args}} "{{prompt}}"'
+'@
+    & pwsh -NoProfile -File $runner -Provider 'tierstub' -Prompt 'x' -Tier 'nope' -FleetPath $tierYaml 2>$null | Out-Null
+    Assert "unknown tier exits 2" ($LASTEXITCODE -eq 2)
+
+    & pwsh -NoProfile -File $runner -Provider 'tierstub' -Prompt 'x' -Tier 'hi;rm' -FleetPath $tierYaml 2>$null | Out-Null
+    Assert "invalid tier name exits 2" ($LASTEXITCODE -eq 2)
+
+    $out3 = & pwsh -NoProfile -File $runner -Provider 'tierstub' -Prompt 'ignored' -Tier 'hi' -FleetPath $tierYaml 2>&1 | Out-String
+    Assert "known tier dispatches" ($out3 -match 'tier-hi')
+    Assert "footer shows provider/tier" ($out3 -match '-- tierstub/hi \|')
+
+    Remove-Item $tierDir -Recurse -Force -ErrorAction SilentlyContinue
 } finally {
     Remove-Item env:CAO_STATE_PATH, env:CAO_FLEET_HOST -ErrorAction SilentlyContinue
 }

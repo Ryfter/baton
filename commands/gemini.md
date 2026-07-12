@@ -11,7 +11,7 @@ answer, journaled + Governor-metered.
 ## Steps
 
 1. **Parse `$ARGUMENTS`.** Split off optional `--tier <name>`/`--tier all`; the
-   rest is the prompt. Empty → usage, stop.
+   rest is the prompt. Empty → usage, stop. Unknown tier → exit 2 with valid list.
 
 2. **Dispatch** — agy interpolates the prompt inline (it does not read stdin), so
    embedded double quotes break it; route quote-free prompts, and use `-PromptFile`

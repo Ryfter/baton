@@ -14,6 +14,7 @@ metered by the Usage Governor, and it reuses Baton's hardened prompt transport
 
 1. **Parse `$ARGUMENTS`.** Split off an optional trailing `--tier <name>` (or
    `--tier all`); everything else is the prompt. Empty prompt → print usage, stop.
+   Unknown tier names exit 2 with the valid list (no silent default).
 
 2. **Write the prompt to a temp file** when it exceeds ~900 bytes or contains
    quotes (the 965-byte rule), then dispatch with `-PromptFile`; otherwise pass
