@@ -1,15 +1,25 @@
 # Roadmap
 
-**Last updated:** 2026-06-04
-**Status:** Plans 1–11 shipped + Decision Loop + Cost Ledger. The entire post–Plan-8 backlog is cleared (issues #16–#26). See [`releases/2026-06-04-backlog-clearance.md`](releases/2026-06-04-backlog-clearance.md) for the full batch writeup and reasoning. This document parks remaining ideas so they have a recorded home and aren't carried in conversation memory.
+**Last updated:** 2026-07-12
+**Status:** `v1.15.0` shipped — *the fleet does the labor.* Plans 1–11 + the Fleet Conductor
+release (v1.2.0) + fourteen minor releases since (v1.3 → v1.15) are all live: governed fleet,
+learning router, front porch, GEPA optimizer, the coach, the project command center, agentic
+executor, quality gates, usage governor, direct-model commands, and per-model token telemetry.
+This document parks remaining ideas so they have a recorded home and aren't carried in
+conversation memory.
 
 Tracked as GitHub issues on **[Project #5: baton](https://github.com/users/Ryfter/projects/5)**.
+Per-release detail lives in [`releases/`](releases/).
 
 ---
 
-## Active WIP Branches
+## Next up (Kevin's 2026-07-11 priority order)
 
-- **Dashboard/docs refresh:** `wip/dashboard-docs-refresh` (`origin/wip/dashboard-docs-refresh`, checkpoint `cc909d6`) preserves the unmerged v1.2.0 docs refresh, dashboard operator-console restyle, and hook/OTel test isolation tweaks. Recovery copies: `D:\tmp\baton-wip-2026-06-20.patch` and `stash@{0}: baton WIP snapshot 2026-06-20 before sprint 6`. Before merge, fix the command-reference mismatches for `/baton:recall`, `/baton:remember`, and `/baton:go`, then consolidate the duplicated/overridden CSS theme rules in `dashboard/static/style.css`. Verified so far: `python -m pytest dashboard -q` (124 passed), `scripts\test-hook.ps1`, and `scripts\test-otel-parser.ps1`.
+1. **Usage-aware failover routing** (d083) — track remaining usage per model, auto-swap to a peer
+   (e.g. Grok for Codex) when near cap; reactive-first slice 1. Spec'd.
+2. **Verified Labor V3** — artifact-batch parallelism. Spec'd.
+3. **Verified Labor V4** — verification telemetry + require-verify graduation. Spec'd.
+4. **Excalidraw architecture diagrams + docs currency** — *in progress (this pass).*
 
 ---
 
@@ -40,6 +50,27 @@ Tracked as GitHub issues on **[Project #5: baton](https://github.com/users/Ryfte
 
 Specs for every plan live under [`docs/superpowers/specs/`](superpowers/specs/).
 
+### Shipped since the Fleet Conductor release (v1.2.0 → v1.15.0)
+
+Post–Plan-11 work ships as tagged releases, not numbered plans. Full notes in [`releases/`](releases/).
+
+| Version | Release | What it ships |
+|---|---|---|
+| v1.2.0 | Fleet Conductor | capability-routing optimizer, cost-optimization engine, `/baton:idea`, tools registry, Grimdex integration |
+| v1.3.0 | The Governed Fleet | usage governance over metered workers (lockouts, reset ETAs, conserve mode) |
+| v1.4.0 / v1.4.1 | The Learning Conductor | router learns quality from ratings + an LLM judge; price-aware selection |
+| v1.5.0 | The Front Porch | `/baton:start` guided entry — new-or-resume, then hand off to `/baton:go` |
+| v1.6.0 | The Evolving Baton | real GEPA optimizer for the Conductor planner prompt (candidate pool) |
+| v1.7.0 / v1.7.1 | The Proving Ground | live shadow A/B testing of prompt candidates + optimizer hardening |
+| v1.8.0 / .1 / .2 | The Coach | guided-use rules engine, session digest, `Next:` footers; memory-bridge follow-ups |
+| v1.9.0 | Project Command Center (L1) | project registry + CLI leader — one front door across every project |
+| v1.10.0 | Fleet Round-Trip Proof | `fleet doctor --live` end-to-end proof against real installed CLIs (labor Slice 1) |
+| v1.11.0 / .1 | Fleet does the labor (S2) | agentic executor — instruments edit files and return repo-applied results; multimodel hardening |
+| v1.12.0 | Plan Gate | competitive plan review (accept/revise/reject) before any labor runs (d080) |
+| v1.13.0 | Verified Labor V2 | require-verify on labor artifacts before acceptance |
+| v1.14.0 | Copilot Credit Budget | fail-open `/baton:usage` spend panel over the GitHub billing API (d079) |
+| v1.15.0 | Direct-model commands | `/baton:codex\|grok\|gemini\|agy` + per-model token telemetry + named tiers (d084) |
+
 ---
 
 ## Parked
@@ -61,7 +92,10 @@ What remains:
 
 ## Decision records
 
-Every architectural choice this session is captured under `~/.claude/knowledge/projects/baton/decisions/`:
+Every architectural choice is captured under `~/.claude/knowledge/projects/baton/decisions/` — the
+model-agnostic knowledge base, not this repo. The log now runs through **d084** (GitHub-ops split,
+2026-07-11); reference records by id rather than duplicating them here. The table below is a
+historical Plan-era snapshot (d001–d013):
 
 | ID | Topic |
 |---|---|

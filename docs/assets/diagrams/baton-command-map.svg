@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="800" height="600" fill="#ffffff"/>
+  <text x="400" y="34" text-anchor="middle" font-size="26" font-weight="700" fill="#1e1e1e">The /baton command map</text>
+  <text x="400" y="60" text-anchor="middle" font-size="15" fill="#757575">grouped by what you're doing</text>
+
+  <!-- Row 1 -->
+  <rect x="40" y="80" width="230" height="142" rx="12" fill="#a5d8ff" stroke="#4a9eed"/>
+  <text x="56" y="106" font-size="15" font-weight="700" fill="#1d4ed8">Front doors</text>
+  <text x="58" y="130" font-size="13" fill="#12305e"><tspan x="58">/baton:start</tspan><tspan x="58" dy="18">/baton:go</tspan><tspan x="58" dy="18">/baton:idea</tspan></text>
+
+  <rect x="290" y="80" width="230" height="142" rx="12" fill="#b2f2bb" stroke="#22c55e"/>
+  <text x="306" y="106" font-size="15" font-weight="700" fill="#15803d">Direct-model</text>
+  <text x="308" y="130" font-size="13" fill="#14401f"><tspan x="308">/baton:codex</tspan><tspan x="308" dy="18">/baton:grok</tspan><tspan x="308" dy="18">/baton:gemini</tspan><tspan x="308" dy="18">/baton:agy</tspan></text>
+
+  <rect x="540" y="80" width="230" height="142" rx="12" fill="#d0bfff" stroke="#8b5cf6"/>
+  <text x="556" y="106" font-size="15" font-weight="700" fill="#6d28d9">Fleet &amp; ensembles</text>
+  <text x="558" y="130" font-size="13" fill="#2e1065"><tspan x="558">/baton:fleet</tspan><tspan x="558" dy="18">/baton:ensemble</tspan><tspan x="558" dy="18">/baton:research</tspan><tspan x="558" dy="18">/baton:six-hats</tspan><tspan x="558" dy="18">/baton:council</tspan></text>
+
+  <!-- Row 2 -->
+  <rect x="40" y="240" width="230" height="142" rx="12" fill="#ffd8a8" stroke="#f59e0b"/>
+  <text x="56" y="266" font-size="15" font-weight="700" fill="#b45309">Routing &amp; capability</text>
+  <text x="58" y="290" font-size="13" fill="#5a3208"><tspan x="58">/baton:route</tspan><tspan x="58" dy="18">/baton:worker</tspan><tspan x="58" dy="18">/baton:models</tspan><tspan x="58" dy="18">/baton:tools</tspan><tspan x="58" dy="18">/baton:triage</tspan></text>
+
+  <rect x="290" y="240" width="230" height="142" rx="12" fill="#fff3bf" stroke="#f59e0b"/>
+  <text x="306" y="266" font-size="15" font-weight="700" fill="#b45309">Gates (before / after)</text>
+  <text x="308" y="290" font-size="13" fill="#5a3208"><tspan x="308">/baton:research-gate</tspan><tspan x="308" dy="18">/baton:plan-gate</tspan><tspan x="308" dy="18">/baton:gate</tspan></text>
+
+  <rect x="540" y="240" width="230" height="142" rx="12" fill="#c3fae8" stroke="#06b6d4"/>
+  <text x="556" y="266" font-size="15" font-weight="700" fill="#0e7490">Jobs (track work)</text>
+  <text x="558" y="289" font-size="13" fill="#0a3f4a"><tspan x="558">/baton:job-start</tspan><tspan x="558" dy="17">/baton:job-status</tspan><tspan x="558" dy="17">/baton:job-list</tspan><tspan x="558" dy="17">/baton:job-phase</tspan><tspan x="558" dy="17">/baton:job-resume</tspan><tspan x="558" dy="17">/baton:job-lesson</tspan></text>
+
+  <!-- Row 3 -->
+  <rect x="40" y="400" width="230" height="142" rx="12" fill="#eebefa" stroke="#ec4899"/>
+  <text x="56" y="426" font-size="15" font-weight="700" fill="#a21caf">Knowledge &amp; memory</text>
+  <text x="58" y="450" font-size="13" fill="#4a1046"><tspan x="58">/baton:kb-index</tspan><tspan x="58" dy="18">/baton:kb-search</tspan><tspan x="58" dy="18">/baton:recall</tspan><tspan x="58" dy="18">/baton:remember</tspan><tspan x="58" dy="18">/baton:memory-promote</tspan></text>
+
+  <rect x="290" y="400" width="230" height="142" rx="12" fill="#ffc9c9" stroke="#ef4444"/>
+  <text x="306" y="426" font-size="15" font-weight="700" fill="#b91c1c">Governance &amp; cost</text>
+  <text x="308" y="450" font-size="13" fill="#5a1414"><tspan x="308">/baton:usage</tspan><tspan x="308" dy="18">/baton:cost</tspan><tspan x="308" dy="18">/baton:effective-cost</tspan></text>
+
+  <rect x="540" y="400" width="230" height="142" rx="12" fill="#fff3bf" stroke="#f59e0b"/>
+  <text x="556" y="426" font-size="15" font-weight="700" fill="#b45309">Decisions &amp; tuning</text>
+  <text x="558" y="450" font-size="13" fill="#5a3208"><tspan x="558">/baton:decision-feedback</tspan><tspan x="558" dy="18">/baton:consolidate-*</tspan><tspan x="558" dy="18">/baton:optimize-prompt</tspan><tspan x="558" dy="18">/baton:log-routing</tspan></text>
+
+  <text x="400" y="575" text-anchor="middle" font-size="13" fill="#757575">All 50 commands — full detail in docs/COMMANDS.md</text>
+</svg>
