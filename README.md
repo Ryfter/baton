@@ -34,6 +34,30 @@ Commands surface as `/baton:<command>` — e.g. `/baton:go "ship the feature"`, 
 
 ---
 
+## Visual overview
+
+**The mental model** — three tiers, like an orchestra. You + Claude Code conduct; the orchestrators
+route, gate, and govern; the instruments (the fleet) do the labor. CLI-first — the dashboard is a
+control board over the same commands.
+
+![Baton mental model — Conductor, Orchestrators, Instruments](docs/assets/diagrams/baton-mental-model.svg)
+
+**Using /baton — the happy path.** Which command drives each step, from a spark to shipped.
+
+![Using /baton — idea, start, gate, dispatch, accept, ship](docs/assets/diagrams/baton-workflow.svg)
+
+**The command map.** All 50 commands, grouped by what you're doing.
+
+![The /baton command map — commands grouped into nine clusters](docs/assets/diagrams/baton-command-map.svg)
+
+**The fleet loop.** Every dispatch is routed, metered, journaled, and learned from — observe, govern, learn.
+
+![The fleet loop — route, dispatch, journal, learn, failover](docs/assets/diagrams/baton-fleet-loop.svg)
+
+> Diagram sources live in [`docs/assets/diagrams/`](docs/assets/diagrams/) (SVG — editable, versioned).
+
+---
+
 ## Features
 
 Each feature has a one-line "what it does"; the link goes to its full design spec.

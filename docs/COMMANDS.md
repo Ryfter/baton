@@ -9,6 +9,8 @@ If you're brand new, read the [**Guide**](GUIDE.md) first — it walks a whole s
 start to finish. This page is the dictionary you come back to for "what are all the
 options for *this* command?"
 
+![The /baton command map — commands grouped into nine clusters](assets/diagrams/baton-command-map.svg)
+
 ## How to read this page
 
 - **`<angle brackets>`** = a value **you** supply (required unless noted).
