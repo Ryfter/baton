@@ -13,13 +13,28 @@ Per-release detail lives in [`releases/`](releases/).
 
 ---
 
-## Next up (Kevin's 2026-07-11 priority order)
+## Next up (priority order — updated 2026-07-13)
 
-1. **Usage-aware failover routing** (d083) — track remaining usage per model, auto-swap to a peer
-   (e.g. Grok for Codex) when near cap; reactive-first slice 1. Spec'd.
-2. **Verified Labor V3** — artifact-batch parallelism. Spec'd.
-3. **Verified Labor V4** — verification telemetry + require-verify graduation. Spec'd.
-4. **Excalidraw architecture diagrams + docs currency** — *in progress (this pass).*
+**SOON** *(Kevin 2026-07-13 — from the compound-engineering read; both are coding-quality
+multipliers that pay forward into every feature after them, so they lead the queue):*
+
+1. **Review named panel** — a fixed roster of specialized review-role personas per diff/artifact
+   (security, performance, architecture, simplicity, framework/style taste), each **routed to the
+   cheapest capable model**; findings prioritized P1/P2/P3 and triaged before parallel resolve.
+   Baton's twist on CE's 14+ named reviewers — "taste as code" on top of routing. *Needs a spec.*
+2. **Compound default + measured** — make Compound a first-class **default** closeout (auto-leave a
+   findable artifact **and** answer "what concrete change — test, decision, reviewer, routing rule —
+   prevents this class of failure next time?"; light human gate) **and** add a **compound-rate**
+   metric (% of runs that produced a decision/lesson/guidance update — computable from the journal
+   today). Verify the learning, not just capture it. *Needs a spec.*
+
+**Then (prior committed order):**
+
+3. **Usage-aware failover routing** (d083) — auto-swap to a peer near a cap; reactive-first slice 1. Spec'd.
+4. **Verified Labor V3** — artifact-batch parallelism. Spec'd.
+5. **Verified Labor V4** — verification telemetry + require-verify graduation. Spec'd.
+
+*Done 2026-07-12: docs currency + visual overview (four SVG infographics) → v1.15.1.*
 
 ---
 
@@ -88,17 +103,9 @@ Reference lives in Grimdex (`projects/baton/notes/compound-engineering.md`). Bat
 implements most of the Plan → Work → Review → **Compound** loop; these close the remaining gaps.
 System-investment track — run alongside features (the 50/50), not instead of the priority order.
 
-- **Named review-role roster** *(highest interest — Kevin 2026-07-13).* A fixed panel of
-  specialized review personas per diff/artifact (security, performance, architecture,
-  simplicity, framework/style taste), each **routed to the cheapest capable model** — Baton's
-  twist on CE's 14+ named reviewers. This is "taste as code" and the strongest copyable mechanic;
-  it maps directly onto routing + capabilities. Findings prioritized P1/P2/P3, triaged before parallel resolve.
-- **Compound-phase automation.** Make Compound a first-class, default closeout step (not a
-  standing rule that depends on discipline): after a run, leave a findable artifact **and**
-  answer "what concrete change (test, decision, reviewer, routing rule) prevents this class of
-  failure next time?" — a light human gate. Model on CE's `/workflows:compound` (six subagents
-  incl. a *prevention strategist*). Pair with a **compound-rate** metric (% of runs that produced
-  a decision/lesson/guidance update — computable from the journal today).
+- **Named review-role roster** — **→ promoted to Next up (SOON), 2026-07-13.** See above.
+- **Compound default + measured** — **→ promoted to Next up (SOON), 2026-07-13.** See above.
+  (Model on CE's `/workflows:compound` six subagents incl. a *prevention strategist*.)
 - **Release → announce compound sub-step.** Generate the downstream artifacts off a run the way
   CE does: plan → release notes → social posts → screenshots, shipped together. (We did this
   chain by hand for v1.15.1 this session — release notes, then the X + LinkedIn drafts.)
