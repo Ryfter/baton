@@ -103,12 +103,17 @@ System-investment track — run alongside features (the 50/50), not instead of t
   CE does: plan → release notes → social posts → screenshots, shipped together. (We did this
   chain by hand for v1.15.1 this session — release notes, then the X + LinkedIn drafts.)
 
-**Bigger framing (see below / Grimdex note):** these generalize the loop *beyond coding* —
-copywriting, marketing, research, design all ride the same Plan→Work→Review→Compound loop with
-different **artifact types + review roles**. Baton's substrate is already domain-general; the
-coding path is one profile. Generalize the *artifact + review-role + capability* abstraction at
-the named-review-roster seam rather than rescoping now. (Grimdex reserves `Grimlore` for the
-future general second-brain KB — the knowledge layer already anticipates this split.)
+**Bigger framing (dNNN positioning):** the substrate generalizes the loop *beyond coding* —
+copywriting/brand voice, product marketing, user research, AI analysis all ride the same
+Plan→Work→Review→Compound loop with different **artifact types + review roles + checks**. But
+**Baton is a coding tool first** (Kevin 2026-07-13: "at its heart... a coding tool... not at the
+expense of the coding bot being awesome"). The general-conductor / non-coding profiles are
+**LOW-PRIORITY backlog**, admitted only when they don't detract from coding quality; generalize
+the *artifact + review-role + check* abstraction **opportunistically at the named-review-roster
+seam**, never as a rescope or rebrand. Coding priority order is unchanged (d083 → V3 → V4).
+Keystone if/when pursued: a codified **Voice/Brand skill** that copywriter + product-marketing
+inherit; AI analysis is the strongest-check non-coding profile (Kevin's BI wheelhouse). (Grimdex
+reserves `Grimlore` for the future general second-brain KB — the knowledge layer anticipates this split.)
 
 ### Housekeeping ideas (no issue tracked yet)
 
