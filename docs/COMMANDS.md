@@ -59,6 +59,42 @@ knowledge base mixed into their prompt before they answer.
 
 ---
 
+# Conductor — describe an outcome, let the fleet build it
+
+The natural-language front doors. You say what you want; the Conductor plans it, routes the work
+to the right instruments, and runs it — interrupting only for real decisions.
+
+### /baton:go
+- **One-liner:** Describe an outcome in plain language; the Conductor plans it into a task DAG and runs it full-auto.
+- **When you'd use it:** When you want the whole thing built, not just advice — the autonomous capstone.
+- **Syntax:** `/baton:go "<what you want done>" [--execute] [--repo <path>] [--budget <n>] [--max-tier local|free|paid] [--gate-artifact "<text>" | --gate-diff <range>] [--plan-gate] [--plan-reviewers a,b]`
+- **Arguments & flags:**
+  - `"<what you want done>"` — the outcome, in your own words.
+  - `--execute` — actually run the labor (the agentic executor edits files). Without it, the Conductor plans and narrates without touching the repo.
+  - `--budget <n>` — hard spend ceiling; crossing it is one of only two reasons it stops.
+  - `--max-tier <tier>` — cap how expensive an instrument it may reach for.
+  - `--plan-gate` / `--plan-reviewers a,b` — run a competitive plan review (see `/baton:plan-gate`) before any labor.
+  - `--gate-artifact "<text>"` / `--gate-diff <range>` — run an acceptance gate on the result (see `/baton:gate`).
+- **Under the hood:** Plans the request into a DAG, routes each task to the cheapest capable instrument, runs under two guards (budget cap + destructive-action gate), and narrates progress. Interrupts only to cross a budget ceiling or before an irreversible action.
+- **Where results land:** run artifacts under `$BATON_HOME/runs/<run-id>/`; repo edits land in your working tree when `--execute` is set.
+- **Plain example:** `/baton:go "add a --json flag to the export command and test it" --execute --budget 5`.
+- **Gotchas:** It guesses through everything it safely can — that's the design. Set `--budget` for a firm cost stop; add `--plan-gate` to review the plan before spending.
+
+### /baton:idea
+- **One-liner:** Turn a raw idea into board-ready GitHub Issues, with one human gate.
+- **When you'd use it:** At the very start — you have a spark, not a spec.
+- **Syntax:** `/baton:idea "<raw idea>" [--no-research] [--providers a,b,c] [--tier free,local]`
+- **Arguments & flags:**
+  - `"<raw idea>"` — the raw thought.
+  - `--no-research` — skip the research ensemble (faster, less grounded).
+  - `--providers` / `--tier` — pick the roster for the research + viability debate.
+- **Under the hood:** KB prefetch → research ensemble → a `/baton:council` viability debate → a reviewable concept doc → GitHub Issues. You approve the concept before any issue is created (the one human gate).
+- **Where results land:** a concept doc for your review, then GitHub Issues on approval.
+- **Plain example:** `/baton:idea "a command that shows which model is cheapest right now"`.
+- **Gotchas:** Job-less (runs without an active job). Nothing is written to GitHub until you approve the concept.
+
+---
+
 # Jobs — track a piece of work start to finish
 
 A **job** is a tracked unit of work (a feature, a bug, an investigation). It has
@@ -206,6 +242,114 @@ These send a question to several models and have Claude synthesize the answers. 
 
 ---
 
+# Direct-model commands — talk to one instrument
+
+`/baton:codex`, `/baton:grok`, `/baton:gemini`, and `/baton:agy` dispatch one prompt straight to
+that model through Baton's hardened, journaled fleet path — the same transport `/baton:go` uses, so
+every call is Governor-metered and its tokens land in the journal. Use these when you want a
+specific model's answer, not a routed or ensembled one.
+
+### /baton:codex (and /baton:grok, /baton:gemini, /baton:agy)
+- **One-liner:** Ask one named model directly — a single journaled, metered dispatch, with an optional model/effort tier.
+- **When you'd use it:** You want *this* instrument's take, or you're boundary-testing a model across its tiers.
+- **Syntax:** `/baton:codex "<prompt>" [--tier <name>|all]`
+- **Arguments & flags:**
+  - `"<prompt>"` — what to ask. Long/quote-heavy prompts use a temp-file transport, so the 965-byte command limit doesn't apply.
+  - `--tier <name>` — pick a named model/effort tier from `fleet.yaml` (e.g. `low|med|high` for codex reasoning effort).
+  - `--tier all` — run the prompt across *every* tier the provider defines (boundary tester, capped at 16).
+- **Under the hood:** Delegates to the shared `fleet-ask.ps1` runner over `Invoke-Fleet`; prints the model's answer plus a footer `-- <provider>[/<tier>] | <N>s | exit:<code> | tok:<n>(<basis>)`. The token count is exact when the CLI prints one, an honest `len/4` estimate otherwise.
+- **Where results land:** stdout in chat; one fleet journal line per dispatch (carrying `tier:` and `tok:` tags).
+- **Plain example:** `/baton:codex "explain this stack trace" --tier low`.
+- **Gotchas:** `/baton:agy` is an alias of `/baton:gemini` (Gemini Antigravity). Each model's tiers and availability are box-private config in *your* `fleet.yaml` — the shipped seed carries generic examples only, so `--tier` names differ per box.
+
+---
+
+# Routing & capability — pick the right worker
+
+### /baton:route
+- **One-liner:** Recommend *or* dispatch the cheapest *capable* tool/model for a need — "optimal, not best" — and learn which wins over time.
+- **When you'd use it:** You know the *kind* of task but not who should do it; or you want the router to run + verify it for you.
+- **Syntax:** `/baton:route "<capability>" [--max-tier local|free|paid] [--local] [--run "<prompt>"] [--rank <1-5>] [--judge]` · `--rate good|bad [note]` · `--calibrate "<capability>" "<prompt>"` · `--cascade "<prompt>" [--drafts N] [--good-enough 0.9]`
+- **Arguments & flags:**
+  - `"<capability>"` — the need (e.g. `code-edit`, `summarize`, `pdf-extract`).
+  - `--run "<prompt>"` — dispatch the chosen worker and verify the result (not just recommend).
+  - `--rate good|bad` — record the quality of the last run so future picks learn.
+  - `--calibrate` — fan a prompt out across all candidates for a capability to seed the ratings.
+  - `--cascade` — draft cheap-first, escalate only if the draft isn't good enough.
+  - `--rank <1-5>` — the time-awareness gate (1 = spend-worthy now … 5 = wait for off-peak).
+- **Under the hood:** Scores capable workers cheapest-tier-first, folding in learned quality from your ratings + an LLM judge. `--run` dispatches, verifies, and escalates up the cost ladder on failure.
+- **Where results land:** ratings + run records under `$BATON_HOME`; a journal line per dispatch.
+- **Plain example:** `/baton:route "summarize a PDF" --run "$(cat notes.pdf)"`.
+
+### /baton:worker
+- **One-liner:** Run a metered external worker (e.g. `gh models`) through Baton routing and inspect its budget.
+- **Syntax:** `/baton:worker run <worker> --prompt "<text>" [--model M] [--file F] [--dry] [--json]` · `/baton:worker status [worker]`
+- **Under the hood:** Dispatches through the same governed path as the fleet, tracking utilization against the worker's budget.
+- **Plain example:** `/baton:worker status` → shows each metered worker's remaining budget.
+
+### /baton:models
+- **One-liner:** Inventory the local model fleet — probes each box's API, joins with registry pins/claims, prints recommendations.
+- **Syntax:** `/baton:models [--json] [--box <provider>] [--import <scorecard.json>]`
+- **Arguments & flags:** `--box` — probe just one host; `--import` — load a Gauntlet scorecard into the ratings store.
+- **Where results land:** the local-model ratings/inventory under `$BATON_HOME`.
+- **Gotchas:** Box-private — it reads *your* machines' running models; nothing here ships in the repo.
+
+### /baton:tools
+- **One-liner:** Operate the tools registry (`tools.yaml`) — the non-LLM capability sibling of `/baton:fleet`.
+- **Syntax:** `/baton:tools doctor | list`
+- **Under the hood:** `doctor` health-checks each tool; `list` shows the registry (first entry is Docling for PDF extraction).
+
+### /baton:effective-cost
+- **One-liner:** Show the per-worker effective-cost leaderboard — cheapest quality-adjusted worker first.
+- **Syntax:** `/baton:effective-cost [report] [--json] [--runs <glob>] [--min-confidence-runs <n>]`
+- **Under the hood:** Folds run records into a cost-per-accepted-outcome ranking. Advisory only.
+
+### /baton:triage
+- **One-liner:** Classify an issue or task into type, priority, estimate, risk, and a recommended pipeline + model.
+- **Syntax:** `/baton:triage [--url <github-issue-url>] [--file <path>] [--json] [<text>]`
+- **Under the hood:** Routes through the fleet — Haiku preferred, escalating to Sonnet on low confidence / high risk.
+- **Plain example:** `/baton:triage --url https://github.com/Ryfter/baton/issues/42`.
+
+---
+
+# Gates — review before and after the work
+
+Competitive reviews that run a small governed-fleet roster against your work and return a verdict.
+Use a gate to *not* spend labor on a bad plan, and to *not* accept a bad result.
+
+### /baton:research-gate
+- **One-liner:** Build / adopt / adapt verdict before non-trivial work — grounds a cheap model in real evidence.
+- **Syntax:** `/baton:research-gate (--text "<task>" | --url <issue> | --file <path>) [--deep] [--json] [--out PATH]`
+- **Under the hood:** Grounds the verdict in your local registry + prior ensembles + KB, plus optional `--deep` live search. Recommend-only.
+
+### /baton:plan-gate
+- **One-liner:** Accept / revise / reject verdict on a plan (task DAG) *before* any labor runs.
+- **Syntax:** `/baton:plan-gate run --goal "<text>" --plan <path\to\plan.json> [--reviewers a,b] [--json]`
+- **Under the hood:** A competitive review of the plan; a `reject`/`revise` returns findings + a revise brief. Wired into `/baton:go --plan-gate`.
+
+### /baton:gate
+- **One-liner:** Accept / polish / reject verdict on a finished artifact, with findings and a polish brief.
+- **Syntax:** `/baton:gate run --task "<text>" [--file F | --diff <range> | --artifact "<text>"] [--reviewers a,b] [--json]`
+- **Under the hood:** A competitive acceptance review of the work product. Wired into `/baton:go --gate-artifact|--gate-diff`.
+
+---
+
+# Usage governance — keep workers and spend in bounds
+
+### /baton:usage
+- **One-liner:** Inspect and govern worker availability — lockouts, reset ETAs, conserve mode, and a usage forecast.
+- **When you'd use it:** A model hit its cap, or you want to see how close you are before a big run.
+- **Syntax:** `/baton:usage [status|lockout|limit|cooldown|clear|conserve|tick|forecast] [worker] [...]`
+- **Arguments & flags:**
+  - `status` — current availability of every worker (default).
+  - `lockout|limit|cooldown` — mark a worker unavailable / set its cap / put it on a timed cooldown.
+  - `conserve` — enter a reduced-spend mode.
+  - `forecast` — project remaining usage against the window.
+- **Under the hood:** Reads/writes the Governor state under `$BATON_HOME`; the fail-open spend panel folds in the GitHub billing API (v1.14.0). Fails open — a missing signal never blocks a dispatch.
+- **Plain example:** `/baton:usage forecast` → "codex ~62% of window used, resets in 3h".
+
+---
+
 # Code phase — turn a spec into working code
 
 **The workflow:** `/baton:code-decompose` slices a finished spec into small independent
@@ -275,6 +419,46 @@ the repo → `/baton:code-merge` reviews the results and folds them back into th
 - **Where results land:** Console — ranked snippets with scores and source paths.
 - **Plain example:** `/baton:kb-search "merge gate rules" --k 3 --scope universal`.
 - **Gotchas:** Empty index → no hits; run `/baton:kb-index --full` first.
+
+---
+
+# Dev memory — don't repeat a known-bad fix
+
+Box-private, advisory memory of problem → attempt → outcome. `remember` records what you tried;
+`recall` warns you *before* you retry something that already failed.
+
+### /baton:recall
+- **One-liner:** Before starting a task, check whether you've tried this before — and whether the last fix failed.
+- **Syntax:** `/baton:recall (-Text "<task>" | -File <path>) [-Deep] [-Json]`
+- **Arguments & flags:** `-Deep` — also pull semantic KB neighbors. Advisory only.
+- **Under the hood:** Matches the task against Baton's dev-memory store and surfaces prior attempts with their outcomes.
+- **Plain example:** `/baton:recall -Text "fix the flaky hook test"`.
+
+### /baton:remember
+- **One-liner:** Capture a problem → attempt → outcome so `recall` can warn next time.
+- **Syntax:** `/baton:remember -Problem "<p>" [-Approach "<a>"] [-Outcome pass|fail|partial|unknown] [-Tags a,b] [-Scope project|universal] [-RefJob <id>]`
+- **Under the hood:** Writes a box-private memory record; nothing is shared to the repo or KB unless promoted.
+- **Plain example:** `/baton:remember -Problem "hook read real box state" -Approach "isolate CAO_STATE_PATH" -Outcome pass`.
+
+### /baton:memory-promote
+- **One-liner:** Crystallize a recurring memory pattern into a Grimdex rule.
+- **Syntax:** `/baton:memory-promote [<id|signature>] [-Json]`
+- **Under the hood:** No args lists auto-detected watched candidates; pass an id/signature to flag one. Always a visible write.
+
+---
+
+# Projects — the portfolio registry
+
+### /baton:project
+- **One-liner:** Project registry command center — list projects by lifecycle and edit the registry.
+- **Syntax:** `/baton:project`
+- **Under the hood:** Reads/edits the box-private project registry under `$BATON_HOME/projects/`.
+
+### /baton:projects
+- **One-liner:** Sync Triage classification to GitHub — labels (classify) + Project v2 fields (decide).
+- **Syntax:** `/baton:projects [init|sync] --owner @me --project N [--apply] [--reclassify] [--classify] [--json]`
+- **Arguments & flags:** Dry-run by default; `--apply` writes to GitHub. `--classify` sets labels; the decide step sets Project v2 fields.
+- **Gotchas:** Nothing is written to GitHub without `--apply`.
 
 ---
 
@@ -399,6 +583,11 @@ observations from the noisy journal into the clean catalog.
 | Command | One-liner |
 |---|---|
 | `/baton:start ["<name>"]` | Start or resume a project — the front porch |
+| `/baton:go "<outcome>" [--execute]` | Describe an outcome; the Conductor plans + runs it |
+| `/baton:idea "<raw idea>"` | Idea → board-ready GitHub Issues (one human gate) |
+| `/baton:codex\|grok\|gemini\|agy "<prompt>" [--tier <name>]` | Ask one model directly (journaled + metered) |
+| `/baton:route "<capability>" [--run "<prompt>"]` | Pick/dispatch the cheapest capable worker |
+| `/baton:triage [--url <issue>]` | Classify type/priority/estimate/risk/pipeline |
 | `/baton:job-start "<brief>"` | Start a tracked job |
 | `/baton:job-status` | Where am I on the current job |
 | `/baton:job-list [--all\|--active\|--done]` | List jobs |
@@ -422,6 +611,10 @@ observations from the noisy journal into the clean catalog.
 | `/baton:log-routing <model> <note>` | Note a model's performance |
 | `/baton:consolidate-routing` | Update the model catalog |
 | `/baton:consolidate-lessons` | File lessons into the KB |
+| `/baton:research-gate` \| `/baton:plan-gate` \| `/baton:gate` | Verdict before/after the work |
+| `/baton:usage [status\|forecast\|conserve]` | Govern worker availability + spend |
+| `/baton:recall` \| `/baton:remember` | Warn before repeating a known-bad fix |
+| `/baton:models` \| `/baton:tools doctor\|list` | Inventory local models / non-LLM tools |
 | `/baton:cost [<total>]` | Per-project spend ledger |
 
 ## Guided use (the coach)

@@ -9,9 +9,11 @@ you decided, and what you learned. Built on
 [claude-octopus](https://github.com/nyldn/claude-octopus) as the dispatch layer
 (recommended companion plugin, not a hard dependency).
 
-**Status:** `v1.2.0-rc.6` — *the Fleet Conductor release* (capability routing, cost-optimization,
-Grimdex, plugin packaging + MCP server). **MIT licensed.** An early/experimental personal project, shared in the hope it's
-useful — not a turnkey product.
+**Status:** `v1.15.0` — *the fleet does the labor.* The conductor now farms coding tasks out to
+non-Claude instruments and gets repo-applied results back — with direct `/baton:codex|grok|gemini|agy`
+lines to every model, per-model token telemetry, plan/research/acceptance gates, and a usage governor
+that keeps spend legible. **MIT licensed.** An early/experimental personal project, shared in the hope
+it's useful — not a turnkey product.
 
 ### 📖 New here? Read these
 
@@ -27,7 +29,8 @@ claude plugin marketplace add Ryfter/baton
 claude plugin install baton@ryfter
 ```
 
-Commands surface as `/baton:<command>` — e.g. `/baton:fleet doctor`, `/baton:route`, `/baton:idea`.
+Commands surface as `/baton:<command>` — e.g. `/baton:go "ship the feature"`, `/baton:codex "..."`,
+`/baton:route`, `/baton:fleet doctor`, `/baton:usage`.
 
 ---
 
@@ -81,7 +84,7 @@ Each feature has a one-line "what it does"; the link goes to its full design spe
   ([spec](docs/superpowers/specs/2026-05-29-decision-loop-design.md))
 - **Per-project cost ledger** — a simple running spend record per project. Command: `/baton:cost`.
 
-### New in v1.2.0 — the Fleet Conductor release
+### The Fleet Conductor release (v1.2.0)
 
 - **Capability-routing optimizer** — an explainable, cheapest-tier-first auto-router over your
   models + tools: it picks the *optimal* (not most-powerful) capability, dispatches, verifies,
@@ -98,6 +101,40 @@ Each feature has a one-line "what it does"; the link goes to its full design spe
 - **Grimdex integration** — the knowledge base is now its own standalone, tool-agnostic project
   ([Ryfter/Grimdex](https://github.com/Ryfter/Grimdex)). This repo wires into it via a pointer
   stanza and works with or without it (graceful degradation).
+
+### New since v1.2.0 — the conductor learns to delegate (v1.3 → v1.15)
+
+The spine of every release since: make the conductor actually *farm out the labor* and stay
+legible about cost while doing it. Full notes live in [`docs/releases/`](docs/releases/).
+
+**Fleet does the labor**
+- **Direct lines to every model** — `/baton:codex`, `/baton:grok`, `/baton:gemini` (+ `/baton:agy`)
+  dispatch one prompt straight to that instrument through the hardened, journaled fleet path.
+  `--tier <name>` selects a model/effort tier; `--tier all` boundary-tests every tier. *(v1.15.0)*
+- **`/baton:go` — the natural-language front door** — describe an outcome; the Conductor plans it
+  into a task DAG and runs it full-auto under two guards (budget cap + destructive-action gate),
+  narrating as it goes and interrupting only for real decisions. *(v1.10 → v1.11)*
+- **Agentic executor** — instruments edit files and return repo-applied results, not just chat
+  text; chat-completion vs. agentic providers are handled by output contract. *(v1.11.0)*
+
+**Legibility & cost control**
+- **Per-model token telemetry** — every dispatch records tokens (exact when the CLI prints a count,
+  honest estimate otherwise) alongside time and exit code in the journal. *(v1.15.0)*
+- **Usage governor + Copilot credit budget** — track worker lockouts, reset ETAs, conserve mode, and
+  a fail-open spend panel over the GitHub billing API. Commands: `/baton:usage`, `/baton:worker`. *(v1.12 → v1.14)*
+
+**Quality gates**
+- **Plan / research / acceptance gates** — competitive review before *and* after labor: a research
+  build/adopt/adapt verdict, a plan accept/revise/reject verdict, and an artifact accept/polish/reject
+  verdict with a polish brief. Commands: `/baton:research-gate`, `/baton:plan-gate`, `/baton:gate`. *(v1.12 → v1.13)*
+
+**Self-improvement**
+- **GEPA planner-prompt optimization** — the Conductor's planner prompt evolves through a candidate
+  pool with live shadow A/B testing; winners promote on your `--apply`. Command: `/baton:optimize-prompt`. *(v1.6 → v1.7)*
+- **Guided-use coach** — a rules engine that surfaces the right next command via a session digest and
+  one-shot `Next:` footers (`off`/`quiet`/`teach`). *(v1.8.0)*
+- **Triage & dev memory** — classify an issue into type/priority/estimate/risk/pipeline (`/baton:triage`);
+  warn before you repeat a known-bad fix (`/baton:recall`, `/baton:remember`). *(v1.9+)*
 
 ---
 
@@ -136,9 +173,21 @@ Full details and a worked example: **[docs/GUIDE.md](docs/GUIDE.md)**.
 
 ## Architecture
 
-Claude Code *is* the orchestrator (no separate daemon). Mutable state lives under
-`$BATON_HOME` (default `~/.baton/` — `jobs/`, `runs/`, `fleet.yaml`, `tools.yaml`, the
-journal); the knowledge base stays at `~/.claude/knowledge/`. See the
+Baton is built in three tiers, like an orchestra:
+
+1. **Conductor** — you + Claude Code, the thin interface. It reads intent, chooses who plays,
+   and keeps the score. Claude Code *is* the orchestrator — no separate daemon.
+2. **Orchestrators** — the brain: routing, gates, the decision loop, cost/usage governance.
+   One planner with two modes (advise, or run full-auto via `/baton:go`).
+3. **Instruments** — the fleet: paid cloud CLIs, free CLIs, and local models on your own
+   machines, each dispatched through one hardened, journaled path.
+
+**CLI-first, GUI as a control board.** Every capability is a `/baton:` command first; the web
+dashboard is a *control board that listens to the same CLI surface* — it visualizes and drives
+the commands, never a parallel code path. Anything the dashboard does, the CLI already did.
+
+Mutable state lives under `$BATON_HOME` (default `~/.baton/` — `jobs/`, `runs/`, `fleet.yaml`,
+`tools.yaml`, the journal); the knowledge base stays at `~/.claude/knowledge/`. See the
 [design spec](docs/superpowers/specs/2026-05-22-coding-agent-orchestrator-design.md)
 and the per-feature specs linked above.
 
