@@ -82,6 +82,34 @@ What remains:
 - ~~**Cross-project consolidation sweep.**~~ **Unblocked + verified 2026-06-05.** A second project (`answerbot`) was registered in the knowledge base with its own decision records. `/consolidate-decisions` now promotes patterns shared across ≥2 projects to `universal/decision-guidance.md` — the first promoted rule ("Back up every project to a private GitHub repo", positive in both `baton` and `answerbot`) is live, and re-runs are idempotent. As more projects accrue decisions + feedback, additional shared patterns will promote automatically.
 - ~~**Wire `decision-detect` as a `Stop` hook.**~~ **Done 2026-06-05** — `scripts/hooks/decision-detect.ps1` is deployed to `~/.claude/hooks` and registered as a `Stop` hook in `~/.claude/settings.json`; bootstrap now deploys + registers it for reproducibility. At end of each turn it scans the final message for decision phrasing and, on a hit, writes a review-ready intake draft to `$TEMP` (advisory — it doesn't auto-create the record; the orchestrator's two-step intake remains authoritative).
 
+### Compound-engineering backlog (do-later, from the Every article — 2026-07-13)
+
+Reference lives in Grimdex (`projects/baton/notes/compound-engineering.md`). Baton already
+implements most of the Plan → Work → Review → **Compound** loop; these close the remaining gaps.
+System-investment track — run alongside features (the 50/50), not instead of the priority order.
+
+- **Named review-role roster** *(highest interest — Kevin 2026-07-13).* A fixed panel of
+  specialized review personas per diff/artifact (security, performance, architecture,
+  simplicity, framework/style taste), each **routed to the cheapest capable model** — Baton's
+  twist on CE's 14+ named reviewers. This is "taste as code" and the strongest copyable mechanic;
+  it maps directly onto routing + capabilities. Findings prioritized P1/P2/P3, triaged before parallel resolve.
+- **Compound-phase automation.** Make Compound a first-class, default closeout step (not a
+  standing rule that depends on discipline): after a run, leave a findable artifact **and**
+  answer "what concrete change (test, decision, reviewer, routing rule) prevents this class of
+  failure next time?" — a light human gate. Model on CE's `/workflows:compound` (six subagents
+  incl. a *prevention strategist*). Pair with a **compound-rate** metric (% of runs that produced
+  a decision/lesson/guidance update — computable from the journal today).
+- **Release → announce compound sub-step.** Generate the downstream artifacts off a run the way
+  CE does: plan → release notes → social posts → screenshots, shipped together. (We did this
+  chain by hand for v1.15.1 this session — release notes, then the X + LinkedIn drafts.)
+
+**Bigger framing (see below / Grimdex note):** these generalize the loop *beyond coding* —
+copywriting, marketing, research, design all ride the same Plan→Work→Review→Compound loop with
+different **artifact types + review roles**. Baton's substrate is already domain-general; the
+coding path is one profile. Generalize the *artifact + review-role + capability* abstraction at
+the named-review-roster seam rather than rescoping now. (Grimdex reserves `Grimlore` for the
+future general second-brain KB — the knowledge layer already anticipates this split.)
+
 ### Housekeeping ideas (no issue tracked yet)
 
 - ~~Bootstrap should print a one-line "version vs. deployed" diff at startup.~~ **Done 2026-06-05** — Step 0 compares the repo's nearest `v*` tag against `~/.claude/.cao-version` (written on each deploy).
