@@ -1,6 +1,6 @@
 ---
 description: Run a competitive acceptance review of a work artifact and get an accept/polish/reject verdict with findings and a polish brief.
-argument-hint: "run --task \"...\" [--file F | --diff <range> | --artifact \"...\"] [--reviewers a,b] [--json]"
+argument-hint: "run --task \"...\" [--file F | --diff <range> | --artifact \"...\"] [--reviewers a,b | --panel] [--fail-loud] [--json]"
 ---
 
 # /baton:gate
@@ -12,6 +12,14 @@ vs solo, severity-weighted), and returns a verdict: **accept** (ship the cheap
 artifact as-is), **polish** (a premium pass should fix the listed findings — a
 ready-to-use polish brief is emitted), or **reject** (a critical defect). Advisory
 only; never blocks and never auto-runs the polish pass.
+
+Pass `--panel` to run the named roles from `$BATON_HOME/review-roles.yaml`;
+when that roster exists and `--reviewers` is omitted, panel mode is selected
+automatically. Each role is routed to the cheapest review-capable model allowed
+by its `cheap` or `strong` tier, and findings are tagged with the role name.
+`--fail-loud` surfaces skipped roles or an entirely unparseable panel as
+`degraded: true` in the result for golden-path callers. Without it, the gate
+keeps its advisory fail-open behavior.
 
 ## Steps
 
@@ -25,6 +33,7 @@ only; never blocks and never auto-runs the polish pass.
    - `run --task "add retry to the fetch helper" --diff HEAD~1` — review the last commit's diff.
    - `run --task "summary memo" --file draft.md` — review a file.
    - `run --task "..." --file x.ps1 --reviewers codex,opus --json` — explicit reviewer pair, machine-readable.
+   - `run --task "..." --diff HEAD --panel --fail-loud --json` — named panel with degradation surfaced to a caller.
 
 3. Summarize in plain language: the verdict and why, the agreed-vs-solo findings,
    and — when the verdict is polish — hand the polish brief to whoever (operator or

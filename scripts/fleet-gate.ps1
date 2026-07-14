@@ -12,6 +12,8 @@ param(
     [string]$File,
     [string]$Diff,
     [string]$Reviewers,
+    [switch]$Panel,
+    [switch]$FailLoud,
     [switch]$Json,
     [string]$FleetPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'fleet.yaml' } else { Join-Path $HOME '.baton/fleet.yaml' })
 )
@@ -32,7 +34,10 @@ switch ($Subcommand) {
         $revList = if ($Reviewers) { @($Reviewers -split '\s*,\s*' | Where-Object { $_ }) } else { @() }
         $callArgs = @{ Artifact = $art; Task = $Task; FleetPath = $FleetPath }
         if ($revList.Count) { $callArgs['Reviewers'] = $revList }
-        $res = Invoke-AcceptanceGate @callArgs
+        if ($Panel) { $callArgs['Panel'] = $true }
+        if ($FailLoud) { $callArgs['FailLoud'] = $true }
+        try { $res = Invoke-AcceptanceGate @callArgs }
+        catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }
         if ($Json) { [pscustomobject]$res | ConvertTo-Json -Depth 6 }
         else {
             Write-Host (Format-GateReport -Result ([hashtable]$res))
