@@ -19,18 +19,28 @@ Per-release detail lives in [`releases/`](releases/).
 plane (routing, gates, cost/usage governance, verification, compound store, instrument registry,
 worktree isolation) is best-in-class among peers but **opt-in and fail-open**, so it isn't on the
 default path. Independent Grok + Codex + Claude assessments (2026-07-13) converged: best-*designed*,
-least-*proven* (~8/10 architecture, ~5/10 shipping). Self-demonstrated: a design-critique dispatch
-let Codex burn 102,305 tokens while Grok gave a comparable answer in 1,964 (~50×) — governance would
-have routed cheap-capable, but it wasn't on the path. **Fix = make ONE default path authoritative,
-governance ON, fail-LOUD on the critical path:**
+least-*proven* (~8/10 architecture, ~5/10 shipping). Illustrated (with the honest caveat Kevin flagged):
+the dispatch let Codex spend 102,305 tokens — thorough: it source-verified, cited exact lines, and caught
+the CLI-only ABI gap (now node #4) — vs Grok's 1,964 (lighter, higher-altitude). NOT a "50x waste": the
+answers weren't comparable, and grounding was arguably the right call for an audit you act on. The real
+gap is that the depth/cost/stakes tradeoff was never a *deliberate, legible* choice — each instrument
+defaulted. Governance should MATCH spend to stakes ("optimal, not best"), not force cheap; today Baton
+makes neither the choice nor the tradeoff visible. **The golden path already EXISTS — it's `/baton:go`**
+(the maestro/Conductor front door; `/baton:start` → `/baton:go`). The gap (per `go.md`, Kevin 2026-07-13):
+its quality nodes are **opt-IN flags** (`--plan-gate`, `--gate-artifact`, `-Verify`, `--execute`) and
+**fail open** (understaffed plan gate accepts, `go.md:79`; acceptance advisory-only, `go.md:52`). **Fix =
+flip its defaults on `--execute`, don't rebuild it:**
 
 > `/baton:go` → research gate → plan gate → cheapest-capable **verified labor** → **named review
 > panel** → **compound artifact** → human merge
 
 **SOON — the spine and its nodes (Kevin 2026-07-13):**
 
-1. **Golden-path default + kill fail-open on the critical path** — chain the pipeline as the *default*
-   (not opt-in flags), governance authoritative, degraded state screams. The frame that contains #2–#3.
+1. **`/baton:go --execute`: quality nodes opt-in -> opt-out, fail-loud, depth matched to stakes** — when `--execute` runs, plan gate + acceptance + verify are
+   **on by default** (keep `--no-*` escape hatches for deliberate flexibility); understaffed/degraded
+   gates **scream/halt** instead of failing open; and the depth/cost choice per task is a **deliberate,
+   logged** call (match spend to stakes — "optimal, not best"), not each instrument's silent default.
+   Near-zero new code — flips defaults on wiring that already exists. The frame that contains #2–#3.
 2. **Review named panel** — the acceptance node: a fixed roster of specialized review-role personas
    per diff/artifact (security/adversarial, architecture, spec-compliance, simplicity, framework/style),
    each **routed to the cheapest capable model**; findings P1/P2/P3, triaged before parallel resolve.
