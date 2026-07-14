@@ -13,26 +13,42 @@ Per-release detail lives in [`releases/`](releases/).
 
 ---
 
-## Next up (priority order — updated 2026-07-13)
+## Next up (priority order — updated 2026-07-13, d086)
 
-**SOON** *(Kevin 2026-07-13 — from the compound-engineering read; both are coding-quality
-multipliers that pay forward into every feature after them, so they lead the queue):*
+**The spine: one authoritative golden "ship" path (d086).** Baton is *"half-working"* — the control
+plane (routing, gates, cost/usage governance, verification, compound store, instrument registry,
+worktree isolation) is best-in-class among peers but **opt-in and fail-open**, so it isn't on the
+default path. Independent Grok + Codex + Claude assessments (2026-07-13) converged: best-*designed*,
+least-*proven* (~8/10 architecture, ~5/10 shipping). Self-demonstrated: a design-critique dispatch
+let Codex burn 102,305 tokens while Grok gave a comparable answer in 1,964 (~50×) — governance would
+have routed cheap-capable, but it wasn't on the path. **Fix = make ONE default path authoritative,
+governance ON, fail-LOUD on the critical path:**
 
-1. **Review named panel** — a fixed roster of specialized review-role personas per diff/artifact
-   (security, performance, architecture, simplicity, framework/style taste), each **routed to the
-   cheapest capable model**; findings prioritized P1/P2/P3 and triaged before parallel resolve.
-   Baton's twist on CE's 14+ named reviewers — "taste as code" on top of routing. *Needs a spec.*
-2. **Compound default + measured** — make Compound a first-class **default** closeout (auto-leave a
-   findable artifact **and** answer "what concrete change — test, decision, reviewer, routing rule —
-   prevents this class of failure next time?"; light human gate) **and** add a **compound-rate**
-   metric (% of runs that produced a decision/lesson/guidance update — computable from the journal
-   today). Verify the learning, not just capture it. *Needs a spec.*
+> `/baton:go` → research gate → plan gate → cheapest-capable **verified labor** → **named review
+> panel** → **compound artifact** → human merge
+
+**SOON — the spine and its nodes (Kevin 2026-07-13):**
+
+1. **Golden-path default + kill fail-open on the critical path** — chain the pipeline as the *default*
+   (not opt-in flags), governance authoritative, degraded state screams. The frame that contains #2–#3.
+2. **Review named panel** — the acceptance node: a fixed roster of specialized review-role personas
+   per diff/artifact (security/adversarial, architecture, spec-compliance, simplicity, framework/style),
+   each **routed to the cheapest capable model**; findings P1/P2/P3, triaged before parallel resolve.
+   "Taste as code" on routing. *(Both Grok & Codex ranked this #2.) Needs a spec.*
+3. **Compound default + measured** — the compound node: default closeout that leaves a findable
+   artifact **and** answers "what concrete change prevents this class of failure next time?"; plus a
+   **compound-rate** metric (% of runs producing a decision/lesson/guidance update — from the journal). *Needs a spec.*
+4. **Finish the instrument ABI** — Python/HTTP instruments actually routable (auto-routing today is
+   CLI-only, `routing-dispatch.ps1:137`). The "add any instrument" thesis structurally depends on it.
+5. **Real-project bakeoff** — Baton vs. the manager/engineer baseline on real slices (security fix,
+   feature, migration); measure completion / human intervention / gate catches / regressions / time /
+   **effective-cost**, incl. a quota-failure run (= d083). The missing end-to-end proof.
 
 **Then (prior committed order):**
 
-3. **Usage-aware failover routing** (d083) — auto-swap to a peer near a cap; reactive-first slice 1. Spec'd.
-4. **Verified Labor V3** — artifact-batch parallelism. Spec'd.
-5. **Verified Labor V4** — verification telemetry + require-verify graduation. Spec'd.
+6. **Usage-aware failover routing** (d083) — auto-swap to a peer near a cap; reactive-first slice 1. Spec'd.
+7. **Verified Labor V3** — artifact-batch parallelism. Spec'd.
+8. **Verified Labor V4** — verification telemetry + require-verify graduation. Spec'd.
 
 *Done 2026-07-12: docs currency + visual overview (four SVG infographics) → v1.15.1.*
 
