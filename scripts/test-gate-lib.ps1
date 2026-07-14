@@ -81,6 +81,174 @@ try {
         (Build-ReviewPrompt -Task 'do x' -Artifact 'fn foo') -match 'do x' -and
         (Build-ReviewPrompt -Task 'do x' -Artifact 'fn foo') -match 'fn foo')
 
+    # ---- Named review panel: roster, prompt, routing, provenance, degradation ----
+    $roleTmp = Join-Path $env:TEMP "gate-role-test-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $roleTmp | Out-Null
+    $rolesFixture = Join-Path $roleTmp 'review-roles.yaml'
+    Set-Content -LiteralPath $rolesFixture -Encoding utf8NoBOM -Value @'
+roles:
+  - name: correctness
+    lens: "Find logic defects only."
+    tier: strong
+    enabled: true
+  - name: disabled-role
+    lens: "This role must not run."
+    tier: strong
+    enabled: false
+  - name: malformed-role
+    tier: cheap
+    enabled: true
+  - name: simplicity
+    lens: "Find needless complexity."
+    tier: cheap
+    enabled: true
+'@
+    $selectorOriginal = (Get-Item Function:\Select-Capability).ScriptBlock
+    try {
+        $rolePrompt = Build-ReviewPrompt -Task 'do x' -Artifact 'fn foo' -Role @{
+            name = 'security'; lens = 'TRY TO BREAK IT.'
+        }
+        $rolePromptOpening = @($rolePrompt -split "\r?\n")[0]
+        Check 'GP1 role prompt uses role identity as the opening line' (
+            $rolePromptOpening -eq 'You are the security reviewer. TRY TO BREAK IT.' -and
+            $rolePrompt -notmatch 'You are a strict code/work reviewer')
+
+        $parsedRoles = @(Get-ReviewRoles -Path $rolesFixture)
+        Check 'GP2 roster parses valid enabled roles and skips enabled:false' (
+            $parsedRoles.Count -eq 2 -and @($parsedRoles.name) -contains 'correctness' -and
+            @($parsedRoles.name) -contains 'simplicity' -and @($parsedRoles.name) -notcontains 'disabled-role')
+        Check 'GP3 malformed role is tolerated and rejected' (@($parsedRoles.name) -notcontains 'malformed-role')
+        Check 'GP4 missing roster returns empty array' (
+            @(Get-ReviewRoles -Path (Join-Path $roleTmp 'missing.yaml')).Count -eq 0)
+
+        $seedRefs = Join-Path $roleTmp 'references'
+        New-Item -ItemType Directory -Force -Path $seedRefs | Out-Null
+        Copy-Item -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'references/review-roles.yaml') `
+            -Destination (Join-Path $seedRefs 'review-roles.yaml')
+        $savedBatonHome = $env:BATON_HOME
+        try {
+            $env:BATON_HOME = Join-Path $roleTmp 'baton-home'
+            $seededConfigs = @(Initialize-BatonHome -ReferencesDir $seedRefs)
+            $seededRolesPath = Join-Path $env:BATON_HOME 'review-roles.yaml'
+            $seededRoleCount = @(Get-ReviewRoles -Path $seededRolesPath).Count
+            Set-Content -LiteralPath $seededRolesPath -Encoding utf8NoBOM -Value 'user: edited'
+            $secondSeed = @(Initialize-BatonHome -ReferencesDir $seedRefs)
+            Check 'GP5 initializer seeds review roster once and never overwrites it' (
+                $seededConfigs -contains 'review-roles.yaml' -and
+                $seededRoleCount -eq 6 -and
+                $secondSeed -notcontains 'review-roles.yaml' -and
+                (Get-Content -LiteralPath $seededRolesPath -Raw).Trim() -eq 'user: edited')
+        }
+        finally {
+            if ($null -eq $savedBatonHome) { Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue }
+            else { $env:BATON_HOME = $savedBatonHome }
+        }
+
+        $script:selectorCalls = [System.Collections.ArrayList]@()
+        $script:skipCheap = $false
+        $script:skipAll = $false
+        Set-Item -Path Function:\Select-Capability -Value {
+            param(
+                [string]$Capability,
+                [string]$MaxCostTier,
+                [string]$FleetPath,
+                [string]$ToolsPath
+            )
+            [void]$script:selectorCalls.Add($MaxCostTier)
+            if ($script:skipAll) { return @() }
+            if ($script:skipCheap -and $MaxCostTier -eq 'free') { return @() }
+            $selectedName = if ($MaxCostTier -eq 'free') { 'cheap-model' } else { 'strong-model' }
+            return [pscustomobject]@{ name = $selectedName; cost_tier = $MaxCostTier }
+        }
+        $panelDispatcher = {
+            param($providerName, $reviewPrompt)
+            return @{
+                stdout = "[{`"severity`":`"minor`",`"area`":`"provider-area`",`"summary`":`"$providerName finding`"}]"
+                stderr = ''; exit_code = 0
+            }
+        }
+        $panelResult = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' `
+            -RolesPath $rolesFixture -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
+            -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $panelDispatcher
+        Check 'GP6 roster presence auto-selects panel and findings carry role provenance' (
+            @($panelResult.findings).Count -eq 2 -and
+            @($panelResult.findings.area) -contains 'correctness' -and
+            @($panelResult.findings.area) -contains 'simplicity')
+        Check 'GP7 strong and cheap roles constrain Select-Capability to paid and free' (
+            @($script:selectorCalls) -contains 'paid' -and @($script:selectorCalls) -contains 'free')
+
+        $script:skipCheap = $true
+        $emptyDispatcher = { param($providerName, $reviewPrompt); return @{ stdout='[]'; stderr=''; exit_code=0 } }
+        $loudResult = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Panel -FailLoud `
+            -RolesPath $rolesFixture -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
+            -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $emptyDispatcher
+        Check 'GP8 skipped role is degraded under FailLoud and named in result' (
+            $loudResult.degraded -and @($loudResult.degraded_roles) -contains 'simplicity' -and
+            $loudResult.reason -match 'simplicity')
+
+        $advisoryResult = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Panel `
+            -RolesPath $rolesFixture -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
+            -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $emptyDispatcher
+        Check 'GP9 skipped role remains advisory fail-open without FailLoud' (
+            -not $advisoryResult.degraded -and $advisoryResult.verdict -eq 'accept' -and
+            @($advisoryResult.degraded_roles) -contains 'simplicity')
+
+        $script:skipCheap = $false
+        $badPanelDispatcher = { param($providerName, $reviewPrompt); return @{ stdout='not json'; stderr=''; exit_code=0 } }
+        $unparsedPanel = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Panel -FailLoud `
+            -RolesPath $rolesFixture -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
+            -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $badPanelDispatcher
+        Check 'GP10 all-unparsed panel is degraded under FailLoud' (
+            $unparsedPanel.degraded -and $unparsedPanel.reason -match 'all reviewers')
+
+        $missingRolesPath = Join-Path $roleTmp 'no-roster.yaml'
+        $emptyRolesPath = Join-Path $roleTmp 'empty-roles.yaml'
+        Set-Content -LiteralPath $emptyRolesPath -Encoding utf8NoBOM -Value 'roles:'
+        $genericDispatcher = { param($providerName, $reviewPrompt); return @{ stdout='[]'; stderr=''; exit_code=0 } }
+        $emptyPanelAdvisory = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Panel `
+            -RolesPath $emptyRolesPath -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
+            -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $genericDispatcher
+        $emptyPanelLoud = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Panel -FailLoud `
+            -RolesPath $emptyRolesPath -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
+            -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $genericDispatcher
+        Check 'GP11 explicit panel with empty roster is advisory degraded with a named reason' (
+            $emptyPanelAdvisory.degraded -and $emptyPanelAdvisory.verdict -eq 'accept' -and
+            @($emptyPanelAdvisory.reviews).Count -eq 0 -and
+            $emptyPanelAdvisory.reason -match 'roster' -and $emptyPanelAdvisory.reason -notmatch '^no findings$')
+        Check 'GP12 explicit panel with empty roster is degraded under FailLoud' (
+            $emptyPanelLoud.degraded -and $emptyPanelLoud.reason -match 'roster')
+
+        $script:skipAll = $true
+        $allSkippedAdvisory = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Panel `
+            -RolesPath $rolesFixture -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
+            -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $genericDispatcher
+        $allSkippedLoud = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Panel -FailLoud `
+            -RolesPath $rolesFixture -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
+            -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $genericDispatcher
+        Check 'GP13 all roles skipped is advisory degraded and not a clean pass' (
+            $allSkippedAdvisory.degraded -and @($allSkippedAdvisory.reviews).Count -eq 0 -and
+            $allSkippedAdvisory.reason -match 'no reviewer ran \(2 roles skipped\)' -and
+            $allSkippedAdvisory.reason -notmatch '^no findings$')
+        Check 'GP14 all roles skipped is degraded under FailLoud' (
+            $allSkippedLoud.degraded -and $allSkippedLoud.reason -match 'no reviewer ran \(2 roles skipped\)')
+        $script:skipAll = $false
+
+        $genericAuto = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' `
+            -RolesPath $missingRolesPath -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
+            -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $genericDispatcher
+        $genericExplicit = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Reviewers @('strong-model') `
+            -RolesPath $missingRolesPath -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
+            -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $genericDispatcher
+        Check 'GP15 no panel + no roster preserves generic competitive output' (
+            ($genericAuto | ConvertTo-Json -Depth 6 -Compress) -eq
+            ($genericExplicit | ConvertTo-Json -Depth 6 -Compress))
+    }
+    finally {
+        Set-Item -Path Function:\Select-Capability -Value $selectorOriginal
+        Remove-Item -Recurse -Force $roleTmp -ErrorAction SilentlyContinue
+        Remove-Variable -Scope Script -Name selectorCalls,skipCheap,skipAll -ErrorAction SilentlyContinue
+    }
+
     $disp = {
         param($n,$p)
         if ($n -eq 'r1') { return @{ stdout='[{"severity":"important","area":"correctness","summary":"off by one"},{"severity":"minor","area":"style","summary":"naming"}]'; stderr=''; exit_code=0 } }
@@ -99,10 +267,10 @@ try {
     Check 'G34 all-unparsed -> accept, flagged' ($g3.verdict -eq 'accept' -and $g3.reason -match 'no usable review')
 
     # zero reviewers + a fleet with no review-capable provider -> throws
-    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "gate-test-$([System.IO.Path]::GetRandomFileName())"
+    $tmpDir = Join-Path $env:TEMP "gate-test-$([System.IO.Path]::GetRandomFileName())"
     New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
     $emptyFleet = Join-Path $tmpDir 'fleet.yaml'
-    Set-Content -LiteralPath $emptyFleet -Encoding utf8 -Value @'
+    Set-Content -LiteralPath $emptyFleet -Encoding utf8NoBOM -Value @'
 providers:
   - name: plain-cli
     kind: cli
@@ -111,19 +279,19 @@ providers:
     command_template: 'echo {{prompt}}'
 '@
     $emptyTools = Join-Path $tmpDir 'tools.yaml'
-    Set-Content -LiteralPath $emptyTools -Encoding utf8 -Value "tools: []`n"
+    Set-Content -LiteralPath $emptyTools -Encoding utf8NoBOM -Value "tools: []`n"
     $threw = $false
     try { Invoke-AcceptanceGate -Artifact 'a' -Task 'b' -Reviewers @() -FleetPath $emptyFleet -ToolsPath $emptyTools } catch { $threw = $true }
     Check 'G35 no reviewers -> throws' ($threw)
 
     # ---- Task 4: CLI (child process, hermetic BATON_HOME) ----
     $canned = Join-Path $tmpDir 'canned-review.ps1'
-    Set-Content -LiteralPath $canned -Encoding utf8 -Value @'
+    Set-Content -LiteralPath $canned -Encoding utf8NoBOM -Value @'
 [void]([Console]::In.ReadToEnd())
 Write-Output '[{"severity":"important","area":"correctness","summary":"off by one"}]'
 '@
     $cliFleet = Join-Path $tmpDir 'cli-fleet.yaml'
-    Set-Content -LiteralPath $cliFleet -Encoding utf8 -Value @"
+    Set-Content -LiteralPath $cliFleet -Encoding utf8NoBOM -Value @"
 providers:
   - name: rev-canned
     kind: cli
@@ -134,7 +302,7 @@ providers:
     command_template: 'pwsh -NoProfile -File "$canned"'
 "@
     $artFx = Join-Path $tmpDir 'artifact.txt'
-    Set-Content -LiteralPath $artFx -Encoding utf8 -Value 'function foo() { return 1 }'
+    Set-Content -LiteralPath $artFx -Encoding utf8NoBOM -Value 'function foo() { return 1 }'
     $gateCli = Join-Path $PSScriptRoot 'fleet-gate.ps1'
     $env:BATON_HOME = $tmpDir
     Copy-Item -LiteralPath $cliFleet -Destination (Join-Path $tmpDir 'fleet.yaml') -Force

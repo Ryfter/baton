@@ -265,12 +265,53 @@ function Format-GateReport {
     return $sb.ToString().TrimEnd()
 }
 
+function Get-ReviewRoles {
+    <# Parse a flat review-roles.yaml roster. Missing or malformed entries are
+       tolerated; only named roles with a lens and cheap|strong tier are returned,
+       and enabled:false roles are skipped. #>
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+
+    $parsedRoles = [System.Collections.ArrayList]@()
+    $currentRole = $null
+    foreach ($rawLine in (Get-Content -LiteralPath $Path)) {
+        if ([string]::IsNullOrWhiteSpace($rawLine) -or $rawLine.TrimStart().StartsWith('#')) { continue }
+        if ($rawLine -match '^roles:\s*$') { continue }
+
+        $newRoleMatch = [regex]::Match($rawLine, '^\s*-\s+name:\s*(.+?)\s*$')
+        if ($newRoleMatch.Success) {
+            if ($null -ne $currentRole) { [void]$parsedRoles.Add($currentRole) }
+            $currentRole = @{ name = (ConvertFrom-FleetValue $newRoleMatch.Groups[1].Value) }
+            continue
+        }
+        if ($null -eq $currentRole) { continue }
+
+        $fieldMatch = [regex]::Match($rawLine, '^\s+([\w.-]+):\s*(.*?)\s*$')
+        if ($fieldMatch.Success) {
+            $currentRole[$fieldMatch.Groups[1].Value] = ConvertFrom-FleetValue $fieldMatch.Groups[2].Value
+        }
+    }
+    if ($null -ne $currentRole) { [void]$parsedRoles.Add($currentRole) }
+
+    $validRoles = [System.Collections.ArrayList]@()
+    foreach ($roleEntry in $parsedRoles) {
+        if ($roleEntry.ContainsKey('enabled') -and $roleEntry.enabled -ne $true) { continue }
+        if ([string]::IsNullOrWhiteSpace([string]$roleEntry.name)) { continue }
+        if ([string]::IsNullOrWhiteSpace([string]$roleEntry.lens)) { continue }
+        if (@('cheap','strong') -notcontains ([string]$roleEntry.tier).ToLowerInvariant()) { continue }
+        $roleEntry.tier = ([string]$roleEntry.tier).ToLowerInvariant()
+        [void]$validRoles.Add($roleEntry)
+    }
+    return $validRoles.ToArray()
+}
+
 function Build-ReviewPrompt {
     <# Compose one reviewer's instruction: role + strict-JSON findings schema +
        the task + the artifact. The whole prompt rides stdin for stdin:true providers. #>
     param(
         [Parameter(Mandatory)][string]$Task,
-        [Parameter(Mandatory)][string]$Artifact
+        [Parameter(Mandatory)][string]$Artifact,
+        [hashtable]$Role
     )
     $schema = @'
 [
@@ -279,8 +320,12 @@ function Build-ReviewPrompt {
     "summary": "<one line: the specific issue>" }
 ]
 '@
-    return @"
-You are a strict code/work reviewer. Review the ARTIFACT below against its TASK.
+    $openingLine = 'You are a strict code/work reviewer. Review the ARTIFACT below against its TASK.'
+    if ($null -ne $Role) {
+        $openingLine = "You are the $($Role.name) reviewer. $($Role.lens)`nReview the ARTIFACT below against its TASK."
+    }
+    $genericPrompt = @"
+$openingLine
 Report real defects only. Respond with ONLY a JSON array matching this schema
 exactly — no prose, no markdown fences. Return [] if there are no findings.
 
@@ -296,6 +341,7 @@ $Task
 ## Artifact
 $Artifact
 "@
+    return $genericPrompt
 }
 
 function Invoke-AcceptanceGate {
@@ -313,46 +359,104 @@ function Invoke-AcceptanceGate {
         [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
         [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
         [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [switch]$Panel,
+        [string]$RolesPath = (Join-Path (Get-BatonHome) 'review-roles.yaml'),
+        [switch]$FailLoud,
         [scriptblock]$Dispatcher
     )
-    if (-not $Reviewers -or $Reviewers.Count -lt 1) {
-        $cands = Select-Capability -Capability review -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
-        $Reviewers = @($cands | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.name })
-    }
-    if (-not $Reviewers -or $Reviewers.Count -lt 1) {
-        throw "Invoke-AcceptanceGate: no reviewers configured (grant the 'review' capability to >=1 provider, or pass -Reviewers)."
+    $reviewersExplicit = $PSBoundParameters.ContainsKey('Reviewers')
+    $panelRequested = $Panel -or ((Test-Path -LiteralPath $RolesPath) -and -not $reviewersExplicit)
+    $roles = if ($panelRequested) { @(Get-ReviewRoles -Path $RolesPath) } else { @() }
+    $panelActive = $panelRequested
+    $degradedRoles = [System.Collections.ArrayList]@()
+    $reviewWork = [System.Collections.ArrayList]@()
+
+    if ($panelActive) {
+        foreach ($roleEntry in $roles) {
+            $roleMaxCostTier = $MaxCostTier
+            if ($roleEntry.tier -eq 'cheap' -and (Get-CostTierRank $roleMaxCostTier) -gt (Get-CostTierRank 'free')) {
+                $roleMaxCostTier = 'free'
+            }
+            $roleCandidates = @(Select-Capability -Capability review -MaxCostTier $roleMaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath |
+                Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_.name) })
+            if ($roleCandidates.Count -lt 1) {
+                [void]$degradedRoles.Add([string]$roleEntry.name)
+                continue
+            }
+            [void]$reviewWork.Add(@{
+                reviewer = [string]$roleEntry.name
+                provider = [string]$roleCandidates[0].name
+                role = $roleEntry
+            })
+        }
+    } else {
+        if (-not $Reviewers -or $Reviewers.Count -lt 1) {
+            $cands = Select-Capability -Capability review -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
+            $Reviewers = @($cands | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.name })
+        }
+        if (-not $Reviewers -or $Reviewers.Count -lt 1) {
+            throw "Invoke-AcceptanceGate: no reviewers configured (grant the 'review' capability to >=1 provider, or pass -Reviewers)."
+        }
+        foreach ($reviewerName in $Reviewers) {
+            [void]$reviewWork.Add(@{ reviewer = $reviewerName; provider = $reviewerName; role = $null })
+        }
     }
     $dispatch = {
         param($name, $prompt)
         if ($Dispatcher) { return (& $Dispatcher $name $prompt) }
         return Invoke-Fleet -Name $name -Prompt $prompt -Path $FleetPath -NoJournal
     }
-    $prompt  = Build-ReviewPrompt -Task $Task -Artifact $Artifact
     $reviews = [System.Collections.ArrayList]@()
-    foreach ($r in $Reviewers) {
-        $pf = @{ reviewer = $r; parsed = $false; findings = @() }
+    foreach ($workItem in $reviewWork) {
+        $reviewerName = [string]$workItem.reviewer
+        $providerName = [string]$workItem.provider
+        $prompt = Build-ReviewPrompt -Task $Task -Artifact $Artifact -Role $workItem.role
+        $pf = @{ reviewer = $reviewerName; parsed = $false; findings = @() }
         try {
-            $res = & $dispatch $r $prompt
+            $res = & $dispatch $providerName $prompt
             if ([int]$res.exit_code -eq 0) {
                 $parsed = Get-ReviewFindings -Output ([string]$res.stdout)
                 $pf.parsed   = $parsed.parsed
                 $pf.findings = $parsed.findings
+                if ($null -ne $workItem.role) {
+                    foreach ($finding in @($pf.findings)) { $finding.area = $reviewerName }
+                }
             }
         } catch {
-            Write-Debug "reviewer $r failed: $($_.Exception.Message)"
+            Write-Debug "reviewer $reviewerName failed: $($_.Exception.Message)"
         }
         [void]$reviews.Add($pf)
     }
     $merge   = Merge-ReviewFindings -Reviews $reviews.ToArray()
     $verdict = Get-AcceptanceVerdict -MergedFindings $merge.merged -RejectAt $RejectAt -PolishAt $PolishAt
-    if (@($merge.unparsed).Count -ge $Reviewers.Count) {
+    $noUsableRoles = $panelActive -and $roles.Count -eq 0
+    $noReviewerRan = $panelActive -and $roles.Count -gt 0 -and $reviews.Count -eq 0
+    $allUnparsed = $reviews.Count -gt 0 -and @($merge.unparsed).Count -ge $reviews.Count
+    if ($allUnparsed) {
         $verdict.reason = 'no usable review obtained (fail-open accept)'
     }
+    $degradationReasons = [System.Collections.ArrayList]@()
+    if ($noUsableRoles) {
+        [void]$degradationReasons.Add('panel requested but roster has no usable enabled roles')
+    } elseif ($noReviewerRan) {
+        [void]$degradationReasons.Add("no reviewer ran ($($degradedRoles.Count) roles skipped)")
+    } elseif ($degradedRoles.Count -gt 0) {
+        [void]$degradationReasons.Add("skipped role(s): $($degradedRoles -join ', ')")
+    }
+    if ($panelActive -and $allUnparsed) {
+        [void]$degradationReasons.Add('all reviewers returned no usable review')
+    }
+    $degraded = $panelActive -and (
+        $noUsableRoles -or $noReviewerRan -or ($FailLoud -and $degradationReasons.Count -gt 0)
+    )
+    if ($degraded) { $verdict.reason = "acceptance panel degraded: $($degradationReasons -join '; ')" }
     $brief = Format-PolishBrief -Verdict $verdict -MergedFindings $merge.merged
     return [ordered]@{
         verdict = $verdict.verdict; reason = $verdict.reason; counts = $verdict.counts
         findings = $merge.merged; polish_brief = $brief
         reviews = @($reviews | ForEach-Object { @{ reviewer = $_.reviewer; parsed = $_.parsed; count = @($_.findings).Count } })
         unparsed = $merge.unparsed
+        degraded = [bool]$degraded
+        degraded_roles = @($degradedRoles.ToArray())
     }
 }

@@ -1,0 +1,32 @@
+# Named acceptance-review roles. Roles name a review lens and a routing tier;
+# model/provider IDs stay in the box-private BATON_HOME fleet.yaml.
+roles:
+  - name: correctness
+    lens: "Does it do what the TASK says, correctly? Logic and edge-case defects only."
+    tier: strong
+    enabled: true
+
+  - name: security
+    lens: "Adversarial: TRY TO BREAK IT — authz, injection, secret/tenant leakage, unsafe I/O."
+    tier: strong
+    enabled: true
+
+  - name: architecture
+    lens: "Boundaries, coupling, and whether it fits existing patterns."
+    tier: strong
+    enabled: true
+
+  - name: spec-compliance
+    lens: "Artifact vs. the ORIGINAL intent — flag under-building / missed requirements."
+    tier: strong
+    enabled: true
+
+  - name: simplicity
+    lens: "Unneeded complexity, dead code, over-engineering."
+    tier: cheap
+    enabled: true
+
+  - name: framework-style
+    lens: "Idiom, naming, project conventions."
+    tier: cheap
+    enabled: true
