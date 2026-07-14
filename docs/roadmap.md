@@ -1,7 +1,7 @@
 # Roadmap
 
-**Last updated:** 2026-07-12
-**Status:** `v1.15.0` shipped — *the fleet does the labor.* Plans 1–11 + the Fleet Conductor
+**Last updated:** 2026-07-14
+**Status:** `v1.16.0` shipped — *the acceptance gate grows a roster (Review Named Panel, d086 node #2).* Plans 1–11 + the Fleet Conductor
 release (v1.2.0) + fourteen minor releases since (v1.3 → v1.15) are all live: governed fleet,
 learning router, front porch, GEPA optimizer, the coach, the project command center, agentic
 executor, quality gates, usage governor, direct-model commands, and per-model token telemetry.
@@ -41,10 +41,12 @@ flip its defaults on `--execute`, don't rebuild it:**
    gates **scream/halt** instead of failing open; and the depth/cost choice per task is a **deliberate,
    logged** call (match spend to stakes — "optimal, not best"), not each instrument's silent default.
    Near-zero new code — flips defaults on wiring that already exists. The frame that contains #2–#3.
-2. **Review named panel** — the acceptance node: a fixed roster of specialized review-role personas
-   per diff/artifact (security/adversarial, architecture, spec-compliance, simplicity, framework/style),
-   each **routed to the cheapest capable model**; findings P1/P2/P3, triaged before parallel resolve.
-   "Taste as code" on routing. *(Both Grok & Codex ranked this #2.) Needs a spec.*
+2. ~~**Review named panel**~~ — **SHIPPED v1.16.0 (2026-07-14, PR #88).** The acceptance node: a
+   config-driven roster of specialized review-role personas per diff/artifact (correctness,
+   security/adversarial, architecture, spec-compliance, simplicity, framework/style), each **routed to
+   the cheapest capable model**, findings tagged with role provenance, **fail-loud** on degraded panels
+   (d086). Generic path byte-for-byte unchanged. See [`releases/2026-07-14-v1.16.0.md`](releases/2026-07-14-v1.16.0.md).
+   *Its wiring into `/baton:go --execute` is node #1 below.*
 3. **Compound default + measured** — the compound node: default closeout that leaves a findable
    artifact **and** answers "what concrete change prevents this class of failure next time?"; plus a
    **compound-rate** metric (% of runs producing a decision/lesson/guidance update — from the journal). *Needs a spec.*
