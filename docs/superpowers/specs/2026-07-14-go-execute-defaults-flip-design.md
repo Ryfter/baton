@@ -482,3 +482,30 @@ The global markdown fleet journal remains invocation telemetry and is currently 
 3. **Re-gate after automatic plan revision.** Today a revised plan is walked without a second Plan Gate (`commands/go.md:74-78`). Recommendation for this node: halt only when the revise pass fails and keep one-pass/no-re-gate behavior to contain cost and scope. A mandatory confirm pass would be stronger but is additional spend and behavior beyond a defaults flip.
 4. **`polish` terminal policy.** This proposal makes `polish` return `needs-polish` rather than `completed`; that is the clearest interpretation of an authoritative acceptance node. If “fail-loud” is intended to cover infrastructure degradation only, keep `polish` completed—but then acceptance remains partly advisory.
 5. **Global journal mirror.** The proposal records stakes in run-scoped `decisions.jsonl`, because execute dispatch intentionally uses `-NoJournal`. If operators require a single cross-run stream, add optional `run_id`, `task_id`, `stakes`, and `depth_tier` metadata to `routing-journal.jsonl`; do not append ad hoc fields to the markdown fleet journal without a separate consumer audit.
+
+
+---
+
+## Node split + locked decisions — 2026-07-14 (Kevin approved)
+
+**This design is now split into two sequential PRs.** Two independent, source-checked reviews (Codex's own draft + Grok's adversarial review — see issue #89 comment) converged: the draft bundles a real depth-routing subsystem with the gates-flip, so "near-zero code" only holds for the gates half.
+
+- **PR-A — gates defaults-flip + fail-loud (issue #89, near-zero, BUILD FIRST).** Under `--execute`: plan gate + acceptance panel (`--panel --fail-loud`) + verify are ON by default; `--no-plan-gate` / `--no-gate` / `--no-verify` escapes; degraded/understaffed gates HALT (fail-loud) instead of silent-accept. No stakes logic in this PR.
+- **PR-B — depth-matched-to-stakes routing + logging (issue #98, fast-follow).** `Resolve-TaskDepthPolicy`, stakes->tier mapping, planner `stakes`/`stakes_basis` schema, spawner selection, `decisions.jsonl` additive fields (`cost_tier` estimate vs `selected_cost_tier` actual).
+
+**Locked answers to the 5 open questions (Codex + Grok consensus):**
+1. **Research gate** — OUT of node #1 (not on the live call graph; write a separate pre-plan proposal if wanted).
+2. **Verify escape** — `--no-verify` only (reserve `--allow-unverified` for a later finer knife).
+3. **Re-gate after auto-revision** — NO re-gate this node (halt only if the revise pass itself fails).
+4. **`polish` terminal** — return `needs-polish` (non-success); keep infra-`degraded` distinct from content statuses in docs/exit lists.
+5. **Journal** — run-scoped `decisions.jsonl` only; no ad-hoc markdown-journal fields.
+
+**Grok tweaks to fold into PR-A at build time:**
+- Empty / no-op diff (exit-0, no tree growth) must NOT be classed `acceptance-degraded` — only throw / unusable-roles / no-verdict degrade. Add a crisp empty-diff rule.
+- Missing `stakes` on `--execute` → documented normalize+warn for PR-A (stakes isn't wired until PR-B; do not silently hard-default).
+- Add `plan-failed` + `plan-gate-degraded` to the `--execute` exit-1 set, AND wire `plan-gate-degraded` into `fleet-go.ps1`'s `plan-rejected` cleanup branch (else orphan worktree/branch on infra fail).
+- `Invoke-Conductor` acceptance: default-on when an artifact/diff is present for non-execute callers (don't silently change library call semantics).
+- Fix the null `$pgRes.reason` in the degraded message when `$pgRes` is null (snippet bug).
+- Plan-gate early-understaffed return still returns `verdict=accept` + `fail_open`; the FailLoud rewrite of that early exit must actually be implemented, not just asserted.
+
+**Tests/fixtures:** plain `--execute` now breaks on unprofiled plans + understaffed panel/plan-gate by design — existing fixtures will need profiles. House rules unchanged (utf8NoBOM; never `$args`/`$input`/`$event`/`$matches`/`$host`/`$pid`; `[Console]::Error.WriteLine` + exit 2; hermetic `$env:TEMP` tests; no box-private model IDs).
