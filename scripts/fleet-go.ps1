@@ -150,6 +150,7 @@ if ($Execute) {
     try { $wt = New-RunWorktree -RepoPath $repo -RunId (Split-Path $runDir -Leaf) }
     catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }
     $spawnArgs = @{ Worktree = $wt.worktree; FleetPath = $FleetPath; ToolsPath = $ToolsPath; MaxCostTier = $MaxCostTier; RunDir = $runDir }
+    if ($PSBoundParameters.ContainsKey('Stakes')) { $spawnArgs.StakesOverride = $Stakes }
     if ($env:BATON_GO_TEST_EXEC_DISPATCHER) {
         # Hermetic seam: dot-source a file defining Invoke-TestExecDispatcher.
         . $env:BATON_GO_TEST_EXEC_DISPATCHER

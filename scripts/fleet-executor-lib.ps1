@@ -79,6 +79,19 @@ function Test-ProviderAgentic {
     return (([string]$Provider.platform) -in @('claude', 'codex', 'gemini'))
 }
 
+function Test-ProviderDepthTier {
+    <# True only when Invoke-Fleet's CLI path can apply this named tier: the
+       provider defines a safe, non-empty fragment and its template consumes it. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [Parameter(Mandatory)][ValidateSet('low','med','high')][string]$DepthTier
+    )
+    if ([string]$Provider.kind -ne 'cli') { return $false }
+    if (-not ([string]$Provider.command_template).Contains('{{tier_args}}')) { return $false }
+    if (-not $Provider.ContainsKey("tier_$DepthTier")) { return $false }
+    return -not [string]::IsNullOrWhiteSpace((Get-FleetProviderTier -Provider $Provider -Tier $DepthTier))
+}
+
 function Remove-RunWorktree {
     <# Explicit discard of the worktree DIRECTORY only. The run branch is
        intentionally KEPT so the human can still inspect or merge the work.
@@ -91,6 +104,53 @@ function Remove-RunWorktree {
     $extra = @(); if ($Force) { $extra += '--force' }
     $out = & git -C $RepoPath worktree remove @extra $Worktree 2>&1
     if ($LASTEXITCODE -ne 0) { throw "execute: git worktree remove failed: $(@($out) -join ' ')" }
+}
+
+function Resolve-TaskDepthPolicy {
+    <# Pure d086 PR-B policy: resolve planner/operator stakes into a generic
+       provider depth, router objective, and effective per-task cost ceiling. #>
+    param(
+        [Parameter(Mandatory)]$Task,
+        [Parameter(Mandatory)][ValidateSet('local','free','paid')][string]$RunMaxCostTier,
+        [ValidateSet('low','standard','high')][string]$StakesOverride
+    )
+    $hasOverride = $PSBoundParameters.ContainsKey('StakesOverride')
+    $stakes = if ($hasOverride) { $StakesOverride }
+              elseif ([string]::IsNullOrWhiteSpace([string]$Task.stakes)) { 'standard' }
+              else { [string]$Task.stakes }
+    $basis = if ($hasOverride) { "operator override: --stakes $StakesOverride" }
+             elseif ([string]::IsNullOrWhiteSpace([string]$Task.stakes)) { 'legacy plan omitted stakes' }
+             else { [string]$Task.stakes_basis }
+    $estimate = if ([string]$Task.est_cost_tier -in @('local','free','paid')) {
+        [string]$Task.est_cost_tier
+    } else { $RunMaxCostTier }
+    $tiers = @('local','free','paid')
+    $minTier = {
+        param([string[]]$Values)
+        $rank = ($Values | ForEach-Object { [array]::IndexOf($tiers, $_) } | Measure-Object -Minimum).Minimum
+        return $tiers[[int]$rank]
+    }.GetNewClosure()
+
+    switch ($stakes) {
+        'low' {
+            $depth = 'low'; $mode = 'economy'
+            $cap = & $minTier @($RunMaxCostTier, 'free', $estimate)
+        }
+        'high' {
+            $depth = 'high'; $mode = 'champion'; $cap = $RunMaxCostTier
+        }
+        default {
+            $stakes = 'standard'; $depth = 'med'; $mode = 'economy'
+            $cap = & $minTier @($RunMaxCostTier, $estimate)
+        }
+    }
+    return [ordered]@{
+        stakes = $stakes
+        stakes_basis = $basis
+        depth_tier = $depth
+        selection_mode = $mode
+        max_cost_tier = $cap
+    }
 }
 
 function New-AgenticSpawner {
@@ -107,11 +167,16 @@ function New-AgenticSpawner {
         [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
         [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
         [string]$RunDir,
-        [scriptblock]$Dispatcher
+        [scriptblock]$Dispatcher,
+        [ValidateSet('low','standard','high')][string]$StakesOverride
     )
+    $hasStakesOverride = $PSBoundParameters.ContainsKey('StakesOverride')
     return {
         param($task)
         $cap = if ($task.capability) { $task.capability } else { 'reasoning' }
+        $policyArgs = @{ Task = $task; RunMaxCostTier = $MaxCostTier }
+        if ($hasStakesOverride) { $policyArgs.StakesOverride = $StakesOverride }
+        $policy = Resolve-TaskDepthPolicy @policyArgs
         # Select-Capability returns via `,([object[]]$ranked)` (comma-operator array
         # preservation, correct for callers doing a direct `$x = Select-Capability ...`
         # assignment with 0/1 results). Piping that return straight into Where-Object
@@ -119,29 +184,42 @@ function New-AgenticSpawner {
         # as a single $_. Capture to a plain variable first (direct assignment unwraps
         # correctly) and filter the variable, not the call, to get real per-candidate
         # enumeration.
-        $raw = Select-Capability -Capability $cap -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
+        $raw = Select-Capability -Capability $cap -MaxCostTier $policy.max_cost_tier `
+            -SelectionMode $policy.selection_mode -FleetPath $FleetPath -ToolsPath $ToolsPath
         # Edit dispatch is fleet-only (Invoke-Fleet resolves names against fleet.yaml);
         # tools.yaml candidates cannot take edit dispatch even if they infer agentic
         # via a platform field, so require source='fleet' before the agentic test.
         $cands = @($raw | Where-Object { ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and (Test-ProviderAgentic -Provider $_) })
         if ($cands.Count -lt 1) {
-            return @{ ok = $false; spend = 0.0; chose = ''; why = "no edit-capable candidate for '$cap'"; alternatives = @() }
+            return @{
+                ok = $false; spend = 0.0; chose = ''; why = "no edit-capable candidate for '$cap'"; alternatives = @()
+                stakes = $policy.stakes; stakes_basis = $policy.stakes_basis; depth_tier = $policy.depth_tier
+                selection_mode = $policy.selection_mode; tier_cap = $policy.max_cost_tier
+                depth_applied = $false; selected_cost_tier = ''
+            }
         }
         $pick = $cands[0]
         $alts = @($cands | Select-Object -Skip 1 | ForEach-Object { $_.name })
+        $provider = Get-FleetProvider -Name ([string]$pick.name) -Path $FleetPath
+        $depthApplied = ($null -ne $provider) -and (Test-ProviderDepthTier -Provider $provider -DepthTier $policy.depth_tier)
+        $resultBase = @{
+            stakes = $policy.stakes; stakes_basis = $policy.stakes_basis; depth_tier = $policy.depth_tier
+            selection_mode = $policy.selection_mode; tier_cap = $policy.max_cost_tier
+            depth_applied = [bool]$depthApplied; selected_cost_tier = [string]$pick.cost_tier
+        }
         $prompt = "Task: $($task.desc)"
         $preTree = Get-WorktreeTreeSha -Worktree $Worktree
         Push-Location -LiteralPath $Worktree
         $dispatchErr = $null
         try {
-            $res = if ($Dispatcher) { & $Dispatcher $pick $prompt }
-                   else { Invoke-Fleet -Name $pick.name -Prompt $prompt -Path $FleetPath -NoJournal }
+            $res = if ($Dispatcher) { & $Dispatcher $pick $prompt $policy.depth_tier }
+                   else { Invoke-Fleet -Name $pick.name -Prompt $prompt -Path $FleetPath -Tier $policy.depth_tier -NoJournal }
         } catch {
             $dispatchErr = $_
             $res = $null
         } finally { Pop-Location }
         if ($dispatchErr) {
-            return @{ ok = $false; spend = 0.0; chose = $pick.name; why = "$($pick.name): dispatch error: $($dispatchErr.Exception.Message)"; alternatives = $alts }
+            return $resultBase + @{ ok = $false; spend = 0.0; chose = $pick.name; why = "$($pick.name): dispatch error: $($dispatchErr.Exception.Message)"; alternatives = $alts }
         }
         $postTree = Get-WorktreeTreeSha -Worktree $Worktree
         $grew = ($null -ne $preTree) -and ($null -ne $postTree) -and ($preTree -ne $postTree)
@@ -155,12 +233,12 @@ function New-AgenticSpawner {
             } catch { }
         }
         if ([int]$res.exit_code -ne 0) {
-            return @{ ok = $false; spend = 0.0; chose = $pick.name; why = "$($pick.name): exit $($res.exit_code)"; alternatives = $alts }
+            return $resultBase + @{ ok = $false; spend = 0.0; chose = $pick.name; why = "$($pick.name): exit $($res.exit_code)"; alternatives = $alts }
         }
         if ($grew) {
-            return @{ ok = $true; spend = 0.0; chose = $pick.name; why = "routed $cap -> $($pick.name); worktree diff grew"; alternatives = $alts }
+            return $resultBase + @{ ok = $true; spend = 0.0; chose = $pick.name; why = "routed $cap -> $($pick.name); worktree diff grew"; alternatives = $alts }
         }
-        return @{ ok = $true; spend = 0.0; chose = $pick.name; why = "$($pick.name): no changes"; alternatives = $alts }
+        return $resultBase + @{ ok = $true; spend = 0.0; chose = $pick.name; why = "$($pick.name): no changes"; alternatives = $alts }
     }.GetNewClosure()
 }
 
@@ -354,10 +432,19 @@ function New-VerifyingSpawner {
         $passed = ([string]$v.verdict -eq 'pass')
         $why = if ($passed) { "$($final.inner.why); verified (grade $($v.grade))" }
                else { "$($final.inner.why); verification $($v.verdict): $($v.failure_category)" }
-        return @{
+        $result = @{
             ok = $passed; spend = [double]$totalSpend; chose = [string]$final.inner.chose
             why = $why; alternatives = @($final.inner.alternatives)
             verification = $verObj; unverified = $false
         }
+        foreach ($field in @('stakes','stakes_basis','depth_tier','depth_applied','selection_mode','tier_cap','selected_cost_tier')) {
+            $hasField = if ($final.inner -is [System.Collections.IDictionary]) {
+                $final.inner.Contains($field)
+            } else {
+                $null -ne $final.inner.PSObject.Properties[$field]
+            }
+            if ($hasField) { $result[$field] = $final.inner.$field }
+        }
+        return $result
     }.GetNewClosure()
 }

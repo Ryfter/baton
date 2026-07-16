@@ -65,6 +65,17 @@ try {
     Check 'A7 platform github not agentic' (-not (Test-ProviderAgentic -Provider @{ platform = 'github' }))
     Check 'A8 no platform, no marker -> not agentic' (-not (Test-ProviderAgentic -Provider @{ name = 'mystery' }))
 
+    if (Get-Command Test-ProviderDepthTier -ErrorAction SilentlyContinue) {
+        $tierProvider = @{ kind='cli'; command_template='tool {{tier_args}} "{{prompt}}"'; tier_med='--effort medium' }
+        Check 'DT1 valid CLI named tier with consuming template is applied' (Test-ProviderDepthTier -Provider $tierProvider -DepthTier med)
+        Check 'DT2 template that drops tier args is not applied' (-not (Test-ProviderDepthTier -Provider @{ kind='cli'; command_template='tool "{{prompt}}"'; tier_med='--effort medium' } -DepthTier med))
+        Check 'DT3 HTTP provider cannot apply CLI named tier' (-not (Test-ProviderDepthTier -Provider @{ kind='http'; command_template='tool {{tier_args}}'; tier_med='--effort medium' } -DepthTier med))
+        Check 'DT4 unsafe tier fragment is not applied' (-not (Test-ProviderDepthTier -Provider @{ kind='cli'; command_template='tool {{tier_args}}'; tier_med='$(unsafe)' } -DepthTier med))
+        Check 'DT5 command resolution consumes the named tier fragment' ((Resolve-FleetCommand -Provider $tierProvider -Prompt 'p' -Tier med) -match '--effort medium')
+    } else {
+        Check 'DT1 Test-ProviderDepthTier exists' $false
+    }
+
     # ---- Resolve-TaskDepthPolicy (d086 PR-B, pure table) ----
     if (Get-Command Resolve-TaskDepthPolicy -ErrorAction SilentlyContinue) {
         $depthCases = @(
@@ -122,7 +133,7 @@ providers:
     cost_tier: free
     platform: codex
     quality: 0.1
-    command_template: 'echo "{{prompt}}"'
+    command_template: 'echo {{tier_args}} "{{prompt}}"'
     tier_low: '--effort low'
     tier_med: '--effort medium'
     tier_high: '--effort high'
@@ -132,7 +143,7 @@ providers:
     cost_tier: paid
     platform: codex
     quality: 0.9
-    command_template: 'echo "{{prompt}}"'
+    command_template: 'echo {{tier_args}} "{{prompt}}"'
     tier_high: '--effort high'
 '@
         $toolsPath = Join-Path $env:BATON_HOME 'tools.yaml'   # intentionally absent file
@@ -163,6 +174,10 @@ providers:
             $r.depth_tier -eq 'med' -and $r.selection_mode -eq 'economy' -and $r.tier_cap -eq 'paid')
         Check 'P8b selected provider actual tier and named depth are recorded' ($r.selected_cost_tier -eq 'free' -and $r.depth_applied -eq $true)
 
+        $legacySpawnerOk = $true
+        try { $legacySpawner = New-AgenticSpawner $wt2.worktree $fleetPath $toolsPath paid $runDir2 $editDisp } catch { $legacySpawnerOk = $false }
+        Check 'P8b1 legacy positional spawner signature remains compatible' ($legacySpawnerOk -and $null -ne $legacySpawner)
+
         $highSeen = @{ tier = ''; pick = '' }
         $highDisp = { param($pick, $prompt, $depthTier)
             $highSeen.tier = $depthTier; $highSeen.pick = [string]$pick.name
@@ -177,6 +192,13 @@ providers:
         Check 'P8d dispatcher receives generic tier and selected actual tier is logged' (
             $highSeen.tier -eq 'high' -and $highSeen.pick -eq 'fake-champion' -and
             $rHigh.depth_applied -eq $true -and $rHigh.selected_cost_tier -eq 'paid')
+
+        $spOverride = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetPath -ToolsPath $toolsPath `
+            -MaxCostTier paid -StakesOverride high -Dispatcher $highDisp
+        $rOverride = & $spOverride $task
+        Check 'P8e spawner-level operator override reaches routing policy' (
+            $rOverride.stakes -eq 'high' -and $rOverride.stakes_basis -eq 'operator override: --stakes high' -and
+            $rOverride.chose -eq 'fake-champion' -and $rOverride.depth_tier -eq 'high')
 
         # dispatcher that does NOTHING, exit 0
         $noopDisp = { param($pick, $prompt) @{ stdout = 'ok'; stderr = ''; exit_code = 0; duration_s = 0 } }
@@ -329,6 +351,11 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
         Check 'VS2 final ok true' ($rv2.ok -eq $true)
         Check 'VS2 two attempt rows' (@(Get-Attempts $fx2.runDir).Count -eq 2)
         Check 'VS2 first_failure_category check-failed' ($rv2.verification.first_failure_category -eq 'check-failed')
+        Check 'VS2 final retry preserves resolved depth policy metadata' (
+            $rv2.stakes -eq 'standard' -and $rv2.stakes_basis -eq 'legacy plan omitted stakes' -and
+            $rv2.depth_tier -eq 'med' -and $rv2.selection_mode -eq 'economy' -and
+            $rv2.tier_cap -eq 'free' -and $rv2.depth_applied -eq $true -and
+            $rv2.selected_cost_tier -eq 'free')
 
         # VS3 retry-then-fail (hook fails both attempts).
         $hook3 = Join-Path $tmpRoot 'hook3.ps1'
