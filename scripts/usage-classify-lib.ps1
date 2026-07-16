@@ -53,6 +53,39 @@ function ConvertTo-ClassifiedResetAt {
         }
     }
 
+    $retryDateMatch = Find-UsageRegexMatch -Text $Text -Pattern 'retry[ -]?after\s*:\s*(?<date>[^\r\n]+)'
+    if ($retryDateMatch.Success) {
+        $retryDate = [datetimeoffset]::MinValue
+        if ([datetimeoffset]::TryParse(
+                $retryDateMatch.Groups['date'].Value.Trim(),
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::AllowWhiteSpaces -bor [System.Globalization.DateTimeStyles]::AssumeUniversal,
+                [ref]$retryDate)) {
+            return $retryDate.UtcDateTime.ToString('o')
+        }
+    }
+
+    $clockMatch = Find-UsageRegexMatch -Text $Text -Pattern '(?:resets?|retry|try again)\s+(?:at\s+)?(?<clock>\d{1,2}:\d{2}\s*(?:AM|PM)?\s*(?:UTC|GMT)?)\b'
+    if ($clockMatch.Success) {
+        $clockText = $clockMatch.Groups['clock'].Value.Trim()
+        $clockHasZone = $clockText.EndsWith('UTC', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $clockText.EndsWith('GMT', [System.StringComparison]::OrdinalIgnoreCase)
+        if ($clockHasZone) { $clockText = $clockText.Substring(0, $clockText.Length - 3).TrimEnd() + ' +00:00' }
+        $clockStyle = [System.Globalization.DateTimeStyles]::AllowWhiteSpaces -bor
+            $(if ($clockHasZone) { [System.Globalization.DateTimeStyles]::None } else { [System.Globalization.DateTimeStyles]::AssumeLocal })
+        $clockInstant = [datetimeoffset]::MinValue
+        $datedClock = $nowUtc.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture) + ' ' + $clockText
+        if ([datetimeoffset]::TryParse(
+                $datedClock,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                $clockStyle,
+                [ref]$clockInstant)) {
+            $clockUtc = $clockInstant.UtcDateTime
+            if ($clockUtc -le $nowUtc) { $clockUtc = $clockUtc.AddDays(1) }
+            return $clockUtc.ToString('o')
+        }
+    }
+
     $relativeMatch = Find-UsageRegexMatch -Text $Text -Pattern '(?:resets?|retry|try again)\s+(?:at|in|after)\s+(?<amount>\d+)\s*(?<unit>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b'
     if ($relativeMatch.Success) {
         $amount = 0
@@ -89,7 +122,7 @@ function Get-UsageFailureObservation {
     $reason = if ($ExitCode -eq 0) { 'dispatch_succeeded' } else { 'unrecognized_dispatch_failure' }
 
     if ($ExitCode -ne 0) {
-        $quotaPattern = 'weekly\s+(?:usage\s+)?limit|hit\s+(?:your|the)\s+(?:usage|weekly|session|model|opus)[^\r\n]{0,60}\blimit|usage\s+limit\s+(?:reached|exceeded)|quota\s+(?:exhausted|exceeded)|insufficient_quota|billing\s+hard\s+limit|credits?\s+exhausted'
+        $quotaPattern = 'weekly\s+(?:usage\s+)?limit|hit\s+your\s+limit|hit\s+(?:your|the)\s+(?:usage|weekly|session|model|opus)[^\r\n]{0,60}\blimit|usage\s+limit\s+(?:reached|exceeded)|quota\s+(?:exhausted|exceeded)|insufficient_quota|billing\s+hard\s+limit|credits?\s+exhausted'
         $authPattern = '\b(?:401|403)\b|unauthori[sz]ed|invalid\s+(?:api\s+)?key|authentication\s+(?:required|failed)|login\s+required|configuration\s+error|unknown\s+model|model\s+not\s+found'
         $burstPattern = '\b429\b|too\s+many\s+requests|rate[ -]?limit(?:ed|\s+exceeded|\s+reached)|retry[ -]?after'
         $overloadPattern = '\b(?:500|502|503|529)\b|overloaded(?:_error)?|server\s+is\s+overloaded|service\s+unavailable|temporarily\s+at\s+capacity'

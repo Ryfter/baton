@@ -44,6 +44,17 @@ $cases = @(
         reset_at = '2099-01-02T00:00:00.0000000Z'
     },
     @{
+        name = 'Claude short limit phrase'
+        exit_code = 1
+        stdout = ''
+        stderr = "You've hit your limit. Resets at 2099-01-03T00:00:00Z."
+        classification = 'quota_exhausted'
+        event_kind = 'lockout'
+        hard = $true
+        scope = 'subscription'
+        reset_at = '2099-01-03T00:00:00.0000000Z'
+    },
+    @{
         name = 'Grok subscription limit'
         exit_code = 1
         stdout = ''
@@ -64,6 +75,28 @@ $cases = @(
         hard = $true
         scope = 'api_rate'
         reset_at = '2098-12-31T23:02:00.0000000Z'
+    },
+    @{
+        name = '429 HTTP-date reset'
+        exit_code = 1
+        stdout = ''
+        stderr = "HTTP 429 Too Many Requests`nRetry-After: Thu, 01 Jan 2099 00:05:00 GMT"
+        classification = 'rate_limit_burst'
+        event_kind = 'cooldown'
+        hard = $true
+        scope = 'api_rate'
+        reset_at = '2099-01-01T00:05:00.0000000Z'
+    },
+    @{
+        name = 'Codex clock reset'
+        exit_code = 1
+        stdout = ''
+        stderr = "You've hit your usage limit. Try again at 01:30 UTC."
+        classification = 'quota_exhausted'
+        event_kind = 'lockout'
+        hard = $true
+        scope = 'subscription'
+        reset_at = '2099-01-01T01:30:00.0000000Z'
     },
     @{
         name = 'server overload'
