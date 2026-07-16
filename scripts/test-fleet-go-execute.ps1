@@ -117,6 +117,71 @@ function Invoke-TestExecDispatcher {
         Check 'E9i -StakesOverride is an alias for -Stakes' $false
     }
 
+    # Reactive usage failover reaches the golden go path and its decisions/report.
+    $savedFleetText = Get-Content -LiteralPath (Join-Path $env:BATON_HOME 'fleet.yaml') -Raw
+    $savedDispatcherPath = $env:BATON_GO_TEST_EXEC_DISPATCHER
+    $savedPlanText = $env:BATON_GO_TEST_PLAN
+    try {
+        Set-Content -LiteralPath (Join-Path $env:BATON_HOME 'fleet.yaml') -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: worker-primary
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo {{tier_args}} "{{prompt}}"'
+    tier_high: '--depth high'
+  - name: worker-substitute
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo {{tier_args}} "{{prompt}}"'
+    tier_high: '--depth high'
+'@
+        $goFailoverDispatcher = Join-Path $tmpRoot 'disp-failover.ps1'
+        Set-Content -LiteralPath $goFailoverDispatcher -Encoding utf8NoBOM -Value @'
+$script:UsageFailoverCallCount = 0
+function Invoke-TestExecDispatcher {
+    param($Pick, $Prompt, $DepthTier)
+    $script:UsageFailoverCallCount++
+    if ($script:UsageFailoverCallCount -eq 1) {
+        Set-Content -LiteralPath (Join-Path (Get-Location).Path 'partial-attempt.txt') -Value 'partial' -Encoding utf8NoBOM
+        return @{ stdout=''; stderr="You've hit your usage limit. Try again at 2099-01-01T00:00:00Z."; exit_code=1; duration_s=0 }
+    }
+    $clean = -not (Test-Path -LiteralPath (Join-Path (Get-Location).Path 'partial-attempt.txt'))
+    Set-Content -LiteralPath (Join-Path (Get-Location).Path 'failover-result.txt') -Value "worker=$($Pick.name);depth=$DepthTier;clean=$clean" -Encoding utf8NoBOM
+    return @{ stdout='done'; stderr=''; exit_code=0; duration_s=0 }
+}
+'@
+        $env:BATON_GO_TEST_EXEC_DISPATCHER = $goFailoverDispatcher
+        $env:BATON_GO_TEST_PLAN = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"usage failover integration","capability":"code-gen","depends_on":[],"est_cost_tier":"free","reversible":true,"stakes":"high","stakes_basis":"security boundary"}]}'
+        $rawFailover = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute `
+            -NoPlanGate -NoGate -NoVerify -RepoPath $repo -Json | Out-String
+        $resultFailover = $rawFailover | ConvertFrom-Json
+        $decisionFailover = (Get-Content -LiteralPath (Join-Path $resultFailover.run_dir 'decisions.jsonl') | Select-Object -First 1) | ConvertFrom-Json
+        $reportFailover = Get-Content -LiteralPath (Join-Path $resultFailover.run_dir 'report.md') -Raw
+        $worktreeFailoverResult = Get-Content -LiteralPath (Join-Path ([string]$resultFailover.worktree) 'failover-result.txt') -Raw
+        $usageFailoverRows = @(Get-Content -LiteralPath (Join-Path $env:BATON_HOME 'usage-journal.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
+        Check 'E9j go usage failover completes through substitute' ($resultFailover.status -eq 'completed' -and $decisionFailover.chose -eq 'worker-substitute')
+        Check 'E9k go usage failover reports exactly one plain-language hop' (
+            ([regex]::Matches($reportFailover, 'usage failover: worker-primary -> worker-substitute')).Count -eq 1 -and
+            $decisionFailover.why -notmatch "`r|`n")
+        Check 'E9l go substitute observes clean state' ($worktreeFailoverResult -match 'worker=worker-substitute;depth=high;clean=True')
+        Check 'E9l go failed partial file stays absent' (-not (Test-Path -LiteralPath (Join-Path ([string]$resultFailover.worktree) 'partial-attempt.txt')))
+        Check 'E9m go decision preserves high-stakes depth policy' ($decisionFailover.stakes -eq 'high' -and $decisionFailover.depth_tier -eq 'high' -and $decisionFailover.selection_mode -eq 'champion' -and $decisionFailover.tier_cap -eq 'paid' -and $decisionFailover.selected_cost_tier -eq 'free')
+        Check 'E9n go usage journal records one structured hop' (@($usageFailoverRows | Where-Object { $_.event -eq 'failover' -and $_.original_worker -eq 'worker-primary' -and $_.substitute -eq 'worker-substitute' }).Count -eq 1)
+    } finally {
+        Set-Content -LiteralPath (Join-Path $env:BATON_HOME 'fleet.yaml') -Value $savedFleetText -Encoding utf8NoBOM
+        $env:BATON_GO_TEST_EXEC_DISPATCHER = $savedDispatcherPath
+        $env:BATON_GO_TEST_PLAN = $savedPlanText
+    }
+
     # Each escape restores only its own legacy node.
     $rawNoPg = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -NoPlanGate -RepoPath $repo -Json | Out-String
     $resNoPg = $rawNoPg | ConvertFrom-Json
