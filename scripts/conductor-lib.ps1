@@ -857,7 +857,13 @@ function Invoke-Conductor {
         try { $produced = [string](& $DiffProvider) }
         catch {
             $diffProviderFailed = $true
-            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Level 'warn' -Message "diff provider failed (fail-open): $($_.Exception.Message)")
+            # Under fail-loud this path degrades and halts (see $diffProviderFailed
+            # consumer below); the event must say so, not narrate 'fail-open'.
+            $dpFailLoud = $acceptanceEnabled -and $AcceptanceFailLoud
+            $dpMsg = if ($dpFailLoud) { "diff provider failed (acceptance-degraded — run halts): $($_.Exception.Message)" }
+                     else { "diff provider failed (fail-open): $($_.Exception.Message)" }
+            $dpLevel = if ($dpFailLoud) { 'error' } else { 'warn' }
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Level $dpLevel -Message $dpMsg)
         }
         if (-not [string]::IsNullOrWhiteSpace($produced)) {
             Set-Content -LiteralPath (Join-Path $RunDir 'changes.diff') -Value $produced -Encoding utf8NoBOM
@@ -883,8 +889,12 @@ function Invoke-Conductor {
                     }
         } catch { $gate = $null; $gateErr = $_.Exception.Message }
         if ($null -eq $gate -or -not $gate.verdict) {
-            $msg = if ($gateErr) { "acceptance gate failed: $gateErr" } else { 'acceptance gate produced no verdict (fail-open)' }
-            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Level 'warn' -Message $msg)
+            # Fail-loud consumes this as acceptance-degraded (below); narrate the halt,
+            # not 'fail-open'. Only the advisory (non-fail-loud) path truly fails open.
+            $noVerdictBase = if ($gateErr) { "acceptance gate failed: $gateErr" } else { 'acceptance gate produced no verdict' }
+            $msg = if ($AcceptanceFailLoud) { "$noVerdictBase (acceptance-degraded — run halts)" } else { "$noVerdictBase (fail-open)" }
+            $gateLevel = if ($AcceptanceFailLoud) { 'error' } else { 'warn' }
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Level $gateLevel -Message $msg)
             $gate = $null
             if ($AcceptanceFailLoud) { $finalStatus = 'acceptance-degraded' }
         } else {
