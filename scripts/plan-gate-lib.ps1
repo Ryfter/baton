@@ -144,10 +144,10 @@ function Invoke-PlanGate {
        Each reviewer reviews INDEPENDENTLY (no cross-talk); reconciliation
        and verdict are pure. Reviewers default to providers claiming the
        'plan-review' capability. -Dispatcher injects for tests; real path
-       dispatches via Invoke-Fleet. Fail-open, NEVER throws: fewer than 2
-       resolved reviewers returns an accept result flagged fail_open with
-       zero dispatch/spend — a missing Grok CLI must never freeze the
-       Conductor (contrast: Invoke-AcceptanceGate throws at <1 reviewer). #>
+       dispatches via Invoke-Fleet. Legacy calls fail open: fewer than 2
+       resolved reviewers returns accept + fail_open with zero dispatch/spend.
+       -FailLoud instead returns an explicit degraded result when the unique or
+       usable roster falls below two. #>
     param(
         [Parameter(Mandatory)][string]$Goal,
         [Parameter(Mandatory)][string]$PlanJson,
@@ -157,6 +157,7 @@ function Invoke-PlanGate {
         [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
         [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
         [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
+        [switch]$FailLoud,
         [scriptblock]$Dispatcher
     )
     if (-not $Reviewers -or $Reviewers.Count -lt 1) {
@@ -171,6 +172,15 @@ function Invoke-PlanGate {
     $seenReviewers = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $Reviewers = @($Reviewers | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Where-Object { $seenReviewers.Add($_) })
     if (@($Reviewers).Count -lt 2) {
+        if ($FailLoud) {
+            return [ordered]@{
+                verdict = 'degraded'; reason = "plan gate degraded: only $(@($Reviewers).Count) unique reviewer(s); need 2"
+                counts = @{ critical = 0; important = 0; minor = 0 }
+                findings = @(); revise_brief = 'Plan review unavailable — no labor may run.'
+                reviews = @(); unparsed = @(); fail_open = $false; reviewers = @($Reviewers)
+                degraded = $true; degraded_reviewers = @($Reviewers)
+            }
+        }
         return [ordered]@{
             verdict = 'accept'; reason = 'understaffed plan-review roster (fewer than 2 reviewers) — fail-open'
             counts = @{ critical = 0; important = 0; minor = 0 }
@@ -201,16 +211,30 @@ function Invoke-PlanGate {
     }
     $merge   = Merge-ReviewFindings -Reviews $reviews.ToArray()
     $verdict = Get-PlanReviewVerdict -MergedFindings $merge.merged -RejectAt $RejectAt -ReviseAt $ReviseAt
+    $usableReviewers = @($reviews | Where-Object { $_.parsed }).Count
+    $degraded = $FailLoud -and $usableReviewers -lt 2
+    $degradedReviewers = @($reviews | Where-Object { -not $_.parsed } | ForEach-Object { $_.reviewer })
     $failOpen = $false
     if (@($merge.unparsed).Count -ge $Reviewers.Count) {
-        $verdict.reason = 'no usable review obtained (fail-open accept)'
-        $failOpen = $true
+        if ($FailLoud) {
+            $verdict.reason = "plan gate degraded: only $usableReviewers usable reviewer(s); need 2"
+        } else {
+            $verdict.reason = 'no usable review obtained (fail-open accept)'
+            $failOpen = $true
+        }
+    } elseif ($degraded) {
+        $verdict.reason = "plan gate degraded: only $usableReviewers usable reviewer(s); need 2"
     }
     $brief = Format-ReviseBrief -Verdict $verdict -MergedFindings $merge.merged
-    return [ordered]@{
+    $result = [ordered]@{
         verdict = $verdict.verdict; reason = $verdict.reason; counts = $verdict.counts
         findings = $merge.merged; revise_brief = $brief
         reviews = @($reviews | ForEach-Object { @{ reviewer = $_.reviewer; parsed = $_.parsed; count = @($_.findings).Count } })
         unparsed = $merge.unparsed; fail_open = $failOpen; reviewers = @($Reviewers)
     }
+    if ($FailLoud) {
+        $result['degraded'] = [bool]$degraded
+        $result['degraded_reviewers'] = $degradedReviewers
+    }
+    return $result
 }

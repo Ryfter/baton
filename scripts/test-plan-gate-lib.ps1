@@ -88,6 +88,15 @@ try {
     Check '5d zero dispatches occurred' ($script:dispatchCount5 -eq 0)
     Check '5e reviewers echoes the lone name' ((($g5.reviewers -join ',') -eq 'only-one'))
 
+    # Fail-loud rewrites the same early-understaffed path into an explicit degraded
+    # result. It must still dispatch nobody, but it may no longer masquerade as accept.
+    $script:dispatchCount5L = 0
+    $disp5L = { param($n,$p) $script:dispatchCount5L++; return @{ stdout='[]'; stderr=''; exit_code=0 } }
+    $g5L = Invoke-PlanGate -Goal 'g' -PlanJson '{}' -Reviewers @('only-one') -Dispatcher $disp5L -FailLoud
+    Check '5f fail-loud understaffed -> degraded result' ($g5L.degraded -eq $true -and $g5L.verdict -eq 'degraded')
+    Check '5g fail-loud understaffed is not fail-open' ($g5L.fail_open -eq $false)
+    Check '5h fail-loud understaffed still dispatches nobody' ($script:dispatchCount5L -eq 0)
+
     # ---- Case 5.5: duplicate reviewer names collapse to one -> understaffed fail-open,
     #      ZERO dispatch. `-Reviewers dup,dup` must not pose as a competitive pair. ----
     $script:dispatchCount55 = 0
@@ -119,6 +128,11 @@ try {
     $g7 = Invoke-PlanGate -Goal 'g' -PlanJson '{}' -Reviewers @('p1','p2') -Dispatcher $disp7
     Check '7a nonzero exit reviewer unparsed' (@($g7.unparsed) -contains 'p2')
     Check '7b its findings excluded from verdict (accept, minor only)' ($g7.verdict -eq 'accept' -and $g7.counts.critical -eq 0)
+    $g7L = Invoke-PlanGate -Goal 'g' -PlanJson '{}' -Reviewers @('p1','p2') -Dispatcher $disp7 -FailLoud
+    Check '7c fail-loud requires two usable reviews' ($g7L.degraded -eq $true -and @($g7L.degraded_reviewers) -contains 'p2')
+
+    $g4L = Invoke-PlanGate -Goal 'g' -PlanJson '{}' -Reviewers @('p3','p4') -Dispatcher $disp4 -FailLoud
+    Check '7d fail-loud all-unparsed is degraded' ($g4L.degraded -eq $true -and @($g4L.degraded_reviewers).Count -eq 2)
 
     # ---- Case 8: Build-PlanReviewPrompt contract ----
     $goal8 = 'migrate the billing service to v2'
