@@ -175,8 +175,16 @@ providers:
         Check 'P8b selected provider actual tier and named depth are recorded' ($r.selected_cost_tier -eq 'free' -and $r.depth_applied -eq $true)
 
         $legacySpawnerOk = $true
-        try { $legacySpawner = New-AgenticSpawner $wt2.worktree $fleetPath $toolsPath paid $runDir2 $editDisp } catch { $legacySpawnerOk = $false }
-        Check 'P8b1 legacy positional spawner signature remains compatible' ($legacySpawnerOk -and $null -ne $legacySpawner)
+        $legacyR = $null
+        try {
+            $legacySpawner = New-AgenticSpawner $wt2.worktree $fleetPath $toolsPath paid $runDir2 $editDisp
+            $legacyR = & $legacySpawner $task
+        } catch { $legacySpawnerOk = $false }
+        Check 'P8b1 legacy positional spawner signature remains compatible' (
+            $legacySpawnerOk -and $null -ne $legacySpawner -and $null -ne $legacyR -and
+            $legacyR.ok -eq $true -and $legacyR.chose -eq $r.chose -and
+            $legacyR.stakes -eq $r.stakes -and $legacyR.depth_tier -eq $r.depth_tier -and
+            $legacyR.selection_mode -eq $r.selection_mode -and $legacyR.stakes_basis -eq $r.stakes_basis)
 
         $highSeen = @{ tier = ''; pick = '' }
         $highDisp = { param($pick, $prompt, $depthTier)

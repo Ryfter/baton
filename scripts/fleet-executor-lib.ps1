@@ -80,8 +80,10 @@ function Test-ProviderAgentic {
 }
 
 function Test-ProviderDepthTier {
-    <# True only when Invoke-Fleet's CLI path can apply this named tier: the
-       provider defines a safe, non-empty fragment and its template consumes it. #>
+    <# Capability probe for depth_applied: true when the selected provider CAN
+       apply a safe named tier fragment on the CLI path (defines a non-empty
+       tier_* fragment and the template consumes {{tier_args}}). Resolved
+       before dispatch — not "this argv contained the fragment". #>
     param(
         [Parameter(Mandatory)][hashtable]$Provider,
         [Parameter(Mandatory)][ValidateSet('low','med','high')][string]$DepthTier
@@ -201,6 +203,8 @@ function New-AgenticSpawner {
         $pick = $cands[0]
         $alts = @($cands | Select-Object -Skip 1 | ForEach-Object { $_.name })
         $provider = Get-FleetProvider -Name ([string]$pick.name) -Path $FleetPath
+        # depth_applied = capability flag (pre-dispatch): selected provider CAN apply a
+        # safe named tier fragment on the CLI path. Not "argv contained the fragment".
         $depthApplied = ($null -ne $provider) -and (Test-ProviderDepthTier -Provider $provider -DepthTier $policy.depth_tier)
         $resultBase = @{
             stakes = $policy.stakes; stakes_basis = $policy.stakes_basis; depth_tier = $policy.depth_tier

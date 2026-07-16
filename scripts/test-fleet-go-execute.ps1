@@ -103,9 +103,14 @@ function Invoke-TestExecDispatcher {
         $rawStakes = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -Stakes high -NoPlanGate -NoGate -RepoPath $repo -Json | Out-String
         $resStakes = $rawStakes | ConvertFrom-Json
         $stakesTask = (Get-Content -Raw (Join-Path $resStakes.run_dir 'plan.json') | ConvertFrom-Json).tasks[0]
+        $stakesDecision = (Get-Content -LiteralPath (Join-Path $resStakes.run_dir 'decisions.jsonl') | Select-Object -First 1) | ConvertFrom-Json
         Check 'E9h -Stakes overrides every task and records operator basis' (
             $resStakes.status -eq 'completed' -and $stakesTask.stakes -eq 'high' -and
-            $stakesTask.stakes_basis -eq 'operator override: --stakes high')
+            $stakesTask.stakes_basis -eq 'operator override: --stakes high' -and
+            $stakesDecision.selection_mode -eq 'champion' -and $stakesDecision.depth_tier -eq 'high' -and
+            $stakesDecision.stakes -eq 'high' -and
+            $stakesDecision.stakes_basis -eq 'operator override: --stakes high' -and
+            $stakesDecision.cost_tier -eq $stakesTask.est_cost_tier)
         Check 'E9i -StakesOverride is an alias for -Stakes' (@($stakesParam.Aliases) -contains 'StakesOverride')
     } else {
         Check 'E9h -Stakes overrides every task and records operator basis' $false
