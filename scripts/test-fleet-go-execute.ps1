@@ -95,7 +95,22 @@ function Invoke-TestExecDispatcher {
     Check 'E9b plain execute defaulted verification on' (Test-Path (Join-Path $res.run_dir 'tasks/t1/verification.json'))
     Check 'E9c missing stakes normalized with a warning' (
         ((Get-Content -Raw (Join-Path $res.run_dir 'plan.json') | ConvertFrom-Json).tasks[0].stakes -eq 'standard') -and
-        ((Get-Content -Raw (Join-Path $res.run_dir 'events.jsonl')) -match 'missing stakes normalized to standard'))
+        ((Get-Content -Raw (Join-Path $res.run_dir 'events.jsonl')) -match 'missing stakes normalized to standard.*applied policy: depth med, economy routing') -and
+        ((Get-Content -Raw (Join-Path $res.run_dir 'events.jsonl')) -notmatch '#98'))
+
+    $stakesParam = (Get-Command "$PSScriptRoot/fleet-go.ps1").Parameters['Stakes']
+    if ($null -ne $stakesParam) {
+        $rawStakes = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -Stakes high -NoPlanGate -NoGate -RepoPath $repo -Json | Out-String
+        $resStakes = $rawStakes | ConvertFrom-Json
+        $stakesTask = (Get-Content -Raw (Join-Path $resStakes.run_dir 'plan.json') | ConvertFrom-Json).tasks[0]
+        Check 'E9h -Stakes overrides every task and records operator basis' (
+            $resStakes.status -eq 'completed' -and $stakesTask.stakes -eq 'high' -and
+            $stakesTask.stakes_basis -eq 'operator override: --stakes high')
+        Check 'E9i -StakesOverride is an alias for -Stakes' (@($stakesParam.Aliases) -contains 'StakesOverride')
+    } else {
+        Check 'E9h -Stakes overrides every task and records operator basis' $false
+        Check 'E9i -StakesOverride is an alias for -Stakes' $false
+    }
 
     # Each escape restores only its own legacy node.
     $rawNoPg = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -NoPlanGate -RepoPath $repo -Json | Out-String

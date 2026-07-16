@@ -89,6 +89,14 @@ function ConvertTo-PlanObject {
         $isSchemaEcho = $false
         foreach ($pt in @($parsed.tasks)) {
             if ($pt.est_cost_tier -and (([string]$pt.est_cost_tier) -match '\|')) { $isSchemaEcho = $true; break }
+            $plannedStakes = [string]$pt.stakes
+            if (-not [string]::IsNullOrWhiteSpace($plannedStakes)) {
+                if ($plannedStakes -notin @('low','standard','high') -or
+                    [string]::IsNullOrWhiteSpace([string]$pt.stakes_basis)) {
+                    $isSchemaEcho = $true
+                    break
+                }
+            }
         }
         if ($isSchemaEcho) { continue }
         $o = $parsed; break
@@ -106,6 +114,8 @@ function ConvertTo-PlanObject {
             reversible    = if ($null -eq $t.reversible) { $true } else { [bool]$t.reversible }
             verify_profile = if ($t.verify_profile) { [string]$t.verify_profile } else { '' }
             allowed_paths  = @($t.allowed_paths | Where-Object { $_ } | ForEach-Object { [string]$_ })
+            stakes        = if ([string]::IsNullOrWhiteSpace([string]$t.stakes)) { 'standard' } else { [string]$t.stakes }
+            stakes_basis  = if ([string]::IsNullOrWhiteSpace([string]$t.stakes)) { 'legacy plan omitted stakes' } else { [string]$t.stakes_basis }
         }
     }
     if (@($tasks).Count -lt 1) { return $null }
@@ -324,8 +334,12 @@ Schema:
 
 Rules: give each task a unique id; use depends_on to order; set reversible=false
 ONLY for steps that commit to master, force-push, delete outside a worktree, or
-publish externally; prefer the cheapest est_cost_tier that can do the job. Use the
-evidence to avoid planning work that already exists.
+publish externally; prefer the cheapest est_cost_tier that can do the job. Set stakes
+to low for narrow, reversible, low-blast-radius work; standard for ordinary bounded
+feature or bugfix work; high for security/privacy/auth, migrations, release/publish,
+cross-cutting architecture, or other high-cost-to-reverse work. stakes_basis must be
+one concrete sentence naming the risk or size signal. Use the evidence to avoid
+planning work that already exists.
 
 {{evi}}
 
@@ -355,9 +369,15 @@ function Build-PlannerPrompt {
     { "id": "t1", "desc": "<what>", "command": "<baton command or empty>",
       "capability": "<ROUTING capability: code-gen for creating/editing files or code, code-transform, reasoning, research, summarize, triage, review — or empty. NEVER a baton command name>",
       "model_pick": "<model or empty>",
-      "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true }
+      "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true,
+      "stakes": "low|standard|high", "stakes_basis": "<one concrete risk/size sentence>" }
   ]
 }
+
+Stakes classification: low for narrow, reversible, low-blast-radius work;
+standard for ordinary bounded feature or bugfix work; high for security/privacy/auth,
+migrations, release/publish, cross-cutting architecture, or high-cost-to-reverse work.
+stakes_basis is one concrete sentence naming the risk or size signal.
 '@
     $evi = if ($RegistryLines.Count) {
         "Tools already wired locally:`n" + (($RegistryLines | ForEach-Object { "- $_" }) -join "`n")
@@ -650,9 +670,9 @@ function Invoke-Conductor {
         [switch]$AcceptancePanel,
         [switch]$AcceptanceFailLoud,
         [switch]$Verify,
-        [switch]$RequireVerify,
         [scriptblock]$VerifyPreflight,
-        [switch]$NormalizeMissingStakes
+        [switch]$NormalizeMissingStakes,
+        [ValidateSet('low','standard','high')][string]$StakesOverride
     )
     if (-not $RunDir) { $RunDir = Initialize-RunDir }
     else { New-Item -ItemType Directory -Force -Path $RunDir | Out-Null }
@@ -667,17 +687,27 @@ function Invoke-Conductor {
         return (Complete-Run -RunDir $RunDir -Plan $empty -Status 'plan-failed')
     }
     $plan.run_id = $runId
-    if ($NormalizeMissingStakes) {
+    if ($NormalizeMissingStakes -or $PSBoundParameters.ContainsKey('StakesOverride')) {
         $missingStakes = 0
         foreach ($plannedTask in @($plan.tasks)) {
-            if ([string]::IsNullOrWhiteSpace([string]$plannedTask.stakes)) {
+            if ($PSBoundParameters.ContainsKey('StakesOverride')) {
+                $plannedTask | Add-Member -NotePropertyName stakes -NotePropertyValue $StakesOverride -Force
+                $plannedTask | Add-Member -NotePropertyName stakes_basis -NotePropertyValue "operator override: --stakes $StakesOverride" -Force
+            } elseif ([string]::IsNullOrWhiteSpace([string]$plannedTask.stakes)) {
                 $plannedTask | Add-Member -NotePropertyName stakes -NotePropertyValue 'standard' -Force
                 $plannedTask | Add-Member -NotePropertyName stakes_basis -NotePropertyValue 'legacy plan omitted stakes' -Force
                 $missingStakes++
+            } elseif ([string]$plannedTask.stakes_basis -eq 'legacy plan omitted stakes') {
+                $missingStakes++
+            }
+            if ([string]$plannedTask.stakes -notin @('low','standard','high') -or
+                [string]::IsNullOrWhiteSpace([string]$plannedTask.stakes_basis)) {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'error' -Message "task $($plannedTask.id) has invalid stakes/stakes_basis")
+                return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-invalid')
             }
         }
         if ($missingStakes -gt 0) {
-            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'warn' -Message "$missingStakes task(s) missing stakes normalized to standard; stakes routing arrives in PR-B (#98)")
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'warn' -Message "$missingStakes task(s) missing stakes normalized to standard; applied policy: depth med, economy routing, capped by run and task cost tiers")
         }
     }
     ($plan | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'plan.json') -Encoding utf8NoBOM
@@ -739,6 +769,13 @@ function Invoke-Conductor {
                     }
                     $plan = $revisedPlan
                     $plan.run_id = $runId
+                    if ($PSBoundParameters.ContainsKey('StakesOverride')) {
+                        foreach ($revisedTask in @($plan.tasks)) {
+                            $revisedTask | Add-Member -NotePropertyName stakes -NotePropertyValue $StakesOverride -Force
+                            $revisedTask | Add-Member -NotePropertyName stakes_basis -NotePropertyValue "operator override: --stakes $StakesOverride" -Force
+                        }
+                        ($plan | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'plan.json') -Encoding utf8NoBOM
+                    }
                 } else {
                     Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Message 'revise recommended, auto-revise disabled — proceeding with the original plan')
                 }

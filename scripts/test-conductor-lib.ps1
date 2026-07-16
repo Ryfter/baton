@@ -33,6 +33,15 @@ try {
     Check 'VF1c absent verify_profile -> empty' ($vft2.verify_profile -eq '')
     Check 'VF1d absent allowed_paths -> empty' (@($vft2.allowed_paths).Count -eq 0)
 
+    # ---- ST1: additive stakes schema normalization + validation (d086 PR-B) ----
+    $stakesPlan = ConvertTo-PlanObject -RawStdout '{"tasks":[{"id":"t1","desc":"auth change","stakes":"high","stakes_basis":"security-sensitive authentication change"},{"id":"t2","desc":"legacy task"}]}'
+    Check 'ST1a supplied stakes preserved' ($stakesPlan.tasks[0].stakes -eq 'high')
+    Check 'ST1b supplied stakes_basis preserved' ($stakesPlan.tasks[0].stakes_basis -eq 'security-sensitive authentication change')
+    Check 'ST1c omitted stakes defaults standard' ($stakesPlan.tasks[1].stakes -eq 'standard')
+    Check 'ST1d omitted stakes basis marks legacy default' ($stakesPlan.tasks[1].stakes_basis -eq 'legacy plan omitted stakes')
+    Check 'ST1e invalid supplied stakes rejects the plan' ($null -eq (ConvertTo-PlanObject -RawStdout '{"tasks":[{"id":"t1","desc":"bad","stakes":"critical","stakes_basis":"not allowed"}]}'))
+    Check 'ST1f supplied stakes without a basis rejects the plan' ($null -eq (ConvertTo-PlanObject -RawStdout '{"tasks":[{"id":"t1","desc":"bad","stakes":"high"}]}'))
+
     # ---- Task 2: DAG order + guards (pure) ----
     $mk = { param($id,$deps,$tier='free',$rev=$true) [pscustomobject]@{ id=$id; desc=$id; command=''; capability=''; model_pick=''; depends_on=@($deps); est_cost_tier=$tier; reversible=$rev } }
     $tasks = @( (& $mk 't2' @('t1')), (& $mk 't1' @()), (& $mk 't3' @('t1','t2')) )
@@ -97,6 +106,8 @@ try {
     Check 'T36 planner prompt includes goal' ($pp -match 'convert pdfs to markdown')
     Check 'T37 planner prompt includes registry evidence' ($pp -match 'docling')
     Check 'T38 planner prompt includes schema + reversible rule' (($pp -match '"tasks"') -and ($pp -match 'reversible'))
+    Check 'ST1g planner prompt requires stakes and stakes_basis' (($pp -match '"stakes"') -and ($pp -match '"stakes_basis"'))
+    Check 'ST1h planner prompt explains low/standard/high classification' (($pp -match 'low for narrow') -and ($pp -match 'high for security'))
     # v1.11.1: codex planned capability "code-parallel" (a baton COMMAND name) and no
     # provider claims it -> walk failed. The schema must pin the routing vocabulary.
     Check 'T38a planner schema constrains capability vocabulary' (($pp -match 'code-gen') -and ($pp -notmatch '"capability": "<capability or empty>"'))
@@ -632,12 +643,14 @@ ERROR: You have hit your usage limit. Try again later.
         $pgSeen4 = [System.Collections.ArrayList]@()
         $pgSpawn4 = { param($t) [void]$pgSeen4.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
         $run4 = Join-Path $pgHome 'pg-4'
-        $rPG4 = Invoke-Conductor -Goal 'g' -RunDir $run4 -Planner $pgPlanner -Spawner $pgSpawn4 -PlanGate -PlanReviewers @('a','b') -PlanGateDispatcher $gateImportant -Dispatcher $reviseDisp -FleetPath $refFleetPG -ToolsPath $pgTools
+        $rPG4 = Invoke-Conductor -Goal 'g' -RunDir $run4 -Planner $pgPlanner -Spawner $pgSpawn4 -PlanGate -PlanReviewers @('a','b') -PlanGateDispatcher $gateImportant -Dispatcher $reviseDisp -FleetPath $refFleetPG -ToolsPath $pgTools -NormalizeMissingStakes -StakesOverride high
         Check 'PG4 revise -> completed' ($rPG4.status -eq 'completed')
         Check 'PG4b exactly ONE revise dispatch' ($pgReviseCount.n -eq 1)
         $pg4Plan = Get-Content -Raw (Join-Path $run4 'plan.json') | ConvertFrom-Json
         Check 'PG4c plan.json overwritten with revised plan' ((@($pg4Plan.tasks).Count -eq 1) -and ($pg4Plan.tasks[0].id -eq 't1-rev'))
         Check 'PG4d walk ran the revised plan' ($pgSeen4 -contains 't1-rev')
+        Check 'PG4e operator stakes override survives plan revision' (
+            $pg4Plan.tasks[0].stakes -eq 'high' -and $pg4Plan.tasks[0].stakes_basis -eq 'operator override: --stakes high')
 
         # PG5: important finding + -PlanRevise:$false -> no revise dispatch, original walked,
         # event notes the disabled auto-revise.

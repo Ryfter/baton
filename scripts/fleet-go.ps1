@@ -22,6 +22,7 @@ param(
     [switch]$NoPlanGate,
     [switch]$NoGate,
     [switch]$NoVerify,
+    [Alias('StakesOverride')][ValidateSet('low','standard','high')][string]$Stakes,
     [string[]]$PlanReviewers,
     [bool]$PlanRevise = $true,
     [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
@@ -65,6 +66,7 @@ $runDir = Initialize-RunDir -RunId (New-RunId)
 
 $go = @{ Goal = $theGoal; RunDir = $runDir; MaxCostTier = $MaxCostTier; FleetPath = $FleetPath; ToolsPath = $ToolsPath }
 if ($PSBoundParameters.ContainsKey('Budget')) { $go['BudgetCap'] = $Budget }
+if ($PSBoundParameters.ContainsKey('Stakes')) { $go['StakesOverride'] = $Stakes }
 
 # Test seams: a canned plan and/or forced-success spawner so the suite never calls a model.
 if ($env:BATON_GO_TEST_PLAN) {
@@ -162,7 +164,6 @@ if ($Execute) {
         # same hashtable reference (built here so they share it).
         $frozen = @{}
         $go['Verify'] = $true
-        $go['RequireVerify'] = $true
         $go['VerifyPreflight'] = {
             param($plan)
             foreach ($tk in @($plan.tasks)) {
