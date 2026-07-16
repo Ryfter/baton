@@ -89,6 +89,14 @@ function ConvertTo-PlanObject {
         $isSchemaEcho = $false
         foreach ($pt in @($parsed.tasks)) {
             if ($pt.est_cost_tier -and (([string]$pt.est_cost_tier) -match '\|')) { $isSchemaEcho = $true; break }
+            $plannedStakes = [string]$pt.stakes
+            if (-not [string]::IsNullOrWhiteSpace($plannedStakes)) {
+                if ($plannedStakes -notin @('low','standard','high') -or
+                    [string]::IsNullOrWhiteSpace([string]$pt.stakes_basis)) {
+                    $isSchemaEcho = $true
+                    break
+                }
+            }
         }
         if ($isSchemaEcho) { continue }
         $o = $parsed; break
@@ -106,6 +114,8 @@ function ConvertTo-PlanObject {
             reversible    = if ($null -eq $t.reversible) { $true } else { [bool]$t.reversible }
             verify_profile = if ($t.verify_profile) { [string]$t.verify_profile } else { '' }
             allowed_paths  = @($t.allowed_paths | Where-Object { $_ } | ForEach-Object { [string]$_ })
+            stakes        = if ([string]::IsNullOrWhiteSpace([string]$t.stakes)) { 'standard' } else { [string]$t.stakes }
+            stakes_basis  = if ([string]::IsNullOrWhiteSpace([string]$t.stakes)) { 'legacy plan omitted stakes' } else { [string]$t.stakes_basis }
         }
     }
     if (@($tasks).Count -lt 1) { return $null }
@@ -193,9 +203,16 @@ function New-RunDecision {
         [string[]]$Alternatives = @(),
         [string]$Why = '',
         [string]$CostTier = '',
-        [datetime]$Now = (Get-Date)
+        [datetime]$Now = (Get-Date),
+        [ValidateSet('low','standard','high')][string]$Stakes,
+        [string]$StakesBasis,
+        [ValidateSet('low','med','high')][string]$DepthTier,
+        [bool]$DepthApplied,
+        [ValidateSet('economy','champion')][string]$SelectionMode,
+        [ValidateSet('local','free','paid')][string]$TierCap,
+        [ValidateSet('local','free','paid')][string]$SelectedCostTier
     )
-    return [ordered]@{
+    $record = [ordered]@{
         ts           = $Now.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
         task_id      = $TaskId
         chose        = $Chose
@@ -203,6 +220,17 @@ function New-RunDecision {
         why          = $Why
         cost_tier    = $CostTier
     }
+    $optional = [ordered]@{
+        Stakes = 'stakes'; StakesBasis = 'stakes_basis'; DepthTier = 'depth_tier'
+        DepthApplied = 'depth_applied'; SelectionMode = 'selection_mode'
+        TierCap = 'tier_cap'; SelectedCostTier = 'selected_cost_tier'
+    }
+    foreach ($parameterName in $optional.Keys) {
+        if ($PSBoundParameters.ContainsKey($parameterName)) {
+            $record[$optional[$parameterName]] = $PSBoundParameters[$parameterName]
+        }
+    }
+    return $record
 }
 
 function Add-RunEvent {
@@ -252,7 +280,11 @@ function Format-RunReport {
     if (@($Decisions).Count -eq 0) { [void]$sb.AppendLine('(none recorded)') }
     foreach ($d in @($Decisions)) {
         $alt = if (@($d.alternatives).Count) { " (alts: $((@($d.alternatives)) -join ', '))" } else { '' }
-        [void]$sb.AppendLine("- $($d.task_id): chose **$($d.chose)** — $($d.why)$alt")
+        $policy = if ($d.stakes) {
+            $applied = if ($d.depth_applied) { 'applied' } else { 'not applied' }
+            " [stakes: $($d.stakes) — $($d.stakes_basis); depth: $($d.depth_tier) ($applied); mode: $($d.selection_mode); cap: $($d.tier_cap); selected tier: $($d.selected_cost_tier)]"
+        } else { '' }
+        [void]$sb.AppendLine("- $($d.task_id): chose **$($d.chose)** — $($d.why)$alt$policy")
     }
     return $sb.ToString().TrimEnd()
 }
@@ -324,8 +356,12 @@ Schema:
 
 Rules: give each task a unique id; use depends_on to order; set reversible=false
 ONLY for steps that commit to master, force-push, delete outside a worktree, or
-publish externally; prefer the cheapest est_cost_tier that can do the job. Use the
-evidence to avoid planning work that already exists.
+publish externally; prefer the cheapest est_cost_tier that can do the job. Set stakes
+to low for narrow, reversible, low-blast-radius work; standard for ordinary bounded
+feature or bugfix work; high for security/privacy/auth, migrations, release/publish,
+cross-cutting architecture, or other high-cost-to-reverse work. stakes_basis must be
+one concrete sentence naming the risk or size signal. Use the evidence to avoid
+planning work that already exists.
 
 {{evi}}
 
@@ -355,9 +391,15 @@ function Build-PlannerPrompt {
     { "id": "t1", "desc": "<what>", "command": "<baton command or empty>",
       "capability": "<ROUTING capability: code-gen for creating/editing files or code, code-transform, reasoning, research, summarize, triage, review — or empty. NEVER a baton command name>",
       "model_pick": "<model or empty>",
-      "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true }
+      "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true,
+      "stakes": "low|standard|high", "stakes_basis": "<one concrete risk/size sentence>" }
   ]
 }
+
+Stakes classification: low for narrow, reversible, low-blast-radius work;
+standard for ordinary bounded feature or bugfix work; high for security/privacy/auth,
+migrations, release/publish, cross-cutting architecture, or high-cost-to-reverse work.
+stakes_basis is one concrete sentence naming the risk or size signal.
 '@
     $evi = if ($RegistryLines.Count) {
         "Tools already wired locally:`n" + (($RegistryLines | ForEach-Object { "- $_" }) -join "`n")
@@ -650,9 +692,9 @@ function Invoke-Conductor {
         [switch]$AcceptancePanel,
         [switch]$AcceptanceFailLoud,
         [switch]$Verify,
-        [switch]$RequireVerify,
         [scriptblock]$VerifyPreflight,
-        [switch]$NormalizeMissingStakes
+        [switch]$NormalizeMissingStakes,
+        [ValidateSet('low','standard','high')][string]$StakesOverride
     )
     if (-not $RunDir) { $RunDir = Initialize-RunDir }
     else { New-Item -ItemType Directory -Force -Path $RunDir | Out-Null }
@@ -667,17 +709,28 @@ function Invoke-Conductor {
         return (Complete-Run -RunDir $RunDir -Plan $empty -Status 'plan-failed')
     }
     $plan.run_id = $runId
-    if ($NormalizeMissingStakes) {
+    $missingStakesPolicyMessage = 'missing stakes normalized to standard; applied policy: depth med, economy routing, capped by run and task cost tiers'
+    if ($NormalizeMissingStakes -or $PSBoundParameters.ContainsKey('StakesOverride')) {
         $missingStakes = 0
         foreach ($plannedTask in @($plan.tasks)) {
-            if ([string]::IsNullOrWhiteSpace([string]$plannedTask.stakes)) {
+            if ($PSBoundParameters.ContainsKey('StakesOverride')) {
+                $plannedTask | Add-Member -NotePropertyName stakes -NotePropertyValue $StakesOverride -Force
+                $plannedTask | Add-Member -NotePropertyName stakes_basis -NotePropertyValue "operator override: --stakes $StakesOverride" -Force
+            } elseif ([string]::IsNullOrWhiteSpace([string]$plannedTask.stakes)) {
                 $plannedTask | Add-Member -NotePropertyName stakes -NotePropertyValue 'standard' -Force
                 $plannedTask | Add-Member -NotePropertyName stakes_basis -NotePropertyValue 'legacy plan omitted stakes' -Force
                 $missingStakes++
+            } elseif ([string]$plannedTask.stakes_basis -eq 'legacy plan omitted stakes') {
+                $missingStakes++
+            }
+            if ([string]$plannedTask.stakes -notin @('low','standard','high') -or
+                [string]::IsNullOrWhiteSpace([string]$plannedTask.stakes_basis)) {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'error' -Message "task $($plannedTask.id) has invalid stakes/stakes_basis")
+                return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-invalid')
             }
         }
         if ($missingStakes -gt 0) {
-            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'warn' -Message "$missingStakes task(s) missing stakes normalized to standard; stakes routing arrives in PR-B (#98)")
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'warn' -Message "$missingStakes task(s) $missingStakesPolicyMessage")
         }
     }
     ($plan | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'plan.json') -Encoding utf8NoBOM
@@ -733,12 +786,25 @@ function Invoke-Conductor {
                     $priorPlan = $plan
                     $revisedPlan = Invoke-PlanRevise -Goal $Goal -PlanJson $planJsonText -ReviseBrief ([string]$pgRes.revise_brief) `
                         -Run $plan -RunDir $RunDir -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath -Dispatcher $Dispatcher
-                    if ($PlanGateFailLoud -and [object]::ReferenceEquals($priorPlan, $revisedPlan)) {
+                    $revisionApplied = -not [object]::ReferenceEquals($priorPlan, $revisedPlan)
+                    if ($PlanGateFailLoud -and -not $revisionApplied) {
                         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Level 'error' -Message 'PLAN GATE DEGRADED — required revise pass failed — no labor will run')
                         return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-gate-degraded')
                     }
                     $plan = $revisedPlan
                     $plan.run_id = $runId
+                    if ($PSBoundParameters.ContainsKey('StakesOverride')) {
+                        foreach ($revisedTask in @($plan.tasks)) {
+                            $revisedTask | Add-Member -NotePropertyName stakes -NotePropertyValue $StakesOverride -Force
+                            $revisedTask | Add-Member -NotePropertyName stakes_basis -NotePropertyValue "operator override: --stakes $StakesOverride" -Force
+                        }
+                        ($plan | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'plan.json') -Encoding utf8NoBOM
+                    } elseif ($revisionApplied -and $NormalizeMissingStakes) {
+                        $revisedMissingStakes = @($plan.tasks | Where-Object { [string]$_.stakes_basis -eq 'legacy plan omitted stakes' }).Count
+                        if ($revisedMissingStakes -gt 0) {
+                            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'warn' -Message "$revisedMissingStakes task(s) $missingStakesPolicyMessage")
+                        }
+                    }
                 } else {
                     Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Message 'revise recommended, auto-revise disabled — proceeding with the original plan')
                 }
@@ -798,7 +864,25 @@ function Invoke-Conductor {
         $tspend = if ($null -ne $r.spend) { [double]$r.spend } else { $est }
         $spend += $tspend
         if ($r.chose) {
-            $dec = New-RunDecision -TaskId $task.id -Chose ([string]$r.chose) -Alternatives (@($r.alternatives)) -Why ([string]$r.why) -CostTier $task.est_cost_tier
+            $decisionArgs = @{
+                TaskId = $task.id; Chose = [string]$r.chose; Alternatives = @($r.alternatives)
+                Why = [string]$r.why; CostTier = $task.est_cost_tier
+            }
+            $policyFields = [ordered]@{
+                Stakes = 'stakes'; StakesBasis = 'stakes_basis'; DepthTier = 'depth_tier'
+                DepthApplied = 'depth_applied'; SelectionMode = 'selection_mode'
+                TierCap = 'tier_cap'; SelectedCostTier = 'selected_cost_tier'
+            }
+            foreach ($parameterName in $policyFields.Keys) {
+                $propertyName = $policyFields[$parameterName]
+                $hasField = if ($r -is [System.Collections.IDictionary]) {
+                    $r.Contains($propertyName)
+                } else {
+                    $null -ne $r.PSObject.Properties[$propertyName]
+                }
+                if ($hasField) { $decisionArgs[$parameterName] = $r.$propertyName }
+            }
+            $dec = New-RunDecision @decisionArgs
             Add-RunDecision -RunDir $RunDir -Decision $dec
             [void]$decisions.Add($dec)
         }

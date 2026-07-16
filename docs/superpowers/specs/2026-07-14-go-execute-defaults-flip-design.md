@@ -107,6 +107,8 @@ argument-hint: "<what you want done>" [--execute] [--repo <path>]
 #   -PlanGate -PlanGateFailLoud
 #   -AcceptanceGate -AcceptancePanel -AcceptanceFailLoud
 #   -Verify -RequireVerify
+#   [PR-B / d088: -RequireVerify was dropped; required-profile enforcement lives in
+#    fleet-go.ps1's execute VerifyPreflight — not an Invoke-Conductor switch.]
 # Map --no-plan-gate/--no-gate/--no-verify to the matching -No* runner switch.
 # Add -Stakes low|standard|high only when the operator supplied the override.
 ```
@@ -148,7 +150,7 @@ if ($gateEnabled) {
 }
 if ($verifyEnabled -and $Execute) {
     $go['Verify'] = $true
-    $go['RequireVerify'] = $true
+    $go['RequireVerify'] = $true  # [PR-B / d088: dropped; enforcement is fleet-go VerifyPreflight]
 }
 if ($PSBoundParameters.ContainsKey('Stakes')) {
     $go['StakesOverride'] = $Stakes
@@ -179,7 +181,7 @@ Add explicit policy parameters:
 [switch]$AcceptancePanel,
 [switch]$AcceptanceFailLoud,
 [switch]$Verify,
-[switch]$RequireVerify,
+[switch]$RequireVerify,  # [PR-B / d088: dropped from Conductor API; see fleet-go VerifyPreflight]
 [ValidateSet('low','standard','high')][string]$StakesOverride,
 ```
 
@@ -292,11 +294,12 @@ Do not convert `degraded` into fake `reject` findings. `verdict` describes revie
 
 ### Verification default and require-verify
 
-Reuse the already-specified V4 graduation boundary: execute edit tasks are capabilities `code-gen` or `code-transform`. Under default `-Verify -RequireVerify`, either capability without `verify_profile` is `plan-invalid` before labor and spend. This matches the existing V4 proposal (`docs/superpowers/specs/2026-07-11-verified-labor-v4-telemetry-graduation-design.md:58-82`) and closes the current legacy delegation at `scripts/fleet-executor-lib.ps1:244-269`.
+Reuse the already-specified V4 graduation boundary: execute edit tasks are capabilities `code-gen` or `code-transform`. Under default `-Verify -RequireVerify` [PR-B / d088: `-RequireVerify` parameter dropped; same rule is enforced by fleet-go.ps1's execute `VerifyPreflight`], either capability without `verify_profile` is `plan-invalid` before labor and spend. This matches the existing V4 proposal (`docs/superpowers/specs/2026-07-11-verified-labor-v4-telemetry-graduation-design.md:58-82`) and closes the current legacy delegation at `scripts/fleet-executor-lib.ps1:244-269`.
 
 Target preflight addition in the closure built by `scripts/fleet-go.ps1`:
 
 ```powershell
+# [PR-B / d088: $RequireVerify param dropped; this check is fleet-go VerifyPreflight]
 if ($RequireVerify -and
     ([string]$tk.capability -in @('code-gen','code-transform')) -and
     [string]::IsNullOrWhiteSpace([string]$tk.verify_profile)) {

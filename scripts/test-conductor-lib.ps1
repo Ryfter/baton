@@ -33,6 +33,15 @@ try {
     Check 'VF1c absent verify_profile -> empty' ($vft2.verify_profile -eq '')
     Check 'VF1d absent allowed_paths -> empty' (@($vft2.allowed_paths).Count -eq 0)
 
+    # ---- ST1: additive stakes schema normalization + validation (d086 PR-B) ----
+    $stakesPlan = ConvertTo-PlanObject -RawStdout '{"tasks":[{"id":"t1","desc":"auth change","stakes":"high","stakes_basis":"security-sensitive authentication change"},{"id":"t2","desc":"legacy task"}]}'
+    Check 'ST1a supplied stakes preserved' ($stakesPlan.tasks[0].stakes -eq 'high')
+    Check 'ST1b supplied stakes_basis preserved' ($stakesPlan.tasks[0].stakes_basis -eq 'security-sensitive authentication change')
+    Check 'ST1c omitted stakes defaults standard' ($stakesPlan.tasks[1].stakes -eq 'standard')
+    Check 'ST1d omitted stakes basis marks legacy default' ($stakesPlan.tasks[1].stakes_basis -eq 'legacy plan omitted stakes')
+    Check 'ST1e invalid supplied stakes rejects the plan' ($null -eq (ConvertTo-PlanObject -RawStdout '{"tasks":[{"id":"t1","desc":"bad","stakes":"critical","stakes_basis":"not allowed"}]}'))
+    Check 'ST1f supplied stakes without a basis rejects the plan' ($null -eq (ConvertTo-PlanObject -RawStdout '{"tasks":[{"id":"t1","desc":"bad","stakes":"high"}]}'))
+
     # ---- Task 2: DAG order + guards (pure) ----
     $mk = { param($id,$deps,$tier='free',$rev=$true) [pscustomobject]@{ id=$id; desc=$id; command=''; capability=''; model_pick=''; depends_on=@($deps); est_cost_tier=$tier; reversible=$rev } }
     $tasks = @( (& $mk 't2' @('t1')), (& $mk 't1' @()), (& $mk 't3' @('t1','t2')) )
@@ -77,8 +86,25 @@ try {
 
     $dec = New-RunDecision -TaskId 't1' -Chose 'docling' -Alternatives @('markitdown') -Why 'already wired' -CostTier 'local'
     Check 'T30 decision records choice + alts' (($dec.chose -eq 'docling') -and (@($dec.alternatives) -contains 'markitdown'))
+    Check 'T30a legacy decision retains planner cost_tier without depth fields' (
+        $dec.cost_tier -eq 'local' -and $null -eq $dec.stakes -and $null -eq $dec.selected_cost_tier)
+    $legacyDecisionOk = $true
+    try { $legacyDecision = New-RunDecision 'legacy' 'worker' @() 'why' 'free' ([datetime]'2024-01-02T03:04:05Z') } catch { $legacyDecisionOk = $false }
+    Check 'T30b legacy positional decision timestamp remains compatible' (
+        $legacyDecisionOk -and $legacyDecision.task_id -eq 'legacy' -and $legacyDecision.ts -eq '2024-01-02T03:04:05Z')
     Add-RunDecision -RunDir $runDir -Decision $dec
     Check 'T31 decision appended' ((Get-Content -LiteralPath (Join-Path $runDir 'decisions.jsonl') | Measure-Object -Line).Lines -ge 1)
+
+    $depthDec = New-RunDecision -TaskId 't2' -Chose 'codex' -Why 'high-stakes route' -CostTier 'local' `
+        -Stakes high -StakesBasis 'authentication boundary' -DepthTier high -DepthApplied $true `
+        -SelectionMode champion -TierCap paid -SelectedCostTier paid
+    Add-RunDecision -RunDir $runDir -Decision $depthDec
+    $depthRow = (Get-Content -LiteralPath (Join-Path $runDir 'decisions.jsonl') | Select-Object -Last 1) | ConvertFrom-Json
+    Check 'T31a serialized depth decision keeps estimate and additive policy fields' (
+        $depthRow.cost_tier -eq 'local' -and $depthRow.stakes -eq 'high' -and
+        $depthRow.stakes_basis -eq 'authentication boundary' -and $depthRow.depth_tier -eq 'high' -and
+        $depthRow.depth_applied -eq $true -and $depthRow.selection_mode -eq 'champion' -and
+        $depthRow.tier_cap -eq 'paid' -and $depthRow.selected_cost_tier -eq 'paid')
 
     $plan = @{ run_id='go-unit-1'; goal='convert pdfs'; budget_cap=$null; tasks=@(
         [pscustomobject]@{ id='t1'; desc='research'; command='research-gate'; capability='research'; model_pick=''; depends_on=@(); est_cost_tier='free'; reversible=$true }
@@ -87,6 +113,11 @@ try {
     Check 'T32 report names the goal' ($report -match 'convert pdfs')
     Check 'T33 report shows status' ($report -match 'completed')
     Check 'T34 report lists the decision' ($report -match 'docling')
+    $depthReport = Format-RunReport -Plan $plan -Decisions @($depthDec) -Spend 0.0 -Status 'completed'
+    Check 'T34a report decision line exposes stakes depth mode cap and actual tier' (
+        $depthReport -match 'stakes: high' -and $depthReport -match 'authentication boundary' -and
+        $depthReport -match 'depth: high' -and $depthReport -match 'mode: champion' -and
+        $depthReport -match 'cap: paid' -and $depthReport -match 'selected tier: paid')
     $reportI = Format-RunReport -Plan $plan -Status 'interrupted-budget' -PendingTaskId 't1'
     Check 'T35 interrupted report names paused task' ($reportI -match 't1')
 
@@ -97,6 +128,8 @@ try {
     Check 'T36 planner prompt includes goal' ($pp -match 'convert pdfs to markdown')
     Check 'T37 planner prompt includes registry evidence' ($pp -match 'docling')
     Check 'T38 planner prompt includes schema + reversible rule' (($pp -match '"tasks"') -and ($pp -match 'reversible'))
+    Check 'ST1g planner prompt requires stakes and stakes_basis' (($pp -match '"stakes"') -and ($pp -match '"stakes_basis"'))
+    Check 'ST1h planner prompt explains low/standard/high classification' (($pp -match 'low for narrow') -and ($pp -match 'high for security'))
     # v1.11.1: codex planned capability "code-parallel" (a baton COMMAND name) and no
     # provider claims it -> walk failed. The schema must pin the routing vocabulary.
     Check 'T38a planner schema constrains capability vocabulary' (($pp -match 'code-gen') -and ($pp -notmatch '"capability": "<capability or empty>"'))
@@ -196,6 +229,23 @@ ERROR: You have hit your usage limit. Try again later.
     Check 'T47 report.md written' (Test-Path (Join-Path $run1 'report.md'))
     Check 'T48 decisions logged for each task' ((Get-Content -LiteralPath (Join-Path $run1 'decisions.jsonl') | Measure-Object -Line).Lines -eq 3)
     Check 'T49 events include finished' ((Get-Content -LiteralPath (Join-Path $run1 'events.jsonl') -Raw) -match 'finished')
+
+    $depthPlanner = { param($goal) @{ run_id='x'; goal=$goal; budget_cap=$null; tasks=@(
+        [pscustomobject]@{ id='td'; desc='secure change'; command='x'; capability='code-gen'; model_pick=''; depends_on=@(); est_cost_tier='local'; reversible=$true; stakes='high'; stakes_basis='authentication boundary' }
+    ) } }
+    $depthSpawner = { param($task) @{
+        ok=$true; spend=0.0; chose='codex'; why='routed'; alternatives=@(); stakes=$task.stakes; stakes_basis=$task.stakes_basis
+        depth_tier='high'; depth_applied=$true; selection_mode='champion'; tier_cap='paid'; selected_cost_tier='paid'
+    } }
+    $depthRun = Join-Path $tmpHome2 'go-loop-depth'
+    $depthResult = Invoke-Conductor -Goal 'secure it' -RunDir $depthRun -Planner $depthPlanner -Spawner $depthSpawner
+    $depthLogged = (Get-Content -LiteralPath (Join-Path $depthRun 'decisions.jsonl') -Raw | ConvertFrom-Json)
+    Check 'T49a conductor copies resolved spawner policy into the task decision' (
+        $depthResult.status -eq 'completed' -and $depthLogged.cost_tier -eq 'local' -and
+        $depthLogged.stakes -eq 'high' -and $depthLogged.stakes_basis -eq 'authentication boundary' -and
+        $depthLogged.depth_tier -eq 'high' -and $depthLogged.depth_applied -eq $true -and
+        $depthLogged.selection_mode -eq 'champion' -and $depthLogged.tier_cap -eq 'paid' -and
+        $depthLogged.selected_cost_tier -eq 'paid')
 
     # Budget interrupt: a paid task that would cross a tiny cap halts BEFORE running.
     $seenB = [System.Collections.ArrayList]@()
@@ -632,12 +682,27 @@ ERROR: You have hit your usage limit. Try again later.
         $pgSeen4 = [System.Collections.ArrayList]@()
         $pgSpawn4 = { param($t) [void]$pgSeen4.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
         $run4 = Join-Path $pgHome 'pg-4'
-        $rPG4 = Invoke-Conductor -Goal 'g' -RunDir $run4 -Planner $pgPlanner -Spawner $pgSpawn4 -PlanGate -PlanReviewers @('a','b') -PlanGateDispatcher $gateImportant -Dispatcher $reviseDisp -FleetPath $refFleetPG -ToolsPath $pgTools
+        $rPG4 = Invoke-Conductor -Goal 'g' -RunDir $run4 -Planner $pgPlanner -Spawner $pgSpawn4 -PlanGate -PlanReviewers @('a','b') -PlanGateDispatcher $gateImportant -Dispatcher $reviseDisp -FleetPath $refFleetPG -ToolsPath $pgTools -NormalizeMissingStakes -StakesOverride high
         Check 'PG4 revise -> completed' ($rPG4.status -eq 'completed')
         Check 'PG4b exactly ONE revise dispatch' ($pgReviseCount.n -eq 1)
         $pg4Plan = Get-Content -Raw (Join-Path $run4 'plan.json') | ConvertFrom-Json
         Check 'PG4c plan.json overwritten with revised plan' ((@($pg4Plan.tasks).Count -eq 1) -and ($pg4Plan.tasks[0].id -eq 't1-rev'))
         Check 'PG4d walk ran the revised plan' ($pgSeen4 -contains 't1-rev')
+        Check 'PG4e operator stakes override survives plan revision' (
+            $pg4Plan.tasks[0].stakes -eq 'high' -and $pg4Plan.tasks[0].stakes_basis -eq 'operator override: --stakes high')
+
+        $pgPlannerStaked = { param($goal) @{ run_id='orig'; goal=$goal; budget_cap=$null; tasks=@(
+            [pscustomobject]@{ id='t1'; desc='original'; command='x'; capability='reasoning'; model_pick=''; depends_on=@(); est_cost_tier='free'; reversible=$true; stakes='standard'; stakes_basis='ordinary bounded task' }
+        ) } }
+        $pgSeen4f = [System.Collections.ArrayList]@()
+        $pgSpawn4f = { param($t) [void]$pgSeen4f.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run4f = Join-Path $pgHome 'pg-4f'
+        $rPG4f = Invoke-Conductor -Goal 'g' -RunDir $run4f -Planner $pgPlannerStaked -Spawner $pgSpawn4f `
+            -PlanGate -PlanReviewers @('a','b') -PlanGateDispatcher $gateImportant -Dispatcher $reviseDisp `
+            -FleetPath $refFleetPG -ToolsPath $pgTools -NormalizeMissingStakes
+        Check 'PG4f revised plan missing stakes emits the applied-policy warning' (
+            $rPG4f.status -eq 'completed' -and
+            (Get-Content -Raw (Join-Path $run4f 'events.jsonl')) -match 'missing stakes normalized to standard.*applied policy: depth med, economy routing')
 
         # PG5: important finding + -PlanRevise:$false -> no revise dispatch, original walked,
         # event notes the disabled auto-revise.

@@ -1,6 +1,6 @@
 ---
 description: Natural-language front door — describe an outcome and the Conductor plans it into a task DAG, then runs it under budget/destructive guards. Execute mode defaults Plan Gate, named-panel acceptance, and verified labor on and fails loud when required evidence is degraded. Run artifacts land under BATON_HOME/runs/<run-id>/.
-argument-hint: "<what you want done>" [--execute] [--repo <path>] [--budget <n>] [--max-tier local|free|paid] [--no-plan-gate] [--no-gate] [--no-verify] [--plan-reviewers a,b] [--plan-revise:$false] [--gate-artifact <text> | --gate-diff <range>]
+argument-hint: "<what you want done>" [--execute] [--repo <path>] [--budget <n>] [--max-tier local|free|paid] [--stakes low|standard|high] [--no-plan-gate] [--no-gate] [--no-verify] [--plan-reviewers a,b] [--plan-revise:$false] [--gate-artifact <text> | --gate-diff <range>]
 ---
 
 # /baton:go
@@ -11,7 +11,7 @@ completion. Stay thin — coordinate, narrate, and let the engine and the fleet 
 ## Steps
 
 1. Treat `$ARGUMENTS` as the goal (strip engine flags such as `--execute`, `--repo`,
-   `--budget`, `--max-tier`, and the three `--no-*` escapes).
+   `--budget`, `--max-tier`, `--stakes`, and the three `--no-*` escapes).
 
 2. Run the engine:
 
@@ -22,7 +22,8 @@ completion. Stay thin — coordinate, narrate, and let the engine and the fleet 
    # actually DO the work. Execute automatically enables:
    #   -PlanGate -PlanGateFailLoud
    #   -AcceptanceGate -AcceptancePanel -AcceptanceFailLoud
-   #   -Verify -RequireVerify
+   #   verification with a required-profile preflight for edit tasks
+   # Map --stakes low|standard|high to -Stakes only when supplied.
    # Map --no-plan-gate / --no-gate / --no-verify to -NoPlanGate / -NoGate / -NoVerify.
    # Each escape disables only that node; --no-gate still records changes.diff.
    # -PlanReviewers a,b pins the plan roster; -PlanRevise:$false skips one auto-revise.
@@ -89,8 +90,10 @@ completion. Stay thin — coordinate, narrate, and let the engine and the fleet 
   re-gate. On execute, fewer than two unique/usable reviewers or infrastructure failure
   returns `plan-gate-degraded` and halts. Standalone `-PlanGate` without fail-loud keeps
   the legacy understaffed fail-open behavior.
-- Until PR-B (#98) wires stakes routing, execute normalizes omitted task stakes to
-  `standard` and records one warning event instead of silently defaulting.
+- Every task carries `stakes` (`low|standard|high`) plus a concrete `stakes_basis`.
+  `--stakes` overrides every task. Legacy plans that omit stakes still load as
+  `standard` / `legacy plan omitted stakes` and execute records one warning naming
+  the applied standard policy.
 - Run artifacts are box-private under `BATON_HOME/runs/<run-id>/`.
 - When a prompt challenger is live (see `/baton:optimize-prompt`), the run log
   carries a `shadow` event naming which prompt variant planned this run.

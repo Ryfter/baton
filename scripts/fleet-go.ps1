@@ -22,6 +22,7 @@ param(
     [switch]$NoPlanGate,
     [switch]$NoGate,
     [switch]$NoVerify,
+    [Alias('StakesOverride')][ValidateSet('low','standard','high')][string]$Stakes,
     [string[]]$PlanReviewers,
     [bool]$PlanRevise = $true,
     [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
@@ -65,6 +66,7 @@ $runDir = Initialize-RunDir -RunId (New-RunId)
 
 $go = @{ Goal = $theGoal; RunDir = $runDir; MaxCostTier = $MaxCostTier; FleetPath = $FleetPath; ToolsPath = $ToolsPath }
 if ($PSBoundParameters.ContainsKey('Budget')) { $go['BudgetCap'] = $Budget }
+if ($PSBoundParameters.ContainsKey('Stakes')) { $go['StakesOverride'] = $Stakes }
 
 # Test seams: a canned plan and/or forced-success spawner so the suite never calls a model.
 if ($env:BATON_GO_TEST_PLAN) {
@@ -148,6 +150,7 @@ if ($Execute) {
     try { $wt = New-RunWorktree -RepoPath $repo -RunId (Split-Path $runDir -Leaf) }
     catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }
     $spawnArgs = @{ Worktree = $wt.worktree; FleetPath = $FleetPath; ToolsPath = $ToolsPath; MaxCostTier = $MaxCostTier; RunDir = $runDir }
+    if ($PSBoundParameters.ContainsKey('Stakes')) { $spawnArgs.StakesOverride = $Stakes }
     if ($env:BATON_GO_TEST_EXEC_DISPATCHER) {
         # Hermetic seam: dot-source a file defining Invoke-TestExecDispatcher.
         . $env:BATON_GO_TEST_EXEC_DISPATCHER
@@ -162,7 +165,6 @@ if ($Execute) {
         # same hashtable reference (built here so they share it).
         $frozen = @{}
         $go['Verify'] = $true
-        $go['RequireVerify'] = $true
         $go['VerifyPreflight'] = {
             param($plan)
             foreach ($tk in @($plan.tasks)) {

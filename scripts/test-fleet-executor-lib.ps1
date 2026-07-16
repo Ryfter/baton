@@ -65,6 +65,47 @@ try {
     Check 'A7 platform github not agentic' (-not (Test-ProviderAgentic -Provider @{ platform = 'github' }))
     Check 'A8 no platform, no marker -> not agentic' (-not (Test-ProviderAgentic -Provider @{ name = 'mystery' }))
 
+    if (Get-Command Test-ProviderDepthTier -ErrorAction SilentlyContinue) {
+        $tierProvider = @{ kind='cli'; command_template='tool {{tier_args}} "{{prompt}}"'; tier_med='--effort medium' }
+        Check 'DT1 valid CLI named tier with consuming template is applied' (Test-ProviderDepthTier -Provider $tierProvider -DepthTier med)
+        Check 'DT2 template that drops tier args is not applied' (-not (Test-ProviderDepthTier -Provider @{ kind='cli'; command_template='tool "{{prompt}}"'; tier_med='--effort medium' } -DepthTier med))
+        Check 'DT3 HTTP provider cannot apply CLI named tier' (-not (Test-ProviderDepthTier -Provider @{ kind='http'; command_template='tool {{tier_args}}'; tier_med='--effort medium' } -DepthTier med))
+        Check 'DT4 unsafe tier fragment is not applied' (-not (Test-ProviderDepthTier -Provider @{ kind='cli'; command_template='tool {{tier_args}}'; tier_med='$(unsafe)' } -DepthTier med))
+        Check 'DT5 command resolution consumes the named tier fragment' ((Resolve-FleetCommand -Provider $tierProvider -Prompt 'p' -Tier med) -match '--effort medium')
+    } else {
+        Check 'DT1 Test-ProviderDepthTier exists' $false
+    }
+
+    # ---- Resolve-TaskDepthPolicy (d086 PR-B, pure table) ----
+    if (Get-Command Resolve-TaskDepthPolicy -ErrorAction SilentlyContinue) {
+        $depthCases = @(
+            @{ name='low caps paid estimate at free'; stakes='low'; estimate='paid'; run='paid'; depth='low'; mode='economy'; cap='free' },
+            @{ name='low honors local task estimate'; stakes='low'; estimate='local'; run='paid'; depth='low'; mode='economy'; cap='local' },
+            @{ name='low honors local run ceiling'; stakes='low'; estimate='paid'; run='local'; depth='low'; mode='economy'; cap='local' },
+            @{ name='standard honors free run ceiling'; stakes='standard'; estimate='paid'; run='free'; depth='med'; mode='economy'; cap='free' },
+            @{ name='standard honors local estimate'; stakes='standard'; estimate='local'; run='paid'; depth='med'; mode='economy'; cap='local' },
+            @{ name='high uses champion under run ceiling'; stakes='high'; estimate='local'; run='free'; depth='high'; mode='champion'; cap='free' },
+            @{ name='high can use paid run ceiling'; stakes='high'; estimate='local'; run='paid'; depth='high'; mode='champion'; cap='paid' }
+        )
+        foreach ($depthCase in $depthCases) {
+            $depthTask = [pscustomobject]@{ stakes=$depthCase.stakes; stakes_basis="basis $($depthCase.name)"; est_cost_tier=$depthCase.estimate }
+            $depthPolicy = Resolve-TaskDepthPolicy -Task $depthTask -RunMaxCostTier $depthCase.run
+            Check "DPOL $($depthCase.name)" (
+                $depthPolicy.stakes -eq $depthCase.stakes -and $depthPolicy.depth_tier -eq $depthCase.depth -and
+                $depthPolicy.selection_mode -eq $depthCase.mode -and $depthPolicy.max_cost_tier -eq $depthCase.cap)
+        }
+        $legacyPolicy = Resolve-TaskDepthPolicy -Task ([pscustomobject]@{ est_cost_tier='paid' }) -RunMaxCostTier paid
+        Check 'DPOL missing stakes defaults to documented standard policy' (
+            $legacyPolicy.stakes -eq 'standard' -and $legacyPolicy.stakes_basis -eq 'legacy plan omitted stakes' -and
+            $legacyPolicy.depth_tier -eq 'med' -and $legacyPolicy.max_cost_tier -eq 'paid')
+        $overridePolicy = Resolve-TaskDepthPolicy -Task ([pscustomobject]@{ stakes='low'; stakes_basis='planner'; est_cost_tier='local' }) -RunMaxCostTier paid -StakesOverride high
+        Check 'DPOL operator override wins and records its basis' (
+            $overridePolicy.stakes -eq 'high' -and $overridePolicy.stakes_basis -eq 'operator override: --stakes high' -and
+            $overridePolicy.selection_mode -eq 'champion' -and $overridePolicy.max_cost_tier -eq 'paid')
+    } else {
+        Check 'DPOL Resolve-TaskDepthPolicy exists' $false
+    }
+
     # ---- Remove-RunWorktree ----
     Remove-RunWorktree -Worktree $wt.worktree -RepoPath $repo -Force
     Check 'R1 worktree dir removed' (-not (Test-Path $wt.worktree))
@@ -91,14 +132,26 @@ providers:
     enabled: true
     cost_tier: free
     platform: codex
-    command_template: 'echo "{{prompt}}"'
+    quality: 0.1
+    command_template: 'echo {{tier_args}} "{{prompt}}"'
+    tier_low: '--effort low'
+    tier_med: '--effort medium'
+    tier_high: '--effort high'
+  - name: fake-champion
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    platform: codex
+    quality: 0.9
+    command_template: 'echo {{tier_args}} "{{prompt}}"'
+    tier_high: '--effort high'
 '@
         $toolsPath = Join-Path $env:BATON_HOME 'tools.yaml'   # intentionally absent file
         $repo2 = New-TempRepo -Root (New-Item -ItemType Directory -Force -Path (Join-Path $tmpRoot 'sp')).FullName
         $wt2 = New-RunWorktree -RepoPath $repo2 -RunId 'go-sp1'
         $runDir2 = Join-Path $tmpRoot 'run-sp1'
         New-Item -ItemType Directory -Force -Path $runDir2 | Out-Null
-        $task = [pscustomobject]@{ id = 't1'; desc = 'write the feature'; capability = 'code-gen' }
+        $task = [pscustomobject]@{ id = 't1'; desc = 'write the feature'; capability = 'code-gen'; est_cost_tier = 'paid'; stakes = 'standard'; stakes_basis = 'ordinary bounded feature' }
 
         # dispatcher that EDITS (writes into its cwd — must be the worktree)
         $editDisp = { param($pick, $prompt)
@@ -116,6 +169,44 @@ providers:
         Check 'P6 caller cwd untouched' ((Get-Location).Path -eq $cwdBefore)
         Check 'P7 per-task diff written' (Test-Path (Join-Path $runDir2 'tasks/t1.diff'))
         Check 'P8 per-task diff names the new file' ((Get-Content -Raw (Join-Path $runDir2 'tasks/t1.diff')) -match 'made-by-instrument\.txt')
+        Check 'P8a standard stakes route economy at med depth' (
+            $r.stakes -eq 'standard' -and $r.stakes_basis -eq 'ordinary bounded feature' -and
+            $r.depth_tier -eq 'med' -and $r.selection_mode -eq 'economy' -and $r.tier_cap -eq 'paid')
+        Check 'P8b selected provider actual tier and named depth are recorded' ($r.selected_cost_tier -eq 'free' -and $r.depth_applied -eq $true)
+
+        $legacySpawnerOk = $true
+        $legacyR = $null
+        try {
+            $legacySpawner = New-AgenticSpawner $wt2.worktree $fleetPath $toolsPath paid $runDir2 $editDisp
+            $legacyR = & $legacySpawner $task
+        } catch { $legacySpawnerOk = $false }
+        Check 'P8b1 legacy positional spawner signature remains compatible' (
+            $legacySpawnerOk -and $null -ne $legacySpawner -and $null -ne $legacyR -and
+            $legacyR.ok -eq $true -and $legacyR.chose -eq $r.chose -and
+            $legacyR.stakes -eq $r.stakes -and $legacyR.depth_tier -eq $r.depth_tier -and
+            $legacyR.selection_mode -eq $r.selection_mode -and $legacyR.stakes_basis -eq $r.stakes_basis)
+
+        $highSeen = @{ tier = ''; pick = '' }
+        $highDisp = { param($pick, $prompt, $depthTier)
+            $highSeen.tier = $depthTier; $highSeen.pick = [string]$pick.name
+            @{ stdout = 'ok'; stderr = ''; exit_code = 0; duration_s = 0 }
+        }.GetNewClosure()
+        $highTask = [pscustomobject]@{ id='t-high'; desc='security change'; capability='code-gen'; est_cost_tier='local'; stakes='high'; stakes_basis='authentication boundary' }
+        $spHigh = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -MaxCostTier paid -Dispatcher $highDisp
+        $rHigh = & $spHigh $highTask
+        Check 'P8c high stakes uses champion selection and run cap' (
+            $rHigh.chose -eq 'fake-champion' -and $rHigh.selection_mode -eq 'champion' -and
+            $rHigh.depth_tier -eq 'high' -and $rHigh.tier_cap -eq 'paid')
+        Check 'P8d dispatcher receives generic tier and selected actual tier is logged' (
+            $highSeen.tier -eq 'high' -and $highSeen.pick -eq 'fake-champion' -and
+            $rHigh.depth_applied -eq $true -and $rHigh.selected_cost_tier -eq 'paid')
+
+        $spOverride = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetPath -ToolsPath $toolsPath `
+            -MaxCostTier paid -StakesOverride high -Dispatcher $highDisp
+        $rOverride = & $spOverride $task
+        Check 'P8e spawner-level operator override reaches routing policy' (
+            $rOverride.stakes -eq 'high' -and $rOverride.stakes_basis -eq 'operator override: --stakes high' -and
+            $rOverride.chose -eq 'fake-champion' -and $rOverride.depth_tier -eq 'high')
 
         # dispatcher that does NOTHING, exit 0
         $noopDisp = { param($pick, $prompt) @{ stdout = 'ok'; stderr = ''; exit_code = 0; duration_s = 0 } }
@@ -164,6 +255,8 @@ providers:
         $sp5 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetOverride -ToolsPath $toolsPath -Dispatcher $noopDisp
         $r5 = & $sp5 $task
         Check 'P15 agentic:true override makes a local entry eligible' ($r5.chose -eq 'fake-local-agentic')
+        Check 'P16 provider without named med tier remains eligible and records depth_applied false' (
+            $r5.depth_tier -eq 'med' -and $r5.depth_applied -eq $false -and $r5.selected_cost_tier -eq 'local')
 
         # ---- I1: tools.yaml candidate with platform: codex must be filtered by source ----
         $toolsWithPlatform = Join-Path $env:BATON_HOME 'tools-platform.yaml'
@@ -266,6 +359,11 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
         Check 'VS2 final ok true' ($rv2.ok -eq $true)
         Check 'VS2 two attempt rows' (@(Get-Attempts $fx2.runDir).Count -eq 2)
         Check 'VS2 first_failure_category check-failed' ($rv2.verification.first_failure_category -eq 'check-failed')
+        Check 'VS2 final retry preserves resolved depth policy metadata' (
+            $rv2.stakes -eq 'standard' -and $rv2.stakes_basis -eq 'legacy plan omitted stakes' -and
+            $rv2.depth_tier -eq 'med' -and $rv2.selection_mode -eq 'economy' -and
+            $rv2.tier_cap -eq 'free' -and $rv2.depth_applied -eq $true -and
+            $rv2.selected_cost_tier -eq 'free')
 
         # VS3 retry-then-fail (hook fails both attempts).
         $hook3 = Join-Path $tmpRoot 'hook3.ps1'
