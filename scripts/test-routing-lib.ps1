@@ -331,4 +331,44 @@ providers:
 }
 finally { Remove-Item -Recurse -Force $tmpW -ErrorAction SilentlyContinue }
 
+# ===== reactive classifier rows reuse the existing route-around =====
+$tmpReactive = Join-Path ([System.IO.Path]::GetTempPath()) ("routing-reactive-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $tmpReactive | Out-Null
+try {
+    $reactiveFleet = Join-Path $tmpReactive 'fleet.yaml'
+    Set-Content -LiteralPath $reactiveFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: worker-dead
+    kind: cli
+    enabled: true
+    cost_tier: free
+    capabilities: [code]
+    command_template: 'echo "{{prompt}}"'
+  - name: worker-peer
+    kind: cli
+    enabled: true
+    cost_tier: free
+    capabilities: [code]
+    command_template: 'echo "{{prompt}}"'
+  - name: worker-paid
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    capabilities: [code]
+    command_template: 'echo "{{prompt}}"'
+'@
+    $reactiveUsage = Join-Path $tmpReactive 'usage-journal.jsonl'
+    Set-Content -LiteralPath $reactiveUsage -Encoding utf8NoBOM -Value '{"ts":"2098-12-31T23:00:00Z","event":"lockout","worker":"worker-dead","scope":"subscription","reset_at":"2099-01-01T00:00:00Z","source":"error_classify","observed_at":"2098-12-31T23:00:00Z","ttl":3600,"confidence":0.95,"classification":"quota_exhausted"}'
+    $reactiveCandidates = Select-Capability -Capability code -FleetPath $reactiveFleet `
+        -ToolsPath (Join-Path $tmpReactive 'none.yaml') -UsagePath $reactiveUsage `
+        -RatingsPath (Join-Path $tmpReactive 'ratings.jsonl') -JournalPath (Join-Path $tmpReactive 'routing.jsonl') `
+        -MaxCostTier free
+    Check 'reactive lockout row removes the dead worker' (@($reactiveCandidates | Where-Object { $_.name -eq 'worker-dead' }).Count -eq 0)
+    Check 'reactive lockout row leaves the same-capability peer' (@($reactiveCandidates).Count -eq 1 -and @($reactiveCandidates)[0].name -eq 'worker-peer')
+    Check 'reactive route-around still honors max cost tier' (@($reactiveCandidates | Where-Object { $_.name -eq 'worker-paid' }).Count -eq 0)
+} finally {
+    Remove-Item -LiteralPath $tmpReactive -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 if ($fail -gt 0) { Write-Host "`n$fail FAILED"; exit 1 } else { Write-Host "`nALL PASS"; exit 0 }

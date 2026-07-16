@@ -11,6 +11,7 @@
 #>
 
 . "$PSScriptRoot/baton-home.ps1"
+. "$PSScriptRoot/usage-classify-lib.ps1"
 $script:DefaultFleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml')
 
 function Set-JsonFileAtomic {
@@ -471,6 +472,7 @@ function Invoke-Fleet {
         [string]$Tier,
         [string]$Path = $script:DefaultFleetPath,
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md'),
+        [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl'),
         [switch]$NoJournal
     )
     $provider = Get-FleetProvider -Name $Name -Path $Path
@@ -504,6 +506,14 @@ function Invoke-Fleet {
         $result.tokens = $tok.tokens
         $result.tokens_basis = $tok.tokens_basis
     }
+
+    # Reactive usage classification is provider-agnostic and runs for every
+    # dispatch result. The structured observation rides with the result so a
+    # policy-aware caller can decide whether one substitute is permitted.
+    $usageObservation = Register-UsageFailure -Worker $Name -ExitCode ([int]$result.exit_code) `
+        -Stdout ([string]$result.stdout) -Stderr ([string]$result.stderr) -UsagePath $UsagePath
+    $result.usage_observation = $usageObservation
+    $result.usage_recorded = [bool]$usageObservation.event
 
     if (-not $NoJournal) {
         Write-FleetJournalLine -Provider $Name -DurationS $result.duration_s `
