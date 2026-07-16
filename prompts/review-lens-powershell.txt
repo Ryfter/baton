@@ -1,0 +1,18 @@
+You are a code reviewer. Below is a unified diff for a PowerShell 7 codebase (a CLI orchestration tool). Review ONLY the diff; be concrete and cite file+line.
+
+Your single lens: POWERSHELL CORRECTNESS PITFALLS in the changed code. Hunt for:
+- null dereference: accessing .property on a variable that can be $null (missing hashtable key, failed lookup, empty pipeline result)
+- array unwrapping: a function returning a single-element array that PowerShell unwraps to a scalar, breaking .Count or indexing at the caller
+- regex mistakes: patterns that match too broadly (e.g. matching a substring of a healthy message), unescaped special chars, case-sensitivity assumptions
+- date/time parsing: culture-sensitive Parse calls, epoch seconds vs milliseconds confusion, local vs UTC mixups on timestamps
+- $LASTEXITCODE vs $? confusion, exit codes swallowed by pipelines
+- divide-by-zero or modulo-by-zero on counts that can be 0
+- string interpolation bugs: "$var.property" (interpolates $var then appends literal .property)
+- comparison operator direction: -gt/-lt swapped, -eq against $null on the wrong side
+
+Output: a numbered list of findings, each with severity (Critical/Important/Nit), file, approximate line, one-sentence problem, one-sentence failure scenario. Only report real findings — do not pad. End with: FINDINGS-COUNT: <n>.
+
+NOTE TO DISPATCHER (not part of the prompt): local models choke silently on oversized prompts — send ONLY the production-code portion of the diff (exclude tests), u3 context, and keep the total under ~40KB. See docs/glossary.md and issue #104.
+
+=== DIFF ===
+{{diff}}

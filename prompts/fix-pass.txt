@@ -1,0 +1,13 @@
+You are implementing a fix pass in this repo ({{repo_path}}) on the CURRENT branch {{branch}}. Do NOT create a new branch. You just adversarially reviewed this branch and returned {{verdict}}; now implement exactly the fixes below. Nothing else — no refactors, no scope growth{{extra_scope_guards}}.
+
+{{numbered_fixes}}
+
+ALSO VERIFY-OR-REFUTE (findings from independent lens reviews; fix only if real, otherwise list as refuted with a one-line concrete reason):
+{{lens_findings}}
+
+HARD house rules (terms per docs/glossary.md): PowerShell 7; utf8NoBOM; never name variables $args/$input/$event/$matches/$host/$pid; tests hermetic (no real ~/.baton, ~/.claude — use $env:TEMP with try/finally); 965-byte shell-arg ceiling; guard every divide; ConvertTo-Json -InputObject @(...) for arrays.
+
+After the edits, run these suites and report exact PASS/FAIL counts (do not claim green without running):
+{{test_suites}}
+
+Commit as ONE commit on this branch with a clear message. Push the branch. Report: files touched, what each fix became, verify-or-refute verdicts, the commit SHA, and exact test counts.
