@@ -65,24 +65,35 @@ function ConvertTo-ClassifiedResetAt {
         }
     }
 
+    # Zone-less wall clocks (e.g. "try again at 01:30") are host LOCAL time
+    # (DateTimeStyles.AssumeLocal). Emit ISO-8601 WITH an explicit offset so the
+    # absolute instant is unambiguous; do not silently re-label local as Z/UTC.
     $clockMatch = Find-UsageRegexMatch -Text $Text -Pattern '(?:resets?|retry|try again)\s+(?:at\s+)?(?<clock>\d{1,2}:\d{2}\s*(?:AM|PM)?\s*(?:UTC|GMT)?)\b'
     if ($clockMatch.Success) {
         $clockText = $clockMatch.Groups['clock'].Value.Trim()
         $clockHasZone = $clockText.EndsWith('UTC', [System.StringComparison]::OrdinalIgnoreCase) -or
             $clockText.EndsWith('GMT', [System.StringComparison]::OrdinalIgnoreCase)
-        if ($clockHasZone) { $clockText = $clockText.Substring(0, $clockText.Length - 3).TrimEnd() + ' +00:00' }
-        $clockStyle = [System.Globalization.DateTimeStyles]::AllowWhiteSpaces -bor
-            $(if ($clockHasZone) { [System.Globalization.DateTimeStyles]::None } else { [System.Globalization.DateTimeStyles]::AssumeLocal })
+        if ($clockHasZone) {
+            $clockText = $clockText.Substring(0, $clockText.Length - 3).TrimEnd() + ' +00:00'
+            $clockStyle = [System.Globalization.DateTimeStyles]::AllowWhiteSpaces
+            $dayBase = $nowUtc.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
+        } else {
+            $clockStyle = [System.Globalization.DateTimeStyles]::AllowWhiteSpaces -bor
+                [System.Globalization.DateTimeStyles]::AssumeLocal
+            $nowLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($nowUtc, [System.TimeZoneInfo]::Local)
+            $dayBase = $nowLocal.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
+        }
         $clockInstant = [datetimeoffset]::MinValue
-        $datedClock = $nowUtc.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture) + ' ' + $clockText
+        $datedClock = $dayBase + ' ' + $clockText
         if ([datetimeoffset]::TryParse(
                 $datedClock,
                 [System.Globalization.CultureInfo]::InvariantCulture,
                 $clockStyle,
                 [ref]$clockInstant)) {
-            $clockUtc = $clockInstant.UtcDateTime
-            if ($clockUtc -le $nowUtc) { $clockUtc = $clockUtc.AddDays(1) }
-            return $clockUtc.ToString('o')
+            if ($clockInstant.UtcDateTime -le $nowUtc) { $clockInstant = $clockInstant.AddDays(1) }
+            if ($clockHasZone) { return $clockInstant.UtcDateTime.ToString('o') }
+            # Zone-less: keep offset in the emitted string (deterministic given host TZ + -Now).
+            return $clockInstant.ToString('o')
         }
     }
 
@@ -122,12 +133,23 @@ function Get-UsageFailureObservation {
     $reason = if ($ExitCode -eq 0) { 'dispatch_succeeded' } else { 'unrecognized_dispatch_failure' }
 
     if ($ExitCode -ne 0) {
-        $quotaPattern = 'weekly\s+(?:usage\s+)?limit|hit\s+your\s+limit|hit\s+(?:your|the)\s+(?:usage|weekly|session|model|opus)[^\r\n]{0,60}\blimit|usage\s+limit\s+(?:reached|exceeded)|quota\s+(?:exhausted|exceeded)|insufficient_quota|billing\s+hard\s+limit|credits?\s+exhausted'
+        # Auth/config hard-excludes failover/lockout even when quota phrases co-occur.
+        # Quota: real provider limit phrasings only — bare "hit your limit of N retries"
+        # must stay ambiguous (negative lookahead on "of <digits>").
+        # Burst: 429 / rate-limit / rate_limit_error only — bare "retry after" is a
+        # reset-time parse source, not a standalone burst trigger.
         $authPattern = '\b(?:401|403)\b|unauthori[sz]ed|invalid\s+(?:api\s+)?key|authentication\s+(?:required|failed)|login\s+required|configuration\s+error|unknown\s+model|model\s+not\s+found'
-        $burstPattern = '\b429\b|too\s+many\s+requests|rate[ -]?limit(?:ed|\s+exceeded|\s+reached)|retry[ -]?after'
+        $quotaPattern = 'weekly\s+(?:usage\s+)?limit|hit\s+your\s+limit(?!\s+of\s+\d)|hit\s+(?:your|the)\s+(?:usage|weekly|session|model|opus)[^\r\n]{0,60}\blimit|usage\s+limit\s+(?:reached|exceeded)|quota\s+(?:exhausted|exceeded)|insufficient_quota|billing\s+hard\s+limit|credits?\s+exhausted'
+        $burstPattern = '\b429\b|too\s+many\s+requests|rate[_ -]?limit(?:ed|_error)?(?:\s+(?:exceeded|reached))?'
         $overloadPattern = '\b(?:500|502|503|529)\b|overloaded(?:_error)?|server\s+is\s+overloaded|service\s+unavailable|temporarily\s+at\s+capacity'
 
-        if ((Find-UsageRegexMatch -Text $text -Pattern $quotaPattern).Success) {
+        if ((Find-UsageRegexMatch -Text $text -Pattern $authPattern).Success) {
+            $classification = 'auth_config'
+            $scope = 'subscription'
+            $confidence = 0.95
+            $reason = 'provider authentication or configuration failure'
+        }
+        elseif ((Find-UsageRegexMatch -Text $text -Pattern $quotaPattern).Success) {
             $classification = 'quota_exhausted'
             $eventKind = 'lockout'
             $hardFailover = $true
@@ -136,12 +158,9 @@ function Get-UsageFailureObservation {
                      else { 'subscription' }
             $confidence = 0.95
             $reason = 'provider quota exhausted'
-        }
-        elseif ((Find-UsageRegexMatch -Text $text -Pattern $authPattern).Success) {
-            $classification = 'auth_config'
-            $scope = 'subscription'
-            $confidence = 0.95
-            $reason = 'provider authentication or configuration failure'
+            # No parseable reset_at -> bounded lockout TTL (not permanent-until-manual-clear).
+            # subscription/weekly: 6h; model (and other non-weekly scopes): 1h.
+            $defaultSeconds = if ($scope -in @('subscription', 'weekly')) { 6 * 3600 } else { 3600 }
         }
         elseif ((Find-UsageRegexMatch -Text $text -Pattern $burstPattern).Success) {
             $classification = 'rate_limit_burst'
@@ -168,7 +187,16 @@ function Get-UsageFailureObservation {
     $ttl = if ($resetAt) {
         try {
             $resetTime = [datetimeoffset]::Parse($resetAt).UtcDateTime
-            [math]::Max(1, [int][math]::Ceiling(($resetTime - $nowUtc).TotalSeconds))
+            $seconds = ($resetTime - $nowUtc).TotalSeconds
+            if (-not [double]::IsFinite($seconds)) {
+                [math]::Max(1, $defaultSeconds)
+            } else {
+                # Guard overflow: clamp into int range before cast.
+                $ceiling = [math]::Ceiling($seconds)
+                if ($ceiling -gt [int]::MaxValue) { [int]::MaxValue }
+                elseif ($ceiling -lt 1) { 1 }
+                else { [int]$ceiling }
+            }
         } catch { [math]::Max(1, $defaultSeconds) }
     } else { [math]::Max(1, $(if ($defaultSeconds -gt 0) { $defaultSeconds } else { 3600 })) }
 

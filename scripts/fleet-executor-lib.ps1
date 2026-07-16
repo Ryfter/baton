@@ -259,6 +259,9 @@ function New-AgenticSpawner {
         [scriptblock]$Dispatcher,
         [ValidateSet('low','standard','high')][string]$StakesOverride,
         [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl'),
+        # Ratings/journal under BATON_HOME so quality_first is hermetic in tests (not host ~/.claude).
+        [string]$RatingsPath = (Join-Path (Get-BatonHome) 'routing-ratings.jsonl'),
+        [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'),
         [ValidateSet('quality_first','never')][string]$FailoverPolicy = 'quality_first'
     )
     $hasStakesOverride = $PSBoundParameters.ContainsKey('StakesOverride')
@@ -277,7 +280,7 @@ function New-AgenticSpawner {
         # enumeration.
         $raw = Select-Capability -Capability $cap -MaxCostTier $policy.max_cost_tier `
             -SelectionMode $policy.selection_mode -FleetPath $FleetPath -ToolsPath $ToolsPath `
-            -UsagePath $UsagePath
+            -UsagePath $UsagePath -RatingsPath $RatingsPath -JournalPath $JournalPath
         # Edit dispatch is fleet-only (Invoke-Fleet resolves names against fleet.yaml);
         # tools.yaml candidates cannot take edit dispatch even if they infer agentic
         # via a platform field, so require source='fleet' before the agentic test.
@@ -305,13 +308,13 @@ function New-AgenticSpawner {
         $hadPartialDiff = ($null -ne $preTree) -and ($null -ne $firstPostTree) -and ($preTree -ne $firstPostTree)
         $hopLine = ''
 
-        if ([int]$res.exit_code -ne 0 -and $observation.hard_failover -and $FailoverPolicy -eq 'quality_first') {
+        if ([int]$res.exit_code -ne 0 -and $observation -and $observation.hard_failover -and $FailoverPolicy -eq 'quality_first') {
             # v1.17.0 delta: re-resolve the same authoritative stakes/depth policy
             # before substitute selection. Never reuse a raw pre-policy ladder.
             $retryPolicy = Resolve-TaskDepthPolicy @policyArgs
             $retryRaw = Select-Capability -Capability $cap -MaxCostTier $retryPolicy.max_cost_tier `
                 -SelectionMode $retryPolicy.selection_mode -FleetPath $FleetPath -ToolsPath $ToolsPath `
-                -UsagePath $UsagePath
+                -UsagePath $UsagePath -RatingsPath $RatingsPath -JournalPath $JournalPath
             $retryCandidates = @($retryRaw | Where-Object {
                 ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and
                 (Test-ProviderAgentic -Provider $_) -and
