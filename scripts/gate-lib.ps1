@@ -446,6 +446,13 @@ function Invoke-AcceptanceGate {
     if ($panelActive -and $allUnparsed) {
         [void]$degradationReasons.Add('all reviewers returned no usable review')
     }
+    $unparsedRoles = @($reviews | Where-Object { -not $_.parsed } | ForEach-Object { [string]$_.reviewer })
+    if ($FailLoud -and $unparsedRoles.Count -gt 0) {
+        [void]$degradationReasons.Add("unusable review(s): $($unparsedRoles -join ', ')")
+        foreach ($unparsedRole in $unparsedRoles) {
+            if (-not @($degradedRoles).Contains($unparsedRole)) { [void]$degradedRoles.Add($unparsedRole) }
+        }
+    }
     $degraded = $panelActive -and (
         $noUsableRoles -or $noReviewerRan -or ($FailLoud -and $degradationReasons.Count -gt 0)
     )

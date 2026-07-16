@@ -201,6 +201,18 @@ roles:
         Check 'GP10 all-unparsed panel is degraded under FailLoud' (
             $unparsedPanel.degraded -and $unparsedPanel.reason -match 'all reviewers')
 
+        $partialPanelDispatcher = {
+            param($providerName, $reviewPrompt)
+            if ($providerName -eq 'cheap-model') { return @{ stdout='not json'; stderr=''; exit_code=0 } }
+            return @{ stdout='[]'; stderr=''; exit_code=0 }
+        }
+        $partialPanel = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Panel -FailLoud `
+            -RolesPath $rolesFixture -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
+            -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $partialPanelDispatcher
+        Check 'GP10b one unusable enabled role degrades a fail-loud panel' (
+            $partialPanel.degraded -and @($partialPanel.degraded_roles) -contains 'simplicity' -and
+            $partialPanel.reason -match 'unusable review')
+
         $missingRolesPath = Join-Path $roleTmp 'no-roster.yaml'
         $emptyRolesPath = Join-Path $roleTmp 'empty-roles.yaml'
         Set-Content -LiteralPath $emptyRolesPath -Encoding utf8NoBOM -Value 'roles:'
