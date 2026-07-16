@@ -19,6 +19,9 @@ param(
     [string]$RepoPath,
     [switch]$Verify,
     [switch]$PlanGate,
+    [switch]$NoPlanGate,
+    [switch]$NoGate,
+    [switch]$NoVerify,
     [string[]]$PlanReviewers,
     [bool]$PlanRevise = $true,
     [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
@@ -42,7 +45,21 @@ if (-not [string]::IsNullOrWhiteSpace($Project)) {
 }
 
 $theGoal = @($Goal, $Text | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) | Select-Object -First 1
-if ([string]::IsNullOrWhiteSpace($theGoal)) { Write-Error 'Provide a goal via -Goal "<text>" (or -Text).'; exit 2 }
+if ([string]::IsNullOrWhiteSpace($theGoal)) { [Console]::Error.WriteLine('Provide a goal via -Goal "<text>" (or -Text).'); exit 2 }
+if ($PlanGate -and $NoPlanGate) { [Console]::Error.WriteLine('Cannot combine -PlanGate with -NoPlanGate.'); exit 2 }
+if ($Verify -and $NoVerify) { [Console]::Error.WriteLine('Cannot combine -Verify with -NoVerify.'); exit 2 }
+if ($NoGate -and ($PSBoundParameters.ContainsKey('GateArtifact') -or $PSBoundParameters.ContainsKey('GateDiff'))) {
+    [Console]::Error.WriteLine('Cannot combine -NoGate with -GateArtifact or -GateDiff.')
+    exit 2
+}
+
+$planGateEnabled = $PlanGate -or ($Execute -and -not $NoPlanGate)
+$gateEnabled = (-not $NoGate) -and (
+    $Execute -or
+    $PSBoundParameters.ContainsKey('GateArtifact') -or
+    $PSBoundParameters.ContainsKey('GateDiff')
+)
+$verifyEnabled = $Verify -or ($Execute -and -not $NoVerify)
 
 $runDir = Initialize-RunDir -RunId (New-RunId)
 
@@ -63,16 +80,42 @@ if ($PSBoundParameters.ContainsKey('GateDiff')) { $go['GateDiff'] = $GateDiff }
 # Test seam: a canned gate verdict so the suite never calls real reviewers.
 if ($env:BATON_GO_TEST_GATE) {
     $cannedVerdict = $env:BATON_GO_TEST_GATE
-    $go['Gater'] = { param($art, $goal) @{ verdict = $cannedVerdict; reason = 'test-stub verdict'; counts = @{ critical = 0; important = 0; minor = 0 }; polish_brief = 'test brief'; findings = @(); reviews = @(); unparsed = @() } }.GetNewClosure()
+    $go['Gater'] = {
+        param($art, $goal)
+        $isDegraded = $cannedVerdict -eq 'degraded'
+        @{
+            verdict = if ($isDegraded) { 'accept' } else { $cannedVerdict }
+            reason = 'test-stub verdict'
+            counts = @{ critical = 0; important = 0; minor = 0 }
+            polish_brief = 'test brief'
+            findings = @()
+            reviews = @()
+            unparsed = @()
+            degraded = $isDegraded
+        }
+    }.GetNewClosure()
     if (-not $go.ContainsKey('GateArtifact')) { $go['GateArtifact'] = 'test artifact' }
+}
+
+if ($gateEnabled) {
+    $go['AcceptanceGate'] = $true
+    if ($Execute) {
+        $go['AcceptancePanel'] = $true
+        $go['AcceptanceFailLoud'] = $true
+    }
+} elseif ($Execute) {
+    # Bind false explicitly so Invoke-Conductor can distinguish --no-gate from
+    # legacy direct callers whose DiffProvider/artifact historically auto-gates.
+    $go['AcceptanceGate'] = $false
 }
 
 # Plan Gate (d080, Slice 2): opt-in peer once-over of the plan DAG BEFORE the walk.
 # -PlanReviewers accepts either a native array (-PlanReviewers a,b) or a single
 # comma-joined string (-PlanReviewers "a,b"); both normalize to a trimmed list.
 # -PlanRevise defaults $true; pass -PlanRevise:$false to skip the one auto-revise pass.
-if ($PlanGate) {
+if ($planGateEnabled) {
     $go['PlanGate'] = $true
+    if ($Execute) { $go['PlanGateFailLoud'] = $true }
     $reviewers = @()
     foreach ($r in @($PlanReviewers)) { $reviewers += (([string]$r) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
     if ($reviewers.Count) { $go['PlanReviewers'] = $reviewers }
@@ -112,16 +155,24 @@ if ($Execute) {
     }
     $go['Spawner'] = New-AgenticSpawner @spawnArgs
     $go['DiffProvider'] = { Get-RunDiff -Worktree $wt.worktree -BaseSha $wt.base_sha }.GetNewClosure()
-    if ($Verify) {
+    $go['NormalizeMissingStakes'] = $true
+    if ($verifyEnabled) {
         # Shared frozen-contracts map: the preflight closure populates+validates it from
         # the base revision; the verifying spawner reads it per task. Both close over the
         # same hashtable reference (built here so they share it).
         $frozen = @{}
         $go['Verify'] = $true
+        $go['RequireVerify'] = $true
         $go['VerifyPreflight'] = {
             param($plan)
             foreach ($tk in @($plan.tasks)) {
                 $prof = [string]$tk.verify_profile
+                if (($tk.capability -in @('code-gen','code-transform')) -and [string]::IsNullOrWhiteSpace($prof)) {
+                    return @{
+                        ok = $false
+                        reason = "task $($tk.id) ($($tk.capability)) needs a verify_profile; add one or re-run with --no-verify"
+                    }
+                }
                 if (-not $prof) { continue }
                 $taskDir = Join-Path $runDir "tasks/$($tk.id)"
                 $fc = Get-FrozenVerificationContract -RepoPath $repo -BaseSha $wt.base_sha `
@@ -145,13 +196,13 @@ try {
 }
 
 if ($Execute -and $wt) {
-    if ($result.status -eq 'plan-rejected') {
+    if ($result.status -in @('plan-rejected','plan-gate-degraded')) {
         # The Plan Gate rejected BEFORE the walk. The worktree/branch were created up
         # front but are untouched by construction (the gate precedes any DAG walk /
         # labor), so discard both — a rejected run must leave nothing behind, and the
         # report must not advertise a dead branch. Best-effort + guarded: cleanup
-        # failure never crashes the run. ONLY on plan-rejected; every other status keeps
-        # the branch for the human to merge. Remove the worktree first, THEN delete the
+        # failure never crashes the run. ONLY on pre-labor Plan Gate stops; every other
+        # status keeps the branch for the human to merge. Remove the worktree first, THEN delete the
         # branch (git refuses to delete a branch still checked out in a worktree).
         try { Remove-RunWorktree -Worktree $wt.worktree -RepoPath $repo -Force } catch { }
         try { & git -C $repo branch -D $wt.branch 2>$null | Out-Null } catch { }
@@ -180,3 +231,9 @@ if ($Json) {
     }
     if (Get-Command Write-CoachFooter -ErrorAction SilentlyContinue) { Write-CoachFooter }
 }
+
+$executeFailure = $Execute -and $result.status -in @(
+    'failed', 'plan-failed', 'plan-invalid', 'plan-gate-degraded', 'plan-rejected',
+    'verification-failed', 'acceptance-degraded', 'needs-polish', 'rejected'
+)
+if ($executeFailure) { exit 1 }

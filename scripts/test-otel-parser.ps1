@@ -10,6 +10,7 @@ $fixture = Join-Path $here 'fixtures\otel-sample.jsonl'
 $tmpEvents = Join-Path $env:TEMP "otel-test-events-$(Get-Random).jsonl"
 $tmpJournal = Join-Path $env:TEMP "otel-test-journal-$(Get-Random).md"
 $tmpMarker = Join-Path $env:TEMP "otel-test-marker-$(Get-Random).txt"
+$tmpState = Join-Path $env:TEMP "otel-test-state-$(Get-Random).json"
 $catalog = Join-Path (Split-Path $here -Parent) 'references\model-routing.md'
 
 Copy-Item $fixture $tmpEvents
@@ -25,6 +26,7 @@ function Assert($label, $cond) {
     -EventsPath $tmpEvents `
     -JournalPath $tmpJournal `
     -MarkerPath $tmpMarker `
+    -StatePath $tmpState `
     -CatalogPath $catalog | Out-Null
 
 $lines = Get-Content $tmpJournal
@@ -47,6 +49,7 @@ Assert "first line event-type is api_request (claude_code. prefix stripped)" ($o
     -EventsPath $tmpEvents `
     -JournalPath $tmpJournal `
     -MarkerPath $tmpMarker `
+    -StatePath $tmpState `
     -CatalogPath $catalog | Out-Null
 
 $linesAfter = Get-Content $tmpJournal
@@ -79,6 +82,7 @@ Add-Content $tmpEvents -Value $appendEvent
     -EventsPath $tmpEvents `
     -JournalPath $tmpJournal `
     -MarkerPath $tmpMarker `
+    -StatePath $tmpState `
     -CatalogPath $catalog | Out-Null
 
 $linesFinal = Get-Content $tmpJournal
@@ -111,13 +115,14 @@ Add-Content $tmpEvents -Value $noCostEvent
     -EventsPath $tmpEvents `
     -JournalPath $tmpJournal `
     -MarkerPath $tmpMarker `
+    -StatePath $tmpState `
     -CatalogPath $catalog | Out-Null
 
 $linesAfter2 = Get-Content $tmpJournal
 $otelLinesAfter2 = @($linesAfter2 | Where-Object { $_ -match '\| otel \|' })
 Assert "fallback computes from pricing table" ($otelLinesAfter2[-1] -match '\| \$0\.0180 \|')
 
-Remove-Item $tmpEvents, $tmpJournal, $tmpMarker -ErrorAction SilentlyContinue
+Remove-Item $tmpEvents, $tmpJournal, $tmpMarker, $tmpState -ErrorAction SilentlyContinue
 
 # --- Plan 3: OTel tagging from state file ---
 Write-Host ""

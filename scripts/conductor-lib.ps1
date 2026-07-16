@@ -642,11 +642,17 @@ function Invoke-Conductor {
         [scriptblock]$Gater,
         [scriptblock]$DiffProvider,
         [switch]$PlanGate,
+        [switch]$PlanGateFailLoud,
         [string[]]$PlanReviewers,
         [bool]$PlanRevise = $true,
         [scriptblock]$PlanGateDispatcher,
+        [switch]$AcceptanceGate,
+        [switch]$AcceptancePanel,
+        [switch]$AcceptanceFailLoud,
         [switch]$Verify,
-        [scriptblock]$VerifyPreflight
+        [switch]$RequireVerify,
+        [scriptblock]$VerifyPreflight,
+        [switch]$NormalizeMissingStakes
     )
     if (-not $RunDir) { $RunDir = Initialize-RunDir }
     else { New-Item -ItemType Directory -Force -Path $RunDir | Out-Null }
@@ -661,32 +667,56 @@ function Invoke-Conductor {
         return (Complete-Run -RunDir $RunDir -Plan $empty -Status 'plan-failed')
     }
     $plan.run_id = $runId
+    if ($NormalizeMissingStakes) {
+        $missingStakes = 0
+        foreach ($plannedTask in @($plan.tasks)) {
+            if ([string]::IsNullOrWhiteSpace([string]$plannedTask.stakes)) {
+                $plannedTask | Add-Member -NotePropertyName stakes -NotePropertyValue 'standard' -Force
+                $plannedTask | Add-Member -NotePropertyName stakes_basis -NotePropertyValue 'legacy plan omitted stakes' -Force
+                $missingStakes++
+            }
+        }
+        if ($missingStakes -gt 0) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'warn' -Message "$missingStakes task(s) missing stakes normalized to standard; stakes routing arrives in PR-B (#98)")
+        }
+    }
     ($plan | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'plan.json') -Encoding utf8NoBOM
     Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'started' -Message "plan: $(@($plan.tasks).Count) tasks")
 
-    # 1.5 Plan Gate (d080, Slice 2): OPT-IN peer once-over of the task DAG BEFORE the walk
+    # 1.5 Plan Gate (d080, Slice 2): policy-selected peer once-over BEFORE the walk.
     #     — a sibling of the post-work Acceptance Gate (d058), but it reviews the not-yet-run
-    #     PLAN. Advisory + fail-open: a THROW from the gate never kills the run (warn + walk
-    #     as-is). Reject is the ONLY hard stop, and it halts before any worktree edit / DAG
-    #     walk / labor spend. Without -PlanGate this whole block is skipped (default path
-    #     byte-for-byte unchanged).
+    #     PLAN. Legacy calls remain advisory/fail-open; -PlanGateFailLoud turns missing
+    #     evidence, infrastructure failure, and a failed required revise pass into
+    #     plan-gate-degraded before any DAG labor.
     if ($PlanGate) {
         # The exact plan.json we just wrote is the artifact the reviewers see.
         $planJsonText = Get-Content -Raw -LiteralPath (Join-Path $RunDir 'plan.json')
         $pgRes = $null
         try {
             $pgRes = Invoke-PlanGate -Goal $Goal -PlanJson $planJsonText -Reviewers $PlanReviewers `
-                -Dispatcher $PlanGateDispatcher -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
+                -Dispatcher $PlanGateDispatcher -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath `
+                -FailLoud:$PlanGateFailLoud
         } catch {
-            # Advisory infrastructure must never kill a run: skip the gate, walk the plan.
-            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Level 'warn' -Message "plan gate failed (fail-open, walking the plan as-is): $($_.Exception.Message)")
+            # Standalone remains advisory. Execute fail-loud consumes the null below.
+            if (-not $PlanGateFailLoud) {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Level 'warn' -Message "plan gate failed (fail-open, walking the plan as-is): $($_.Exception.Message)")
+            }
             $pgRes = $null
+        }
+        if ($PlanGateFailLoud -and $null -eq $pgRes) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Level 'error' -Message 'PLAN GATE DEGRADED — gate returned no usable result — no labor will run')
+            return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-gate-degraded')
         }
         if ($null -ne $pgRes) {
             $pgJson = ConvertTo-Json -Depth 8 -InputObject $pgRes
             Set-Content -LiteralPath (Join-Path $RunDir 'plan-review.json') -Value $pgJson -Encoding utf8NoBOM
             $c = $pgRes.counts
             Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Message "plan verdict: $($pgRes.verdict) — $($pgRes.reason) ($($c.critical) critical, $($c.important) important, $($c.minor) minor)")
+            if ($PlanGateFailLoud -and ($pgRes.degraded -or $pgRes.fail_open)) {
+                $pgReason = if ([string]::IsNullOrWhiteSpace([string]$pgRes.reason)) { 'gate returned a degraded result' } else { [string]$pgRes.reason }
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Level 'error' -Message "PLAN GATE DEGRADED — $pgReason — no labor will run")
+                return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-gate-degraded')
+            }
             $verdict = [string]$pgRes.verdict
             if ($verdict -ne 'accept') {
                 Set-Content -LiteralPath (Join-Path $RunDir 'revise_brief.md') -Value ([string]$pgRes.revise_brief) -Encoding utf8NoBOM
@@ -700,8 +730,14 @@ function Invoke-Conductor {
             elseif ($verdict -eq 'revise') {
                 if ($PlanRevise) {
                     # One revise pass, then walk whichever plan survives (no re-gate, Slice 2).
-                    $plan = Invoke-PlanRevise -Goal $Goal -PlanJson $planJsonText -ReviseBrief ([string]$pgRes.revise_brief) `
+                    $priorPlan = $plan
+                    $revisedPlan = Invoke-PlanRevise -Goal $Goal -PlanJson $planJsonText -ReviseBrief ([string]$pgRes.revise_brief) `
                         -Run $plan -RunDir $RunDir -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath -Dispatcher $Dispatcher
+                    if ($PlanGateFailLoud -and [object]::ReferenceEquals($priorPlan, $revisedPlan)) {
+                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Level 'error' -Message 'PLAN GATE DEGRADED — required revise pass failed — no labor will run')
+                        return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-gate-degraded')
+                    }
+                    $plan = $revisedPlan
                     $plan.run_id = $runId
                 } else {
                     Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Message 'revise recommended, auto-revise disabled — proceeding with the original plan')
@@ -800,38 +836,76 @@ function Invoke-Conductor {
             return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status $failStatus -PendingTaskId $task.id)
         }
     }
-    # 4. Acceptance phase (d058): opt-in, advisory, fail-open. Runs only after a
-    #    successful walk and only when a gate target resolves.
+    # 4. Acceptance phase (d058): runs after a successful walk when policy enables it.
+    #    Legacy direct callers remain advisory; execute supplies panel + fail-loud.
     $gate = $null
     $finalStatus = 'completed'
+    $acceptanceEnabled = if ($PSBoundParameters.ContainsKey('AcceptanceGate')) {
+        [bool]$AcceptanceGate
+    } else {
+        $PSBoundParameters.ContainsKey('GateArtifact') -or
+        $PSBoundParameters.ContainsKey('GateDiff') -or
+        $null -ne $DiffProvider
+    }
     # Slice 2 (d078): a -DiffProvider produces the walk's cumulative diff post-walk;
     # non-empty -> recorded to changes.diff and gated as the artifact. Absent, empty,
     # or throwing (fail-open) -> the existing -GateArtifact/-GateDiff path unchanged.
     $art = ''
+    $diffProviderFailed = $false
     if ($DiffProvider) {
         $produced = ''
         try { $produced = [string](& $DiffProvider) }
-        catch { Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Level 'warn' -Message "diff provider failed (fail-open): $($_.Exception.Message)") }
+        catch {
+            $diffProviderFailed = $true
+            # Under fail-loud this path degrades and halts (see $diffProviderFailed
+            # consumer below); the event must say so, not narrate 'fail-open'.
+            $dpFailLoud = $acceptanceEnabled -and $AcceptanceFailLoud
+            $dpMsg = if ($dpFailLoud) { "diff provider failed (acceptance-degraded — run halts): $($_.Exception.Message)" }
+                     else { "diff provider failed (fail-open): $($_.Exception.Message)" }
+            $dpLevel = if ($dpFailLoud) { 'error' } else { 'warn' }
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Level $dpLevel -Message $dpMsg)
+        }
         if (-not [string]::IsNullOrWhiteSpace($produced)) {
             Set-Content -LiteralPath (Join-Path $RunDir 'changes.diff') -Value $produced -Encoding utf8NoBOM
             $art = $produced
         }
     }
     if ([string]::IsNullOrWhiteSpace($art)) { $art = Resolve-GateArtifact -Artifact $GateArtifact -Diff $GateDiff }
-    if (-not [string]::IsNullOrWhiteSpace($art)) {
+    if ($acceptanceEnabled -and -not [string]::IsNullOrWhiteSpace($art)) {
         $gateErr = $null
         try {
             $gate = if ($Gater) { & $Gater $art $plan.goal }
-                    else { Invoke-AcceptanceGate -Artifact $art -Task $plan.goal -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath }
+                    else {
+                        $gateArgs = @{
+                            Artifact = $art
+                            Task = $plan.goal
+                            MaxCostTier = $MaxCostTier
+                            FleetPath = $FleetPath
+                            ToolsPath = $ToolsPath
+                        }
+                        if ($AcceptancePanel) { $gateArgs['Panel'] = $true }
+                        if ($AcceptanceFailLoud) { $gateArgs['FailLoud'] = $true }
+                        Invoke-AcceptanceGate @gateArgs
+                    }
         } catch { $gate = $null; $gateErr = $_.Exception.Message }
         if ($null -eq $gate -or -not $gate.verdict) {
-            $msg = if ($gateErr) { "acceptance gate failed: $gateErr" } else { 'acceptance gate produced no verdict (fail-open)' }
-            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Level 'warn' -Message $msg)
+            # Fail-loud consumes this as acceptance-degraded (below); narrate the halt,
+            # not 'fail-open'. Only the advisory (non-fail-loud) path truly fails open.
+            $noVerdictBase = if ($gateErr) { "acceptance gate failed: $gateErr" } else { 'acceptance gate produced no verdict' }
+            $msg = if ($AcceptanceFailLoud) { "$noVerdictBase (acceptance-degraded — run halts)" } else { "$noVerdictBase (fail-open)" }
+            $gateLevel = if ($AcceptanceFailLoud) { 'error' } else { 'warn' }
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Level $gateLevel -Message $msg)
             $gate = $null
+            if ($AcceptanceFailLoud) { $finalStatus = 'acceptance-degraded' }
         } else {
             Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Message "acceptance verdict: $($gate.verdict) — $($gate.reason)")
-            if ($gate.verdict -eq 'reject') { $finalStatus = 'rejected' }
+            if ($AcceptanceFailLoud -and $gate.degraded) { $finalStatus = 'acceptance-degraded' }
+            elseif ($gate.verdict -eq 'reject') { $finalStatus = 'rejected' }
+            elseif ($AcceptanceFailLoud -and $gate.verdict -eq 'polish') { $finalStatus = 'needs-polish' }
         }
+    }
+    if ($acceptanceEnabled -and $AcceptanceFailLoud -and $diffProviderFailed) {
+        $finalStatus = 'acceptance-degraded'
     }
     return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status $finalStatus -Gate $gate -TaskCosts $taskCosts)
 }
