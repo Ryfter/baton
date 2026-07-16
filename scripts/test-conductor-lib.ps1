@@ -300,6 +300,36 @@ ERROR: You have hit your usage limit. Try again later.
     Check 'T78 gate no-verdict logs produced-no-verdict warn' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-noverdict/events.jsonl') -Raw) -match 'produced no verdict')
     Check 'T79 gate no-verdict -> no acceptance.json' (-not (Test-Path (Join-Path $gtHome 'r-noverdict/acceptance.json')))
 
+    # Execute policy is represented by the explicit acceptance switches. Legacy
+    # direct callers stay advisory; fail-loud callers stop shipping on infra loss
+    # and on a polish verdict.
+    $rpf = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-polish-loud') -Planner $gPlanner -Spawner $gSpawner `
+        -GateArtifact 'work' -Gater $gaterPolish -AcceptanceGate -AcceptanceFailLoud
+    Check 'T79a fail-loud polish -> needs-polish' ($rpf.status -eq 'needs-polish')
+    $rtf = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-throw-loud') -Planner $gPlanner -Spawner $gSpawner `
+        -GateArtifact 'work' -Gater $gaterThrow -AcceptanceGate -AcceptanceFailLoud
+    Check 'T79b fail-loud gate throw -> acceptance-degraded' ($rtf.status -eq 'acceptance-degraded')
+    $rnf = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-noverdict-loud') -Planner $gPlanner -Spawner $gSpawner `
+        -GateArtifact 'work' -Gater $gaterNoVerdict -AcceptanceGate -AcceptanceFailLoud
+    Check 'T79c fail-loud no verdict -> acceptance-degraded' ($rnf.status -eq 'acceptance-degraded')
+    $gaterDegraded = { param($art,$goal) @{ verdict='accept'; reason='role lost'; counts=@{critical=0;important=0;minor=0}; polish_brief=''; findings=@(); reviews=@(); unparsed=@(); degraded=$true } }
+    $rdf = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-degraded-loud') -Planner $gPlanner -Spawner $gSpawner `
+        -GateArtifact 'work' -Gater $gaterDegraded -AcceptanceGate -AcceptanceFailLoud
+    Check 'T79d fail-loud degraded panel -> acceptance-degraded' ($rdf.status -eq 'acceptance-degraded')
+
+    # Explicit policy must reach the real acceptance-gate call, while a library
+    # caller that merely supplies an artifact remains default-on for compatibility.
+    function Invoke-AcceptanceGate {
+        param($Artifact,$Task,$MaxCostTier,$FleetPath,$ToolsPath,[switch]$Panel,[switch]$FailLoud)
+        return @{ verdict='accept'; reason="panel=$([bool]$Panel);loud=$([bool]$FailLoud)"; counts=@{critical=0;important=0;minor=0}; polish_brief=''; findings=@(); reviews=@(); unparsed=@(); degraded=$false }
+    }
+    $rFlags = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-flags') -Planner $gPlanner -Spawner $gSpawner `
+        -GateArtifact 'work' -AcceptanceGate -AcceptancePanel -AcceptanceFailLoud
+    Check 'T79e panel and fail-loud reach Invoke-AcceptanceGate' ($rFlags.acceptance.reason -eq 'panel=True;loud=True')
+    $rLegacyArtifact = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-legacy-artifact') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'work'
+    Check 'T79f non-execute library artifact remains default-on' ($rLegacyArtifact.acceptance.verdict -eq 'accept')
+    . "$PSScriptRoot/gate-lib.ps1"
+
     Remove-Item -Recurse -Force $gtHome -ErrorAction SilentlyContinue
 
     # ---- T80-T86: effective cost wiring (slice 1) ----
@@ -528,6 +558,22 @@ ERROR: You have hit your usage limit. Try again later.
         $rDp4 = Invoke-Conductor -Goal 'g' -RunDir $runDp4 -Planner $dpPlanner -Spawner $dpSpawn -Gater $dpGater -DiffProvider { throw 'boom' }
         Check 'DP7 throwing diff provider is fail-open (run completes)' ($rDp4.status -eq 'completed')
         Check 'DP8 fail-open logged a gate warn event' ((Get-Content -Raw (Join-Path $runDp4 'events.jsonl')) -match 'diff provider failed')
+
+        $runDp5 = Initialize-RunDir -RunId 'go-dp-5' -Root $tmpDp
+        $rDp5 = Invoke-Conductor -Goal 'g' -RunDir $runDp5 -Planner $dpPlanner -Spawner $dpSpawn -Gater $dpGater `
+            -DiffProvider { '' } -AcceptanceGate -AcceptanceFailLoud
+        Check 'DP9 empty/no-op diff is a clean completed run, not degraded' ($rDp5.status -eq 'completed' -and $null -eq $rDp5.acceptance)
+
+        $runDp6 = Initialize-RunDir -RunId 'go-dp-6' -Root $tmpDp
+        $rDp6 = Invoke-Conductor -Goal 'g' -RunDir $runDp6 -Planner $dpPlanner -Spawner $dpSpawn -Gater $dpGater `
+            -DiffProvider { throw 'boom' } -AcceptanceGate -AcceptanceFailLoud
+        Check 'DP10 fail-loud diff provider throw -> acceptance-degraded' ($rDp6.status -eq 'acceptance-degraded')
+
+        $runDp7 = Initialize-RunDir -RunId 'go-dp-7' -Root $tmpDp
+        $rDp7 = Invoke-Conductor -Goal 'g' -RunDir $runDp7 -Planner $dpPlanner -Spawner $dpSpawn -Gater $dpGater `
+            -DiffProvider $dp1 -AcceptanceGate:$false -AcceptanceFailLoud
+        Check 'DP11 explicit acceptance disable still records changes.diff' (
+            $rDp7.status -eq 'completed' -and $null -eq $rDp7.acceptance -and (Test-Path (Join-Path $runDp7 'changes.diff')))
     } finally {
         Remove-Item -Recurse -Force $tmpDp -ErrorAction SilentlyContinue
     }
@@ -621,6 +667,14 @@ ERROR: You have hit your usage limit. Try again later.
         Check 'PG6c original plan walked (revise failed open)' ((@($pg6Plan.tasks).Count -eq 2) -and ($pgSeen6 -contains 't2'))
         Check 'PG6d event notes revise fail-open' ((Get-Content -Raw (Join-Path $run6 'events.jsonl')) -match 'revise pass failed to parse')
 
+        $pgSeen6L = [System.Collections.ArrayList]@()
+        $pgSpawn6L = { param($t) [void]$pgSeen6L.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run6L = Join-Path $pgHome 'pg-6-loud'
+        $rPG6L = Invoke-Conductor -Goal 'g' -RunDir $run6L -Planner $pgPlanner -Spawner $pgSpawn6L -PlanGate -PlanGateFailLoud `
+            -PlanReviewers @('a','b') -PlanGateDispatcher $gateImportant -Dispatcher $reviseDispBad -FleetPath $refFleetPG -ToolsPath $pgTools
+        Check 'PG6e fail-loud revise failure -> plan-gate-degraded' ($rPG6L.status -eq 'plan-gate-degraded')
+        Check 'PG6f fail-loud revise failure runs no tasks' (@($pgSeen6L).Count -eq 0)
+
         # PG7: understaffed roster (<2 reviewers) -> fail-open accept, walk proceeds,
         # plan-review.json flags fail_open.
         $pgSeen7 = [System.Collections.ArrayList]@()
@@ -630,6 +684,15 @@ ERROR: You have hit your usage limit. Try again later.
         Check 'PG7 understaffed roster -> completed (fail-open)' ($rPG7.status -eq 'completed')
         Check 'PG7b plan-review.json fail_open true' ((Get-Content -Raw (Join-Path $run7 'plan-review.json') | ConvertFrom-Json).fail_open -eq $true)
         Check 'PG7c walk proceeded' (@($pgSeen7).Count -eq 2)
+
+        $pgSeen7L = [System.Collections.ArrayList]@()
+        $pgSpawn7L = { param($t) [void]$pgSeen7L.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run7L = Join-Path $pgHome 'pg-7-loud'
+        $rPG7L = Invoke-Conductor -Goal 'g' -RunDir $run7L -Planner $pgPlanner -Spawner $pgSpawn7L -PlanGate -PlanGateFailLoud `
+            -PlanReviewers @('one') -FleetPath $refFleetPG -ToolsPath $pgTools
+        Check 'PG7d fail-loud understaffed -> plan-gate-degraded' ($rPG7L.status -eq 'plan-gate-degraded')
+        Check 'PG7e fail-loud understaffed writes degraded result and runs no tasks' (
+            (Get-Content -Raw (Join-Path $run7L 'plan-review.json') | ConvertFrom-Json).degraded -eq $true -and @($pgSeen7L).Count -eq 0)
 
         # PG9 (F4): a THROW from the revise pass's roster resolution (Select-Capability on a
         # malformed fleet/tools file) is fail-open — the WHOLE revise pass sits in one try, so
@@ -676,6 +739,14 @@ ERROR: You have hit your usage limit. Try again later.
         $rPG8 = Invoke-Conductor -Goal 'g' -RunDir $run8 -Planner $pgPlanner -Spawner $pgSpawn8 -PlanGate -PlanReviewers @('a','b') -FleetPath $refFleetPG -ToolsPath $pgTools
         Check 'PG8 gate throw -> completed (fail-open)' ($rPG8.status -eq 'completed')
         Check 'PG8b gate throw logs warn event + walk ran' (((Get-Content -Raw (Join-Path $run8 'events.jsonl')) -match 'plan gate failed') -and (@($pgSeen8).Count -eq 2))
+
+        $pgSeen8L = [System.Collections.ArrayList]@()
+        $pgSpawn8L = { param($t) [void]$pgSeen8L.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $run8L = Join-Path $pgHome 'pg-8-loud'
+        $rPG8L = Invoke-Conductor -Goal 'g' -RunDir $run8L -Planner $pgPlanner -Spawner $pgSpawn8L -PlanGate -PlanGateFailLoud `
+            -PlanReviewers @('a','b') -FleetPath $refFleetPG -ToolsPath $pgTools
+        Check 'PG8c fail-loud gate throw -> plan-gate-degraded without null reason crash' ($rPG8L.status -eq 'plan-gate-degraded')
+        Check 'PG8d fail-loud gate throw runs no tasks' (@($pgSeen8L).Count -eq 0)
         . "$PSScriptRoot/plan-gate-lib.ps1"   # restore the real Invoke-PlanGate after the shadow
     } finally {
         Remove-Item Env:\BATON_HOME, Env:\BATON_GO_TEST_PLAN, Env:\BATON_GO_TEST_SPAWN, Env:\BATON_GO_TEST_PLANGATE -ErrorAction SilentlyContinue
