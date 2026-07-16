@@ -101,7 +101,8 @@ function Invoke-Worker {
         [switch]$Dry
     )
     if (-not $Dispatcher) {
-        $Dispatcher = { param($n, $p, $m) Invoke-Fleet -Name $n -Prompt $p -Model $m -Path $FleetPath }
+        $Dispatcher = { param($n, $p, $m) Invoke-Fleet -Name $n -Prompt $p -Model $m -Path $FleetPath `
+            -UsagePath $UsagePath -NoUsageJournal:$Dry }
     }
     $provider = Get-FleetProvider -Name $Name -Path $FleetPath
     $adapter  = Test-WorkerAdapter -Provider $provider

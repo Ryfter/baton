@@ -473,6 +473,7 @@ function Invoke-Fleet {
         [string]$Path = $script:DefaultFleetPath,
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md'),
         [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl'),
+        [switch]$NoUsageJournal,
         [switch]$NoJournal
     )
     $provider = Get-FleetProvider -Name $Name -Path $Path
@@ -510,10 +511,15 @@ function Invoke-Fleet {
     # Reactive usage classification is provider-agnostic and runs for every
     # dispatch result. The structured observation rides with the result so a
     # policy-aware caller can decide whether one substitute is permitted.
-    $usageObservation = Register-UsageFailure -Worker $Name -ExitCode ([int]$result.exit_code) `
-        -Stdout ([string]$result.stdout) -Stderr ([string]$result.stderr) -UsagePath $UsagePath
+    $usageObservation = if ($NoUsageJournal) {
+        Get-UsageFailureObservation -ExitCode ([int]$result.exit_code) `
+            -Stdout ([string]$result.stdout) -Stderr ([string]$result.stderr)
+    } else {
+        Register-UsageFailure -Worker $Name -ExitCode ([int]$result.exit_code) `
+            -Stdout ([string]$result.stdout) -Stderr ([string]$result.stderr) -UsagePath $UsagePath
+    }
     $result.usage_observation = $usageObservation
-    $result.usage_recorded = [bool]$usageObservation.event
+    $result.usage_recorded = [bool]($usageObservation.event -and -not $NoUsageJournal)
 
     if (-not $NoJournal) {
         Write-FleetJournalLine -Provider $Name -DurationS $result.duration_s `
