@@ -273,5 +273,37 @@ try {
 Assert "tier fragment reaches dispatch" (($td.stdout | Out-String) -match 'tier-hi')
 Remove-Item $tierDir -Recurse -Force -ErrorAction SilentlyContinue
 
+# ===== reactive usage classification threads through every fleet result =====
+$classifyDir = Join-Path $env:TEMP "baton-fleet-classify-$(Get-Random)"
+New-Item -ItemType Directory -Force -Path $classifyDir | Out-Null
+try {
+    $failScript = Join-Path $classifyDir 'quota-fail.ps1'
+    Set-Content -LiteralPath $failScript -Encoding utf8NoBOM -Value @'
+[Console]::Error.WriteLine("You've hit your usage limit. Try again at 2099-01-01T00:00:00Z.")
+exit 1
+'@
+    $classifyFleet = Join-Path $classifyDir 'fleet.yaml'
+    $safeFailScript = $failScript.Replace('\', '/')
+    Set-Content -LiteralPath $classifyFleet -Encoding utf8NoBOM -Value @"
+providers:
+  - name: worker-quota
+    kind: cli
+    enabled: true
+    cost_tier: free
+    command_template: 'pwsh -NoProfile -File $safeFailScript "{{prompt}}"'
+"@
+    $classifyUsage = Join-Path $classifyDir 'usage-journal.jsonl'
+    $classifiedResult = Invoke-Fleet -Name 'worker-quota' -Prompt 'fixture' -Path $classifyFleet `
+        -UsagePath $classifyUsage -NoJournal
+    Assert 'classified fleet result keeps nonzero exit' ($classifiedResult.exit_code -eq 1)
+    Assert 'classified fleet result attaches observation' ($classifiedResult.usage_observation.classification -eq 'quota_exhausted')
+    Assert 'classified fleet result marks journal registration' ($classifiedResult.usage_recorded -eq $true)
+    $classifiedRows = @(Get-Content -LiteralPath $classifyUsage | ForEach-Object { $_ | ConvertFrom-Json })
+    Assert 'classified fleet result writes one Usage Governor row' ($classifiedRows.Count -eq 1)
+    Assert 'classified fleet result locks the dispatch worker' ($classifiedRows[0].event -eq 'lockout' -and $classifiedRows[0].worker -eq 'worker-quota')
+} finally {
+    Remove-Item -LiteralPath $classifyDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 if ($failures -gt 0) { Write-Host "`n$failures failure(s)" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll tests passed." -ForegroundColor Green

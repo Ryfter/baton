@@ -154,7 +154,7 @@ if ($Execute) {
     if ($env:BATON_GO_TEST_EXEC_DISPATCHER) {
         # Hermetic seam: dot-source a file defining Invoke-TestExecDispatcher.
         . $env:BATON_GO_TEST_EXEC_DISPATCHER
-        $spawnArgs.Dispatcher = { param($pick, $prompt) Invoke-TestExecDispatcher -Pick $pick -Prompt $prompt }
+        $spawnArgs.Dispatcher = { param($pick, $prompt, $depthTier) Invoke-TestExecDispatcher $pick $prompt $depthTier }
     }
     $go['Spawner'] = New-AgenticSpawner @spawnArgs
     $go['DiffProvider'] = { Get-RunDiff -Worktree $wt.worktree -BaseSha $wt.base_sha }.GetNewClosure()

@@ -217,7 +217,8 @@ providers:
 
         # dispatcher that FAILS (exit 1)
         $failDisp = { param($pick, $prompt) @{ stdout = ''; stderr = 'boom'; exit_code = 1; duration_s = 0 } }
-        $sp3 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -Dispatcher $failDisp
+        $sp3 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetPath -ToolsPath $toolsPath `
+            -UsagePath (Join-Path $env:BATON_HOME 'usage-p11.jsonl') -Dispatcher $failDisp
         $r3 = & $sp3 $task
         Check 'P11 nonzero exit is NOT ok' ($r3.ok -eq $false)
         Check 'P12 failure why names provider + exit' ($r3.why -match 'fake-agentic.*exit 1')
@@ -286,12 +287,267 @@ tools:
 
         # ---- M4: dispatcher throw is caught and returned as a failed task, not a crash ----
         $throwDisp = { param($pick, $prompt) throw 'boom' }
-        $sp8 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -Dispatcher $throwDisp
+        $sp8 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetPath -ToolsPath $toolsPath `
+            -UsagePath (Join-Path $env:BATON_HOME 'usage-m4.jsonl') -Dispatcher $throwDisp
         $cwdBeforeThrow = (Get-Location).Path
         $r8 = & $sp8 $task
         Check 'M4a dispatcher throw is caught, task returns not-ok' ($r8.ok -eq $false)
         Check 'M4a why records dispatch error' ($r8.why -match 'dispatch error')
         Check 'M4b caller cwd unchanged after a dispatch throw' ((Get-Location).Path -eq $cwdBeforeThrow)
+
+        # ================= Reactive usage failover (d083 slice 1) =================
+        # Tree restoration is the clean-state gate used before a substitute runs.
+        Set-Content -LiteralPath (Join-Path $wt2.worktree 'restore-kept.txt') -Value 'before' -Encoding utf8NoBOM
+        $restoreTree = Get-WorktreeTreeSha -Worktree $wt2.worktree
+        Set-Content -LiteralPath (Join-Path $wt2.worktree 'restore-kept.txt') -Value 'after' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $wt2.worktree 'restore-drop.txt') -Value 'drop' -Encoding utf8NoBOM
+        $restoreOk = Restore-WorktreeTreeSnapshot -Worktree $wt2.worktree -TreeSha $restoreTree
+        Check 'UF0 restore snapshot succeeds' $restoreOk
+        Check 'UF0 restore snapshot restores tracked content' (((Get-Content -LiteralPath (Join-Path $wt2.worktree 'restore-kept.txt') -Raw).Trim()) -eq 'before')
+        Check 'UF0 restore snapshot removes new untracked content' (-not (Test-Path -LiteralPath (Join-Path $wt2.worktree 'restore-drop.txt')))
+        Check 'UF0 restore snapshot returns exact tree' ((Get-WorktreeTreeSha -Worktree $wt2.worktree) -eq $restoreTree)
+        Check 'UF0 invalid snapshot fails closed' (-not (Restore-WorktreeTreeSnapshot -Worktree $wt2.worktree -TreeSha 'not-a-tree'))
+
+        $failoverFleet = Join-Path $env:BATON_HOME 'fleet-failover.yaml'
+        Set-Content -LiteralPath $failoverFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: worker-primary
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo {{tier_args}} "{{prompt}}"'
+    tier_low: '--depth low'
+    tier_med: '--depth medium'
+    tier_high: '--depth high'
+  - name: worker-substitute
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo {{tier_args}} "{{prompt}}"'
+    tier_low: '--depth low'
+    tier_med: '--depth medium'
+    tier_high: '--depth high'
+  - name: worker-lower
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.8
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+  - name: worker-paid
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    platform: codex
+    quality: 1.0
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+'@
+        $failoverUsage = Join-Path $env:BATON_HOME 'usage-failover.jsonl'
+        $failoverSeen = @{ calls = 0; names = @(); depths = @(); locked_before_retry = $false; clean_before_retry = $false }
+        $failoverDispatcher = {
+            param($pick, $prompt, $depthTier)
+            $failoverSeen.calls++
+            $failoverSeen.names += [string]$pick.name
+            $failoverSeen.depths += [string]$depthTier
+            if ($failoverSeen.calls -eq 1) {
+                Set-Content -LiteralPath (Join-Path (Get-Location).Path 'partial-attempt.txt') -Value 'partial' -Encoding utf8NoBOM
+                return @{ stdout=''; stderr="You've hit your usage limit. Try again at 2099-01-01T00:00:00Z."; exit_code=1; duration_s=0 }
+            }
+            $failoverSeen.clean_before_retry = -not (Test-Path -LiteralPath (Join-Path (Get-Location).Path 'partial-attempt.txt'))
+            if (Test-Path -LiteralPath $failoverUsage) {
+                $beforeRetryRows = @(Get-Content -LiteralPath $failoverUsage | ForEach-Object { $_ | ConvertFrom-Json })
+                $failoverSeen.locked_before_retry = @($beforeRetryRows | Where-Object { $_.worker -eq 'worker-primary' -and $_.event -eq 'lockout' }).Count -eq 1
+            }
+            Set-Content -LiteralPath (Join-Path (Get-Location).Path 'substitute-result.txt') -Value 'peer work' -Encoding utf8NoBOM
+            return @{ stdout='done'; stderr=''; exit_code=0; duration_s=0 }
+        }.GetNewClosure()
+        $failoverTask = [pscustomobject]@{ id='uf1'; desc='usage failover fixture'; capability='code-gen'; est_cost_tier='paid'; stakes='standard'; stakes_basis='bounded fixture' }
+        $failoverSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $failoverFleet -ToolsPath $toolsPath `
+            -MaxCostTier free -UsagePath $failoverUsage -Dispatcher $failoverDispatcher
+        $failoverResult = & $failoverSpawner $failoverTask
+        Check 'UF1 substitute retry succeeds' ($failoverResult.ok -eq $true)
+        Check 'UF1 exactly one substitute is attempted' ($failoverSeen.calls -eq 2)
+        Check 'UF1 attempted workers are primary then substitute' (($failoverSeen.names -join ',') -eq 'worker-primary,worker-substitute')
+        Check 'UF1 same depth policy reaches both attempts' (($failoverSeen.depths -join ',') -eq 'med,med')
+        Check 'UF1 primary is locked before substitute dispatch' $failoverSeen.locked_before_retry
+        Check 'UF1 substitute starts from clean state' $failoverSeen.clean_before_retry
+        Check 'UF1 failed attempt partial file is absent' (-not (Test-Path -LiteralPath (Join-Path $wt2.worktree 'partial-attempt.txt')))
+        Check 'UF1 substitute result remains' (Test-Path -LiteralPath (Join-Path $wt2.worktree 'substitute-result.txt'))
+        Check 'UF1 result chooses substitute' ($failoverResult.chose -eq 'worker-substitute')
+        Check 'UF1 one-line operator hop is legible' ($failoverResult.why -match '^usage failover: worker-primary -> worker-substitute \(quota_exhausted; reset ' -and $failoverResult.why -notmatch "`r|`n")
+        Check 'UF1 v1.17 policy fields survive' ($failoverResult.stakes -eq 'standard' -and $failoverResult.depth_tier -eq 'med' -and $failoverResult.selection_mode -eq 'economy' -and $failoverResult.tier_cap -eq 'free')
+        Check 'UF1 selected peer tier is within ceiling' ($failoverResult.selected_cost_tier -eq 'free')
+        $failoverRows = @(Get-Content -LiteralPath $failoverUsage | ForEach-Object { $_ | ConvertFrom-Json })
+        $hopRows = @($failoverRows | Where-Object { $_.event -eq 'failover' })
+        Check 'UF1 usage journal has one hop row' ($hopRows.Count -eq 1)
+        Check 'UF1 hop row carries required workers and reason' ($hopRows[0].original_worker -eq 'worker-primary' -and $hopRows[0].substitute -eq 'worker-substitute' -and $hopRows[0].reason -eq 'quota_exhausted')
+        Check 'UF1 hop row records partial diff' ($hopRows[0].had_partial_diff -eq $true)
+        # worker-paid is in the failover fleet above MaxCostTier=free; must never be attempted.
+        Check 'UF1 paid peer above max_cost_tier is refused' ($failoverSeen.names -notcontains 'worker-paid')
+
+        # A second hard failure ends after the one substitute; it never cascades.
+        $cascadeUsage = Join-Path $env:BATON_HOME 'usage-no-cascade.jsonl'
+        $cascadeSeen = @{ calls = 0 }
+        $cascadeDispatcher = {
+            param($pick, $prompt, $depthTier)
+            $cascadeSeen.calls++
+            return @{ stdout=''; stderr='HTTP 429 Too Many Requests. Retry-After: 120'; exit_code=1; duration_s=0 }
+        }.GetNewClosure()
+        $cascadeSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $failoverFleet -ToolsPath $toolsPath `
+            -MaxCostTier free -UsagePath $cascadeUsage -Dispatcher $cascadeDispatcher
+        $cascadeResult = & $cascadeSpawner $failoverTask
+        Check 'UF2 second hard limit does not cascade' ($cascadeSeen.calls -eq 2 -and $cascadeResult.ok -eq $false)
+
+        # Auth/config and ambiguous failures never enter the substitute loop.
+        # auth+quota co-occurrence must stay auth_config (no failover).
+        foreach ($negativeCase in @(
+            @{ name='auth'; message='HTTP 401 invalid API key'; expected='auth_config' },
+            @{ name='auth-quota'; message='HTTP 401 unauthorized; usage limit exceeded'; expected='auth_config' },
+            @{ name='ambiguous'; message='remote command ended unexpectedly'; expected='ambiguous' },
+            @{ name='retry-fix'; message='retry after fixing tests'; expected='ambiguous' },
+            @{ name='limit-retries'; message='hit your limit of 3 retries'; expected='ambiguous' }
+        )) {
+            $negativeUsage = Join-Path $env:BATON_HOME "usage-$($negativeCase.name).jsonl"
+            $negativeSeen = @{ calls = 0 }
+            $negativeDispatcher = {
+                param($pick, $prompt, $depthTier)
+                $negativeSeen.calls++
+                return @{ stdout=''; stderr=$negativeCase.message; exit_code=1; duration_s=0 }
+            }.GetNewClosure()
+            $negativeSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $failoverFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath $negativeUsage -Dispatcher $negativeDispatcher
+            $negativeResult = & $negativeSpawner $failoverTask
+            Check "UF3 $($negativeCase.name) does not retry" ($negativeSeen.calls -eq 1 -and $negativeResult.ok -eq $false)
+            Check "UF3 $($negativeCase.name) reason is visible" ($negativeResult.why -match $negativeCase.expected)
+            if ($negativeCase.name -eq 'auth-quota') {
+                Check 'UF3 auth-quota does not journal lockout' (
+                    -not (Test-Path -LiteralPath $negativeUsage) -or
+                    @((Get-Content -LiteralPath $negativeUsage | ForEach-Object { $_ | ConvertFrom-Json }) |
+                        Where-Object { $_.event -eq 'lockout' }).Count -eq 0)
+            }
+        }
+
+        # quality_first refuses the only lower-quality peer loudly.
+        $qualityFleet = Join-Path $env:BATON_HOME 'fleet-quality-floor.yaml'
+        Set-Content -LiteralPath $qualityFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: worker-primary
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+  - name: worker-lower
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.8
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+'@
+        $qualitySeen = @{ calls = 0 }
+        $qualityDispatcher = { param($pick, $prompt, $depthTier) $qualitySeen.calls++; @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 } }.GetNewClosure()
+        $qualitySpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $qualityFleet -ToolsPath $toolsPath `
+            -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-quality.jsonl') -Dispatcher $qualityDispatcher
+        $qualityResult = & $qualitySpawner $failoverTask
+        Check 'UF4 quality_first refuses downgrade' ($qualitySeen.calls -eq 1 -and $qualityResult.ok -eq $false)
+        Check 'UF4 no peer available is loud' ($qualityResult.why -match 'no peer available.*quality_first')
+
+        # High stakes re-resolves champion/high policy on the substitute too.
+        $highFailoverUsage = Join-Path $env:BATON_HOME 'usage-high-failover.jsonl'
+        $highFailoverSeen = @{ calls = 0; depths = @() }
+        $highFailoverDispatcher = {
+            param($pick, $prompt, $depthTier)
+            $highFailoverSeen.calls++
+            $highFailoverSeen.depths += $depthTier
+            if ($highFailoverSeen.calls -eq 1) { return @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 } }
+            return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 }
+        }.GetNewClosure()
+        $highFailoverTask = [pscustomobject]@{ id='uf-high'; desc='high stakes fixture'; capability='code-gen'; est_cost_tier='free'; stakes='high'; stakes_basis='security boundary' }
+        $highFailoverSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $failoverFleet -ToolsPath $toolsPath `
+            -MaxCostTier free -UsagePath $highFailoverUsage -Dispatcher $highFailoverDispatcher
+        $highFailoverResult = & $highFailoverSpawner $highFailoverTask
+        Check 'UF5 high stakes substitute succeeds' ($highFailoverResult.ok -eq $true -and $highFailoverSeen.calls -eq 2)
+        Check 'UF5 high stakes depth is preserved on retry' (($highFailoverSeen.depths -join ',') -eq 'high,high')
+        Check 'UF5 champion and cost cap are preserved' ($highFailoverResult.selection_mode -eq 'champion' -and $highFailoverResult.tier_cap -eq 'free' -and $highFailoverResult.selected_cost_tier -eq 'free')
+
+        # Failed worktree restore refuses the substitute hop (no second dispatch).
+        $restoreFailUsage = Join-Path $env:BATON_HOME 'usage-restore-fail.jsonl'
+        $restoreFailSeen = @{ calls = 0 }
+        $restoreFailDispatcher = {
+            param($pick, $prompt, $depthTier)
+            $restoreFailSeen.calls++
+            return @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 }
+        }.GetNewClosure()
+        $savedRestoreFn = (Get-Item -LiteralPath 'Function:Restore-WorktreeTreeSnapshot').ScriptBlock
+        function Restore-WorktreeTreeSnapshot {
+            param(
+                [Parameter(Mandatory)][string]$Worktree,
+                [Parameter(Mandatory)][string]$TreeSha
+            )
+            return $false
+        }
+        try {
+            $restoreFailSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $failoverFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath $restoreFailUsage -Dispatcher $restoreFailDispatcher
+            $restoreFailResult = & $restoreFailSpawner $failoverTask
+        } finally {
+            Set-Item -Path 'Function:Restore-WorktreeTreeSnapshot' -Value $savedRestoreFn
+        }
+        Check 'UF6 restore failure does not dispatch substitute' ($restoreFailSeen.calls -eq 1)
+        Check 'UF6 restore failure is loud' ($restoreFailResult.ok -eq $false -and $restoreFailResult.why -match 'clean worktree restore failed')
+
+        # Substitute peer above max_cost_tier is REFUSED even when quality is higher.
+        $paidOnlyFleet = Join-Path $env:BATON_HOME 'fleet-paid-only-peer.yaml'
+        Set-Content -LiteralPath $paidOnlyFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: worker-primary
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+  - name: worker-paid
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    platform: codex
+    quality: 1.0
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+'@
+        $paidPeerUsage = Join-Path $env:BATON_HOME 'usage-paid-peer.jsonl'
+        $paidPeerSeen = @{ calls = 0; names = @() }
+        $paidPeerDispatcher = {
+            param($pick, $prompt, $depthTier)
+            $paidPeerSeen.calls++
+            $paidPeerSeen.names += [string]$pick.name
+            return @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 }
+        }.GetNewClosure()
+        $paidPeerSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $paidOnlyFleet -ToolsPath $toolsPath `
+            -MaxCostTier free -UsagePath $paidPeerUsage -Dispatcher $paidPeerDispatcher
+        $paidPeerResult = & $paidPeerSpawner $failoverTask
+        Check 'UF7 paid peer above max_cost_tier is refused' (
+            $paidPeerSeen.calls -eq 1 -and
+            $paidPeerSeen.names -notcontains 'worker-paid' -and
+            $paidPeerResult.ok -eq $false)
+        Check 'UF7 no peer available names quality_first' ($paidPeerResult.why -match 'no peer available.*quality_first')
 
         # ================= New-VerifyingSpawner (VS-series, d082 V2) =================
         # Hermetic: a temp repo with a committed .baton/verification.json (a `unit` profile
