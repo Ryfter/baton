@@ -45,8 +45,10 @@ brief speaks the same language. Fleet briefs should reference this file ("terms 
   **lockout** (exhausted until reset), **cooldown** (short pause), **limited** (advisory soft
   state), `waiting_for_reset`.
 - **Reactive classifier** (`usage-classify-lib.ps1`) — classifies a failed dispatch's
-  exit/stdout/stderr into `quota_exhausted | rate_limit_burst | auth_config | server_overload |
-  ambiguous`; auth is evaluated first and never triggers failover.
+  exit/stdout/stderr into `quota_exhausted | rate_limit_burst | auth_config | context_overflow |
+  server_overload | ambiguous`; auth is evaluated first and never triggers failover.
+  `context_overflow` is not a usage failure (no lockout/cooldown; provider stays routable);
+  remedy is shrink/split the prompt or reroute to a larger-context peer.
 - **Failover hop / substitute retry** — ONE retry on a same-capability peer after the primary
   is locked; honors stakes/depth policy and cost ceilings; never cascades.
 - **quality_first** — failover posture: substitute only equal-or-better; otherwise surface

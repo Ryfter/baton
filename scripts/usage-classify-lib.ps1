@@ -114,13 +114,31 @@ function ConvertTo-ClassifiedResetAt {
     return $null
 }
 
+function Format-ContextOverflowLine {
+    <# One-line operator remedy for a context_overflow observation. #>
+    param(
+        [Parameter(Mandatory)][string]$Provider,
+        [long]$PromptBytes = 0,
+        [long]$FloorBytes = 35000
+    )
+    # Guard divides: floor at 1 so 0-byte fixtures still render as 0KB / 1KB-safe.
+    $promptKb = if ($PromptBytes -le 0) { 0 } else { [int][math]::Ceiling($PromptBytes / 1024.0) }
+    $capKb = if ($FloorBytes -le 0) { 0 } else { [int][math]::Ceiling($FloorBytes / 1024.0) }
+    return "prompt too large for $Provider (${promptKb}KB > ${capKb}KB) — split the prompt or reroute to a larger-context peer"
+}
+
 function Get-UsageFailureObservation {
     <# Return the normalized section-3.1 observation plus reactive classification. #>
     param(
         [Parameter(Mandatory)][int]$ExitCode,
         [AllowEmptyString()][string]$Stdout = '',
         [AllowEmptyString()][string]$Stderr = '',
-        [datetime]$Now = [datetime]::UtcNow
+        [datetime]$Now = [datetime]::UtcNow,
+        # Optional: when omitted, the empty-output size heuristic never fires
+        # (older callers stay fully backward compatible).
+        [Nullable[long]]$PromptBytes = $null,
+        # Default 35000 = measured 2026-07-16 incident bracket (33KB ok / 50KB dies).
+        [long]$OverflowFloorBytes = 35000
     )
     $nowUtc = $Now.ToUniversalTime()
     $text = (([string]$Stdout) + "`n" + ([string]$Stderr)).Trim()
@@ -131,23 +149,48 @@ function Get-UsageFailureObservation {
     $confidence = 0.2
     $defaultSeconds = 0
     $reason = if ($ExitCode -eq 0) { 'dispatch_succeeded' } else { 'unrecognized_dispatch_failure' }
+    $floor = if ($OverflowFloorBytes -gt 0) { $OverflowFloorBytes } else { 35000 }
 
     if ($ExitCode -ne 0) {
         # Auth/config hard-excludes failover/lockout even when quota phrases co-occur.
+        # Auth stays FIRST. Context overflow is next (before quota): a healthy
+        # provider must not be locked out for an oversized prompt.
         # Quota: real provider limit phrasings only — bare "hit your limit of N retries"
         # must stay ambiguous (negative lookahead on "of <digits>").
         # Burst: 429 / rate-limit / rate_limit_error only — bare "retry after" is a
         # reset-time parse source, not a standalone burst trigger.
         $authPattern = '\b(?:401|403)\b|unauthori[sz]ed|invalid\s+(?:api\s+)?key|authentication\s+(?:required|failed)|login\s+required|configuration\s+error|unknown\s+model|model\s+not\s+found'
+        $overflowPattern = 'context\s+length|maximum\s+context|too\s+many\s+tokens|prompt\s+is\s+too\s+long|prompt_too_large|context\s+window\s+(?:exceeded|full)|token\s+limit\s+exceeded|exceeds?\s+(?:the\s+)?(?:maximum\s+)?context|n_ctx|max_tokens?\s+exceeded'
         $quotaPattern = 'weekly\s+(?:usage\s+)?limit|hit\s+your\s+limit(?!\s+of\s+\d)|hit\s+(?:your|the)\s+(?:usage|weekly|session|model|opus)[^\r\n]{0,60}\blimit|usage\s+limit\s+(?:reached|exceeded)|quota\s+(?:exhausted|exceeded)|insufficient_quota|billing\s+hard\s+limit|credits?\s+exhausted'
         $burstPattern = '\b429\b|too\s+many\s+requests|rate[_ -]?limit(?:ed|_error)?(?:\s+(?:exceeded|reached))?'
         $overloadPattern = '\b(?:500|502|503|529)\b|overloaded(?:_error)?|server\s+is\s+overloaded|service\s+unavailable|temporarily\s+at\s+capacity'
+
+        $overflowByString = (Find-UsageRegexMatch -Text $text -Pattern $overflowPattern).Success
+        # Heuristic (2): only when PromptBytes is explicitly supplied AND all three
+        # signals hold — nonzero exit (outer), empty combined output, bytes >= floor.
+        $overflowByHeuristic = ($null -ne $PromptBytes) -and
+            ([string]::IsNullOrEmpty($text)) -and
+            ([long]$PromptBytes -ge $floor)
 
         if ((Find-UsageRegexMatch -Text $text -Pattern $authPattern).Success) {
             $classification = 'auth_config'
             $scope = 'subscription'
             $confidence = 0.95
             $reason = 'provider authentication or configuration failure'
+        }
+        elseif ($overflowByString -or $overflowByHeuristic) {
+            # NOT a usage failure: no lockout, no cooldown, provider stays routable.
+            # Journal event is the classification name itself (not lockout/cooldown).
+            $classification = 'context_overflow'
+            $eventKind = 'context_overflow'
+            $hardFailover = $false
+            $scope = 'api_rate'
+            $confidence = if ($overflowByString) { 0.9 } else { 0.75 }
+            $reason = if ($overflowByString) {
+                'provider reported prompt/context overflow'
+            } else {
+                'empty failure with prompt at/over overflow floor'
+            }
         }
         elseif ((Find-UsageRegexMatch -Text $text -Pattern $quotaPattern).Success) {
             $classification = 'quota_exhausted'
@@ -183,8 +226,14 @@ function Get-UsageFailureObservation {
         }
     }
 
-    $resetAt = ConvertTo-ClassifiedResetAt -Text $text -Now $nowUtc -DefaultSeconds $defaultSeconds
-    $ttl = if ($resetAt) {
+    $resetAt = if ($classification -eq 'context_overflow') {
+        $null
+    } else {
+        ConvertTo-ClassifiedResetAt -Text $text -Now $nowUtc -DefaultSeconds $defaultSeconds
+    }
+    $ttl = if ($classification -eq 'context_overflow') {
+        0
+    } elseif ($resetAt) {
         try {
             $resetTime = [datetimeoffset]::Parse($resetAt).UtcDateTime
             $seconds = ($resetTime - $nowUtc).TotalSeconds
@@ -200,7 +249,7 @@ function Get-UsageFailureObservation {
         } catch { [math]::Max(1, $defaultSeconds) }
     } else { [math]::Max(1, $(if ($defaultSeconds -gt 0) { $defaultSeconds } else { 3600 })) }
 
-    return [ordered]@{
+    $obs = [ordered]@{
         classification = $classification
         event = $eventKind
         hard_failover = $hardFailover
@@ -212,7 +261,10 @@ function Get-UsageFailureObservation {
         ttl = $ttl
         confidence = $confidence
         reason = $reason
+        prompt_bytes = $PromptBytes
+        overflow_floor_bytes = $floor
     }
+    return $obs
 }
 
 function Add-UsageClassifyJournalRow {
@@ -239,9 +291,12 @@ function Register-UsageFailure {
         [AllowEmptyString()][string]$Stdout = '',
         [AllowEmptyString()][string]$Stderr = '',
         [string]$UsagePath = $script:DefaultClassifyUsagePath,
-        [datetime]$Now = [datetime]::UtcNow
+        [datetime]$Now = [datetime]::UtcNow,
+        [Nullable[long]]$PromptBytes = $null,
+        [long]$OverflowFloorBytes = 35000
     )
-    $observation = Get-UsageFailureObservation -ExitCode $ExitCode -Stdout $Stdout -Stderr $Stderr -Now $Now
+    $observation = Get-UsageFailureObservation -ExitCode $ExitCode -Stdout $Stdout -Stderr $Stderr `
+        -Now $Now -PromptBytes $PromptBytes -OverflowFloorBytes $OverflowFloorBytes
     if ($observation.event) {
         $row = [ordered]@{
             ts = $observation.observed_at
@@ -258,6 +313,15 @@ function Register-UsageFailure {
             classification = $observation.classification
         }
         if ($observation.event -eq 'cooldown') { $row.until = $observation.reset_at }
+        # context_overflow journals the classification itself (not lockout/cooldown)
+        # so the provider stays routable; carry size for operator diagnosis.
+        if ($observation.classification -eq 'context_overflow') {
+            $row.prompt_bytes = $observation.prompt_bytes
+            $row.overflow_floor_bytes = $observation.overflow_floor_bytes
+            $row.operator_line = Format-ContextOverflowLine -Provider $Worker `
+                -PromptBytes $(if ($null -ne $observation.prompt_bytes) { [long]$observation.prompt_bytes } else { 0 }) `
+                -FloorBytes ([long]$observation.overflow_floor_bytes)
+        }
         Add-UsageClassifyJournalRow -Row $row -UsagePath $UsagePath
     }
     return $observation
