@@ -3,6 +3,11 @@ $ErrorActionPreference = 'Stop'
 
 $script:fail = 0
 function Check($name,$condition){ if($condition){Write-Host "PASS: $name"} else {Write-Host "FAIL: $name"; $script:fail++} }
+function Copy-TestMap($sourceMap) {
+    $copy = [ordered]@{}
+    foreach ($mapKey in $sourceMap.Keys) { $copy[$mapKey] = $sourceMap[$mapKey] }
+    return $copy
+}
 
 $libraryPath = Join-Path $PSScriptRoot 'usage-probe-lib.ps1'
 Check 'P0 usage probe library exists' (Test-Path -LiteralPath $libraryPath)
@@ -18,7 +23,14 @@ $requiredFunctions = @(
     'ConvertFrom-CodexRateLimitResponse',
     'Add-UsageProbeCacheRow',
     'Get-FreshUsageProbeCache',
-    'Get-CodexUsageProbe'
+    'Get-CodexUsageProbe',
+    'Get-UsageProbeCapDecision',
+    'Get-FleetMedianDispatchTokens',
+    'Get-UsageFitAdvisory',
+    'Get-MonthlyUsagePaceAdvisory',
+    'Test-UsageSurplusSpend',
+    'Add-UsageProbeLimitedRows',
+    'Add-UsagePreflightEvent'
 )
 foreach ($functionName in $requiredFunctions) {
     Check "P0 function $functionName exists" ($null -ne (Get-Command $functionName -ErrorAction SilentlyContinue))
@@ -175,6 +187,127 @@ try {
         Check ("G fail-open: {0} returns null" -f $failureCase.name) ($null -eq $failureResult)
         Check ("G fail-open: {0} does not create a cache row" -f $failureCase.name) (-not (Test-Path -LiteralPath $failureCache))
     }
+
+    # ---- policy caps + structured advisory rows ----
+    $policyProvider = @{
+        name = 'worker-probe'; kind = 'cli'; platform = 'codex'; cost_tier = 'paid'
+        usage_policy = @{ probe = $true; soft_cap_5h = [double]75; soft_cap_weekly = [double]85; monthly_allowance = [double]100 }
+    }
+    $underResponse = New-SyntheticRateLimitResponse -FiveHourUsed 74.9 -WeeklyUsed 84.9
+    $underObs = ConvertFrom-CodexRateLimitResponse -Worker 'worker-probe' -Response $underResponse -ObservedAt $T0 -TtlSeconds 600
+    $underDecision = Get-UsageProbeCapDecision -Provider $policyProvider -Observations @($underObs)
+    Check 'D1 observations under both caps are not held' (-not $underDecision.over_cap -and @($underDecision.windows).Count -eq 0)
+
+    $fiveCapResponse = New-SyntheticRateLimitResponse -FiveHourUsed 75 -WeeklyUsed 20
+    $fiveCapObs = ConvertFrom-CodexRateLimitResponse -Worker 'worker-probe' -Response $fiveCapResponse -ObservedAt $T0 -TtlSeconds 600
+    $fiveCapDecision = Get-UsageProbeCapDecision -Provider $policyProvider -Observations @($fiveCapObs)
+    Check 'D2 five-hour equality reaches the cap' ($fiveCapDecision.over_cap -and @($fiveCapDecision.windows).Count -eq 1)
+    Check 'D3 five-hour decision names window, value, cap, and knob' (
+        $fiveCapDecision.windows[0].window -eq 'five_hour' -and
+        [double]$fiveCapDecision.windows[0].used_pct -eq 75 -and
+        [double]$fiveCapDecision.windows[0].cap -eq 75 -and
+        $fiveCapDecision.windows[0].policy_knob -eq 'soft_cap_5h')
+
+    $weeklyCapResponse = New-SyntheticRateLimitResponse -FiveHourUsed 10 -WeeklyUsed 90
+    $weeklyCapObs = ConvertFrom-CodexRateLimitResponse -Worker 'worker-probe' -Response $weeklyCapResponse -ObservedAt $T0 -TtlSeconds 600
+    $weeklyCapDecision = Get-UsageProbeCapDecision -Provider $policyProvider -Observations @($weeklyCapObs)
+    Check 'D4 weekly cap is independent' (
+        $weeklyCapDecision.over_cap -and
+        $weeklyCapDecision.windows[0].window -eq 'weekly' -and
+        $weeklyCapDecision.windows[0].policy_knob -eq 'soft_cap_weekly')
+
+    $bothCapResponse = New-SyntheticRateLimitResponse -FiveHourUsed 80 -WeeklyUsed 90
+    $bothCapObs = ConvertFrom-CodexRateLimitResponse -Worker 'worker-probe' -Response $bothCapResponse -ObservedAt $T0 -TtlSeconds 600
+    $bothCapDecision = Get-UsageProbeCapDecision -Provider $policyProvider -Observations @($bothCapObs)
+    Check 'D5 both cap crossings remain in one decision' ($bothCapDecision.over_cap -and @($bothCapDecision.windows).Count -eq 2)
+
+    $policyUsage = Join-Path $tmp 'policy-usage.jsonl'
+    Add-UsageProbeLimitedRows -Worker 'worker-probe' -Decision $underDecision -UsagePath $policyUsage
+    Check 'J1 under-cap observations never journal limited state' (-not (Test-Path -LiteralPath $policyUsage))
+    Add-UsageProbeLimitedRows -Worker 'worker-probe' -Decision $fiveCapDecision -UsagePath $policyUsage
+    $limitedRows = @(Get-Content -LiteralPath $policyUsage | ForEach-Object { $_ | ConvertFrom-Json })
+    Check 'J2 over-cap observation journals one advisory limited row' (
+        $limitedRows.Count -eq 1 -and $limitedRows[0].event -eq 'limited' -and $limitedRows[0].source -eq 'app_server_probe')
+    Check 'J3 limited row preserves normalized freshness and cap fields' (
+        $limitedRows[0].observed_at -and [int]$limitedRows[0].ttl -eq 600 -and
+        [double]$limitedRows[0].used_pct -eq 75 -and [double]$limitedRows[0].cap -eq 75 -and
+        $limitedRows[0].window -eq 'five_hour')
+
+    Add-UsagePreflightEvent -Worker 'worker-probe' -Outcome 'rerouted' -WindowDecision $fiveCapDecision.windows[0] `
+        -Substitute 'worker-peer' -UsagePath $policyUsage -Reason 'soft_cap'
+    Add-UsagePreflightEvent -Worker 'worker-probe' -Outcome 'held' -WindowDecision $weeklyCapDecision.windows[0] `
+        -UsagePath $policyUsage -Reason 'soft_cap'
+    Add-UsagePreflightEvent -Worker 'worker-probe' -Outcome 'dispatched' -UsagePath $policyUsage -Reason 'surplus_spend'
+    $preflightRows = @((Get-Content -LiteralPath $policyUsage | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object { $_.event -eq 'preflight' })
+    Check 'J4 preflight rows carry all three outcomes' ((@($preflightRows.outcome | Sort-Object) -join ',') -eq 'dispatched,held,rerouted')
+    $rerouteRow = $preflightRows | Where-Object { $_.outcome -eq 'rerouted' }
+    Check 'J5 reroute row carries policy evidence and substitute' (
+        $rerouteRow.worker -eq 'worker-probe' -and $rerouteRow.substitute -eq 'worker-peer' -and
+        [double]$rerouteRow.used_pct -eq 75 -and [double]$rerouteRow.cap -eq 75 -and
+        $rerouteRow.window -eq 'five_hour')
+    Check 'J6 surplus reason is journaled' (($preflightRows | Where-Object { $_.reason -eq 'surplus_spend' }).outcome -eq 'dispatched')
+
+    # ---- token median + will-this-job-fit advisory ----
+    $fleetJournal = Join-Path $tmp 'model-routing-log.md'
+    Set-Content -LiteralPath $fleetJournal -Encoding utf8NoBOM -Value @('# Model Routing Log', '# synthetic rows')
+    for ($index = 1; $index -le 25; $index++) {
+        $providerName = if ($index -eq 5) { 'worker-other' } else { 'worker-probe' }
+        Add-Content -LiteralPath $fleetJournal -Encoding utf8NoBOM -Value (
+            "2026-07-16T12:{0:D2}:00-06:00 | fleet | {1} | 1s | exit:0 | `"synthetic`" | host:test | tok:{2}(estimate)" -f $index, $providerName, ($index * 100))
+    }
+    $tokenStats = Get-FleetMedianDispatchTokens -Worker 'worker-probe' -JournalPath $fleetJournal -SampleSize 20
+    Check 'T1 token history uses only the latest 20 provider dispatches' ($tokenStats.count -eq 20)
+    Check 'T2 even token sample median averages the center values' ([double]$tokenStats.median -eq 1550)
+    Check 'T3 token history returns a guarded positive total' ([double]$tokenStats.total -gt 0)
+
+    $tightObservation = [ordered]@{
+        worker='worker-probe'; scope='five_hour'; used_pct=[double]98; reset_at=$T0.AddHours(1).ToString('o')
+        source='app_server_probe'; observed_at=$T0.ToString('o'); ttl=600; confidence=[double]0.95
+    }
+    $fitLine = Get-UsageFitAdvisory -Worker 'worker-probe' -Observation $tightObservation -TokenStats $tokenStats
+    Check 'T4 fit advisory names usage and median token burn' ($fitLine -match 'worker-probe at 98% of 5h' -and $fitLine -match 'typical dispatch burns ~1550 tok')
+    $comfortableObservation = Copy-TestMap $tightObservation; $comfortableObservation.used_pct = [double]20
+    Check 'T5 fit advisory stays quiet with ample remaining share' ($null -eq (Get-UsageFitAdvisory -Worker 'worker-probe' -Observation $comfortableObservation -TokenStats $tokenStats))
+    Check 'T6 zero token history never divides or advises' (
+        $null -eq (Get-UsageFitAdvisory -Worker 'worker-probe' -Observation $tightObservation -TokenStats @{ count=0; median=0; total=0 }))
+
+    # ---- monthly pace is advisory-only and observation-driven ----
+    $monthlyRows = @(
+        [pscustomobject]@{
+            worker='worker-probe'; scope='paid_credit'; source='billing_api'; consumed=[double]60
+            observed_at=$T0.ToString('o'); reset_at=$T0.AddDays(20).ToString('o')
+        }
+    )
+    $pace = Get-MonthlyUsagePaceAdvisory -Worker 'worker-probe' -UsagePolicy $policyProvider.usage_policy -Rows $monthlyRows -Now $T0
+    Check 'M1 consumed above day-of-cycle pace is advisory' ($pace.advisory -and $pace.line -match 'monthly usage pace')
+    Check 'M2 monthly pace reports expected consumption with guarded math' ([double]$pace.consumed -eq 60 -and [double]$pace.expected -gt 0)
+    $monthlyRows[0].consumed = [double]10
+    $paceUnder = Get-MonthlyUsagePaceAdvisory -Worker 'worker-probe' -UsagePolicy $policyProvider.usage_policy -Rows $monthlyRows -Now $T0
+    Check 'M3 consumed under pace is not advisory' (-not $paceUnder.advisory)
+    Check 'M4 absent allowance is unavailable, never advisory' (
+        (Get-MonthlyUsagePaceAdvisory -Worker 'worker-probe' -UsagePolicy @{} -Rows $monthlyRows -Now $T0).status -eq 'unavailable')
+    Check 'M5 missing observation is unavailable, never advisory' (
+        (Get-MonthlyUsagePaceAdvisory -Worker 'worker-probe' -UsagePolicy $policyProvider.usage_policy -Rows @() -Now $T0).status -eq 'unavailable')
+
+    # ---- bounded weekly surplus-spend preference ----
+    $surplusWeekly = [ordered]@{
+        worker='worker-probe'; scope='weekly'; used_pct=[double]40; reset_at=$T0.AddHours(24).ToString('o')
+        source='app_server_probe'; observed_at=$T0.ToString('o'); ttl=600; confidence=[double]0.95
+    }
+    $surplusSnapshot = [ordered]@{ observations=@($surplusWeekly); observed_at=$T0.ToString('o'); ttl=600; cached=$true }
+    $surplus = Test-UsageSurplusSpend -Provider $policyProvider -Snapshot $surplusSnapshot -Now $T0.AddMinutes(5)
+    Check 'S1 surplus applies at the 24-hour boundary with headroom' ($surplus.apply -and [double]$surplus.preference -gt 0 -and $surplus.reason -eq 'surplus_spend')
+    $outsideSnapshot = Copy-TestMap $surplusSnapshot; $outsideWeekly = Copy-TestMap $surplusWeekly; $outsideWeekly.reset_at = $T0.AddHours(24).AddSeconds(1).ToString('o'); $outsideSnapshot.observations = @($outsideWeekly)
+    Check 'S2 surplus rejects reset outside 24 hours' (-not (Test-UsageSurplusSpend -Provider $policyProvider -Snapshot $outsideSnapshot -Now $T0).apply)
+    $lowHeadroomSnapshot = Copy-TestMap $surplusSnapshot; $lowHeadroomWeekly = Copy-TestMap $surplusWeekly; $lowHeadroomWeekly.used_pct = [double]65; $lowHeadroomSnapshot.observations = @($lowHeadroomWeekly)
+    Check 'S3 surplus requires used below weekly cap minus 20' (-not (Test-UsageSurplusSpend -Provider $policyProvider -Snapshot $lowHeadroomSnapshot -Now $T0).apply)
+    $httpProvider = $policyProvider.Clone(); $httpProvider.kind = 'http'
+    Check 'S4 surplus never applies to an HTTP or metered API tier' (-not (Test-UsageSurplusSpend -Provider $httpProvider -Snapshot $surplusSnapshot -Now $T0).apply)
+    $wrongAdapter = $policyProvider.Clone(); $wrongAdapter.platform = 'grok'
+    Check 'S5 surplus requires the shipped probe adapter' (-not (Test-UsageSurplusSpend -Provider $wrongAdapter -Snapshot $surplusSnapshot -Now $T0).apply)
+    $probeOff = $policyProvider.Clone(); $probeOff.usage_policy = $policyProvider.usage_policy.Clone(); $probeOff.usage_policy.probe = $false
+    Check 'S6 surplus requires probe true' (-not (Test-UsageSurplusSpend -Provider $probeOff -Snapshot $surplusSnapshot -Now $T0).apply)
+    Check 'S7 stale snapshot never applies surplus preference' (-not (Test-UsageSurplusSpend -Provider $policyProvider -Snapshot $surplusSnapshot -Now $T0.AddMinutes(11)).apply)
 } finally {
     $env:BATON_HOME = $savedBatonHome
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

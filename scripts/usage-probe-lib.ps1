@@ -8,6 +8,7 @@
   cached under BATON_HOME and normalized to the usage observation contract.
 #>
 . "$PSScriptRoot/baton-home.ps1"
+. "$PSScriptRoot/usage-classify-lib.ps1"
 
 function Get-BatonPluginVersion {
     $roots = [System.Collections.Generic.List[string]]::new()
@@ -269,4 +270,227 @@ function Get-CodexUsageProbe {
     } catch {
         return $null
     }
+}
+
+function Get-UsageProbeCapDecision {
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [Parameter(Mandatory)][object[]]$Observations
+    )
+    $crossings = [System.Collections.ArrayList]@()
+    $policy = $Provider.usage_policy
+    if ($null -eq $policy) { return [ordered]@{ over_cap = $false; windows = @() } }
+    foreach ($observation in @($Observations)) {
+        $knob = if ([string]$observation.scope -eq 'five_hour') { 'soft_cap_5h' }
+                elseif ([string]$observation.scope -eq 'weekly') { 'soft_cap_weekly' }
+                else { $null }
+        if (-not $knob -or $null -eq $policy[$knob]) { continue }
+        $used = [double]$observation.used_pct
+        $cap = [double]$policy[$knob]
+        if ($used -lt $cap) { continue }
+        [void]$crossings.Add([ordered]@{
+            window = [string]$observation.scope
+            used_pct = $used
+            cap = $cap
+            policy_knob = $knob
+            reset_at = [string]$observation.reset_at
+            source = [string]$observation.source
+            observed_at = [string]$observation.observed_at
+            ttl = [int]$observation.ttl
+            confidence = [double]$observation.confidence
+        })
+    }
+    return [ordered]@{ over_cap = ($crossings.Count -gt 0); windows = @($crossings.ToArray()) }
+}
+
+function Get-FleetMedianDispatchTokens {
+    <# Fold the latest N fleet journal token fields for one provider. #>
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        [Parameter(Mandatory)][string]$JournalPath,
+        [int]$SampleSize = 20
+    )
+    $empty = [ordered]@{ worker = $Worker; count = 0; median = [double]0; total = [double]0 }
+    if ($SampleSize -le 0 -or -not (Test-Path -LiteralPath $JournalPath)) { return $empty }
+    $values = [System.Collections.Generic.List[double]]::new()
+    foreach ($journalLine in (Get-Content -LiteralPath $JournalPath -ErrorAction SilentlyContinue)) {
+        $fields = @([string]$journalLine -split '\s*\|\s*')
+        if ($fields.Count -lt 3 -or $fields[1] -ne 'fleet' -or $fields[2] -ne $Worker) { continue }
+        $tokenMatch = [regex]::Match(
+            [string]$journalLine,
+            '\|\s*tok:(?<tokens>\d+)\((?:exact|estimate)\)\s*$',
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase,
+            [timespan]::FromMilliseconds(100))
+        if (-not $tokenMatch.Success) { continue }
+        $tokenValue = [long]0
+        if ([long]::TryParse($tokenMatch.Groups['tokens'].Value, [ref]$tokenValue) -and $tokenValue -ge 0) {
+            $values.Add([double]$tokenValue)
+        }
+    }
+    if ($values.Count -eq 0) { return $empty }
+    $recent = @($values | Select-Object -Last $SampleSize | Sort-Object)
+    $count = $recent.Count
+    $median = if (($count % 2) -eq 1) { [double]$recent[[int][math]::Floor($count / 2)] }
+              else { ([double]$recent[($count / 2) - 1] + [double]$recent[$count / 2]) / 2 }
+    $total = [double](($recent | Measure-Object -Sum).Sum)
+    return [ordered]@{ worker = $Worker; count = $count; median = $median; total = $total }
+}
+
+function Get-UsageFitAdvisory {
+    <# Observe-only approximation: scale the median dispatch's share of the recent
+       token sample by current used_pct, then compare it with remaining percent. #>
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        [Parameter(Mandatory)]$Observation,
+        [Parameter(Mandatory)]$TokenStats
+    )
+    $count = [int]$TokenStats.count
+    $median = [double]$TokenStats.median
+    $total = [double]$TokenStats.total
+    $used = [double]$Observation.used_pct
+    if ($count -le 0 -or $median -le 0 -or $total -le 0 -or $used -le 0) { return $null }
+    $remaining = [math]::Max(0, 100 - $used)
+    $typicalShare = ($median / $total) * $used
+    if (-not [double]::IsFinite($typicalShare) -or $remaining -ge $typicalShare) { return $null }
+    $windowLabel = if ([string]$Observation.scope -eq 'five_hour') { '5h' }
+                   elseif ([string]$Observation.scope -eq 'weekly') { 'weekly' }
+                   else { [string]$Observation.scope }
+    $usedText = [math]::Round($used, 1)
+    $medianText = [int][math]::Round($median)
+    return "$Worker at $usedText% of $windowLabel; typical dispatch burns ~$medianText tok - consider holding"
+}
+
+function Get-MonthlyUsagePaceAdvisory {
+    <# Observe-only pace check over an already-journaled billing observation.
+       Adapter #3 produces the observation later; this helper never fetches billing. #>
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        [Parameter(Mandatory)][hashtable]$UsagePolicy,
+        [object[]]$Rows = @(),
+        [datetimeoffset]$Now = [datetimeoffset]::UtcNow
+    )
+    $result = [ordered]@{
+        status = 'unavailable'; advisory = $false; line = $null
+        consumed = $null; expected = $null; allowance = $null
+    }
+    if (-not $UsagePolicy.ContainsKey('monthly_allowance')) { return $result }
+    $allowance = [double]$UsagePolicy.monthly_allowance
+    if ($allowance -le 0 -or -not [double]::IsFinite($allowance)) { return $result }
+    $latest = @($Rows | Where-Object {
+        [string]$_.worker -eq $Worker -and [string]$_.scope -eq 'paid_credit' -and
+        [string]$_.source -eq 'billing_api' -and $null -ne $_.consumed -and $_.reset_at
+    } | Sort-Object {
+        try { [datetimeoffset]::Parse([string]$_.observed_at) } catch { [datetimeoffset]::MinValue }
+    } | Select-Object -Last 1)
+    if ($latest.Count -eq 0) { return $result }
+    $observation = $latest[0]
+    $consumed = [double]$observation.consumed
+    if ($consumed -lt 0 -or -not [double]::IsFinite($consumed)) { return $result }
+    try { $reset = [datetimeoffset]::Parse([string]$observation.reset_at) }
+    catch { return $result }
+    $cycleStart = $reset.AddMonths(-1)
+    $cycleSeconds = ($reset - $cycleStart).TotalSeconds
+    $elapsedSeconds = ($Now - $cycleStart).TotalSeconds
+    if ($cycleSeconds -le 0 -or $elapsedSeconds -lt 0 -or $Now -ge $reset) { return $result }
+    $elapsedFraction = [math]::Min([double]1, [double]($elapsedSeconds / $cycleSeconds))
+    $expected = $allowance * $elapsedFraction
+    $result.status = 'ok'
+    $result.consumed = $consumed
+    $result.expected = [math]::Round($expected, 2)
+    $result.allowance = $allowance
+    if ($consumed -gt $expected) {
+        $result.advisory = $true
+        $result.line = "$Worker monthly usage pace is ahead of the current cycle - advisory only"
+    }
+    return $result
+}
+
+function Test-UsageSurplusSpend {
+    <# Small, cache-only preference for adapter-backed subscription CLI capacity
+       that would otherwise expire within 24 hours. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        $Snapshot,
+        [datetimeoffset]$Now = [datetimeoffset]::UtcNow
+    )
+    $result = [ordered]@{ apply = $false; preference = [double]0; reason = '' }
+    if ($null -eq $Provider.usage_policy -or $Provider.usage_policy.probe -ne $true) { return $result }
+    if ([string]$Provider.kind -ne 'cli' -or [string]$Provider.platform -ne 'codex') { return $result }
+    if ($null -eq $Snapshot) { return $result }
+    try {
+        $snapshotAt = [datetimeoffset]::Parse([string]$Snapshot.observed_at)
+        $snapshotTtl = [int]$Snapshot.ttl
+        if ($snapshotTtl -le 0 -or $Now -ge $snapshotAt.AddSeconds($snapshotTtl)) { return $result }
+    } catch { return $result }
+    $weekly = @($Snapshot.observations | Where-Object {
+        [string]$_.scope -eq 'weekly' -and [string]$_.source -eq 'app_server_probe'
+    } | Select-Object -First 1)
+    if ($weekly.Count -eq 0) { return $result }
+    try { $reset = [datetimeoffset]::Parse([string]$weekly[0].reset_at) }
+    catch { return $result }
+    $untilReset = $reset - $Now
+    if ($untilReset.TotalSeconds -le 0 -or $untilReset.TotalHours -gt 24) { return $result }
+    $threshold = [double]$Provider.usage_policy.soft_cap_weekly - 20
+    if ([double]$weekly[0].used_pct -ge $threshold) { return $result }
+    $result.apply = $true
+    $result.preference = [double]0.01
+    $result.reason = 'surplus_spend'
+    return $result
+}
+
+function Add-UsageProbeLimitedRows {
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        [Parameter(Mandatory)]$Decision,
+        [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl')
+    )
+    foreach ($window in @($Decision.windows)) {
+        $row = [ordered]@{
+            ts = [string]$window.observed_at
+            event = 'limited'
+            worker = $Worker
+            scope = [string]$window.window
+            window = [string]$window.window
+            used_pct = [double]$window.used_pct
+            cap = [double]$window.cap
+            policy_knob = [string]$window.policy_knob
+            reset_at = [string]$window.reset_at
+            source = 'app_server_probe'
+            observed_at = [string]$window.observed_at
+            ttl = [int]$window.ttl
+            confidence = [double]$window.confidence
+            reason = "preflight soft cap reached ($($window.policy_knob))"
+        }
+        Add-UsageClassifyJournalRow -Row $row -UsagePath $UsagePath
+    }
+}
+
+function Add-UsagePreflightEvent {
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        [Parameter(Mandatory)][ValidateSet('dispatched','rerouted','held')][string]$Outcome,
+        $WindowDecision,
+        [string]$Substitute,
+        [string]$Reason,
+        [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl'),
+        [string]$Timestamp
+    )
+    if (-not $Timestamp) { $Timestamp = [datetimeoffset]::UtcNow.ToString('o') }
+    $row = [ordered]@{
+        ts = $Timestamp
+        event = 'preflight'
+        worker = $Worker
+        outcome = $Outcome
+        source = 'app_server_probe'
+    }
+    if ($WindowDecision) {
+        $row.window = [string]$WindowDecision.window
+        $row.used_pct = [double]$WindowDecision.used_pct
+        $row.cap = [double]$WindowDecision.cap
+        $row.policy_knob = [string]$WindowDecision.policy_knob
+        $row.reset_at = [string]$WindowDecision.reset_at
+    }
+    if ($Substitute) { $row.substitute = $Substitute }
+    if ($Reason) { $row.reason = $Reason }
+    Add-UsageClassifyJournalRow -Row $row -UsagePath $UsagePath
 }
