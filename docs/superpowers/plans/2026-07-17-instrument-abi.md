@@ -36,11 +36,11 @@
 - Modify `scripts/test-fleet-lib.ps1`
 - Add `scripts/fixtures/mock-http-server.ps1`
 
-- [ ] Add hermetic loopback cases for explicit/pinned/listed model resolution, default/custom endpoint, exact `usage.total_tokens`, exact prompt-plus-completion usage, absent-usage estimate fallback through `Invoke-Fleet`, non-200, and timeout.
-- [ ] Add a shared UTF-8 prompt-byte helper and normalized failure-row helper where they reduce duplication without changing CLI output.
-- [ ] Implement `Invoke-FleetHttpChat -Provider -Prompt -Model`, honoring `timeout_s` and optional `endpoint`, and omit token keys when usage is absent.
-- [ ] Preserve `stub-http.ps1` hatch precedence with a regression assertion.
-- [ ] Run `scripts/test-fleet-lib.ps1` and commit the HTTP slice.
+- [x] Add hermetic loopback cases for explicit/pinned/listed model resolution, default/custom endpoint, exact `usage.total_tokens`, exact prompt-plus-completion usage, absent-usage estimate fallback through `Invoke-Fleet`, non-200, and timeout.
+- [x] Add a shared UTF-8 prompt-byte helper and normalized failure-row helper where they reduce duplication without changing CLI output.
+- [x] Implement `Invoke-FleetHttpChat -Provider -Prompt -Model`, honoring `timeout_s` and optional `endpoint`, and omit token keys when usage is absent.
+- [x] Preserve `stub-http.ps1` hatch precedence with a regression assertion.
+- [x] Run `scripts/test-fleet-lib.ps1` and commit the HTTP slice.
 
 ## Task 2: Add stdio-JSON for fleet and tools
 
@@ -51,11 +51,11 @@
 - Modify `scripts/test-fleet-lib.ps1`
 - Modify `scripts/test-routing-dispatch.ps1`
 
-- [ ] Add fake-child modes for happy output, malformed stdout, response-declared nonzero exit, process nonzero exit, stderr preservation, and timeout.
-- [ ] Implement a generic stdio-JSON invoker using `ProcessStartInfo`, redirected streams, async stdout/stderr drains, an overall timeout, process-tree cleanup, and request JSON loaded from a UTF-8-no-BOM temp file.
-- [ ] Send `{prompt, model, tier_args}` and normalize the one response object to the shared row. Treat extra/malformed JSON and any process/response nonzero exit honestly.
-- [ ] Dispatch fleet `kind: stdio-json` through the generic helper and tools `kind: stdio-json` through the same helper.
-- [ ] Run the two targeted suites and commit the stdio slice.
+- [x] Add fake-child modes for happy output, malformed stdout, response-declared nonzero exit, process nonzero exit, stderr preservation, and timeout.
+- [x] Implement a generic stdio-JSON invoker using `ProcessStartInfo`, redirected streams, async stdout/stderr drains, an overall timeout, process-tree cleanup, and request JSON loaded from a UTF-8-no-BOM temp file.
+- [x] Send `{prompt, model, tier_args}` and normalize the one response object to the shared row. Treat extra/malformed JSON and any process/response nonzero exit honestly.
+- [x] Dispatch fleet `kind: stdio-json` through the generic helper and tools `kind: stdio-json` through the same helper.
+- [x] Run the two targeted suites and commit the stdio slice.
 
 ## Task 3: Widen tools routing and enforce declaration guards
 
@@ -64,12 +64,12 @@
 - Modify `scripts/test-routing-dispatch.ps1`
 - Modify `scripts/test-routing-lib.ps1` if candidate passthrough assertions are needed
 
-- [ ] Widen `Invoke-Tool` so `python` shares the existing CLI execution branch and `http` delegates to `Invoke-FleetHttpChat`.
-- [ ] Replace the CLI-only candidate gate with the supported set `cli`, `python`, `http`, `stdio-json`; preserve the existing loud journaled unknown-kind skip contract.
-- [ ] Resolve the full declared fleet/tool row before dispatch, count prompt UTF-8 bytes, and emit a journaled `prompt_too_large` skip before invoking any dispatcher when the declared positive ceiling is exceeded.
-- [ ] Assert all new kinds reach an injected dispatcher, unknown kinds remain loud, `prompt_too_large` names the byte ceiling, and no call occurs on an oversized prompt.
-- [ ] Assert `probe`, `agentic`, `endpoint`, and `max_prompt_bytes` survive the existing flat YAML readers without adding box-private values.
-- [ ] Run routing and fleet targeted suites and commit the routing/declaration slice.
+- [x] Widen `Invoke-Tool` so `python` shares the existing CLI execution branch and `http` delegates to `Invoke-FleetHttpChat`.
+- [x] Replace the CLI-only candidate gate with the supported set `cli`, `python`, `http`, `stdio-json`; preserve the existing loud journaled unknown-kind skip contract.
+- [x] Resolve the full declared fleet/tool row before dispatch, count prompt UTF-8 bytes, and emit a journaled `prompt_too_large` skip before invoking any dispatcher when the declared positive ceiling is exceeded.
+- [x] Assert all new kinds reach an injected dispatcher, unknown kinds remain loud, `prompt_too_large` names the byte ceiling, and no call occurs on an oversized prompt.
+- [x] Assert `probe`, `agentic`, `endpoint`, and `max_prompt_bytes` survive the existing flat YAML readers without adding box-private values.
+- [x] Run routing and fleet targeted suites and commit the routing/declaration slice.
 
 ## Task 4: Preserve the d009 executor boundary and remove redundant hatches
 
@@ -80,18 +80,18 @@
 - Delete `scripts/fleet/lm-studio-small.ps1`
 - Delete `scripts/fleet/ollama-box2.ps1`
 
-- [ ] Add executor tests proving explicit `agentic: true` is refused for HTTP and stdio-JSON while CLI explicit/inferred behavior remains unchanged.
-- [ ] Put the transport veto at `Test-ProviderAgentic`, the executor eligibility seam used by initial and substitute selection.
-- [ ] Change `Invoke-Fleet` HTTP dispatch order to hatch-if-present, otherwise generic; add stdio-JSON dispatch; leave CLI dispatch unchanged.
-- [ ] Delete only the three named redundant hatches and confirm `stub-http.ps1` remains.
-- [ ] Run executor, fleet, and routing suites and commit the cleanup/boundary slice.
+- [x] Add executor tests proving explicit `agentic: true` is refused for HTTP and stdio-JSON while CLI explicit/inferred behavior remains unchanged.
+- [x] Put the transport veto at `Test-ProviderAgentic`, the executor eligibility seam used by initial and substitute selection.
+- [x] Change `Invoke-Fleet` HTTP dispatch order to hatch-if-present, otherwise generic; add stdio-JSON dispatch; leave CLI dispatch unchanged.
+- [x] Delete only the three named redundant hatches and confirm `stub-http.ps1` remains.
+- [x] Run executor, fleet, and routing suites and commit the cleanup/boundary slice.
 
 ## Task 5: Full verification and branch handoff
 
-- [ ] Run `python -m pytest kb dashboard -q` as required by `AGENTS.md`; record the exact pytest total.
-- [ ] Enumerate and run every `scripts/test-*.ps1` suite with `pwsh -NoProfile -File`, without stopping after the first failure. Capture each suite's exact printed PASS/FAIL totals and exit code.
-- [ ] Fix regressions incrementally, rerun affected suites, then rerun the complete PowerShell set before claiming green.
-- [ ] Run `git diff --check`; inspect `git status --short`; scan changed PowerShell for forbidden automatic-variable names and unsafe encodings; confirm every divide is guarded and array JSON uses `ConvertTo-Json -InputObject @(...)`.
-- [ ] Confirm tests used only unique `$env:TEMP` roots with `try/finally`, loopback HTTP, and fake child processes; confirm no real Baton/Claude home or live model server was touched.
-- [ ] Commit any verification fixes with focused messages.
-- [ ] Push `feature/instrument-abi` and report files, commit SHAs, reconciliation deltas, exact suite counts, and open questions. Do not open a PR or merge.
+- [x] Run `python -m pytest kb dashboard -q` as required by `AGENTS.md`; record the exact pytest total.
+- [x] Enumerate and run every `scripts/test-*.ps1` suite with `pwsh -NoProfile -File`, without stopping after the first failure. Capture each suite's exact printed PASS/FAIL totals and exit code.
+- [x] Fix regressions incrementally, rerun affected suites, then rerun the complete PowerShell set before claiming green.
+- [x] Run `git diff --check`; inspect `git status --short`; scan changed PowerShell for forbidden automatic-variable names and unsafe encodings; confirm every divide is guarded and array JSON uses `ConvertTo-Json -InputObject @(...)`.
+- [x] Confirm tests used only unique `$env:TEMP` roots with `try/finally`, loopback HTTP, and fake child processes; confirm no real Baton/Claude home or live model server was touched.
+- [x] Commit any verification fixes with focused messages.
+- [x] Push `feature/instrument-abi` and report files, commit SHAs, reconciliation deltas, exact suite counts, and open questions. Do not open a PR or merge.

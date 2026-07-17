@@ -807,9 +807,9 @@ function Invoke-Fleet {
         throw "Provider '$Name' has unknown kind '$($provider.kind)'."
     }
 
-    # Normalize token fields so both cli and http paths carry them. HTTP hatches
-    # that do not emit native counts fall back to an honest estimate (exact native
-    # counts are a named follow-up, spec §4.1).
+    # Normalize token fields across transports. Generic HTTP attaches exact usage
+    # when the server reports it; missing usage (and hatch rows that omit tokens)
+    # fall back to the honest estimate seam here.
     if (-not $result.ContainsKey('tokens')) {
         $tok = Get-FleetTokenUsage -Provider $provider -Prompt $Prompt -Stdout ([string]$result.stdout)
         $result.tokens = $tok.tokens
