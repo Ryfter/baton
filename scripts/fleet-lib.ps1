@@ -44,6 +44,69 @@ function ConvertFrom-FleetValue {
     return $v
 }
 
+function ConvertTo-FleetUsagePolicy {
+    <# Normalize and validate the optional d090 provider usage_policy block.
+       The block's presence opts the provider into policy configuration; probe
+       remains false unless the box-private fleet explicitly enables it. #>
+    param(
+        [Parameter(Mandatory)][string]$ProviderName,
+        [Parameter(Mandatory)][hashtable]$RawPolicy
+    )
+    $allowed = @('probe', 'soft_cap_5h', 'soft_cap_weekly', 'monthly_allowance')
+    foreach ($key in $RawPolicy.Keys) {
+        if ($key -notin $allowed) {
+            throw "Provider '$ProviderName' usage_policy has unknown field '$key'."
+        }
+    }
+
+    $policy = @{
+        probe = $false
+        soft_cap_5h = [double]75
+        soft_cap_weekly = [double]85
+    }
+    if ($RawPolicy.ContainsKey('probe')) {
+        if ($RawPolicy.probe -isnot [bool]) {
+            throw "Provider '$ProviderName' usage_policy.probe must be true or false."
+        }
+        $policy.probe = [bool]$RawPolicy.probe
+    }
+    foreach ($capField in @('soft_cap_5h', 'soft_cap_weekly')) {
+        if (-not $RawPolicy.ContainsKey($capField)) { continue }
+        $capValue = [double]0
+        if (-not [double]::TryParse(
+                [string]$RawPolicy[$capField],
+                [System.Globalization.NumberStyles]::Float,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [ref]$capValue) -or
+            -not [double]::IsFinite($capValue) -or $capValue -lt 0 -or $capValue -gt 100) {
+            throw "Provider '$ProviderName' usage_policy.$capField must be a percentage from 0 through 100."
+        }
+        $policy[$capField] = $capValue
+    }
+    if ($RawPolicy.ContainsKey('monthly_allowance')) {
+        $allowance = [double]0
+        if (-not [double]::TryParse(
+                [string]$RawPolicy.monthly_allowance,
+                [System.Globalization.NumberStyles]::Float,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [ref]$allowance) -or
+            -not [double]::IsFinite($allowance) -or $allowance -le 0) {
+            throw "Provider '$ProviderName' usage_policy.monthly_allowance must be a positive number."
+        }
+        $policy.monthly_allowance = $allowance
+    }
+    return $policy
+}
+
+function Complete-FleetProvider {
+    param([Parameter(Mandatory)][hashtable]$Provider)
+    if ($Provider.ContainsKey('usage_policy')) {
+        $Provider.usage_policy = ConvertTo-FleetUsagePolicy -ProviderName ([string]$Provider.name) `
+            -RawPolicy ([hashtable]$Provider.usage_policy)
+    }
+    return $Provider
+}
+
 function Read-Fleet {
     <# Parse fleet.yaml into an array of provider hashtables. #>
     param([string]$Path = $script:DefaultFleetPath)
@@ -52,8 +115,8 @@ function Read-Fleet {
     }
     $providers = [System.Collections.ArrayList]@()
     $current = $null
-    $inEnv = $false
-    $envIndent = 0
+    $childBlock = ''
+    $childIndent = 0
 
     foreach ($rawLine in (Get-Content $Path)) {
         if ($rawLine -match '^\s*#') { continue }
@@ -62,41 +125,42 @@ function Read-Fleet {
 
         # New provider: "  - name: <value>"
         if ($rawLine -match '^(\s*)-\s+name:\s*(.+?)\s*$') {
-            if ($current) { [void]$providers.Add($current) }
+            if ($current) { [void]$providers.Add((Complete-FleetProvider -Provider $current)) }
             $current = @{ name = (ConvertFrom-FleetValue $matches[2]); env = $null }
-            $inEnv = $false
+            $childBlock = ''
             continue
         }
         # A new top-level key (no indentation) ends the providers block — stop
         # absorbing indented children (e.g. capability_floors entries) into the
         # last provider. `providers:` itself is skipped above.
         if ($current -and $rawLine -match '^[\w.-]+:') {
-            [void]$providers.Add($current)
+            [void]$providers.Add((Complete-FleetProvider -Provider $current))
             $current = $null
-            $inEnv = $false
+            $childBlock = ''
             continue
         }
         if (-not $current) { continue }
 
         $indent = ($rawLine -replace '\S.*$', '').Length
 
-        # env: block opener (no value on the line)
-        if ($rawLine -match '^(\s+)env:\s*$') {
-            $current.env = @{}
-            $inEnv = $true
-            $envIndent = $matches[1].Length
+        # Supported child-block opener (no value on the line).
+        if ($rawLine -match '^(\s+)(env|usage_policy):\s*$') {
+            $blockName = [string]$matches[2]
+            $current[$blockName] = @{}
+            $childBlock = $blockName
+            $childIndent = $matches[1].Length
             continue
         }
 
-        # env entry (deeper indentation than the env: key)
-        if ($inEnv -and $indent -gt $envIndent -and $rawLine -match '^\s+([\w.-]+):\s*(.+?)\s*$') {
-            $current.env[$matches[1]] = (ConvertFrom-FleetValue $matches[2])
+        # Child entry (deeper indentation than its block key).
+        if ($childBlock -and $indent -gt $childIndent -and $rawLine -match '^\s+([\w.-]+):\s*(.+?)\s*$') {
+            $current[$childBlock][$matches[1]] = (ConvertFrom-FleetValue $matches[2])
             continue
         }
 
-        # indentation returned to field level — exit env block and fall through
-        if ($inEnv) {
-            $inEnv = $false
+        # Indentation returned to field level — exit child block and fall through.
+        if ($childBlock) {
+            $childBlock = ''
         }
 
         # ordinary field (including lines that just exited the env block)
@@ -116,7 +180,7 @@ function Read-Fleet {
             $current[$key] = $parsed
         }
     }
-    if ($current) { [void]$providers.Add($current) }
+    if ($current) { [void]$providers.Add((Complete-FleetProvider -Provider $current)) }
     return $providers.ToArray()
 }
 
