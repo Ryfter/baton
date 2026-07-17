@@ -1,10 +1,11 @@
 # Roadmap
 
-**Last updated:** 2026-07-16
-**Status:** `v1.18.0` shipped — *usage-aware failover complete (d083+d090, #94): the fleet
-classifies its own failures, routes around exhausted providers, and pre-flights headroom
-before dispatch. v1.17.0 (same week) made `--execute` governance authoritative (d086 node #1:
-gates default-on + fail-loud, stakes→depth routing).* Plans 1–11 + the Fleet Conductor
+**Last updated:** 2026-07-17
+**Status:** `v1.19.0` shipped — *the instrument ABI (d091, #92+#104): any language, one
+return contract. Generic HTTP + stdio-json transports, python tools routable, exact local
+token counts, `max_prompt_bytes` pre-flight, and the `context_overflow` reactive class.
+v1.18.0/v1.17.0 (same week) shipped usage-aware failover (d083+d090) and authoritative
+`--execute` governance (d086 node #1).* Plans 1–11 + the Fleet Conductor
 release (v1.2.0) + fourteen minor releases since (v1.3 → v1.15) are all live: governed fleet,
 learning router, front porch, GEPA optimizer, the coach, the project command center, agentic
 executor, quality gates, usage governor, direct-model commands, and per-model token telemetry.
@@ -53,8 +54,11 @@ flip its defaults on `--execute`, don't rebuild it:**
 3. **Compound default + measured** — the compound node: default closeout that leaves a findable
    artifact **and** answers "what concrete change prevents this class of failure next time?"; plus a
    **compound-rate** metric (% of runs producing a decision/lesson/guidance update — from the journal). *Needs a spec.*
-4. **Finish the instrument ABI** — Python/HTTP instruments actually routable (auto-routing today is
-   CLI-only, `routing-dispatch.ps1:137`). The "add any instrument" thesis structurally depends on it.
+4. ~~**Finish the instrument ABI**~~ — **SHIPPED v1.19.0 (2026-07-17, PRs #109+#110, issues
+   #92+#104, d091).** One return contract, three transports (generic HTTP w/ exact tokens +
+   hatch override, python/http tools routable, stdio-json for any language), `max_prompt_bytes`
+   enforced pre-flight, `context_overflow` reactive class. See
+   [`releases/2026-07-17-v1.19.0.md`](releases/2026-07-17-v1.19.0.md).
 5. **Real-project bakeoff** — Baton vs. the manager/engineer baseline on real slices (security fix,
    feature, migration); measure completion / human intervention / gate catches / regressions / time /
    **effective-cost**, incl. a quota-failure run (= d083). The missing end-to-end proof.
@@ -71,7 +75,7 @@ flip its defaults on `--execute`, don't rebuild it:**
 
 **New since 2026-07-16 (from live incidents + thinking session — pre-briefs in Grimdex `projects/baton/notes/`):**
 - **#101** — flip missing-stakes normalize+warn to hard-require (d089 deferral).
-- **#104** — `context_overflow` as a distinct failure class (local-lens size ceiling: chunk to <35KB).
+- ~~**#104**~~ — shipped with v1.19.0 (see above).
 - **#106** — per-PR ship report: pipeline-level cost/quality cards (spec committed).
 - **Unnumbered candidates:** durable scheduling (highest-leverage; Task-Scheduler steps + mailbox),
   SDLC loop (`--from-issue` intake + evidence write-back), reproducer panel role + shared
