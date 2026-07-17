@@ -307,6 +307,12 @@ function Get-FleetTokenUsage {
     return @{ tokens = [int][math]::Ceiling($len / 4); tokens_basis = 'estimate' }
 }
 
+function Get-Utf8ByteCount {
+    <# Shared UTF-8 byte length for prompt-size guards and overflow heuristics. #>
+    param([AllowEmptyString()][AllowNull()][string]$Text = '')
+    return [long][System.Text.Encoding]::UTF8.GetByteCount([string]$Text)
+}
+
 function Get-InstrumentPromptGuard {
     <# Enforce an optional UTF-8 byte ceiling without changing undeclared rows.
        Returns $null when allowed, otherwise a normalized pre-dispatch failure. #>
@@ -324,7 +330,7 @@ function Get-InstrumentPromptGuard {
             reason = 'invalid_max_prompt_bytes'
         }
     }
-    $promptBytes = [System.Text.Encoding]::UTF8.GetByteCount($Prompt)
+    $promptBytes = Get-Utf8ByteCount -Text $Prompt
     if ($promptBytes -le $ceiling) { return $null }
     return @{
         stdout = ''
@@ -819,12 +825,26 @@ function Invoke-Fleet {
     # Reactive usage classification is provider-agnostic and runs for every
     # dispatch result. The structured observation rides with the result so a
     # policy-aware caller can decide whether one substitute is permitted.
+    # PromptBytes always supplied (Invoke-Fleet path) so the empty-output
+    # context_overflow heuristic can fire; floor defaults to 35000 unless the
+    # provider declares max_prompt_bytes (then that ceiling is the floor).
+    $promptBytes = Get-Utf8ByteCount -Text $Prompt
+    $overflowFloor = [long]35000
+    if ($provider.ContainsKey('max_prompt_bytes') -and
+        -not [string]::IsNullOrWhiteSpace([string]$provider.max_prompt_bytes)) {
+        $declaredFloor = [long]0
+        if ([long]::TryParse([string]$provider.max_prompt_bytes, [ref]$declaredFloor) -and $declaredFloor -gt 0) {
+            $overflowFloor = $declaredFloor
+        }
+    }
     $usageObservation = if ($NoUsageJournal) {
         Get-UsageFailureObservation -ExitCode ([int]$result.exit_code) `
-            -Stdout ([string]$result.stdout) -Stderr ([string]$result.stderr)
+            -Stdout ([string]$result.stdout) -Stderr ([string]$result.stderr) `
+            -PromptBytes $promptBytes -OverflowFloorBytes $overflowFloor
     } else {
         Register-UsageFailure -Worker $Name -ExitCode ([int]$result.exit_code) `
-            -Stdout ([string]$result.stdout) -Stderr ([string]$result.stderr) -UsagePath $UsagePath
+            -Stdout ([string]$result.stdout) -Stderr ([string]$result.stderr) `
+            -UsagePath $UsagePath -PromptBytes $promptBytes -OverflowFloorBytes $overflowFloor
     }
     $result.usage_observation = $usageObservation
     $result.usage_recorded = [bool]($usageObservation.event -and -not $NoUsageJournal)

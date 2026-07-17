@@ -301,6 +301,105 @@ try {
     Check 'hop row carries reason' ($hop.reason -eq 'quota_exhausted')
     Check 'hop row carries reset' ((As-IsoString $hop.reset_at) -eq '2099-01-01T00:00:00.0000000Z')
     Check 'hop row carries partial-diff flag' ($hop.had_partial_diff -eq $true)
+
+    # ================= context_overflow (issue #104) =================
+    $overflowStrings = @(
+        @{ name = 'context length'; text = 'Error: context length exceeded for this model' },
+        @{ name = 'maximum context'; text = 'request exceeds maximum context' },
+        @{ name = 'too many tokens'; text = 'too many tokens in the prompt' },
+        @{ name = 'prompt is too long'; text = 'prompt is too long for this endpoint' },
+        @{ name = 'prompt_too_large preflight'; text = 'prompt_too_large: prompt is 50000 UTF-8 bytes; max_prompt_bytes is 4096' }
+    )
+    foreach ($ov in $overflowStrings) {
+        $obs = Get-UsageFailureObservation -ExitCode 1 -Stdout '' -Stderr $ov.text -Now $now
+        Check "overflow string $($ov.name): classification" ($obs.classification -eq 'context_overflow')
+        Check "overflow string $($ov.name): event is context_overflow not lockout" ($obs.event -eq 'context_overflow')
+        Check "overflow string $($ov.name): no hard failover" ($obs.hard_failover -eq $false)
+        Check "overflow string $($ov.name): no reset_at" ($null -eq $obs.reset_at)
+        Check "overflow string $($ov.name): source" ($obs.source -eq 'error_classify')
+    }
+
+    # Heuristic (2): nonzero exit + empty combined output + PromptBytes >= floor
+    $heuristicHit = Get-UsageFailureObservation -ExitCode 1 -Stdout '' -Stderr '' -Now $now `
+        -PromptBytes 40000 -OverflowFloorBytes 35000
+    Check 'heuristic: classification context_overflow' ($heuristicHit.classification -eq 'context_overflow')
+    Check 'heuristic: event context_overflow' ($heuristicHit.event -eq 'context_overflow')
+    Check 'heuristic: no hard failover' ($heuristicHit.hard_failover -eq $false)
+    Check 'heuristic: prompt_bytes carried' ([long]$heuristicHit.prompt_bytes -eq 40000)
+    Check 'heuristic: floor carried' ([long]$heuristicHit.overflow_floor_bytes -eq 35000)
+
+    # All three signals required — drop any one -> not context_overflow via heuristic
+    $belowFloor = Get-UsageFailureObservation -ExitCode 1 -Stdout '' -Stderr '' -Now $now `
+        -PromptBytes 10000 -OverflowFloorBytes 35000
+    Check 'heuristic: below floor stays ambiguous' (
+        $belowFloor.classification -eq 'ambiguous' -and $belowFloor.event -eq 'cooldown')
+
+    $nonEmpty = Get-UsageFailureObservation -ExitCode 1 -Stdout '' -Stderr 'remote command ended unexpectedly' -Now $now `
+        -PromptBytes 40000 -OverflowFloorBytes 35000
+    Check 'heuristic: non-empty output stays ambiguous' (
+        $nonEmpty.classification -eq 'ambiguous' -and $nonEmpty.event -eq 'cooldown')
+
+    $zeroExit = Get-UsageFailureObservation -ExitCode 0 -Stdout '' -Stderr '' -Now $now `
+        -PromptBytes 40000 -OverflowFloorBytes 35000
+    Check 'heuristic: zero exit is success not overflow' (
+        $zeroExit.classification -eq 'ambiguous' -and $null -eq $zeroExit.event)
+
+    # PromptBytes absent (older callers) -> empty failure stays ambiguous; strings still fire
+    $noBytesEmpty = Get-UsageFailureObservation -ExitCode 1 -Stdout '' -Stderr '' -Now $now
+    Check 'PromptBytes absent: empty failure stays ambiguous' (
+        $noBytesEmpty.classification -eq 'ambiguous' -and $noBytesEmpty.event -eq 'cooldown')
+    $noBytesString = Get-UsageFailureObservation -ExitCode 1 -Stdout '' -Stderr 'context length exceeded' -Now $now
+    Check 'PromptBytes absent: overflow strings still classify' ($noBytesString.classification -eq 'context_overflow')
+
+    # Token-metered QUOTA phrasing must NOT read as overflow (overflow runs first
+    # and writes no cooldown — a false overflow would keep re-dispatching a dead
+    # quota). Only prompt/context-qualified token phrasings count as overflow.
+    $tokenQuota = Get-UsageFailureObservation -ExitCode 1 -Stdout '' `
+        -Stderr 'monthly token limit exceeded for your plan' -Now $now
+    Check 'bare token-limit phrasing is NOT overflow' ($tokenQuota.classification -ne 'context_overflow')
+    $tokenOverflow = Get-UsageFailureObservation -ExitCode 1 -Stdout '' `
+        -Stderr 'prompt token limit exceeded' -Now $now
+    Check 'prompt-qualified token limit IS overflow' ($tokenOverflow.classification -eq 'context_overflow')
+
+    # Auth-FIRST ordering: auth strings win over overflow strings (ordering regression)
+    $authWins = Get-UsageFailureObservation -ExitCode 1 -Stdout '' `
+        -Stderr 'HTTP 401 invalid API key; context length exceeded; usage limit exceeded' -Now $now
+    Check 'auth wins over overflow+quota co-occurrence' ($authWins.classification -eq 'auth_config')
+    Check 'auth wins: no lockout event' ($null -eq $authWins.event)
+    Check 'auth wins: no hard failover' ($authWins.hard_failover -eq $false)
+
+    # Journal: context_overflow writes a context_overflow row (NOT lockout/cooldown)
+    $overflowReg = Register-UsageFailure -Worker 'worker-overflow' -ExitCode 1 -Stdout '' -Stderr '' `
+        -UsagePath $usagePath -Now $now -PromptBytes 51200 -OverflowFloorBytes 35000
+    Check 'register context_overflow classification' ($overflowReg.classification -eq 'context_overflow')
+    Check 'register context_overflow no hard failover' ($overflowReg.hard_failover -eq $false)
+    $allRows = @(Get-Content -LiteralPath $usagePath | ForEach-Object { $_ | ConvertFrom-Json })
+    $ovRows = @($allRows | Where-Object { $_.worker -eq 'worker-overflow' })
+    Check 'context_overflow journals exactly one row' ($ovRows.Count -eq 1)
+    Check 'context_overflow event is not lockout' ($ovRows[0].event -eq 'context_overflow')
+    Check 'context_overflow event is not cooldown' ($ovRows[0].event -ne 'cooldown')
+    Check 'context_overflow journal carries prompt_bytes' ([long]$ovRows[0].prompt_bytes -eq 51200)
+    Check 'context_overflow journal carries floor' ([long]$ovRows[0].overflow_floor_bytes -eq 35000)
+    Check 'context_overflow journal source' ($ovRows[0].source -eq 'error_classify')
+    # No lockout/cooldown rows for this worker (provider stays routable)
+    Check 'context_overflow writes no lockout row' (
+        @($allRows | Where-Object { $_.worker -eq 'worker-overflow' -and $_.event -eq 'lockout' }).Count -eq 0)
+    Check 'context_overflow writes no cooldown row' (
+        @($allRows | Where-Object { $_.worker -eq 'worker-overflow' -and $_.event -eq 'cooldown' }).Count -eq 0)
+
+    # Operator line format
+    $opLine = Format-ContextOverflowLine -Provider 'lm-studio' -PromptBytes 51200 -FloorBytes 35000
+    Check 'operator line shape' (
+        $opLine -eq 'prompt too large for lm-studio (50KB > 35KB) — split the prompt or reroute to a larger-context peer')
+    # Literal expectation — never compare the journal line to the same function
+    # that produced it (a broken formatter would agree with itself).
+    Check 'journal operator_line matches expected literal' (
+        [string]$ovRows[0].operator_line -eq 'prompt too large for worker-overflow (50KB > 35KB) — split the prompt or reroute to a larger-context peer')
+
+    # Unknown size (string-detected overflow, no PromptBytes) renders ?KB, not 0KB.
+    $opLineUnknown = Format-ContextOverflowLine -Provider 'lm-studio' -FloorBytes 35000
+    Check 'operator line renders ?KB when prompt size unknown' (
+        $opLineUnknown -eq 'prompt too large for lm-studio (?KB > 35KB) — split the prompt or reroute to a larger-context peer')
 }
 finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue

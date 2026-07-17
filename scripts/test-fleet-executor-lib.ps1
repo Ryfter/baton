@@ -438,6 +438,79 @@ providers:
             }
         }
 
+        # context_overflow (#104): one substitute allowed, no lockout, prefer larger max_prompt_bytes.
+        # Name order matters for equal-quality economy ranking (name is the last key):
+        # worker-primary must sort before worker-sub-* so it is the first pick.
+        $overflowFleet = Join-Path $env:BATON_HOME 'fleet-context-overflow.yaml'
+        Set-Content -LiteralPath $overflowFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: worker-primary
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    max_prompt_bytes: 20000
+    command_template: 'echo "{{prompt}}"'
+  - name: worker-sub-large
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.9
+    capabilities: [code-gen]
+    max_prompt_bytes: 100000
+    command_template: 'echo "{{prompt}}"'
+  - name: worker-sub-small
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.9
+    capabilities: [code-gen]
+    max_prompt_bytes: 30000
+    command_template: 'echo "{{prompt}}"'
+'@
+        $overflowUsage = Join-Path $env:BATON_HOME 'usage-context-overflow.jsonl'
+        $overflowSeen = @{ calls = 0; names = [System.Collections.Generic.List[string]]::new(); locked_before_retry = $false }
+        $overflowDispatcher = {
+            param($pick, $prompt, $depthTier)
+            $overflowSeen.calls++
+            $overflowSeen.names.Add([string]$pick.name)
+            if ($overflowSeen.calls -eq 1) {
+                return @{ stdout = ''; stderr = 'context length exceeded'; exit_code = 1; duration_s = 0 }
+            }
+            # Second call = substitute dispatch; primary classification is already journaled.
+            if (Test-Path -LiteralPath $overflowUsage) {
+                $beforeRows = @(Get-Content -LiteralPath $overflowUsage | ForEach-Object { $_ | ConvertFrom-Json })
+                $overflowSeen.locked_before_retry = @($beforeRows | Where-Object {
+                    $_.worker -eq 'worker-primary' -and $_.event -in @('lockout', 'cooldown')
+                }).Count -gt 0
+            }
+            Set-Content -LiteralPath (Join-Path (Get-Location).Path 'overflow-peer.txt') -Value 'larger peer ok' -Encoding utf8NoBOM
+            return @{ stdout = 'ok'; stderr = ''; exit_code = 0; duration_s = 0 }
+        }.GetNewClosure()
+        $overflowTask = [pscustomobject]@{ id = 'uf-ov'; desc = 'context overflow fixture'; capability = 'code-gen'; est_cost_tier = 'paid'; stakes = 'standard'; stakes_basis = 'bounded fixture' }
+        $overflowSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $overflowFleet -ToolsPath $toolsPath `
+            -MaxCostTier free -UsagePath $overflowUsage -Dispatcher $overflowDispatcher
+        $overflowResult = & $overflowSpawner $overflowTask
+        $overflowNames = ($overflowSeen.names -join ',')
+        Check 'UF-OV context_overflow substitute succeeds' ($overflowResult.ok -eq $true)
+        Check 'UF-OV exactly one substitute' ($overflowSeen.calls -eq 2)
+        Check 'UF-OV prefers larger max_prompt_bytes peer' (
+            $overflowNames -eq 'worker-primary,worker-sub-large' -and $overflowResult.chose -eq 'worker-sub-large')
+        Check 'UF-OV primary is NOT locked before retry' (-not $overflowSeen.locked_before_retry)
+        Check 'UF-OV hop line names context_overflow' (
+            $overflowResult.why -match '^context_overflow: worker-primary -> worker-sub-large \(prefer larger context\)')
+        $overflowRows = @(Get-Content -LiteralPath $overflowUsage | ForEach-Object { $_ | ConvertFrom-Json })
+        Check 'UF-OV journals context_overflow not lockout' (
+            @($overflowRows | Where-Object { $_.worker -eq 'worker-primary' -and $_.event -eq 'context_overflow' }).Count -eq 1 -and
+            @($overflowRows | Where-Object { $_.worker -eq 'worker-primary' -and $_.event -eq 'lockout' }).Count -eq 0)
+        Check 'UF-OV hop reason is context_overflow' (
+            @($overflowRows | Where-Object { $_.event -eq 'failover' -and $_.reason -eq 'context_overflow' }).Count -eq 1)
+
         # quality_first refuses the only lower-quality peer loudly.
         $qualityFleet = Join-Path $env:BATON_HOME 'fleet-quality-floor.yaml'
         Set-Content -LiteralPath $qualityFleet -Encoding utf8NoBOM -Value @'
