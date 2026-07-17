@@ -1,7 +1,10 @@
 # Roadmap
 
-**Last updated:** 2026-07-14
-**Status:** `v1.16.0` shipped — *the acceptance gate grows a roster (Review Named Panel, d086 node #2).* Plans 1–11 + the Fleet Conductor
+**Last updated:** 2026-07-16
+**Status:** `v1.18.0` shipped — *usage-aware failover complete (d083+d090, #94): the fleet
+classifies its own failures, routes around exhausted providers, and pre-flights headroom
+before dispatch. v1.17.0 (same week) made `--execute` governance authoritative (d086 node #1:
+gates default-on + fail-loud, stakes→depth routing).* Plans 1–11 + the Fleet Conductor
 release (v1.2.0) + fourteen minor releases since (v1.3 → v1.15) are all live: governed fleet,
 learning router, front porch, GEPA optimizer, the coach, the project command center, agentic
 executor, quality gates, usage governor, direct-model commands, and per-model token telemetry.
@@ -36,11 +39,11 @@ flip its defaults on `--execute`, don't rebuild it:**
 
 **SOON — the spine and its nodes (Kevin 2026-07-13):**
 
-1. **`/baton:go --execute`: quality nodes opt-in -> opt-out, fail-loud, depth matched to stakes** — when `--execute` runs, plan gate + acceptance + verify are
-   **on by default** (keep `--no-*` escape hatches for deliberate flexibility); understaffed/degraded
-   gates **scream/halt** instead of failing open; and the depth/cost choice per task is a **deliberate,
-   logged** call (match spend to stakes — "optimal, not best"), not each instrument's silent default.
-   Near-zero new code — flips defaults on wiring that already exists. The frame that contains #2–#3.
+1. ~~**`/baton:go --execute`: quality nodes opt-in -> opt-out, fail-loud, depth matched to stakes**~~ —
+   **SHIPPED v1.17.0 (2026-07-16, PRs #99+#100, issues #89+#98).** Gates default-on under
+   `--execute` with `--no-*` escapes; degraded gates halt loudly; planner `stakes` +
+   `--stakes` override → depth policy → journaled in `decisions.jsonl`. Missing-stakes
+   hard-require deferred as #101 (d089). See [`releases/2026-07-16-v1.17.0.md`](releases/2026-07-16-v1.17.0.md).
 2. ~~**Review named panel**~~ — **SHIPPED v1.16.0 (2026-07-14, PR #88).** The acceptance node: a
    config-driven roster of specialized review-role personas per diff/artifact (correctness,
    security/adversarial, architecture, spec-compliance, simplicity, framework/style), each **routed to
@@ -58,9 +61,21 @@ flip its defaults on `--execute`, don't rebuild it:**
 
 **Then (prior committed order):**
 
-6. **Usage-aware failover routing** (d083) — auto-swap to a peer near a cap; reactive-first slice 1. Spec'd.
+6. ~~**Usage-aware failover routing** (d083)~~ — **SHIPPED v1.18.0 (2026-07-16, PRs #103+#107,
+   issue #94).** Reactive classifier + one substitute retry (slice 1) AND the d090 pre-flight
+   buffer policy (probe, soft caps 75/85, operator escalation, surplus spend). Follow-up:
+   #104 `context_overflow` class. See [`releases/2026-07-16-v1.18.0.md`](releases/2026-07-16-v1.18.0.md).
 7. **Verified Labor V3** — artifact-batch parallelism. Spec'd.
-8. **Verified Labor V4** — verification telemetry + require-verify graduation. Spec'd.
+8. **Verified Labor V4** — verification telemetry + require-verify graduation. Spec'd. (The
+   ship-report spec, #106, feeds it.)
+
+**New since 2026-07-16 (from live incidents + thinking session — pre-briefs in Grimdex `projects/baton/notes/`):**
+- **#101** — flip missing-stakes normalize+warn to hard-require (d089 deferral).
+- **#104** — `context_overflow` as a distinct failure class (local-lens size ceiling: chunk to <35KB).
+- **#106** — per-PR ship report: pipeline-level cost/quality cards (spec committed).
+- **Unnumbered candidates:** durable scheduling (highest-leverage; Task-Scheduler steps + mailbox),
+  SDLC loop (`--from-issue` intake + evidence write-back), reproducer panel role + shared
+  verdict enum, effort-as-routing-dimension.
 
 *Done 2026-07-12: docs currency + visual overview (four SVG infographics) → v1.15.1.*
 
