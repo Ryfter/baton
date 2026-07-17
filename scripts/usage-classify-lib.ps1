@@ -118,11 +118,15 @@ function Format-ContextOverflowLine {
     <# One-line operator remedy for a context_overflow observation. #>
     param(
         [Parameter(Mandatory)][string]$Provider,
-        [long]$PromptBytes = 0,
+        [Nullable[long]]$PromptBytes = $null,
         [long]$FloorBytes = 35000
     )
     # Guard divides: floor at 1 so 0-byte fixtures still render as 0KB / 1KB-safe.
-    $promptKb = if ($PromptBytes -le 0) { 0 } else { [int][math]::Ceiling($PromptBytes / 1024.0) }
+    # Unknown size (string-detected overflow with no PromptBytes) renders '?KB',
+    # never a misleading 0KB.
+    $promptKb = if ($null -eq $PromptBytes) { '?' }
+                elseif ($PromptBytes -le 0) { '0' }
+                else { [string][int][math]::Ceiling($PromptBytes / 1024.0) }
     $capKb = if ($FloorBytes -le 0) { 0 } else { [int][math]::Ceiling($FloorBytes / 1024.0) }
     return "prompt too large for $Provider (${promptKb}KB > ${capKb}KB) — split the prompt or reroute to a larger-context peer"
 }
@@ -160,7 +164,13 @@ function Get-UsageFailureObservation {
         # Burst: 429 / rate-limit / rate_limit_error only — bare "retry after" is a
         # reset-time parse source, not a standalone burst trigger.
         $authPattern = '\b(?:401|403)\b|unauthori[sz]ed|invalid\s+(?:api\s+)?key|authentication\s+(?:required|failed)|login\s+required|configuration\s+error|unknown\s+model|model\s+not\s+found'
-        $overflowPattern = 'context\s+length|maximum\s+context|too\s+many\s+tokens|prompt\s+is\s+too\s+long|prompt_too_large|context\s+window\s+(?:exceeded|full)|token\s+limit\s+exceeded|exceeds?\s+(?:the\s+)?(?:maximum\s+)?context|n_ctx|max_tokens?\s+exceeded'
+        # NOTE: no bare 'token limit exceeded' / 'max_tokens exceeded' alternatives —
+        # token-metered QUOTA messages ("monthly token limit exceeded") must fall
+        # through to the quota pattern below (overflow is evaluated first and writes
+        # no cooldown, so a false overflow would keep re-dispatching a dead quota).
+        # Token-count phrasings only count as overflow with a prompt/context/input
+        # qualifier nearby.
+        $overflowPattern = 'context\s+length|maximum\s+context|too\s+many\s+tokens|prompt\s+is\s+too\s+long|prompt_too_large|context\s+window\s+(?:exceeded|full)|exceeds?\s+(?:the\s+)?(?:maximum\s+)?context|n_ctx|(?:prompt|input|request|context)[^\r\n]{0,40}\b(?:token\s+limit|max_tokens?)\s+exceeded'
         $quotaPattern = 'weekly\s+(?:usage\s+)?limit|hit\s+your\s+limit(?!\s+of\s+\d)|hit\s+(?:your|the)\s+(?:usage|weekly|session|model|opus)[^\r\n]{0,60}\blimit|usage\s+limit\s+(?:reached|exceeded)|quota\s+(?:exhausted|exceeded)|insufficient_quota|billing\s+hard\s+limit|credits?\s+exhausted'
         $burstPattern = '\b429\b|too\s+many\s+requests|rate[_ -]?limit(?:ed|_error)?(?:\s+(?:exceeded|reached))?'
         $overloadPattern = '\b(?:500|502|503|529)\b|overloaded(?:_error)?|server\s+is\s+overloaded|service\s+unavailable|temporarily\s+at\s+capacity'
@@ -168,6 +178,10 @@ function Get-UsageFailureObservation {
         $overflowByString = (Find-UsageRegexMatch -Text $text -Pattern $overflowPattern).Success
         # Heuristic (2): only when PromptBytes is explicitly supplied AND all three
         # signals hold — nonzero exit (outer), empty combined output, bytes >= floor.
+        # ACCEPTED RISK (d091 review): a genuinely dead provider that emits empty
+        # output presents identically under a large prompt and gets NO cooldown —
+        # it stays routable until a small-prompt failure classifies it honestly.
+        # The 6-token probe (glossary: probe-before-blame) is the tiebreaker.
         $overflowByHeuristic = ($null -ne $PromptBytes) -and
             ([string]::IsNullOrEmpty($text)) -and
             ([long]$PromptBytes -ge $floor)
@@ -319,7 +333,7 @@ function Register-UsageFailure {
             $row.prompt_bytes = $observation.prompt_bytes
             $row.overflow_floor_bytes = $observation.overflow_floor_bytes
             $row.operator_line = Format-ContextOverflowLine -Provider $Worker `
-                -PromptBytes $(if ($null -ne $observation.prompt_bytes) { [long]$observation.prompt_bytes } else { 0 }) `
+                -PromptBytes ([Nullable[long]]$observation.prompt_bytes) `
                 -FloorBytes ([long]$observation.overflow_floor_bytes)
         }
         Add-UsageClassifyJournalRow -Row $row -UsagePath $UsagePath

@@ -100,7 +100,8 @@ function Get-AgenticUsageObservation {
     param(
         $Result,
         [Parameter(Mandatory)][string]$Worker,
-        [Parameter(Mandatory)][string]$UsagePath
+        [Parameter(Mandatory)][string]$UsagePath,
+        [Nullable[long]]$PromptBytes = $null
     )
     if ($null -ne $Result) {
         if ($Result -is [System.Collections.IDictionary] -and $Result.Contains('usage_observation')) {
@@ -113,7 +114,7 @@ function Get-AgenticUsageObservation {
     $exitCode = if ($null -ne $Result) { [int]$Result.exit_code } else { -1 }
     $stdout = if ($null -ne $Result) { [string]$Result.stdout } else { '' }
     $stderr = if ($null -ne $Result) { [string]$Result.stderr } else { 'dispatch returned no result' }
-    return Register-UsageFailure -Worker $Worker -ExitCode $exitCode -Stdout $stdout -Stderr $stderr -UsagePath $UsagePath
+    return Register-UsageFailure -Worker $Worker -ExitCode $exitCode -Stdout $stdout -Stderr $stderr -UsagePath $UsagePath -PromptBytes $PromptBytes
 }
 
 function Test-ProviderAgentic {
@@ -534,7 +535,8 @@ function New-AgenticSpawner {
         $firstAttempt = Invoke-AgenticDispatchAttempt -Candidate $pick -Prompt $prompt -DepthTier $policy.depth_tier `
             -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
         $res = $firstAttempt.result
-        $observation = Get-AgenticUsageObservation -Result $res -Worker ([string]$pick.name) -UsagePath $UsagePath
+        $observation = Get-AgenticUsageObservation -Result $res -Worker ([string]$pick.name) -UsagePath $UsagePath `
+            -PromptBytes (Get-Utf8ByteCount -Text $prompt)
         $firstPostTree = Get-WorktreeTreeSha -Worktree $Worktree
         $hadPartialDiff = ($null -ne $preTree) -and ($null -ne $firstPostTree) -and ($preTree -ne $firstPostTree)
 
@@ -558,7 +560,7 @@ function New-AgenticSpawner {
             }
             if ($retryCandidates.Count -lt 1) {
                 if ($isContextOverflow) {
-                    $pb = if ($null -ne $observation.prompt_bytes) { [long]$observation.prompt_bytes } else { 0 }
+                    $pb = if ($null -ne $observation.prompt_bytes) { [Nullable[long]][long]$observation.prompt_bytes } else { [Nullable[long]]$null }
                     $fb = if ($null -ne $observation.overflow_floor_bytes) { [long]$observation.overflow_floor_bytes } else { 35000 }
                     $why = Format-ContextOverflowLine -Provider ([string]$pick.name) -PromptBytes $pb -FloorBytes $fb
                 } else {
@@ -568,7 +570,7 @@ function New-AgenticSpawner {
             }
             if ($null -eq $preTree -or -not (Restore-WorktreeTreeSnapshot -Worktree $Worktree -TreeSha $preTree)) {
                 if ($isContextOverflow) {
-                    $pb = if ($null -ne $observation.prompt_bytes) { [long]$observation.prompt_bytes } else { 0 }
+                    $pb = if ($null -ne $observation.prompt_bytes) { [Nullable[long]][long]$observation.prompt_bytes } else { [Nullable[long]]$null }
                     $fb = if ($null -ne $observation.overflow_floor_bytes) { [long]$observation.overflow_floor_bytes } else { 35000 }
                     $why = (Format-ContextOverflowLine -Provider ([string]$pick.name) -PromptBytes $pb -FloorBytes $fb) +
                         ' (clean worktree restore failed; no retry)'
@@ -594,7 +596,8 @@ function New-AgenticSpawner {
             $retryAttempt = Invoke-AgenticDispatchAttempt -Candidate $substitute -Prompt $prompt -DepthTier $retryPolicy.depth_tier `
                 -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
             $res = $retryAttempt.result
-            [void](Get-AgenticUsageObservation -Result $res -Worker ([string]$substitute.name) -UsagePath $UsagePath)
+            [void](Get-AgenticUsageObservation -Result $res -Worker ([string]$substitute.name) -UsagePath $UsagePath `
+                -PromptBytes (Get-Utf8ByteCount -Text $prompt))
             $pick = $substitute
             $alts = $retryAlts
             $policy = $retryPolicy
@@ -617,7 +620,7 @@ function New-AgenticSpawner {
             if ($hopLine) {
                 $failureWhy = "$hopLine; substitute exit $($res.exit_code)"
             } elseif ($observation -and [string]$observation.classification -eq 'context_overflow') {
-                $pb = if ($null -ne $observation.prompt_bytes) { [long]$observation.prompt_bytes } else { 0 }
+                $pb = if ($null -ne $observation.prompt_bytes) { [Nullable[long]][long]$observation.prompt_bytes } else { [Nullable[long]]$null }
                 $fb = if ($null -ne $observation.overflow_floor_bytes) { [long]$observation.overflow_floor_bytes } else { 35000 }
                 $failureWhy = Format-ContextOverflowLine -Provider ([string]$pick.name) -PromptBytes $pb -FloorBytes $fb
             } elseif ($firstAttempt.dispatch_error) {

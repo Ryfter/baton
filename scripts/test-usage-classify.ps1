@@ -351,6 +351,16 @@ try {
     $noBytesString = Get-UsageFailureObservation -ExitCode 1 -Stdout '' -Stderr 'context length exceeded' -Now $now
     Check 'PromptBytes absent: overflow strings still classify' ($noBytesString.classification -eq 'context_overflow')
 
+    # Token-metered QUOTA phrasing must NOT read as overflow (overflow runs first
+    # and writes no cooldown — a false overflow would keep re-dispatching a dead
+    # quota). Only prompt/context-qualified token phrasings count as overflow.
+    $tokenQuota = Get-UsageFailureObservation -ExitCode 1 -Stdout '' `
+        -Stderr 'monthly token limit exceeded for your plan' -Now $now
+    Check 'bare token-limit phrasing is NOT overflow' ($tokenQuota.classification -ne 'context_overflow')
+    $tokenOverflow = Get-UsageFailureObservation -ExitCode 1 -Stdout '' `
+        -Stderr 'prompt token limit exceeded' -Now $now
+    Check 'prompt-qualified token limit IS overflow' ($tokenOverflow.classification -eq 'context_overflow')
+
     # Auth-FIRST ordering: auth strings win over overflow strings (ordering regression)
     $authWins = Get-UsageFailureObservation -ExitCode 1 -Stdout '' `
         -Stderr 'HTTP 401 invalid API key; context length exceeded; usage limit exceeded' -Now $now
@@ -381,8 +391,15 @@ try {
     $opLine = Format-ContextOverflowLine -Provider 'lm-studio' -PromptBytes 51200 -FloorBytes 35000
     Check 'operator line shape' (
         $opLine -eq 'prompt too large for lm-studio (50KB > 35KB) — split the prompt or reroute to a larger-context peer')
-    Check 'journal operator_line matches Format-ContextOverflowLine' (
-        [string]$ovRows[0].operator_line -eq (Format-ContextOverflowLine -Provider 'worker-overflow' -PromptBytes 51200 -FloorBytes 35000))
+    # Literal expectation — never compare the journal line to the same function
+    # that produced it (a broken formatter would agree with itself).
+    Check 'journal operator_line matches expected literal' (
+        [string]$ovRows[0].operator_line -eq 'prompt too large for worker-overflow (50KB > 35KB) — split the prompt or reroute to a larger-context peer')
+
+    # Unknown size (string-detected overflow, no PromptBytes) renders ?KB, not 0KB.
+    $opLineUnknown = Format-ContextOverflowLine -Provider 'lm-studio' -FloorBytes 35000
+    Check 'operator line renders ?KB when prompt size unknown' (
+        $opLineUnknown -eq 'prompt too large for lm-studio (?KB > 35KB) — split the prompt or reroute to a larger-context peer')
 }
 finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
