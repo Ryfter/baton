@@ -98,6 +98,42 @@ completion. Stay thin — coordinate, narrate, and let the engine and the fleet 
 - When a prompt challenger is live (see `/baton:optimize-prompt`), the run log
   carries a `shadow` event naming which prompt variant planned this run.
 
+## Usage-aware preflight (Layer 2)
+
+Preflight is opt-in per provider. An absent `usage_policy` block preserves the
+legacy dispatch path. The repository seed contains only commented placeholders;
+copy the block into the box-private `BATON_HOME/fleet.yaml` provider entry and
+set `probe: true` only where Baton ships a probe adapter:
+
+```yaml
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+      monthly_allowance: <box-private allowance>
+```
+
+For GitHub Copilot, find the allowance at **GitHub -> avatar (top-right) ->
+Copilot Settings -> usage**, where it is shown as consumed/allowance. Do not
+commit the account's plan name, allowance, consumption, or quota values.
+
+For the Codex CLI adapter, Baton reads the app-server five-hour and weekly
+windows and caches the raw response for about ten minutes under
+`BATON_HOME/usage-probe-cache.jsonl`. Crossing either soft cap prevents that
+provider from being dispatched: Baton prints one line naming the provider,
+window, observed use, reset time, and policy knob, then applies the existing
+quality-first one-substitute resolver. If no qualifying peer is available, the
+task is held loudly. A missing, stale, timed-out, or malformed probe fails open
+and dispatch proceeds normally; probe infrastructure is never itself a quota
+blocker.
+
+Token-fit and monthly-pace messages are advisory in this layer and never hold a
+task. A small `surplus_spend` preference may break an otherwise eligible tie
+when an adapter-backed CLI's weekly reset is within 24 hours and it retains the
+required headroom. It never relaxes quality, stakes/depth, or cost ceilings and
+never applies to metered API tiers. Preflight outcomes are appended to the
+Usage Governor journal as `dispatched`, `rerouted`, or `held`.
+
 ## Running from the D:\dev home base
 
 You can launch a run against any registered project without `cd`-ing into it:
