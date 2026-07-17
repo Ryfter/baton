@@ -153,7 +153,7 @@ function Invoke-RoutedCandidate {
     $c = $Candidate
     $supportedToolKinds = @('cli', 'python', 'http', 'stdio-json')
     if ($c.source -eq 'tools' -and [string]$c.kind -notin $supportedToolKinds) {
-        $reason = "unsupported kind $($c.kind) in Slice 2"
+        $reason = "unsupported kind $($c.kind) (supported: $($supportedToolKinds -join ', '))"
         $attempt = [pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0; gate=$null; grader='heuristic' }
         Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath -Stage $Stage
         return @{ attempt = $attempt; result = @{ stdout=''; stderr=''; exit_code=-1; duration_s=0 } }
