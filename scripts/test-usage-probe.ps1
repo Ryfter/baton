@@ -197,6 +197,7 @@ try {
     $underObs = ConvertFrom-CodexRateLimitResponse -Worker 'worker-probe' -Response $underResponse -ObservedAt $T0 -TtlSeconds 600
     $underDecision = Get-UsageProbeCapDecision -Provider $policyProvider -Observations @($underObs)
     Check 'D1 observations under both caps are not held' (-not $underDecision.over_cap -and @($underDecision.windows).Count -eq 0)
+    Check 'D1b under-cap decision retains checked-window evidence' (@($underDecision.checked).Count -eq 2)
 
     $fiveCapResponse = New-SyntheticRateLimitResponse -FiveHourUsed 75 -WeeklyUsed 20
     $fiveCapObs = ConvertFrom-CodexRateLimitResponse -Worker 'worker-probe' -Response $fiveCapResponse -ObservedAt $T0 -TtlSeconds 600

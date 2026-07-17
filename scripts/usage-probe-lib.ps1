@@ -277,9 +277,10 @@ function Get-UsageProbeCapDecision {
         [Parameter(Mandatory)][hashtable]$Provider,
         [Parameter(Mandatory)][object[]]$Observations
     )
+    $checked = [System.Collections.ArrayList]@()
     $crossings = [System.Collections.ArrayList]@()
     $policy = $Provider.usage_policy
-    if ($null -eq $policy) { return [ordered]@{ over_cap = $false; windows = @() } }
+    if ($null -eq $policy) { return [ordered]@{ over_cap = $false; checked = @(); windows = @() } }
     foreach ($observation in @($Observations)) {
         $knob = if ([string]$observation.scope -eq 'five_hour') { 'soft_cap_5h' }
                 elseif ([string]$observation.scope -eq 'weekly') { 'soft_cap_weekly' }
@@ -287,8 +288,7 @@ function Get-UsageProbeCapDecision {
         if (-not $knob -or $null -eq $policy[$knob]) { continue }
         $used = [double]$observation.used_pct
         $cap = [double]$policy[$knob]
-        if ($used -lt $cap) { continue }
-        [void]$crossings.Add([ordered]@{
+        $windowDecision = [ordered]@{
             window = [string]$observation.scope
             used_pct = $used
             cap = $cap
@@ -298,9 +298,15 @@ function Get-UsageProbeCapDecision {
             observed_at = [string]$observation.observed_at
             ttl = [int]$observation.ttl
             confidence = [double]$observation.confidence
-        })
+        }
+        [void]$checked.Add($windowDecision)
+        if ($used -ge $cap) { [void]$crossings.Add($windowDecision) }
     }
-    return [ordered]@{ over_cap = ($crossings.Count -gt 0); windows = @($crossings.ToArray()) }
+    return [ordered]@{
+        over_cap = ($crossings.Count -gt 0)
+        checked = @($checked.ToArray())
+        windows = @($crossings.ToArray())
+    }
 }
 
 function Get-FleetMedianDispatchTokens {
@@ -433,7 +439,7 @@ function Test-UsageSurplusSpend {
     $threshold = [double]$Provider.usage_policy.soft_cap_weekly - 20
     if ([double]$weekly[0].used_pct -ge $threshold) { return $result }
     $result.apply = $true
-    $result.preference = [double]0.01
+    $result.preference = [double]0.0001
     $result.reason = 'surplus_spend'
     return $result
 }
@@ -493,4 +499,19 @@ function Add-UsagePreflightEvent {
     if ($Substitute) { $row.substitute = $Substitute }
     if ($Reason) { $row.reason = $Reason }
     Add-UsageClassifyJournalRow -Row $row -UsagePath $UsagePath
+}
+
+function Format-UsagePreflightLine {
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        [Parameter(Mandatory)]$WindowDecision,
+        [Parameter(Mandatory)][ValidateSet('rerouted','held')][string]$Outcome,
+        [string]$Substitute
+    )
+    $used = [math]::Round([double]$WindowDecision.used_pct, 1)
+    $cap = [math]::Round([double]$WindowDecision.cap, 1)
+    $line = "usage preflight: $Worker is at $used% of $($WindowDecision.window) " +
+        "(resets $($WindowDecision.reset_at)), reached $($WindowDecision.policy_knob)=$cap"
+    if ($Outcome -eq 'rerouted') { return "$line; rerouting to $Substitute" }
+    return "$line; no peer available + $Worker over soft cap"
 }

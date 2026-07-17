@@ -549,6 +549,349 @@ providers:
             $paidPeerResult.ok -eq $false)
         Check 'UF7 no peer available names quality_first' ($paidPeerResult.why -match 'no peer available.*quality_first')
 
+        # ================= Proactive usage preflight (d090 Layer 2) =================
+        $spawnerParams = (Get-Command New-AgenticSpawner).Parameters
+        $hasPreflightContract = $spawnerParams.ContainsKey('ProbeTransport') -and
+            $spawnerParams.ContainsKey('ProbeCachePath') -and
+            $spawnerParams.ContainsKey('FleetJournalPath') -and
+            $spawnerParams.ContainsKey('ProbeClock')
+        Check 'PF0 spawner exposes hermetic usage preflight seams' $hasPreflightContract
+        if ($hasPreflightContract) {
+            $probeNow = [datetimeoffset]::Parse('2026-07-16T12:00:00-06:00')
+            $legacyOrder = @(
+                [pscustomobject]@{ name='worker-z'; score=[double]1; source='fleet' },
+                [pscustomobject]@{ name='worker-a'; score=[double]1; source='fleet' }
+            )
+            $legacyRanked = Sort-UsageSurplusCandidates -Candidates $legacyOrder -FleetPath $failoverFleet `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-none.jsonl') -Now $probeNow
+            Check 'PF0 no surplus preference preserves legacy candidate order exactly' (
+                (@($legacyRanked.name) -join ',') -eq 'worker-z,worker-a')
+            function New-ExecutorProbeResponse {
+                param(
+                    [double]$FiveHourUsed,
+                    [double]$WeeklyUsed,
+                    [datetimeoffset]$At,
+                    [double]$WeeklyResetHours = 48
+                )
+                return [pscustomobject]@{
+                    jsonrpc = '2.0'; id = 2
+                    result = [pscustomobject]@{
+                        rateLimits = [pscustomobject]@{
+                            limitId = 'synthetic'; limitName = 'synthetic'
+                            primary = [pscustomobject]@{
+                                usedPercent = $FiveHourUsed; windowDurationMins = 300
+                                resetsAt = $At.AddHours(2).ToUnixTimeSeconds()
+                            }
+                            secondary = [pscustomobject]@{
+                                usedPercent = $WeeklyUsed; windowDurationMins = 10080
+                                resetsAt = $At.AddHours($WeeklyResetHours).ToUnixTimeSeconds()
+                            }
+                            credits = $null; individualLimit = $null; planType = $null; rateLimitReachedType = $null
+                        }
+                        rateLimitResetCredits = [pscustomobject]@{ availableCount = 0; credits = @() }
+                    }
+                }
+            }
+
+            $preflightFleet = Join-Path $env:BATON_HOME 'fleet-preflight.yaml'
+            Set-Content -LiteralPath $preflightFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: worker-primary
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo {{tier_args}} "{{prompt}}"'
+    tier_low: '--depth low'
+    tier_med: '--depth medium'
+    tier_high: '--depth high'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+      monthly_allowance: 100
+  - name: worker-substitute
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo {{tier_args}} "{{prompt}}"'
+    tier_low: '--depth low'
+    tier_med: '--depth medium'
+    tier_high: '--depth high'
+  - name: worker-third
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: gemini
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+  - name: worker-lower
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.8
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+  - name: worker-paid
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    platform: codex
+    quality: 1.0
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+'@
+            $preflightTask = [pscustomobject]@{
+                id='pf1'; desc='synthetic preflight fixture'; capability='code-gen'
+                est_cost_tier='free'; stakes='standard'; stakes_basis='bounded fixture'
+            }
+            $probeClock = { return $probeNow }.GetNewClosure()
+
+            # Under caps: selected worker dispatches and the raw response is cached.
+            $underUsage = Join-Path $env:BATON_HOME 'usage-pf-under.jsonl'
+            $underCache = Join-Path $env:BATON_HOME 'cache-pf-under.jsonl'
+            $underSeen = @{ calls = 0; names = @(); probes = 0 }
+            $underProbe = {
+                param($clientVersion, $timeoutSeconds)
+                $underSeen.probes++
+                return (New-ExecutorProbeResponse -FiveHourUsed 40 -WeeklyUsed 50 -At $probeNow)
+            }.GetNewClosure()
+            $underDispatcher = {
+                param($pick, $prompt, $depthTier)
+                $underSeen.calls++; $underSeen.names += [string]$pick.name
+                Set-Content -LiteralPath (Join-Path (Get-Location).Path 'pf-under.txt') -Value 'done' -Encoding utf8NoBOM
+                return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 }
+            }.GetNewClosure()
+            $underSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath $underUsage -Dispatcher $underDispatcher -ProbeTransport $underProbe `
+                -ProbeCachePath $underCache -FleetJournalPath (Join-Path $env:BATON_HOME 'journal-pf-under.md') -ProbeClock $probeClock
+            $underResult = & $underSpawner $preflightTask
+            Check 'PF1 under caps dispatches the selected provider' ($underResult.ok -and $underSeen.calls -eq 1 -and $underSeen.names[0] -eq 'worker-primary')
+            Check 'PF1 under caps probes once and caches raw response' ($underSeen.probes -eq 1 -and (Test-Path -LiteralPath $underCache))
+            $underRows = @(Get-Content -LiteralPath $underUsage | ForEach-Object { $_ | ConvertFrom-Json })
+            Check 'PF1 under caps journals dispatched with evidence' (
+                @($underRows | Where-Object {
+                    $_.event -eq 'preflight' -and $_.outcome -eq 'dispatched' -and
+                    $null -ne $_.used_pct -and $null -ne $_.cap -and $_.window
+                }).Count -eq 1)
+            Check 'PF1 under caps never journals limited' (@($underRows | Where-Object { $_.event -eq 'limited' }).Count -eq 0)
+
+            # Five-hour and weekly crossings reroute before the capped provider runs.
+            foreach ($capCase in @(
+                @{ name='five-hour'; five=[double]80; weekly=[double]20; window='five_hour'; knob='soft_cap_5h' },
+                @{ name='weekly'; five=[double]20; weekly=[double]90; window='weekly'; knob='soft_cap_weekly' }
+            )) {
+                $capUsage = Join-Path $env:BATON_HOME "usage-pf-$($capCase.name).jsonl"
+                $capCache = Join-Path $env:BATON_HOME "cache-pf-$($capCase.name).jsonl"
+                $capSeen = @{ calls = 0; names = @(); depths = @() }
+                $capProbe = {
+                    param($clientVersion, $timeoutSeconds)
+                    return (New-ExecutorProbeResponse -FiveHourUsed $capCase.five -WeeklyUsed $capCase.weekly -At $probeNow)
+                }.GetNewClosure()
+                $capDispatcher = {
+                    param($pick, $prompt, $depthTier)
+                    $capSeen.calls++; $capSeen.names += [string]$pick.name; $capSeen.depths += [string]$depthTier
+                    Set-Content -LiteralPath (Join-Path (Get-Location).Path "pf-$($capCase.name).txt") -Value 'peer' -Encoding utf8NoBOM
+                    return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 }
+                }.GetNewClosure()
+                $capSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                    -MaxCostTier free -UsagePath $capUsage -Dispatcher $capDispatcher -ProbeTransport $capProbe `
+                    -ProbeCachePath $capCache -FleetJournalPath (Join-Path $env:BATON_HOME "journal-pf-$($capCase.name).md") -ProbeClock $probeClock
+                $capResult = & $capSpawner $preflightTask
+                Check "PF2 $($capCase.name) cap reroutes before dispatch" (
+                    $capResult.ok -and $capSeen.calls -eq 1 -and ($capSeen.names -join ',') -eq 'worker-substitute')
+                Check "PF2 $($capCase.name) reroute preserves med depth and free ceiling" (
+                    ($capSeen.depths -join ',') -eq 'med' -and $capResult.depth_tier -eq 'med' -and
+                    $capResult.tier_cap -eq 'free' -and $capResult.selected_cost_tier -eq 'free')
+                Check "PF2 $($capCase.name) loud line names all policy evidence" (
+                    $capResult.why -match 'usage preflight: worker-primary' -and
+                    $capResult.why -match $capCase.window -and $capResult.why -match $capCase.knob -and
+                    $capResult.why -match '80%|90%' -and $capResult.why -match 'resets ' -and
+                    $capResult.why -notmatch "`r|`n")
+                $capRows = @(Get-Content -LiteralPath $capUsage | ForEach-Object { $_ | ConvertFrom-Json })
+                Check "PF2 $($capCase.name) journals one limited observation" (
+                    @($capRows | Where-Object { $_.event -eq 'limited' -and $_.window -eq $capCase.window }).Count -eq 1)
+                Check "PF2 $($capCase.name) journals rerouted decision" (
+                    @($capRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'rerouted' -and $_.substitute -eq 'worker-substitute' }).Count -eq 1)
+                Check "PF2 $($capCase.name) lower-quality and paid workers are refused" (
+                    $capSeen.names -notcontains 'worker-lower' -and $capSeen.names -notcontains 'worker-paid')
+            }
+
+            # No equal-quality peer: hold loudly and do not dispatch anyone.
+            $holdFleet = Join-Path $env:BATON_HOME 'fleet-preflight-hold.yaml'
+            Set-Content -LiteralPath $holdFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: worker-primary
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+  - name: worker-lower
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.8
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+'@
+            $holdUsage = Join-Path $env:BATON_HOME 'usage-pf-hold.jsonl'
+            $holdSeen = @{ calls = 0 }
+            $holdSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $holdFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath $holdUsage -Dispatcher { param($pick,$prompt,$depthTier) $holdSeen.calls++; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 20 -At $probeNow }.GetNewClosure() `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-hold.jsonl') -ProbeClock $probeClock
+            $holdResult = & $holdSpawner $preflightTask
+            Check 'PF3 over cap with no peer holds without dispatch' (-not $holdResult.ok -and $holdSeen.calls -eq 0)
+            Check 'PF3 hold is loud with exact no-peer context' ($holdResult.why -match 'no peer available \+ worker-primary over soft cap' -and $holdResult.why -notmatch "`r|`n")
+            $holdRows = @(Get-Content -LiteralPath $holdUsage | ForEach-Object { $_ | ConvertFrom-Json })
+            Check 'PF3 held outcome is journaled' (@($holdRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'held' }).Count -eq 1)
+
+            # Transport failures are fail-open and dispatch the primary normally.
+            foreach ($probeFailure in @(
+                @{ name='timeout'; body={ param($clientVersion,$timeoutSeconds) throw 'synthetic timeout' } },
+                @{ name='garbage'; body={ param($clientVersion,$timeoutSeconds) return 'synthetic garbage' } },
+                @{ name='missing'; body={ param($clientVersion,$timeoutSeconds) throw 'synthetic missing binary' } }
+            )) {
+                $failureSeen = @{ calls = 0; name = '' }
+                $failureDispatcher = {
+                    param($pick,$prompt,$depthTier)
+                    $failureSeen.calls++; $failureSeen.name = [string]$pick.name
+                    return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 }
+                }.GetNewClosure()
+                $failureSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                    -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME "usage-pf-fail-$($probeFailure.name).jsonl") `
+                    -Dispatcher $failureDispatcher -ProbeTransport $probeFailure.body `
+                    -ProbeCachePath (Join-Path $env:BATON_HOME "cache-pf-fail-$($probeFailure.name).jsonl") -ProbeClock $probeClock
+                $failureResult = & $failureSpawner $preflightTask
+                Check "PF4 $($probeFailure.name) probe failure fails open" (
+                    $failureResult.ok -and $failureSeen.calls -eq 1 -and $failureSeen.name -eq 'worker-primary')
+            }
+
+            # Stale cache must invoke the transport once; fresh cache behavior is covered in probe suite.
+            $staleCache = Join-Path $env:BATON_HOME 'cache-pf-stale.jsonl'
+            [void](Get-CodexUsageProbe -Worker 'worker-primary' -Transport {
+                param($clientVersion,$timeoutSeconds)
+                New-ExecutorProbeResponse -FiveHourUsed 30 -WeeklyUsed 40 -At $probeNow
+            } -CachePath $staleCache -Now $probeNow -TtlSeconds 600)
+            $staleSeen = @{ probes = 0; dispatches = 0 }
+            $staleSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-pf-stale.jsonl') `
+                -Dispatcher { param($pick,$prompt,$depthTier) $staleSeen.dispatches++; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) $staleSeen.probes++; New-ExecutorProbeResponse -FiveHourUsed 35 -WeeklyUsed 45 -At $probeNow.AddMinutes(11) }.GetNewClosure() `
+                -ProbeCachePath $staleCache -ProbeClock { $probeNow.AddMinutes(11) }.GetNewClosure()
+            $staleResult = & $staleSpawner $preflightTask
+            Check 'PF5 stale cache re-probes exactly once then dispatches' ($staleResult.ok -and $staleSeen.probes -eq 1 -and $staleSeen.dispatches -eq 1)
+
+            # A proactive reroute consumes the one-hop budget; peer quota failure cannot cascade.
+            $oneHopSeen = @{ calls = 0; names = @() }
+            $oneHopSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-pf-one-hop.jsonl') `
+                -Dispatcher { param($pick,$prompt,$depthTier) $oneHopSeen.calls++; $oneHopSeen.names += [string]$pick.name; @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 20 -At $probeNow }.GetNewClosure() `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-one-hop.jsonl') -ProbeClock $probeClock
+            $oneHopResult = & $oneHopSpawner $preflightTask
+            Check 'PF6 proactive reroute consumes the one-hop budget' (-not $oneHopResult.ok -and $oneHopSeen.calls -eq 1 -and ($oneHopSeen.names -join ',') -eq 'worker-substitute')
+
+            # High stakes remains champion/high when preflight selects a peer.
+            $pfHighSeen = @{ calls = 0; depths = @() }
+            $pfHighTask = [pscustomobject]@{ id='pf-high'; desc='synthetic high'; capability='code-gen'; est_cost_tier='free'; stakes='high'; stakes_basis='security boundary' }
+            $pfHighSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-pf-high.jsonl') `
+                -Dispatcher { param($pick,$prompt,$depthTier) $pfHighSeen.calls++; $pfHighSeen.depths += [string]$depthTier; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 20 -At $probeNow }.GetNewClosure() `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-high.jsonl') -ProbeClock $probeClock
+            $pfHighResult = & $pfHighSpawner $pfHighTask
+            Check 'PF7 high-stakes preflight peer keeps champion/high policy' (
+                $pfHighResult.ok -and ($pfHighSeen.depths -join ',') -eq 'high' -and
+                $pfHighResult.selection_mode -eq 'champion' -and $pfHighResult.tier_cap -eq 'free')
+
+            # Token-fit and monthly pace append advisories but never auto-hold.
+            $advisoryUsage = Join-Path $env:BATON_HOME 'usage-pf-advisory.jsonl'
+            Add-UsageClassifyJournalRow -UsagePath $advisoryUsage -Row ([ordered]@{
+                ts=$probeNow.ToString('o'); event='observation'; worker='worker-primary'; scope='paid_credit'
+                source='billing_api'; consumed=[double]60; observed_at=$probeNow.ToString('o'); reset_at=$probeNow.AddDays(20).ToString('o')
+            })
+            $advisoryJournal = Join-Path $env:BATON_HOME 'journal-pf-advisory.md'
+            Set-Content -LiteralPath $advisoryJournal -Encoding utf8NoBOM -Value @('# synthetic')
+            foreach ($tokenValue in @(100,200,300,400,500)) {
+                Add-Content -LiteralPath $advisoryJournal -Encoding utf8NoBOM -Value "2026-07-16T12:00:00-06:00 | fleet | worker-primary | 1s | exit:0 | `"synthetic`" | host:test | tok:$tokenValue(estimate)"
+            }
+            $advisorySeen = @{ calls = 0 }
+            $advisoryFleet = Join-Path $env:BATON_HOME 'fleet-pf-advisory.yaml'
+            (Get-Content -LiteralPath $preflightFleet -Raw).Replace('soft_cap_5h: 75', 'soft_cap_5h: 100') | Set-Content -LiteralPath $advisoryFleet -Encoding utf8NoBOM
+            $advisorySpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $advisoryFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath $advisoryUsage -FleetJournalPath $advisoryJournal `
+                -Dispatcher { param($pick,$prompt,$depthTier) $advisorySeen.calls++; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) New-ExecutorProbeResponse -FiveHourUsed 98 -WeeklyUsed 20 -At $probeNow }.GetNewClosure() `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-advisory.jsonl') -ProbeClock $probeClock
+            $advisoryResult = & $advisorySpawner $preflightTask
+            Check 'PF8 fit/monthly advisories never auto-hold' ($advisoryResult.ok -and $advisorySeen.calls -eq 1 -and $advisoryResult.chose -eq 'worker-primary')
+            Check 'PF8 result appends token-fit advisory' ($advisoryResult.why -match 'typical dispatch burns ~300 tok')
+            Check 'PF8 result appends monthly pace advisory' ($advisoryResult.why -match 'monthly usage pace')
+
+            # Fresh cached surplus preference changes only same-tier candidate order.
+            $surplusFleet = Join-Path $env:BATON_HOME 'fleet-pf-surplus.yaml'
+            Set-Content -LiteralPath $surplusFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: worker-alpha
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+  - name: worker-probe
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+'@
+            $surplusCache = Join-Path $env:BATON_HOME 'cache-pf-surplus.jsonl'
+            [void](Get-CodexUsageProbe -Worker 'worker-probe' -Transport {
+                param($clientVersion,$timeoutSeconds)
+                New-ExecutorProbeResponse -FiveHourUsed 20 -WeeklyUsed 40 -At $probeNow -WeeklyResetHours 12
+            } -CachePath $surplusCache -Now $probeNow -TtlSeconds 600)
+            $surplusUsage = Join-Path $env:BATON_HOME 'usage-pf-surplus.jsonl'
+            $surplusSeen = @{ calls=0; name=''; probes=0 }
+            $surplusSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $surplusFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath $surplusUsage `
+                -Dispatcher { param($pick,$prompt,$depthTier) $surplusSeen.calls++; $surplusSeen.name=[string]$pick.name; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) $surplusSeen.probes++; throw 'fresh cache should be used' }.GetNewClosure() `
+                -ProbeCachePath $surplusCache -ProbeClock { $probeNow.AddMinutes(5) }.GetNewClosure()
+            $surplusResult = & $surplusSpawner $preflightTask
+            Check 'PF9 surplus preference moves adapter-backed peer within the eligible tier' (
+                $surplusResult.ok -and $surplusSeen.name -eq 'worker-probe' -and $surplusSeen.probes -eq 0)
+            $surplusRows = @(Get-Content -LiteralPath $surplusUsage | ForEach-Object { $_ | ConvertFrom-Json })
+            Check 'PF9 surplus reason lands in preflight journal' (
+                @($surplusRows | Where-Object { $_.event -eq 'preflight' -and $_.reason -eq 'surplus_spend' }).Count -eq 1)
+        }
+
         # ================= New-VerifyingSpawner (VS-series, d082 V2) =================
         # Hermetic: a temp repo with a committed .baton/verification.json (a `unit` profile
         # whose argv runs a committed pwsh check), a REAL frozen contract, and an inner

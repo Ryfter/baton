@@ -9,6 +9,7 @@
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/fleet-lib.ps1"     # Invoke-Fleet for the spawner dispatch
 . "$PSScriptRoot/routing-lib.ps1"   # Select-Capability for the spawner routing
+. "$PSScriptRoot/usage-probe-lib.ps1"   # d090 proactive preflight + cache/advisories
 . "$PSScriptRoot/verification-lib.ps1"   # Invoke-VerificationContract etc. (d082 V2)
 
 function New-RunWorktree {
@@ -242,6 +243,79 @@ function Invoke-AgenticDispatchAttempt {
     }
 }
 
+function Resolve-AgenticSubstituteCandidates {
+    <# Shared quality-first re-resolution for proactive and reactive usage hops. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)]$OriginalCandidate,
+        [Parameter(Mandatory)][System.Collections.Generic.HashSet[string]]$AttemptedProviders,
+        [Parameter(Mandatory)][hashtable]$PolicyArgs,
+        [Parameter(Mandatory)][string]$FleetPath,
+        [Parameter(Mandatory)][string]$ToolsPath,
+        [Parameter(Mandatory)][string]$UsagePath,
+        [Parameter(Mandatory)][string]$RatingsPath,
+        [Parameter(Mandatory)][string]$JournalPath
+    )
+    $retryPolicy = Resolve-TaskDepthPolicy @PolicyArgs
+    $retryRaw = Select-Capability -Capability $Capability -MaxCostTier $retryPolicy.max_cost_tier `
+        -SelectionMode $retryPolicy.selection_mode -FleetPath $FleetPath -ToolsPath $ToolsPath `
+        -UsagePath $UsagePath -RatingsPath $RatingsPath -JournalPath $JournalPath
+    $eligible = @($retryRaw | Where-Object {
+        ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and
+        (Test-ProviderAgentic -Provider $_) -and
+        (-not $AttemptedProviders.Contains([string]$_.name)) -and
+        ([double]$_.quality -ge [double]$OriginalCandidate.quality)
+    })
+    return [ordered]@{ policy = $retryPolicy; candidates = @($eligible) }
+}
+
+function Sort-UsageSurplusCandidates {
+    <# Apply only a tiny score preference from fresh cached adapter data. The
+       existing router already enforced cost/stakes/quality eligibility. #>
+    param(
+        [Parameter(Mandatory)][object[]]$Candidates,
+        [Parameter(Mandatory)][string]$FleetPath,
+        [Parameter(Mandatory)][string]$ProbeCachePath,
+        [datetimeoffset]$Now = [datetimeoffset]::UtcNow
+    )
+    $hasPreference = $false
+    $candidateIndex = 0
+    $ranked = foreach ($candidate in @($Candidates)) {
+        $preference = [double]0
+        $reason = ''
+        $provider = Get-FleetProvider -Name ([string]$candidate.name) -Path $FleetPath
+        if ($null -ne $provider -and $null -ne $provider.usage_policy -and $provider.usage_policy.probe -eq $true) {
+            $snapshot = Get-FreshUsageProbeCache -Worker ([string]$candidate.name) -CachePath $ProbeCachePath -Now $Now
+            $surplus = Test-UsageSurplusSpend -Provider $provider -Snapshot $snapshot -Now $Now
+            if ($surplus.apply) {
+                $preference = [double]$surplus.preference
+                $reason = [string]$surplus.reason
+                $hasPreference = $true
+            }
+        }
+        $candidate | Add-Member -NotePropertyName usage_preference -NotePropertyValue $preference -Force
+        $candidate | Add-Member -NotePropertyName usage_preference_reason -NotePropertyValue $reason -Force
+        $candidate | Add-Member -NotePropertyName usage_adjusted_score -NotePropertyValue ([double]$candidate.score - $preference) -Force
+        $candidate | Add-Member -NotePropertyName usage_original_index -NotePropertyValue $candidateIndex -Force
+        $candidateIndex++
+        $candidate
+    }
+    if (-not $hasPreference) { return ,([object[]]@($ranked)) }
+    $sorted = @($ranked | Sort-Object @{e={ [double]$_.usage_adjusted_score }}, @{e={ [int]$_.usage_original_index }})
+    return ,([object[]]$sorted)
+}
+
+function Get-UsagePreflightEvidenceWindow {
+    param([Parameter(Mandatory)]$Decision)
+    $ranked = @($Decision.checked | Sort-Object {
+        $cap = [double]$_.cap
+        if ($cap -le 0) { return [double]::PositiveInfinity }
+        return -([double]$_.used_pct / $cap)
+    })
+    if ($ranked.Count -eq 0) { return $null }
+    return $ranked[0]
+}
+
 function New-AgenticSpawner {
     <# Factory: returns a scriptblock matching Invoke-Conductor's -Spawner contract
        (param($task) -> @{ ok; spend; chose; why; alternatives }). Per task: route the
@@ -262,7 +336,11 @@ function New-AgenticSpawner {
         # Ratings/journal under BATON_HOME so quality_first is hermetic in tests (not host ~/.claude).
         [string]$RatingsPath = (Join-Path (Get-BatonHome) 'routing-ratings.jsonl'),
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'),
-        [ValidateSet('quality_first','never')][string]$FailoverPolicy = 'quality_first'
+        [ValidateSet('quality_first','never')][string]$FailoverPolicy = 'quality_first',
+        [scriptblock]$ProbeTransport,
+        [string]$ProbeCachePath = (Join-Path (Get-BatonHome) 'usage-probe-cache.jsonl'),
+        [string]$FleetJournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md'),
+        [scriptblock]$ProbeClock
     )
     $hasStakesOverride = $PSBoundParameters.ContainsKey('StakesOverride')
     return {
@@ -293,34 +371,99 @@ function New-AgenticSpawner {
                 depth_applied = $false; selected_cost_tier = ''
             }
         }
+        $preflightNow = try {
+            if ($ProbeClock) { [datetimeoffset](& $ProbeClock) } else { [datetimeoffset]::UtcNow }
+        } catch { [datetimeoffset]::UtcNow }
+        $surplusRanked = Sort-UsageSurplusCandidates -Candidates $cands -FleetPath $FleetPath `
+            -ProbeCachePath $ProbeCachePath -Now $preflightNow
+        $cands = @($surplusRanked)
         $pick = $cands[0]
         $alts = @($cands | Select-Object -Skip 1 | ForEach-Object { $_.name })
         $resultBase = New-AgenticResultBase -Candidate $pick -Policy $policy -FleetPath $FleetPath
         $prompt = "Task: $($task.desc)"
-        $preTree = Get-WorktreeTreeSha -Worktree $Worktree
         $attemptedProviders = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         [void]$attemptedProviders.Add([string]$pick.name)
+        $preflightRerouted = $false
+        $hopLine = ''
+        $advisoryLines = [System.Collections.Generic.List[string]]::new()
+
+        $providerRow = Get-FleetProvider -Name ([string]$pick.name) -Path $FleetPath
+        $canProbe = ($null -ne $providerRow) -and ($null -ne $providerRow.usage_policy) -and
+            ($providerRow.usage_policy.probe -eq $true) -and ([string]$providerRow.kind -eq 'cli') -and
+            ([string]$providerRow.platform -eq 'codex')
+        if ($canProbe) {
+            $snapshot = Get-CodexUsageProbe -Worker ([string]$pick.name) -Transport $ProbeTransport `
+                -CachePath $ProbeCachePath -Now $preflightNow -TimeoutSeconds 20 -TtlSeconds 600
+            if ($null -ne $snapshot) {
+                $capDecision = Get-UsageProbeCapDecision -Provider $providerRow -Observations @($snapshot.observations)
+                $evidenceWindow = Get-UsagePreflightEvidenceWindow -Decision $capDecision
+                $usageRows = Read-UsageJournal -Path $UsagePath
+                $monthly = Get-MonthlyUsagePaceAdvisory -Worker ([string]$pick.name) `
+                    -UsagePolicy $providerRow.usage_policy -Rows $usageRows -Now $preflightNow
+                if ($monthly.advisory -and $monthly.line) { $advisoryLines.Add([string]$monthly.line) }
+                $fitObservation = @($snapshot.observations | Where-Object { $_.scope -eq 'five_hour' } | Select-Object -First 1)
+                if ($fitObservation.Count -gt 0) {
+                    $tokenStats = Get-FleetMedianDispatchTokens -Worker ([string]$pick.name) `
+                        -JournalPath $FleetJournalPath -SampleSize 20
+                    $fitLine = Get-UsageFitAdvisory -Worker ([string]$pick.name) `
+                        -Observation $fitObservation[0] -TokenStats $tokenStats
+                    if ($fitLine) { $advisoryLines.Add([string]$fitLine) }
+                }
+
+                if ($capDecision.over_cap) {
+                    Add-UsageProbeLimitedRows -Worker ([string]$pick.name) -Decision $capDecision -UsagePath $UsagePath
+                    $originalPick = $pick
+                    $crossing = @($capDecision.windows)[0]
+                    $substitution = Resolve-AgenticSubstituteCandidates -Capability $cap -OriginalCandidate $originalPick `
+                        -AttemptedProviders $attemptedProviders -PolicyArgs $policyArgs -FleetPath $FleetPath `
+                        -ToolsPath $ToolsPath -UsagePath $UsagePath -RatingsPath $RatingsPath -JournalPath $JournalPath
+                    $preflightCandidates = @($substitution.candidates)
+                    if ($preflightCandidates.Count -lt 1) {
+                        Add-UsagePreflightEvent -Worker ([string]$originalPick.name) -Outcome held `
+                            -WindowDecision $crossing -UsagePath $UsagePath -Reason 'soft_cap' -Timestamp $preflightNow.ToString('o')
+                        $holdLine = Format-UsagePreflightLine -Worker ([string]$originalPick.name) `
+                            -WindowDecision $crossing -Outcome held
+                        return $resultBase + @{
+                            ok=$false; spend=0.0; chose=$originalPick.name; why=$holdLine; alternatives=$alts
+                        }
+                    }
+                    $pick = $preflightCandidates[0]
+                    $policy = $substitution.policy
+                    [void]$attemptedProviders.Add([string]$pick.name)
+                    $alts = @($preflightCandidates | Select-Object -Skip 1 | ForEach-Object { $_.name })
+                    Add-UsagePreflightEvent -Worker ([string]$originalPick.name) -Outcome rerouted `
+                        -WindowDecision $crossing -Substitute ([string]$pick.name) -UsagePath $UsagePath `
+                        -Reason 'soft_cap' -Timestamp $preflightNow.ToString('o')
+                    $hopLine = Format-UsagePreflightLine -Worker ([string]$originalPick.name) `
+                        -WindowDecision $crossing -Outcome rerouted -Substitute ([string]$pick.name)
+                    $preflightRerouted = $true
+                    $resultBase = New-AgenticResultBase -Candidate $pick -Policy $policy -FleetPath $FleetPath
+                } else {
+                    $preflightReason = if ([string]$pick.usage_preference_reason) { [string]$pick.usage_preference_reason } else { 'under_soft_cap' }
+                    Add-UsagePreflightEvent -Worker ([string]$pick.name) -Outcome dispatched `
+                        -WindowDecision $evidenceWindow -UsagePath $UsagePath -Reason $preflightReason `
+                        -Timestamp $preflightNow.ToString('o')
+                }
+            }
+        }
+
+        $preTree = Get-WorktreeTreeSha -Worktree $Worktree
         $firstAttempt = Invoke-AgenticDispatchAttempt -Candidate $pick -Prompt $prompt -DepthTier $policy.depth_tier `
             -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
         $res = $firstAttempt.result
         $observation = Get-AgenticUsageObservation -Result $res -Worker ([string]$pick.name) -UsagePath $UsagePath
         $firstPostTree = Get-WorktreeTreeSha -Worktree $Worktree
         $hadPartialDiff = ($null -ne $preTree) -and ($null -ne $firstPostTree) -and ($preTree -ne $firstPostTree)
-        $hopLine = ''
 
-        if ([int]$res.exit_code -ne 0 -and $observation -and $observation.hard_failover -and $FailoverPolicy -eq 'quality_first') {
+        if ([int]$res.exit_code -ne 0 -and $observation -and $observation.hard_failover -and
+            $FailoverPolicy -eq 'quality_first' -and -not $preflightRerouted) {
             # v1.17.0 delta: re-resolve the same authoritative stakes/depth policy
             # before substitute selection. Never reuse a raw pre-policy ladder.
-            $retryPolicy = Resolve-TaskDepthPolicy @policyArgs
-            $retryRaw = Select-Capability -Capability $cap -MaxCostTier $retryPolicy.max_cost_tier `
-                -SelectionMode $retryPolicy.selection_mode -FleetPath $FleetPath -ToolsPath $ToolsPath `
-                -UsagePath $UsagePath -RatingsPath $RatingsPath -JournalPath $JournalPath
-            $retryCandidates = @($retryRaw | Where-Object {
-                ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and
-                (Test-ProviderAgentic -Provider $_) -and
-                (-not $attemptedProviders.Contains([string]$_.name)) -and
-                ([double]$_.quality -ge [double]$pick.quality)
-            })
+            $substitution = Resolve-AgenticSubstituteCandidates -Capability $cap -OriginalCandidate $pick `
+                -AttemptedProviders $attemptedProviders -PolicyArgs $policyArgs -FleetPath $FleetPath `
+                -ToolsPath $ToolsPath -UsagePath $UsagePath -RatingsPath $RatingsPath -JournalPath $JournalPath
+            $retryPolicy = $substitution.policy
+            $retryCandidates = @($substitution.candidates)
             if ($retryCandidates.Count -lt 1) {
                 $why = "usage failover: $($pick.name) -> no peer available (quality_first; $($observation.classification))"
                 return $resultBase + @{ ok=$false; spend=0.0; chose=$pick.name; why=$why; alternatives=$alts }
@@ -365,13 +508,16 @@ function New-AgenticSpawner {
             $failureWhy = if ($hopLine) { "$hopLine; substitute exit $($res.exit_code)" }
                           elseif ($firstAttempt.dispatch_error) { "$($pick.name): dispatch error: $($firstAttempt.dispatch_error) ($($observation.classification))" }
                           else { "$($pick.name): exit $($res.exit_code) ($($observation.classification))" }
+            if ($advisoryLines.Count -gt 0) { $failureWhy += '; ' + ($advisoryLines -join '; ') }
             return $resultBase + @{ ok = $false; spend = 0.0; chose = $pick.name; why = $failureWhy; alternatives = $alts }
         }
         if ($grew) {
             $successWhy = if ($hopLine) { "$hopLine; worktree diff grew" } else { "routed $cap -> $($pick.name); worktree diff grew" }
+            if ($advisoryLines.Count -gt 0) { $successWhy += '; ' + ($advisoryLines -join '; ') }
             return $resultBase + @{ ok = $true; spend = 0.0; chose = $pick.name; why = $successWhy; alternatives = $alts }
         }
         $noChangeWhy = if ($hopLine) { "$hopLine; no changes" } else { "$($pick.name): no changes" }
+        if ($advisoryLines.Count -gt 0) { $noChangeWhy += '; ' + ($advisoryLines -join '; ') }
         return $resultBase + @{ ok = $true; spend = 0.0; chose = $pick.name; why = $noChangeWhy; alternatives = $alts }
     }.GetNewClosure()
 }
