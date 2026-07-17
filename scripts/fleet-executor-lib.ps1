@@ -273,6 +273,57 @@ function Resolve-AgenticSubstituteCandidates {
     return [ordered]@{ policy = $retryPolicy; candidates = @($eligible) }
 }
 
+function Sort-ContextOverflowCandidates {
+    <# Soft preference: larger declared max_prompt_bytes first. Missing data is
+       treated as 0 and does not hard-fail the hop — stable by original index.
+       Prefers the value already on the Select-Capability candidate; falls back
+       to a fleet.yaml re-read when the field is absent.
+       Returns a flat object[] (NOT unary-comma nested) so callers can take [0]. #>
+    param(
+        [AllowEmptyCollection()][object[]]$Candidates = @(),
+        [Parameter(Mandatory)][string]$FleetPath
+    )
+    $list = [System.Collections.Generic.List[object]]::new()
+    $idx = 0
+    foreach ($candidate in @($Candidates)) {
+        if ($null -eq $candidate) { continue }
+        $ceiling = [long]0
+        $raw = $null
+        if ($null -ne $candidate.PSObject.Properties['max_prompt_bytes']) {
+            $raw = $candidate.max_prompt_bytes
+        }
+        if (($null -eq $raw -or [string]::IsNullOrWhiteSpace([string]$raw)) -and $FleetPath) {
+            $provider = Get-FleetProvider -Name ([string]$candidate.name) -Path $FleetPath
+            if ($null -ne $provider) {
+                if ($provider -is [System.Collections.IDictionary] -and $provider.Contains('max_prompt_bytes')) {
+                    $raw = $provider['max_prompt_bytes']
+                } elseif ($null -ne $provider.PSObject.Properties['max_prompt_bytes']) {
+                    $raw = $provider.max_prompt_bytes
+                }
+            }
+        }
+        if ($null -ne $raw -and -not [string]::IsNullOrWhiteSpace([string]$raw)) {
+            $parsed = [long]0
+            if ([long]::TryParse([string]$raw, [ref]$parsed) -and $parsed -gt 0) {
+                $ceiling = $parsed
+            }
+        }
+        $candidate | Add-Member -NotePropertyName context_capacity_bytes -NotePropertyValue $ceiling -Force
+        $candidate | Add-Member -NotePropertyName context_sort_index -NotePropertyValue $idx -Force
+        $list.Add([pscustomobject]@{
+            candidate = $candidate
+            cap = $ceiling
+            idx = $idx
+        })
+        $idx++
+    }
+    $out = [System.Collections.Generic.List[object]]::new()
+    foreach ($row in ($list | Sort-Object @{ e = { -[long]$_.cap } }, @{ e = { [int]$_.idx } })) {
+        $out.Add($row.candidate)
+    }
+    return $out.ToArray()
+}
+
 function Sort-UsageSurplusCandidates {
     <# Apply only a tiny score preference from fresh cached adapter data. The
        existing router already enforced cost/stakes/quality eligibility. #>
@@ -487,8 +538,14 @@ function New-AgenticSpawner {
         $firstPostTree = Get-WorktreeTreeSha -Worktree $Worktree
         $hadPartialDiff = ($null -ne $preTree) -and ($null -ne $firstPostTree) -and ($preTree -ne $firstPostTree)
 
-        if ([int]$res.exit_code -ne 0 -and $observation -and $observation.hard_failover -and
-            $FailoverPolicy -eq 'quality_first' -and -not $preflightRerouted) {
+        # hard_failover = quota/burst usage hop. context_overflow is NOT a usage
+        # lockout (provider stays routable) but still gets one quality_first peer
+        # retry with a soft preference for larger declared max_prompt_bytes.
+        $isContextOverflow = $observation -and ([string]$observation.classification -eq 'context_overflow')
+        $shouldSubstitute = [int]$res.exit_code -ne 0 -and $observation -and
+            $FailoverPolicy -eq 'quality_first' -and -not $preflightRerouted -and
+            ($observation.hard_failover -or $isContextOverflow)
+        if ($shouldSubstitute) {
             # v1.17.0 delta: re-resolve the same authoritative stakes/depth policy
             # before substitute selection. Never reuse a raw pre-policy ladder.
             $substitution = Resolve-AgenticSubstituteCandidates -Capability $cap -OriginalCandidate $pick `
@@ -496,12 +553,28 @@ function New-AgenticSpawner {
                 -ToolsPath $ToolsPath -UsagePath $UsagePath -RatingsPath $RatingsPath -JournalPath $JournalPath
             $retryPolicy = $substitution.policy
             $retryCandidates = @($substitution.candidates)
+            if ($isContextOverflow -and $retryCandidates.Count -gt 0) {
+                $retryCandidates = @(Sort-ContextOverflowCandidates -Candidates ([object[]]$retryCandidates) -FleetPath $FleetPath)
+            }
             if ($retryCandidates.Count -lt 1) {
-                $why = "usage failover: $($pick.name) -> no peer available (quality_first; $($observation.classification))"
+                if ($isContextOverflow) {
+                    $pb = if ($null -ne $observation.prompt_bytes) { [long]$observation.prompt_bytes } else { 0 }
+                    $fb = if ($null -ne $observation.overflow_floor_bytes) { [long]$observation.overflow_floor_bytes } else { 35000 }
+                    $why = Format-ContextOverflowLine -Provider ([string]$pick.name) -PromptBytes $pb -FloorBytes $fb
+                } else {
+                    $why = "usage failover: $($pick.name) -> no peer available (quality_first; $($observation.classification))"
+                }
                 return $resultBase + @{ ok=$false; spend=0.0; chose=$pick.name; why=$why; alternatives=$alts }
             }
             if ($null -eq $preTree -or -not (Restore-WorktreeTreeSnapshot -Worktree $Worktree -TreeSha $preTree)) {
-                $why = "usage failover: $($pick.name) -> no retry (clean worktree restore failed; $($observation.classification))"
+                if ($isContextOverflow) {
+                    $pb = if ($null -ne $observation.prompt_bytes) { [long]$observation.prompt_bytes } else { 0 }
+                    $fb = if ($null -ne $observation.overflow_floor_bytes) { [long]$observation.overflow_floor_bytes } else { 35000 }
+                    $why = (Format-ContextOverflowLine -Provider ([string]$pick.name) -PromptBytes $pb -FloorBytes $fb) +
+                        ' (clean worktree restore failed; no retry)'
+                } else {
+                    $why = "usage failover: $($pick.name) -> no retry (clean worktree restore failed; $($observation.classification))"
+                }
                 return $resultBase + @{ ok=$false; spend=0.0; chose=$pick.name; why=$why; alternatives=$alts }
             }
 
@@ -511,8 +584,12 @@ function New-AgenticSpawner {
             Add-UsageFailoverEvent -OriginalWorker ([string]$pick.name) -Substitute ([string]$substitute.name) `
                 -Reason ([string]$observation.classification) -ResetAt ([string]$observation.reset_at) `
                 -HadPartialDiff $hadPartialDiff -UsagePath $UsagePath
-            $resetText = if ($observation.reset_at) { "reset $($observation.reset_at)" } else { 'reset unknown' }
-            $hopLine = "usage failover: $($pick.name) -> $($substitute.name) ($($observation.classification); $resetText)"
+            if ($isContextOverflow) {
+                $hopLine = "context_overflow: $($pick.name) -> $($substitute.name) (prefer larger context)"
+            } else {
+                $resetText = if ($observation.reset_at) { "reset $($observation.reset_at)" } else { 'reset unknown' }
+                $hopLine = "usage failover: $($pick.name) -> $($substitute.name) ($($observation.classification); $resetText)"
+            }
 
             $retryAttempt = Invoke-AgenticDispatchAttempt -Candidate $substitute -Prompt $prompt -DepthTier $retryPolicy.depth_tier `
                 -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
@@ -537,9 +614,17 @@ function New-AgenticSpawner {
             } catch { }
         }
         if ([int]$res.exit_code -ne 0) {
-            $failureWhy = if ($hopLine) { "$hopLine; substitute exit $($res.exit_code)" }
-                          elseif ($firstAttempt.dispatch_error) { "$($pick.name): dispatch error: $($firstAttempt.dispatch_error) ($($observation.classification))" }
-                          else { "$($pick.name): exit $($res.exit_code) ($($observation.classification))" }
+            if ($hopLine) {
+                $failureWhy = "$hopLine; substitute exit $($res.exit_code)"
+            } elseif ($observation -and [string]$observation.classification -eq 'context_overflow') {
+                $pb = if ($null -ne $observation.prompt_bytes) { [long]$observation.prompt_bytes } else { 0 }
+                $fb = if ($null -ne $observation.overflow_floor_bytes) { [long]$observation.overflow_floor_bytes } else { 35000 }
+                $failureWhy = Format-ContextOverflowLine -Provider ([string]$pick.name) -PromptBytes $pb -FloorBytes $fb
+            } elseif ($firstAttempt.dispatch_error) {
+                $failureWhy = "$($pick.name): dispatch error: $($firstAttempt.dispatch_error) ($($observation.classification))"
+            } else {
+                $failureWhy = "$($pick.name): exit $($res.exit_code) ($($observation.classification))"
+            }
             if ($advisoryLines.Count -gt 0) { $failureWhy += '; ' + ($advisoryLines -join '; ') }
             return $resultBase + @{ ok = $false; spend = 0.0; chose = $pick.name; why = $failureWhy; alternatives = $alts }
         }
