@@ -309,6 +309,49 @@ try {
     $probeOff = $policyProvider.Clone(); $probeOff.usage_policy = $policyProvider.usage_policy.Clone(); $probeOff.usage_policy.probe = $false
     Check 'S6 surplus requires probe true' (-not (Test-UsageSurplusSpend -Provider $probeOff -Snapshot $surplusSnapshot -Now $T0).apply)
     Check 'S7 stale snapshot never applies surplus preference' (-not (Test-UsageSurplusSpend -Provider $policyProvider -Snapshot $surplusSnapshot -Now $T0.AddMinutes(11)).apply)
+    # Preference must stay a near-tie breaker: quality gap 0.05 => score delta 5e-5 >> 1e-7.
+    Check 'S8 surplus preference is a true near-tie breaker (<< quality resolution)' (
+        [double]$surplus.preference -gt 0 -and [double]$surplus.preference -le 1e-7)
+
+    # ---- multi-window loud line + journal name ALL crossings (FIX 4) ----
+    $multiLine = Format-UsagePreflightLine -Worker 'worker-probe' -WindowDecision $bothCapDecision.windows -Outcome held
+    Check 'D6 multi-window hold line names every crossed window' (
+        $multiLine -match 'five_hour' -and $multiLine -match 'weekly' -and
+        $multiLine -match 'soft_cap_5h' -and $multiLine -match 'soft_cap_weekly')
+    $multiJournal = Join-Path $tmp 'multi-window-preflight.jsonl'
+    Add-UsagePreflightEvent -Worker 'worker-probe' -Outcome 'held' -WindowDecision $bothCapDecision.windows `
+        -UsagePath $multiJournal -Reason 'soft_cap'
+    $multiRow = (Get-Content -LiteralPath $multiJournal -Raw | ConvertFrom-Json)
+    Check 'D6 multi-window journal event names every crossed window' (
+        [string]$multiRow.window -match 'five_hour' -and [string]$multiRow.window -match 'weekly')
+
+    # ---- transport process path: stderr drained + child killed on timeout (FIX 5) ----
+    # Hermetic fake child: flood stderr then sleep. Never invoke the real codex binary.
+    $childPidFile = Join-Path $tmp 'transport-child-pid.txt'
+    $stderrFloodStub = @"
+Set-Content -LiteralPath '$($childPidFile.Replace("'", "''"))' -Value `$PID -Encoding utf8NoBOM
+`$noise = ('E' * 200)
+1..2000 | ForEach-Object { [Console]::Error.WriteLine(`$noise) }
+Start-Sleep -Seconds 120
+"@
+    $stubPath = Join-Path $tmp 'stderr-flood-stub.ps1'
+    Set-Content -LiteralPath $stubPath -Value $stderrFloodStub -Encoding utf8NoBOM
+    $transportStarted = [datetime]::UtcNow
+    $transportResult = Invoke-CodexRateLimitTransport -ClientVersion 'test' -TimeoutSeconds 2 `
+        -FileName 'pwsh' -ArgumentList @('-NoProfile', '-File', $stubPath)
+    $transportElapsed = ([datetime]::UtcNow - $transportStarted).TotalSeconds
+    Check 'X1 chatty-stderr timeout returns null (fail-open)' ($null -eq $transportResult)
+    Check 'X1 transport returns near the timeout (stderr did not stall the pipe)' (
+        $transportElapsed -lt 15 -and $transportElapsed -ge 1.5)
+    $childPidText = if (Test-Path -LiteralPath $childPidFile) {
+        (Get-Content -LiteralPath $childPidFile -Raw).Trim()
+    } else { '' }
+    $childPidValue = 0
+    $childAlive = $false
+    if ([int]::TryParse($childPidText, [ref]$childPidValue) -and $childPidValue -gt 0) {
+        $childAlive = $null -ne (Get-Process -Id $childPidValue -ErrorAction SilentlyContinue)
+    }
+    Check 'X1 timed-out transport child is killed' (-not $childAlive -and $childPidValue -gt 0)
 } finally {
     $env:BATON_HOME = $savedBatonHome
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

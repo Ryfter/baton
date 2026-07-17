@@ -53,17 +53,24 @@ function Wait-CodexJsonRpcResponse {
 
 function Invoke-CodexRateLimitTransport {
     <# Start one app-server process, complete the initialize handshake, read rate
-       limits, and always terminate the child. Any failure returns $null. #>
+       limits, and always terminate the child. Any failure returns $null.
+       -FileName/-ArgumentList are hermetic test seams; production keeps codex defaults. #>
     param(
         [Parameter(Mandatory)][string]$ClientVersion,
-        [int]$TimeoutSeconds = 20
+        [int]$TimeoutSeconds = 20,
+        [string]$FileName = 'codex',
+        [string[]]$ArgumentList
     )
     if ($TimeoutSeconds -le 0) { return $null }
+    $exeArgs = if ($null -eq $ArgumentList -or @($ArgumentList).Count -eq 0) { @('app-server') } else { @($ArgumentList) }
     $process = $null
+    $stderrTask = $null
     try {
         $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-        $startInfo.FileName = 'codex'
-        [void]$startInfo.ArgumentList.Add('app-server')
+        $startInfo.FileName = $FileName
+        foreach ($exeArg in $exeArgs) {
+            [void]$startInfo.ArgumentList.Add([string]$exeArg)
+        }
         $startInfo.UseShellExecute = $false
         $startInfo.CreateNoWindow = $true
         $startInfo.RedirectStandardInput = $true
@@ -74,6 +81,10 @@ function Invoke-CodexRateLimitTransport {
         $process = [System.Diagnostics.Process]::new()
         $process.StartInfo = $startInfo
         if (-not $process.Start()) { return $null }
+        # Drain stderr asynchronously (pure .NET Task — no PS scriptblock on a
+        # thread-pool thread) so a chatty app-server cannot fill the OS pipe and
+        # stall the stdout handshake into the timeout. Payload is discarded.
+        $stderrTask = $process.StandardError.ReadToEndAsync()
 
         $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSeconds)
         $initializeRequest = [ordered]@{
@@ -114,6 +125,9 @@ function Invoke-CodexRateLimitTransport {
             try {
                 if (-not $process.HasExited) { $process.Kill($true) }
             } catch { }
+            if ($null -ne $stderrTask) {
+                try { [void]$stderrTask.Wait(500) } catch { }
+            }
             try { $process.Dispose() } catch { }
         }
     }
@@ -436,10 +450,15 @@ function Test-UsageSurplusSpend {
     catch { return $result }
     $untilReset = $reset - $Now
     if ($untilReset.TotalSeconds -le 0 -or $untilReset.TotalHours -gt 24) { return $result }
-    $threshold = [double]$Provider.usage_policy.soft_cap_weekly - 20
+    # Headroom gate: used must stay below (soft_cap_weekly - 20). Clamp so a
+    # mis-tiny soft_cap_weekly cannot invert the inequality into always-apply.
+    $threshold = [math]::Max([double]0, [double]$Provider.usage_policy.soft_cap_weekly - 20)
     if ([double]$weekly[0].used_pct -ge $threshold) { return $result }
     $result.apply = $true
-    $result.preference = [double]0.0001
+    # Near-tie breaker only: economy score = tier_rank - quality*0.001, so a
+    # quality gap of 0.01 is 1e-5 on the score scale. 1e-7 can never flip a
+    # real quality difference; it only breaks equal-score ties.
+    $result.preference = [double]1e-7
     $result.reason = 'surplus_spend'
     return $result
 }
@@ -471,6 +490,20 @@ function Add-UsageProbeLimitedRows {
     }
 }
 
+function Get-UsageWindowDecisionList {
+    <# Normalize one window object or an array of crossings. Hashtables must not
+       be unrolled via @() (dictionary key enumeration). #>
+    param($WindowDecision)
+    if ($null -eq $WindowDecision) { return ,[object[]]@() }
+    if ($WindowDecision -is [System.Array]) { return ,[object[]]@($WindowDecision) }
+    if ($WindowDecision -is [System.Collections.IList] -and
+        $WindowDecision -isnot [string] -and
+        $WindowDecision -isnot [System.Collections.IDictionary]) {
+        return ,[object[]]@($WindowDecision)
+    }
+    return ,[object[]](, $WindowDecision)
+}
+
 function Add-UsagePreflightEvent {
     param(
         [Parameter(Mandatory)][string]$Worker,
@@ -490,11 +523,20 @@ function Add-UsagePreflightEvent {
         source = 'app_server_probe'
     }
     if ($WindowDecision) {
-        $row.window = [string]$WindowDecision.window
-        $row.used_pct = [double]$WindowDecision.used_pct
-        $row.cap = [double]$WindowDecision.cap
-        $row.policy_knob = [string]$WindowDecision.policy_knob
-        $row.reset_at = [string]$WindowDecision.reset_at
+        # Accept one window object or an array of crossings; name every window.
+        $windowList = Get-UsageWindowDecisionList -WindowDecision $WindowDecision
+        $primary = $windowList[0]
+        $windowNames = [string[]]@($windowList | ForEach-Object { [string]$_.window })
+        $row.window = if ($windowNames.Count -le 1) { [string]$primary.window } else { ($windowNames -join ',') }
+        $row.windows = $windowNames
+        $row.used_pct = [double]$primary.used_pct
+        $row.cap = [double]$primary.cap
+        $row.policy_knob = if ($windowList.Count -le 1) {
+            [string]$primary.policy_knob
+        } else {
+            (([string[]]@($windowList | ForEach-Object { [string]$_.policy_knob })) -join ',')
+        }
+        $row.reset_at = [string]$primary.reset_at
     }
     if ($Substitute) { $row.substitute = $Substitute }
     if ($Reason) { $row.reason = $Reason }
@@ -506,12 +548,20 @@ function Format-UsagePreflightLine {
         [Parameter(Mandatory)][string]$Worker,
         [Parameter(Mandatory)]$WindowDecision,
         [Parameter(Mandatory)][ValidateSet('rerouted','held')][string]$Outcome,
-        [string]$Substitute
+        [string]$Substitute,
+        [string]$AlsoOverCap
     )
-    $used = [math]::Round([double]$WindowDecision.used_pct, 1)
-    $cap = [math]::Round([double]$WindowDecision.cap, 1)
-    $line = "usage preflight: $Worker is at $used% of $($WindowDecision.window) " +
-        "(resets $($WindowDecision.reset_at)), reached $($WindowDecision.policy_knob)=$cap"
+    $windowList = Get-UsageWindowDecisionList -WindowDecision $WindowDecision
+    $evidenceParts = foreach ($wd in $windowList) {
+        $used = [math]::Round([double]$wd.used_pct, 1)
+        $cap = [math]::Round([double]$wd.cap, 1)
+        "at $used% of $($wd.window) (resets $($wd.reset_at)), reached $($wd.policy_knob)=$cap"
+    }
+    $evidence = ($evidenceParts -join '; ')
+    $line = "usage preflight: $Worker is $evidence"
     if ($Outcome -eq 'rerouted') { return "$line; rerouting to $Substitute" }
+    if ($AlsoOverCap) {
+        return "$line; $AlsoOverCap also over soft cap; held (no further hop)"
+    }
     return "$line; no peer available + $Worker over soft cap"
 }

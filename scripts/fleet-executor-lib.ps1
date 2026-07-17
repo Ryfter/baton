@@ -413,16 +413,16 @@ function New-AgenticSpawner {
                 if ($capDecision.over_cap) {
                     Add-UsageProbeLimitedRows -Worker ([string]$pick.name) -Decision $capDecision -UsagePath $UsagePath
                     $originalPick = $pick
-                    $crossing = @($capDecision.windows)[0]
+                    $crossings = @($capDecision.windows)
                     $substitution = Resolve-AgenticSubstituteCandidates -Capability $cap -OriginalCandidate $originalPick `
                         -AttemptedProviders $attemptedProviders -PolicyArgs $policyArgs -FleetPath $FleetPath `
                         -ToolsPath $ToolsPath -UsagePath $UsagePath -RatingsPath $RatingsPath -JournalPath $JournalPath
                     $preflightCandidates = @($substitution.candidates)
                     if ($preflightCandidates.Count -lt 1) {
                         Add-UsagePreflightEvent -Worker ([string]$originalPick.name) -Outcome held `
-                            -WindowDecision $crossing -UsagePath $UsagePath -Reason 'soft_cap' -Timestamp $preflightNow.ToString('o')
+                            -WindowDecision $crossings -UsagePath $UsagePath -Reason 'soft_cap' -Timestamp $preflightNow.ToString('o')
                         $holdLine = Format-UsagePreflightLine -Worker ([string]$originalPick.name) `
-                            -WindowDecision $crossing -Outcome held
+                            -WindowDecision $crossings -Outcome held
                         return $resultBase + @{
                             ok=$false; spend=0.0; chose=$originalPick.name; why=$holdLine; alternatives=$alts
                         }
@@ -431,11 +431,39 @@ function New-AgenticSpawner {
                     $policy = $substitution.policy
                     [void]$attemptedProviders.Add([string]$pick.name)
                     $alts = @($preflightCandidates | Select-Object -Skip 1 | ForEach-Object { $_.name })
+
+                    # One-hop only: re-run the same probe+cap preflight on the substitute
+                    # before dispatch. If the hop target is also over cap, hold (no chain).
+                    $subProvider = Get-FleetProvider -Name ([string]$pick.name) -Path $FleetPath
+                    $subCanProbe = ($null -ne $subProvider) -and ($null -ne $subProvider.usage_policy) -and
+                        ($subProvider.usage_policy.probe -eq $true) -and ([string]$subProvider.kind -eq 'cli') -and
+                        ([string]$subProvider.platform -eq 'codex')
+                    if ($subCanProbe) {
+                        $subSnapshot = Get-CodexUsageProbe -Worker ([string]$pick.name) -Transport $ProbeTransport `
+                            -CachePath $ProbeCachePath -Now $preflightNow -TimeoutSeconds 20 -TtlSeconds 600
+                        if ($null -ne $subSnapshot) {
+                            $subCapDecision = Get-UsageProbeCapDecision -Provider $subProvider `
+                                -Observations @($subSnapshot.observations)
+                            if ($subCapDecision.over_cap) {
+                                Add-UsageProbeLimitedRows -Worker ([string]$pick.name) -Decision $subCapDecision `
+                                    -UsagePath $UsagePath
+                                Add-UsagePreflightEvent -Worker ([string]$originalPick.name) -Outcome held `
+                                    -WindowDecision $crossings -Substitute ([string]$pick.name) -UsagePath $UsagePath `
+                                    -Reason 'soft_cap' -Timestamp $preflightNow.ToString('o')
+                                $holdLine = Format-UsagePreflightLine -Worker ([string]$originalPick.name) `
+                                    -WindowDecision $crossings -Outcome held -AlsoOverCap ([string]$pick.name)
+                                return $resultBase + @{
+                                    ok=$false; spend=0.0; chose=$originalPick.name; why=$holdLine; alternatives=$alts
+                                }
+                            }
+                        }
+                    }
+
                     Add-UsagePreflightEvent -Worker ([string]$originalPick.name) -Outcome rerouted `
-                        -WindowDecision $crossing -Substitute ([string]$pick.name) -UsagePath $UsagePath `
+                        -WindowDecision $crossings -Substitute ([string]$pick.name) -UsagePath $UsagePath `
                         -Reason 'soft_cap' -Timestamp $preflightNow.ToString('o')
                     $hopLine = Format-UsagePreflightLine -Worker ([string]$originalPick.name) `
-                        -WindowDecision $crossing -Outcome rerouted -Substitute ([string]$pick.name)
+                        -WindowDecision $crossings -Outcome rerouted -Substitute ([string]$pick.name)
                     $preflightRerouted = $true
                     $resultBase = New-AgenticResultBase -Candidate $pick -Policy $policy -FleetPath $FleetPath
                 } else {

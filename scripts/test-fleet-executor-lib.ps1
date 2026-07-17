@@ -890,6 +890,134 @@ providers:
             $surplusRows = @(Get-Content -LiteralPath $surplusUsage | ForEach-Object { $_ | ConvertFrom-Json })
             Check 'PF9 surplus reason lands in preflight journal' (
                 @($surplusRows | Where-Object { $_.event -eq 'preflight' -and $_.reason -eq 'surplus_spend' }).Count -eq 1)
+
+            # FIX 2: surplus on the weaker peer must not flip a real quality gap (0.90 vs 0.85).
+            $qualitySurplusFleet = Join-Path $env:BATON_HOME 'fleet-pf-quality-surplus.yaml'
+            Set-Content -LiteralPath $qualitySurplusFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: worker-strong
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.90
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+  - name: worker-weak
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.85
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+'@
+            $qualitySurplusCache = Join-Path $env:BATON_HOME 'cache-pf-quality-surplus.jsonl'
+            [void](Get-CodexUsageProbe -Worker 'worker-weak' -Transport {
+                param($clientVersion,$timeoutSeconds)
+                New-ExecutorProbeResponse -FiveHourUsed 20 -WeeklyUsed 40 -At $probeNow -WeeklyResetHours 12
+            } -CachePath $qualitySurplusCache -Now $probeNow -TtlSeconds 600)
+            # Economy score = tier_rank - quality*0.001 (both free => tier 0).
+            $qualityCands = @(
+                [pscustomobject]@{ name='worker-weak'; score=([double](0 - 0.85 * 0.001)); source='fleet'; quality=[double]0.85 },
+                [pscustomobject]@{ name='worker-strong'; score=([double](0 - 0.90 * 0.001)); source='fleet'; quality=[double]0.90 }
+            )
+            $qualityRanked = Sort-UsageSurplusCandidates -Candidates $qualityCands -FleetPath $qualitySurplusFleet `
+                -ProbeCachePath $qualitySurplusCache -Now $probeNow.AddMinutes(5)
+            Check 'PF10 surplus on weaker peer does not flip a real quality gap' (
+                @($qualityRanked)[0].name -eq 'worker-strong' -and
+                [double](@($qualityRanked | Where-Object { $_.name -eq 'worker-weak' })[0].usage_preference) -gt 0)
+
+            # FIX 3: two probe:true peers both over cap -> held, no dispatch, no hop chain.
+            $bothOverFleet = Join-Path $env:BATON_HOME 'fleet-pf-both-over.yaml'
+            Set-Content -LiteralPath $bothOverFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: worker-primary
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+  - name: worker-peer
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+'@
+            $bothOverSeen = @{ calls = 0; probes = 0; workers = @() }
+            $bothOverProbe = {
+                param($clientVersion, $timeoutSeconds)
+                $bothOverSeen.probes++
+                return (New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 20 -At $probeNow)
+            }.GetNewClosure()
+            $bothOverDispatcher = {
+                param($pick, $prompt, $depthTier)
+                $bothOverSeen.calls++
+                $bothOverSeen.workers += [string]$pick.name
+                return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 }
+            }.GetNewClosure()
+            $bothOverUsage = Join-Path $env:BATON_HOME 'usage-pf-both-over.jsonl'
+            $bothOverSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $bothOverFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath $bothOverUsage -Dispatcher $bothOverDispatcher -ProbeTransport $bothOverProbe `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-both-over.jsonl') -ProbeClock $probeClock
+            $bothOverResult = & $bothOverSpawner $preflightTask
+            Check 'PF11 both probe peers over cap holds without dispatch' (
+                -not $bothOverResult.ok -and $bothOverSeen.calls -eq 0)
+            Check 'PF11 both-over hold names both providers' (
+                $bothOverResult.why -match 'worker-primary' -and $bothOverResult.why -match 'worker-peer' -and
+                $bothOverResult.why -match 'also over soft cap' -and $bothOverResult.why -notmatch "`r|`n")
+            Check 'PF11 both-over probes primary and substitute exactly once each' ($bothOverSeen.probes -eq 2)
+            $bothOverRows = @(Get-Content -LiteralPath $bothOverUsage | ForEach-Object { $_ | ConvertFrom-Json })
+            Check 'PF11 both-over journals held not rerouted' (
+                @($bothOverRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'held' }).Count -eq 1 -and
+                @($bothOverRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'rerouted' }).Count -eq 0)
+
+            # FIX 4: multi-window over-cap loud line names every crossed window.
+            $multiWinUsage = Join-Path $env:BATON_HOME 'usage-pf-multi-window.jsonl'
+            $multiWinSeen = @{ calls = 0; names = @() }
+            $multiWinSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath $multiWinUsage `
+                -Dispatcher {
+                    param($pick,$prompt,$depthTier)
+                    $multiWinSeen.calls++; $multiWinSeen.names += [string]$pick.name
+                    Set-Content -LiteralPath (Join-Path (Get-Location).Path 'pf-multi.txt') -Value 'peer' -Encoding utf8NoBOM
+                    return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 }
+                }.GetNewClosure() `
+                -ProbeTransport {
+                    param($clientVersion,$timeoutSeconds)
+                    New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 90 -At $probeNow
+                }.GetNewClosure() `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-multi-window.jsonl') -ProbeClock $probeClock
+            $multiWinResult = & $multiWinSpawner $preflightTask
+            Check 'PF12 multi-window over-cap loud line names all crossings' (
+                $multiWinResult.ok -and $multiWinResult.why -match 'five_hour' -and
+                $multiWinResult.why -match 'weekly' -and $multiWinResult.why -match 'soft_cap_5h' -and
+                $multiWinResult.why -match 'soft_cap_weekly')
+            $multiWinRows = @(Get-Content -LiteralPath $multiWinUsage | ForEach-Object { $_ | ConvertFrom-Json })
+            $multiWinPreflight = @($multiWinRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'rerouted' }) | Select-Object -First 1
+            Check 'PF12 multi-window preflight journal names all crossings' (
+                $null -ne $multiWinPreflight -and
+                [string]$multiWinPreflight.window -match 'five_hour' -and
+                [string]$multiWinPreflight.window -match 'weekly')
         }
 
         # ================= New-VerifyingSpawner (VS-series, d082 V2) =================
