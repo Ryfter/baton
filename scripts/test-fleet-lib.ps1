@@ -21,6 +21,93 @@ Assert "stub-with-model has model_default" (($fleet | Where-Object { $_.name -eq
 Assert "stub-with-env has env hashtable" (($fleet | Where-Object { $_.name -eq 'stub-with-env' }).env.FLEET_TEST_VAR -eq 'box2-value')
 Assert "stub-http has base_url" (($fleet | Where-Object { $_.name -eq 'stub-http' }).base_url -eq 'http://localhost:9999')
 
+# --- usage_policy nested block (d090 Layer 2) ---
+$policyDir = Join-Path $env:TEMP "baton-fleet-policy-$(Get-Random)"
+New-Item -ItemType Directory -Force -Path $policyDir | Out-Null
+try {
+    $policyFleet = Join-Path $policyDir 'fleet-policy.yaml'
+    Set-Content -LiteralPath $policyFleet -Encoding utf8NoBOM -Value @'
+providers:
+  - name: no-policy
+    kind: cli
+    enabled: true
+    cost_tier: free
+    command_template: 'tool "{{prompt}}"'
+  - name: default-policy
+    kind: cli
+    enabled: true
+    cost_tier: free
+    command_template: 'tool "{{prompt}}"'
+    usage_policy:
+  - name: explicit-policy
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    command_template: 'tool "{{prompt}}"'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 70.5
+      soft_cap_weekly: 82
+      monthly_allowance: 900
+'@
+    $policyRows = Read-Fleet -Path $policyFleet
+    $noPolicy = $policyRows | Where-Object { $_.name -eq 'no-policy' }
+    $defaultPolicy = $policyRows | Where-Object { $_.name -eq 'default-policy' }
+    $explicitPolicy = $policyRows | Where-Object { $_.name -eq 'explicit-policy' }
+    Assert 'usage policy absent leaves provider backward-compatible' (-not $noPolicy.ContainsKey('usage_policy'))
+    Assert 'usage policy empty block gets defaults' (
+        $defaultPolicy.usage_policy.probe -eq $false -and
+        [double]$defaultPolicy.usage_policy.soft_cap_5h -eq 75 -and
+        [double]$defaultPolicy.usage_policy.soft_cap_weekly -eq 85 -and
+        -not $defaultPolicy.usage_policy.ContainsKey('monthly_allowance'))
+    Assert 'usage policy explicit values parse and normalize' (
+        $explicitPolicy.usage_policy.probe -eq $true -and
+        [double]$explicitPolicy.usage_policy.soft_cap_5h -eq 70.5 -and
+        [double]$explicitPolicy.usage_policy.soft_cap_weekly -eq 82 -and
+        [double]$explicitPolicy.usage_policy.monthly_allowance -eq 900)
+    Assert 'usage policy child fields do not leak onto provider' (
+        -not $explicitPolicy.ContainsKey('probe') -and
+        -not $explicitPolicy.ContainsKey('soft_cap_5h'))
+
+    $invalidPolicyCases = @(
+        @{ name = 'probe'; line = '      probe: yes'; field = 'probe' },
+        @{ name = 'low-cap'; line = '      soft_cap_5h: -1'; field = 'soft_cap_5h' },
+        @{ name = 'high-cap'; line = '      soft_cap_weekly: 101'; field = 'soft_cap_weekly' },
+        @{ name = 'text-cap'; line = '      soft_cap_5h: many'; field = 'soft_cap_5h' },
+        @{ name = 'zero-allowance'; line = '      monthly_allowance: 0'; field = 'monthly_allowance' },
+        @{ name = 'text-allowance'; line = '      monthly_allowance: plenty'; field = 'monthly_allowance' }
+    )
+    foreach ($invalidCase in $invalidPolicyCases) {
+        $badFleet = Join-Path $policyDir ("bad-{0}.yaml" -f $invalidCase.name)
+        Set-Content -LiteralPath $badFleet -Encoding utf8NoBOM -Value @(
+            'providers:',
+            '  - name: invalid-worker',
+            '    kind: cli',
+            '    enabled: true',
+            '    cost_tier: free',
+            "    command_template: 'tool `"{{prompt}}`"'",
+            '    usage_policy:',
+            $invalidCase.line)
+        $policyThrew = $false
+        $policyMessage = ''
+        try { [void](Read-Fleet -Path $badFleet) }
+        catch { $policyThrew = $true; $policyMessage = $_.Exception.Message }
+        Assert ("usage policy rejects invalid {0}" -f $invalidCase.name) (
+            $policyThrew -and
+            $policyMessage -match 'invalid-worker' -and
+            $policyMessage -match [regex]::Escape([string]$invalidCase.field))
+    }
+
+    $seedText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\references\fleet.yaml') -Raw
+    Assert 'seed contains commented usage policy example' ($seedText -match '(?m)^\s*#\s*usage_policy:\s*$')
+    Assert 'seed does not activate usage policy' ($seedText -notmatch '(?m)^\s+usage_policy:\s*$')
+    Assert 'seed monthly allowance is a placeholder, never a quota number' (
+        $seedText -match '(?m)^\s*#\s*monthly_allowance:\s*<[^>]+>' -and
+        $seedText -notmatch '(?m)^\s*#\s*monthly_allowance:\s*\d')
+} finally {
+    Remove-Item -LiteralPath $policyDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # --- Get-FleetProvider ---
 $p = Get-FleetProvider -Name 'stub-cli' -Path $fixture
 Assert "Get-FleetProvider finds stub-cli" ($p.name -eq 'stub-cli')

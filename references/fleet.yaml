@@ -63,6 +63,13 @@
 #                     absent -> inferred from platform ∈ {claude, codex, gemini}.
 #                     Non-agentic providers are filtered out of edit tasks (their
 #                     diff-apply path arrives in Slice 3).
+#   usage_policy      (optional, box-private nested block) pre-flight usage buffer.
+#                     Absent = no proactive probe and fully backward-compatible.
+#                     `probe: true` is meaningful only where Baton ships an adapter.
+#                     Defaults inside a present block: probe false, soft_cap_5h 75,
+#                     soft_cap_weekly 85. monthly_allowance is user-entered; find it
+#                     at GitHub -> avatar (top-right) -> Copilot Settings -> usage,
+#                     shown as consumed / allowance. Never commit real values here.
 #
 # VRAM rule (d043): run ONE model-serving process per box — e.g. never enable
 # ollama AND lm-studio on the same machine; they cannot see each other's VRAM
@@ -120,6 +127,13 @@ providers:
     # Per-model token capture (observe-only). ONE capture group over stdout; commas
     # stripped. No match -> honest len/4 estimate (never labelled exact).
     token_usage: 'tokens used[:\s]+([\d,]+)'
+    # Layer 2 (d090) is opt-in per box. Copy/uncomment this block only in the live
+    # ~/.baton/fleet.yaml. These are policy defaults/placeholders, not vendor quota.
+    # usage_policy:
+    #   probe: false
+    #   soft_cap_5h: 75
+    #   soft_cap_weekly: 85
+    #   monthly_allowance: <enter allowance>
     # Named tiers: --tier <name> substitutes the fragment at {{tier_args}}; --tier all
     # runs every tier (boundary tester). Real model IDs are BOX-PRIVATE — add
     # `tier_<name>: '-m <model-id> ...'` rows in your live ~/.baton/fleet.yaml.

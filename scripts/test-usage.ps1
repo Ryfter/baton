@@ -53,6 +53,13 @@ try {
     Set-WorkerLimited -Worker 'w-lim2' -ResetAt $T0.AddHours(1).ToString('o') -UsagePath $U2 -Timestamp $T0.ToString('o')
     Check 'T10b limited past reset -> available' ((Get-WorkerState -Worker 'w-lim2' -UsagePath $U2 -Now $T0.AddHours(2)).state -eq 'available')
 
+    Add-UsageEvent -Kind 'limited' -Worker 'w-probe' -Path $U2 -Timestamp $T0.ToString('o') -Fields @{
+        source = 'app_server_probe'; observed_at = $T0.ToString('o'); ttl = 600
+        reset_at = $T0.AddDays(2).ToString('o'); reason = 'synthetic soft cap'
+    }
+    Check 'T10c fresh proactive limited row is limited' ((Get-WorkerState -Worker 'w-probe' -UsagePath $U2 -Now $T0.AddMinutes(5)).state -eq 'limited')
+    Check 'T10d proactive limited row expires by ttl before vendor reset' ((Get-WorkerState -Worker 'w-probe' -UsagePath $U2 -Now $T0.AddMinutes(11)).state -eq 'available')
+
     Set-WorkerLockout -Worker 'w-clr' -UsagePath $U2 -Timestamp $T0.ToString('o')
     Clear-Worker -Worker 'w-clr' -UsagePath $U2 -Timestamp $T0.AddMinutes(1).ToString('o')
     Check 'T11 clear supersedes earlier lockout' ((Get-WorkerState -Worker 'w-clr' -UsagePath $U2 -Now $T0.AddMinutes(2)).state -eq 'available')

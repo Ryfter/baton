@@ -110,6 +110,17 @@ function Get-WorkerState {
             return $result
         }
         'limited' {
+            # Proactive observations are advisory and freshness-bound. A stale or
+            # malformed probe row fails open even when the vendor reset is later.
+            if ([string]$latest.source -eq 'app_server_probe') {
+                $observed = ConvertTo-UsageDateTime ([string]$latest.observed_at)
+                $probeTtl = 0
+                if ($observed -eq [datetime]::MinValue -or
+                    -not [int]::TryParse([string]$latest.ttl, [ref]$probeTtl) -or $probeTtl -le 0) {
+                    return $result
+                }
+                if ($nowUtc -ge $observed.AddSeconds($probeTtl)) { return $result }
+            }
             if ($latest.reset_at) {
                 $r = ConvertTo-UsageDateTime ([string]$latest.reset_at)
                 if ($nowUtc -ge $r) { return $result }
