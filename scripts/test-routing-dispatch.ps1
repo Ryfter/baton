@@ -148,10 +148,10 @@ providers:
     $o5 = Invoke-RoutedCapability -Capability 'code-gen' -Prompt 'x' -Dispatcher $dispAllPass -Grader $rejectGrader @common4
     Check 'custom grader overrides'    ($o5.status -eq 'escalate-to-conductor' -and $o5.attempts[0].reason -eq 'custom-reject')
 
-    # Non-cli tool kind is skipped (pdf-extract -> docling is kind:python); only candidate -> escalate.
-    $o6 = Invoke-RoutedCapability -Capability 'pdf-extract' -Prompt 'x' @common4
-    Check 'non-cli kind skipped'       ($o6.attempts.Count -eq 1 -and $o6.attempts[0].reason -match 'unsupported kind')
-    Check 'only non-cli -> escalate'   ($o6.status -eq 'escalate-to-conductor')
+    # Instrument ABI: declared Python tools are admitted to the dispatcher.
+    $o6 = Invoke-RoutedCapability -Capability 'pdf-extract' -Prompt 'x' -Dispatcher $dispAllPass @common4
+    Check 'python tool kind admitted'  ($o6.status -eq 'passed' -and $o6.winner -eq 'docling')
+    Check 'python tool attempted once' ($o6.attempts.Count -eq 1 -and $o6.attempts[0].kind -eq 'python')
 
     # ===== Slice A: prime-hours gate on the paid tier (opt-in via -Rank) =====
     $phYaml = @"

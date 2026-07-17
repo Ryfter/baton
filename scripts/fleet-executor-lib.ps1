@@ -123,6 +123,10 @@ function Test-ProviderAgentic {
        out of edit tasks (their diff-apply path is Slice 3). Accepts either a fleet
        provider hashtable or a Select-Capability candidate object. #>
     param([Parameter(Mandatory)]$Provider)
+    # d091: an explicit marker cannot grant edit powers to transports without
+    # an agentic filesystem harness. Legacy test objects with no kind retain
+    # the pre-ABI inference behavior.
+    if ([string]$Provider.kind -in @('http', 'stdio-json')) { return $false }
     if ($null -ne $Provider.agentic) { return [bool]$Provider.agentic }
     return (([string]$Provider.platform) -in @('claude', 'codex', 'gemini'))
 }

@@ -5,13 +5,15 @@
 #
 # Fields:
 #   name              unique key, [a-z0-9-]+, used as /fleet test <name>
-#   kind              cli | http
+#   kind              cli | http | stdio-json
 #   enabled           true | false (disabled providers are skipped, not invoked)
 #   cost_tier         paid | free | local
-#   command_template  (cli only) {{prompt}} required, {{model}} optional. Third
-#                     transport: {{prompt_file}} = the prompt is written to a temp
-#                     file and its path substituted (quote-safe + size-safe) — for
-#                     CLIs that neither read stdin nor tolerate inline quotes (grok).
+#   command_template  (cli / stdio-json) cli: {{prompt}} required, {{model}} optional.
+#                     Third transport: {{prompt_file}} = the prompt is written to a
+#                     temp file and its path substituted (quote-safe + size-safe) —
+#                     for CLIs that neither read stdin nor tolerate inline quotes (grok).
+#                     stdio-json: executable that speaks one JSON request on stdin /
+#                     one JSON response on stdout (request always via temp file first).
 #   stdin             (cli only, optional) true = template has no {{prompt}}; the
 #                     prompt is piped via stdin (quote-safe). false = explicit VETO
 #                     of the automatic clean-tail stdin promotion for CLIs that do
@@ -19,7 +21,10 @@
 #                     template's tail is a standalone quoted {{prompt}}.
 #   model_default     (optional) fallback when --model not given
 #   env               (optional) env vars set before invoking, restored after
-#   base_url          (http only) read by scripts/fleet/<name>.ps1
+#   base_url          (http) OpenAI-compatible server root; generic Invoke-FleetHttpChat
+#                     POSTs to {base_url}{endpoint}. Optional hatch scripts/fleet/<name>.ps1
+#                     still overrides the generic path when present (escape valve).
+#   endpoint          (http, optional) path under base_url; default /v1/chat/completions
 #   role              (optional) draft | bulk | finisher — cascade stage (Slice B).
 #                     Absent -> inferred: local/free = draft, paid = finisher.
 #   adapter           (optional) names the worker-adapter that meters this provider
@@ -34,8 +39,11 @@
 #                     stops boosting. Default 99.9.
 #   platform          (optional) claude | codex | gemini | grok | github | local — Lever 4
 #                     identity; journaled now, consumed by the cost/speed advisor later.
-#   timeout_s         (http only, optional) per-request timeout; default 300 in the
-#                     lm-studio hatch (large pinned models cold-load before generating).
+#   timeout_s         (http / stdio-json, optional) per-request timeout seconds; default 300
+#   max_prompt_bytes  (optional) UTF-8 byte ceiling enforced pre-dispatch; oversize ->
+#                     loud prompt_too_large skip (no process/network call). Absent = no check.
+#   probe             (optional) declaration slot for usage-probe adapters
+#                     (e.g. codex-app-server). Wiring is Layer 2; this field is the home.
 #   capabilities      (optional) explicit capability claims — a provider WITH this
 #                     list is a candidate for ONLY those capabilities; without it,
 #                     the blanket general_capabilities grant applies (frontier CLIs).
@@ -61,6 +69,8 @@
 #   agentic           (optional) true | false — edit-eligibility for /baton:go --execute
 #                     (agentic labor into a run worktree). Authoritative when present;
 #                     absent -> inferred from platform ∈ {claude, codex, gemini}.
+#                     d091: kind http|stdio-json can NEVER be agentic (no file-edit
+#                     harness); an explicit agentic:true is refused at the executor seam.
 #                     Non-agentic providers are filtered out of edit tasks (their
 #                     diff-apply path arrives in Slice 3).
 #   usage_policy      (optional, box-private nested block) pre-flight usage buffer.
@@ -229,10 +239,10 @@ providers:
     model_default: 'devstral:24b'
     command_template: 'ollama run {{model}} "{{prompt}}"'
 
-  # Remote Ollama box over Tailscale (Plan 9 / issue #20). Uses the native
-  # /api/generate HTTP endpoint via scripts/fleet/ollama-box2.ps1 — the local
-  # `ollama run` CLI hangs against a remote host. Set base_url to the box's
-  # Tailscale address (per-host: edit your deployed ~/.claude/fleet.yaml).
+  # Remote Ollama box over Tailscale (Plan 9 / issue #20). Uses Ollama's
+  # OpenAI-compatible /v1/chat/completions endpoint via fleet-lib's generic HTTP
+  # transport — the local `ollama run` CLI hangs against a remote host. Replace
+  # the documentation-only address in each box's deployed fleet.yaml.
   - name: ollama-box2
     kind: http
     enabled: true
@@ -240,7 +250,7 @@ providers:
     role: draft
     platform: local
     model_default: 'dolphin3:8b'
-    base_url: 'http://100.115.71.9:11434'   # wraith2 over Tailscale
+    base_url: 'http://192.0.2.20:11434'   # placeholder; replace per box
     usage_class: tight
 
   - name: lm-studio

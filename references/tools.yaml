@@ -5,12 +5,14 @@
 #
 # Fields:
 #   name         unique key, [a-z0-9-]+
-#   kind         python | cli | http   (how it is invoked)
+#   kind         python | cli | http | stdio-json   (how it is invoked)
 #   enabled      true | false          (disabled tools are skipped, not invoked)
 #   cost_tier    paid | free | local
 #   capability   the need it serves (the routing key), e.g. pdf-extract
-#   module       (kind:python) importable module path used by the invoker
-#   command_template / base_url   (cli/http, future tools)
+#   module       (kind:python) optional importable module path used by doctor
+#   command_template   (python/cli/stdio-json) executable declaration
+#   base_url / endpoint   (http; endpoint defaults to /v1/chat/completions)
+#   max_prompt_bytes / probe / agentic   optional instrument ABI declarations
 #   role         (optional) draft | bulk | finisher — cascade stage (Slice B); these
 #                specialized local tools are all draft-class.
 #   platform     (optional) platform identity (Lever 4); local for on-box tools.

@@ -64,6 +64,8 @@ try {
     Check 'A6 platform local not agentic' (-not (Test-ProviderAgentic -Provider @{ platform = 'local' }))
     Check 'A7 platform github not agentic' (-not (Test-ProviderAgentic -Provider @{ platform = 'github' }))
     Check 'A8 no platform, no marker -> not agentic' (-not (Test-ProviderAgentic -Provider @{ name = 'mystery' }))
+    Check 'A9 agentic:true cannot grant HTTP edit powers' (-not (Test-ProviderAgentic -Provider @{ kind = 'http'; agentic = $true; platform = 'codex' }))
+    Check 'A10 agentic:true cannot grant stdio-json edit powers' (-not (Test-ProviderAgentic -Provider @{ kind = 'stdio-json'; agentic = $true; platform = 'codex' }))
 
     if (Get-Command Test-ProviderDepthTier -ErrorAction SilentlyContinue) {
         $tierProvider = @{ kind='cli'; command_template='tool {{tier_args}} "{{prompt}}"'; tier_med='--effort medium' }
