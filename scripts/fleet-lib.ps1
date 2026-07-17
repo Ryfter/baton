@@ -144,17 +144,21 @@ function Read-Fleet {
         $indent = ($rawLine -replace '\S.*$', '').Length
 
         # Supported child-block opener (no value on the line).
-        if ($rawLine -match '^(\s+)(env|usage_policy):\s*$') {
-            $blockName = [string]$matches[2]
+        $blockMatch = [regex]::Match($rawLine, '^(\s+)(env|usage_policy):\s*$')
+        if ($blockMatch.Success) {
+            $blockName = [string]$blockMatch.Groups[2].Value
             $current[$blockName] = @{}
             $childBlock = $blockName
-            $childIndent = $matches[1].Length
+            $childIndent = $blockMatch.Groups[1].Value.Length
             continue
         }
 
         # Child entry (deeper indentation than its block key).
-        if ($childBlock -and $indent -gt $childIndent -and $rawLine -match '^\s+([\w.-]+):\s*(.+?)\s*$') {
-            $current[$childBlock][$matches[1]] = (ConvertFrom-FleetValue $matches[2])
+        $childFieldMatch = [regex]::Match($rawLine, '^\s+([\w.-]+):\s*(.+?)\s*$')
+        if ($childBlock -and $indent -gt $childIndent -and $childFieldMatch.Success) {
+            $childKey = [string]$childFieldMatch.Groups[1].Value
+            $childValue = [string]$childFieldMatch.Groups[2].Value
+            $current[$childBlock][$childKey] = (ConvertFrom-FleetValue $childValue)
             continue
         }
 
