@@ -131,6 +131,7 @@ function Select-Capability {
                 cost_tier = [string]$t.cost_tier; quality = $detail.quality
                 quality_detail = $detail
                 role = $t.role; platform = $t.platform   # Slice B passthrough (null when absent)
+                agentic = $t.agentic; probe = $t.probe; max_prompt_bytes = $t.max_prompt_bytes
                 why = "specialized tool for $Capability ($($t.cost_tier))"
             })
         }
@@ -162,6 +163,7 @@ function Select-Capability {
                 quality_detail = $detail
                 role = $p.role; platform = $p.platform
                 agentic = $p.agentic   # Slice 2 (d078) edit-eligibility passthrough (null when absent)
+                probe = $p.probe; max_prompt_bytes = $p.max_prompt_bytes
                 budget = $p.budget; saturate = $p.saturate; saturation_target = $p.saturation_target
                 sat_util = $null
                 why = $why

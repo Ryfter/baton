@@ -77,19 +77,35 @@ function Write-RoutingJournalLine {
 }
 
 function Invoke-Tool {
-    <# Dispatch a tools.yaml kind:cli entry. Pipe the prompt via stdin when stdin:true
-       (robust path, immune to embedded quotes/$/backticks); otherwise pass it as the
-       final positional arg. Returns @{ stdout; stderr; exit_code; duration_s }.
-       -TimeoutS is accepted for signature parity with Invoke-Fleet-Cli (not enforced inline). #>
+    <# Dispatch a routable tools.yaml transport. cli/python share the legacy
+       execution branch; http and stdio-json delegate to fleet-lib primitives. #>
     param(
         [Parameter(Mandatory)][hashtable]$Tool,
         [Parameter(Mandatory)][string]$Prompt,
         [int]$TimeoutS = 120
     )
+    $guard = Get-InstrumentPromptGuard -Instrument $Tool -Prompt $Prompt
+    if ($null -ne $guard) { return $guard }
+    $kind = [string]$Tool.kind
+    if ($kind -eq 'http') {
+        $httpResult = Invoke-FleetHttpChat -Provider $Tool -Prompt $Prompt
+        if (-not $httpResult.ContainsKey('tokens')) {
+            $httpUsage = Get-FleetTokenUsage -Provider $Tool -Prompt $Prompt -Stdout ([string]$httpResult.stdout)
+            $httpResult.tokens = $httpUsage.tokens
+            $httpResult.tokens_basis = $httpUsage.tokens_basis
+        }
+        return $httpResult
+    }
+    if ($kind -eq 'stdio-json') {
+        return Invoke-FleetStdioJson -Instrument $Tool -Prompt $Prompt -TimeoutS $TimeoutS
+    }
+    if ($kind -notin @('cli', 'python')) {
+        throw "Unsupported tool kind '$kind'."
+    }
     $cmd = [string]$Tool.command_template
-    $tokens = $cmd -split '\s+' | Where-Object { $_ -ne '' }
-    $exe = $tokens[0]
-    $rest = @($tokens | Select-Object -Skip 1)
+    $commandTokens = $cmd -split '\s+' | Where-Object { $_ -ne '' }
+    $exe = $commandTokens[0]
+    $rest = @($commandTokens | Select-Object -Skip 1)
     $start = Get-Date
     try {
         if ($Tool.stdin -eq $true) {
@@ -105,10 +121,11 @@ function Invoke-Tool {
         }
         $exit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
         $duration = [int]((Get-Date) - $start).TotalSeconds
-        return @{ stdout = $out; stderr = ''; exit_code = $exit; duration_s = $duration }
+        $usage = Get-FleetTokenUsage -Provider $Tool -Prompt $Prompt -Stdout ([string]$out)
+        return @{ stdout = $out; stderr = ''; exit_code = $exit; duration_s = $duration; tokens = $usage.tokens; tokens_basis = $usage.tokens_basis }
     } catch {
         $duration = [int]((Get-Date) - $start).TotalSeconds
-        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = -1; duration_s = $duration }
+        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = -1; duration_s = $duration; tokens = 0; tokens_basis = 'estimate' }
     }
 }
 
@@ -134,12 +151,26 @@ function Invoke-RoutedCandidate {
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl')
     )
     $c = $Candidate
-    # Slice 2 dispatches only cli tools + fleet models. Skip other tool kinds.
-    if ($c.source -eq 'tools' -and $c.kind -ne 'cli') {
+    $supportedToolKinds = @('cli', 'python', 'http', 'stdio-json')
+    if ($c.source -eq 'tools' -and [string]$c.kind -notin $supportedToolKinds) {
         $reason = "unsupported kind $($c.kind) in Slice 2"
         $attempt = [pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0; gate=$null; grader='heuristic' }
         Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath -Stage $Stage
         return @{ attempt = $attempt; result = @{ stdout=''; stderr=''; exit_code=-1; duration_s=0 } }
+    }
+
+    # Additive declaration guard. Candidate passthrough means injected dispatchers
+    # and real rows take the same pre-call path without rereading ambient config.
+    if ($null -ne $c.max_prompt_bytes -and
+        -not [string]::IsNullOrWhiteSpace([string]$c.max_prompt_bytes)) {
+        $guard = Get-InstrumentPromptGuard `
+            -Instrument @{ max_prompt_bytes = $c.max_prompt_bytes } -Prompt $Prompt
+        if ($null -ne $guard) {
+            $reason = [string]$guard.stderr
+            $attempt = [pscustomobject]@{ candidate=$c.name; source=$c.source; kind=$c.kind; cost_tier=$c.cost_tier; passed=$false; score=0.0; reason=$reason; duration_s=0; gate=$null; grader='heuristic' }
+            Write-RoutingJournalLine -Capability $Capability -Candidate $c.name -Source $c.source -Kind $c.kind -CostTier $c.cost_tier -ExitCode -1 -DurationS 0 -Passed $false -Score 0.0 -Reason $reason -JournalPath $JournalPath -Stage $Stage
+            return @{ attempt = $attempt; result = $guard }
+        }
     }
 
     # Slice A: prime-hours gate (opt-in via -Rank; guards only the paid tier).

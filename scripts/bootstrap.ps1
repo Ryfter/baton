@@ -262,19 +262,23 @@ foreach ($script in @('baton-home.ps1', 'job-lib.ps1', 'consolidate-lessons.ps1'
     Copy-WithPrompt $src $dst "lib script: $script" -Force
 }
 
-# --- Step 5b2: Deploy fleet escape-hatch scripts ---
-Write-Step "Deploying fleet escape-hatch scripts"
+# --- Step 5b2: Retire genericized fleet escape-hatch scripts ---
+Write-Step "Reconciling fleet escape-hatch scripts"
 $fleetScriptsDst = Join-Path $claudeDir 'scripts/fleet'
 if (-not (Test-Path $fleetScriptsDst)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $fleetScriptsDst" }
     else { New-Item -ItemType Directory -Force -Path $fleetScriptsDst | Out-Null; Write-Ok "created $fleetScriptsDst" }
 }
-# Deploy only real provider hatches — NOT the test stub (stub-http.ps1).
-foreach ($hatch in @('lm-studio.ps1', 'lm-studio-small.ps1')) {
-    $src = Join-Path $repoRoot "scripts\fleet\$hatch"
-    $dst = Join-Path $fleetScriptsDst $hatch
-    Copy-WithPrompt $src $dst "fleet hatch: $hatch" -Force
+# d091: built-in HTTP rows use fleet-lib's generic OpenAI-compatible transport.
+# Remove stale deployed copies so they cannot keep shadowing that path. The
+# test-only stub-http hatch remains repo-local and is never deployed.
+foreach ($obsoleteHatch in @('lm-studio.ps1', 'lm-studio-small.ps1', 'ollama-box2.ps1')) {
+    $dst = Join-Path $fleetScriptsDst $obsoleteHatch
+    if (-not (Test-Path -LiteralPath $dst)) { continue }
+    if ($DryRun) { Write-Ok "[dry-run] would remove obsolete fleet hatch: $obsoleteHatch" }
+    else { Remove-Item -LiteralPath $dst -Force; Write-Ok "removed obsolete fleet hatch: $obsoleteHatch" }
 }
+Write-Skip "built-in HTTP providers use the generic transport; no provider hatches deployed"
 
 # --- Step 5b3: Initialize BATON_HOME (state root) + one-time state migration ---
 Write-Step "Initializing BATON_HOME state root + migrating legacy state"

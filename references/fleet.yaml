@@ -229,10 +229,10 @@ providers:
     model_default: 'devstral:24b'
     command_template: 'ollama run {{model}} "{{prompt}}"'
 
-  # Remote Ollama box over Tailscale (Plan 9 / issue #20). Uses the native
-  # /api/generate HTTP endpoint via scripts/fleet/ollama-box2.ps1 — the local
-  # `ollama run` CLI hangs against a remote host. Set base_url to the box's
-  # Tailscale address (per-host: edit your deployed ~/.claude/fleet.yaml).
+  # Remote Ollama box over Tailscale (Plan 9 / issue #20). Uses Ollama's
+  # OpenAI-compatible /v1/chat/completions endpoint via fleet-lib's generic HTTP
+  # transport — the local `ollama run` CLI hangs against a remote host. Replace
+  # the documentation-only address in each box's deployed fleet.yaml.
   - name: ollama-box2
     kind: http
     enabled: true
@@ -240,7 +240,7 @@ providers:
     role: draft
     platform: local
     model_default: 'dolphin3:8b'
-    base_url: 'http://100.115.71.9:11434'   # wraith2 over Tailscale
+    base_url: 'http://192.0.2.20:11434'   # placeholder; replace per box
     usage_class: tight
 
   - name: lm-studio

@@ -307,6 +307,240 @@ function Get-FleetTokenUsage {
     return @{ tokens = [int][math]::Ceiling($len / 4); tokens_basis = 'estimate' }
 }
 
+function Get-InstrumentPromptGuard {
+    <# Enforce an optional UTF-8 byte ceiling without changing undeclared rows.
+       Returns $null when allowed, otherwise a normalized pre-dispatch failure. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Instrument,
+        [Parameter(Mandatory)][string]$Prompt
+    )
+    if (-not $Instrument.ContainsKey('max_prompt_bytes') -or
+        [string]::IsNullOrWhiteSpace([string]$Instrument.max_prompt_bytes)) { return $null }
+    $ceiling = [long]0
+    if (-not [long]::TryParse([string]$Instrument.max_prompt_bytes, [ref]$ceiling) -or $ceiling -lt 0) {
+        return @{
+            stdout = ''; stderr = "invalid max_prompt_bytes '$($Instrument.max_prompt_bytes)'"
+            exit_code = -1; duration_s = 0; tokens = 0; tokens_basis = 'estimate'
+            reason = 'invalid_max_prompt_bytes'
+        }
+    }
+    $promptBytes = [System.Text.Encoding]::UTF8.GetByteCount($Prompt)
+    if ($promptBytes -le $ceiling) { return $null }
+    return @{
+        stdout = ''
+        stderr = "prompt_too_large: prompt is $promptBytes UTF-8 bytes; max_prompt_bytes is $ceiling"
+        exit_code = -1; duration_s = 0; tokens = 0; tokens_basis = 'estimate'
+        reason = 'prompt_too_large'; prompt_bytes = $promptBytes; max_prompt_bytes = $ceiling
+    }
+}
+
+function Resolve-FleetHttpModel {
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [string]$Model
+    )
+    if ($Model) { return $Model }
+    if ($Provider.model_default -and [string]$Provider.model_default -ne 'auto') {
+        return [string]$Provider.model_default
+    }
+    if (-not $Provider.base_url) { throw 'HTTP instrument has no base_url.' }
+    $modelsUri = "$([string]$Provider.base_url.TrimEnd('/'))/v1/models"
+    $models = Invoke-RestMethod -Uri $modelsUri -Method Get -TimeoutSec 10
+    $firstModel = [string]$models.data[0].id
+    if ([string]::IsNullOrWhiteSpace($firstModel)) {
+        throw "HTTP instrument model resolution returned no models from $modelsUri."
+    }
+    return $firstModel
+}
+
+function Get-FleetHttpUsage {
+    <# Native OpenAI usage -> exact token fields; absent usage -> $null so the
+       existing caller-side estimate seam remains authoritative. #>
+    param($Response)
+    if ($null -eq $Response -or $null -eq $Response.usage) { return $null }
+    $usage = $Response.usage
+    $totalProperty = $usage.PSObject.Properties['total_tokens']
+    if ($null -ne $totalProperty) {
+        $total = [long]0
+        if ([long]::TryParse([string]$totalProperty.Value, [ref]$total) -and $total -ge 0) {
+            return @{ tokens = $total; tokens_basis = 'exact' }
+        }
+    }
+    $promptProperty = $usage.PSObject.Properties['prompt_tokens']
+    $completionProperty = $usage.PSObject.Properties['completion_tokens']
+    if ($null -eq $promptProperty -or $null -eq $completionProperty) { return $null }
+    $promptTokens = [long]0
+    $completionTokens = [long]0
+    if ([long]::TryParse([string]$promptProperty.Value, [ref]$promptTokens) -and
+        [long]::TryParse([string]$completionProperty.Value, [ref]$completionTokens) -and
+        $promptTokens -ge 0 -and $completionTokens -ge 0) {
+        return @{ tokens = ($promptTokens + $completionTokens); tokens_basis = 'exact' }
+    }
+    return $null
+}
+
+function Invoke-FleetHttpChat {
+    <# Generic OpenAI-compatible chat transport. Native usage is attached only
+       when present; callers retain the existing honest estimate fallback. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [Parameter(Mandatory)][string]$Prompt,
+        [string]$Model
+    )
+    $start = Get-Date
+    try {
+        if (-not $Provider.base_url) { throw 'HTTP instrument has no base_url.' }
+        $modelName = Resolve-FleetHttpModel -Provider $Provider -Model $Model
+        $endpoint = if ($Provider.endpoint) { [string]$Provider.endpoint } else { '/v1/chat/completions' }
+        if (-not $endpoint.StartsWith('/')) { $endpoint = "/$endpoint" }
+        $uri = "$([string]$Provider.base_url.TrimEnd('/'))$endpoint"
+        $bodyObject = [ordered]@{
+            model = $modelName
+            messages = @([ordered]@{ role = 'user'; content = $Prompt })
+            stream = $false
+        }
+        $body = ConvertTo-Json -InputObject $bodyObject -Depth 10 -Compress
+        $timeoutS = if ($Provider.timeout_s) { [int]$Provider.timeout_s } else { 300 }
+        if ($timeoutS -le 0) { throw 'HTTP instrument timeout_s must be positive.' }
+        $response = Invoke-RestMethod -Uri $uri -Method Post -Body $body `
+            -ContentType 'application/json' -TimeoutSec $timeoutS
+        $text = [string]$response.choices[0].message.content
+        $duration = [int]((Get-Date) - $start).TotalSeconds
+        $result = @{ stdout = $text; stderr = ''; exit_code = 0; duration_s = $duration }
+        $usage = Get-FleetHttpUsage -Response $response
+        if ($null -ne $usage) {
+            $result.tokens = $usage.tokens
+            $result.tokens_basis = $usage.tokens_basis
+        }
+        return $result
+    } catch {
+        $duration = [int]((Get-Date) - $start).TotalSeconds
+        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = 1; duration_s = $duration }
+    }
+}
+
+function Invoke-FleetStdioJson {
+    <# One JSON request over stdin, one JSON object over stdout. The request is
+       materialized as a temp file first to obey the 965-byte shell-arg rule. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Instrument,
+        [Parameter(Mandatory)][string]$Prompt,
+        [string]$Model,
+        [string]$Tier,
+        [int]$TimeoutS = 0
+    )
+    $start = Get-Date
+    $process = $null
+    $stdoutTask = $null
+    $stderrTask = $null
+    $requestFile = $null
+    try {
+        $guard = Get-InstrumentPromptGuard -Instrument $Instrument -Prompt $Prompt
+        if ($null -ne $guard) { return $guard }
+        $command = [string]$Instrument.command_template
+        $commandTokens = @($command -split '\s+' | Where-Object { $_ -ne '' })
+        if ($commandTokens.Count -eq 0) { throw 'stdio-json instrument has no command_template.' }
+        $resolvedModel = if ($Model) { $Model }
+            elseif ($Instrument.model_default -and [string]$Instrument.model_default -ne 'auto') { [string]$Instrument.model_default }
+            else { '' }
+        $request = [ordered]@{
+            prompt = $Prompt
+            model = $resolvedModel
+            tier_args = (Get-FleetProviderTier -Provider $Instrument -Tier $Tier)
+        }
+        $requestFile = [System.IO.Path]::GetTempFileName()
+        Set-Content -LiteralPath $requestFile `
+            -Value (ConvertTo-Json -InputObject $request -Depth 6 -Compress) -Encoding utf8NoBOM
+
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $commandTokens[0]
+        foreach ($commandArg in @($commandTokens | Select-Object -Skip 1)) {
+            [void]$startInfo.ArgumentList.Add([string]$commandArg)
+        }
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false)
+        $startInfo.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) { throw 'stdio-json child failed to start.' }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.StandardInput.Write((Get-Content -LiteralPath $requestFile -Raw))
+        $process.StandardInput.Close()
+
+        $effectiveTimeout = if ($TimeoutS -gt 0) { $TimeoutS }
+            elseif ($Instrument.timeout_s) { [int]$Instrument.timeout_s }
+            else { 300 }
+        if ($effectiveTimeout -le 0) { throw 'stdio-json timeout must be positive.' }
+        if (-not $process.WaitForExit($effectiveTimeout * 1000)) {
+            try { $process.Kill($true) } catch { }
+            try { [void]$process.WaitForExit(2000) } catch { }
+            $stderrText = try { [string]$stderrTask.GetAwaiter().GetResult() } catch { '' }
+            $duration = [int]((Get-Date) - $start).TotalSeconds
+            $timeoutText = "stdio-json timeout after $effectiveTimeout seconds"
+            if ($stderrText) { $timeoutText = "$timeoutText`n$stderrText" }
+            return @{ stdout = ''; stderr = $timeoutText; exit_code = 1; duration_s = $duration; tokens = 0; tokens_basis = 'estimate' }
+        }
+        $stdoutText = [string]$stdoutTask.GetAwaiter().GetResult()
+        $stderrText = [string]$stderrTask.GetAwaiter().GetResult()
+        $duration = [int]((Get-Date) - $start).TotalSeconds
+        if ($process.ExitCode -ne 0) {
+            return @{ stdout = $stdoutText; stderr = $stderrText; exit_code = [int]$process.ExitCode; duration_s = $duration; tokens = 0; tokens_basis = 'estimate' }
+        }
+        try { $response = $stdoutText | ConvertFrom-Json -ErrorAction Stop }
+        catch {
+            $detail = "stdio-json malformed response: $($_.Exception.Message)"
+            if ($stderrText) { $detail = "$detail`n$stderrText" }
+            return @{ stdout = $stdoutText; stderr = $detail; exit_code = 1; duration_s = $duration; tokens = 0; tokens_basis = 'estimate' }
+        }
+        if ($null -eq $response -or $response -is [string] -or $response -is [System.Array] -or
+            $null -eq $response.PSObject.Properties['output']) {
+            $detail = 'stdio-json malformed response: expected one object with output.'
+            if ($stderrText) { $detail = "$detail`n$stderrText" }
+            return @{ stdout = $stdoutText; stderr = $detail; exit_code = 1; duration_s = $duration; tokens = 0; tokens_basis = 'estimate' }
+        }
+        $responseExit = 0
+        if ($null -ne $response.PSObject.Properties['exit_code'] -and
+            -not [int]::TryParse([string]$response.exit_code, [ref]$responseExit)) {
+            return @{ stdout = [string]$response.output; stderr = 'stdio-json malformed response: exit_code must be an integer.'; exit_code = 1; duration_s = $duration; tokens = 0; tokens_basis = 'estimate' }
+        }
+        $responseStderr = if ($null -ne $response.PSObject.Properties['stderr']) { [string]$response.stderr } else { '' }
+        $combinedStderr = @($stderrText, $responseStderr | Where-Object { $_ }) -join "`n"
+        $result = @{
+            stdout = [string]$response.output; stderr = $combinedStderr
+            exit_code = $responseExit; duration_s = $duration
+        }
+        if ($null -ne $response.PSObject.Properties['tokens']) {
+            $tokenCount = [long]0
+            $basis = [string]$response.tokens_basis
+            if (-not [long]::TryParse([string]$response.tokens, [ref]$tokenCount) -or $tokenCount -lt 0 -or
+                $basis -notin @('exact', 'estimate')) {
+                return @{ stdout = [string]$response.output; stderr = 'stdio-json malformed response: invalid tokens or tokens_basis.'; exit_code = 1; duration_s = $duration; tokens = 0; tokens_basis = 'estimate' }
+            }
+            $result.tokens = $tokenCount
+            $result.tokens_basis = $basis
+        } else {
+            $usage = Get-FleetTokenUsage -Provider $Instrument -Prompt $Prompt -Stdout ([string]$response.output)
+            $result.tokens = $usage.tokens
+            $result.tokens_basis = $usage.tokens_basis
+        }
+        return $result
+    } catch {
+        $duration = [int]((Get-Date) - $start).TotalSeconds
+        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = 1; duration_s = $duration; tokens = 0; tokens_basis = 'estimate' }
+    } finally {
+        if ($null -ne $process) {
+            try { if (-not $process.HasExited) { $process.Kill($true) } } catch { }
+            try { $process.Dispose() } catch { }
+        }
+        if ($requestFile) { Remove-Item -LiteralPath $requestFile -ErrorAction SilentlyContinue }
+    }
+}
+
 function Get-FleetProviderTierNames {
     <# Named tiers on a provider = its flat `tier_<name>` keys, excluding the
        `tier_default` selector. Returns a sorted string[] (empty if none). #>
@@ -532,7 +766,7 @@ function Invoke-Fleet-Cli {
 }
 
 function Invoke-Fleet {
-    <# Main entry. Dispatches to cli or http; journals the invocation. #>
+    <# Main entry. Dispatches to declared transports and journals the invocation. #>
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$Prompt,
@@ -548,21 +782,27 @@ function Invoke-Fleet {
     if (-not $provider) { throw "Unknown fleet provider '$Name'. Run /fleet list to see valid names." }
     if ($provider.enabled -ne $true) { throw "Provider '$Name' is disabled in fleet.yaml. Set enabled: true to use." }
 
-    if ($provider.kind -eq 'cli') {
+    $promptGuard = Get-InstrumentPromptGuard -Instrument $provider -Prompt $Prompt
+    if ($null -ne $promptGuard) {
+        $result = $promptGuard
+    } elseif ($provider.kind -eq 'cli') {
         $result = Invoke-Fleet-Cli -Provider $provider -Prompt $Prompt -Model $Model -Tier $Tier
     } elseif ($provider.kind -eq 'http') {
         # Dot-source the per-provider escape hatch + call Invoke-<PascalName>.
         # Escape hatches live next to this library (scripts/fleet/), NOT next to
         # fleet.yaml — they're tied to the code location, not the config location.
         $scriptPath = Join-Path $PSScriptRoot "fleet/$Name.ps1"
-        if (-not (Test-Path $scriptPath)) {
-            throw "Provider '$Name' (kind: http) requires $scriptPath defining Invoke-<PascalName>."
+        if (Test-Path $scriptPath) {
+            . $scriptPath
+            $fnName = 'Invoke-' + (($Name -split '-' | ForEach-Object { $_.Substring(0,1).ToUpper() + $_.Substring(1) }) -join '')
+            $fn = Get-Command $fnName -ErrorAction SilentlyContinue
+            if (-not $fn) { throw "$scriptPath must define $fnName." }
+            $result = & $fn $provider $Prompt $Model
+        } else {
+            $result = Invoke-FleetHttpChat -Provider $provider -Prompt $Prompt -Model $Model
         }
-        . $scriptPath
-        $fnName = 'Invoke-' + (($Name -split '-' | ForEach-Object { $_.Substring(0,1).ToUpper() + $_.Substring(1) }) -join '')
-        $fn = Get-Command $fnName -ErrorAction SilentlyContinue
-        if (-not $fn) { throw "$scriptPath must define $fnName." }
-        $result = & $fn $provider $Prompt $Model
+    } elseif ($provider.kind -eq 'stdio-json') {
+        $result = Invoke-FleetStdioJson -Instrument $provider -Prompt $Prompt -Model $Model -Tier $Tier
     } else {
         throw "Provider '$Name' has unknown kind '$($provider.kind)'."
     }
