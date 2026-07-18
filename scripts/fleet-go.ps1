@@ -23,6 +23,7 @@ param(
     [switch]$NoGate,
     [switch]$NoVerify,
     [Alias('StakesOverride')][ValidateSet('low','standard','high')][string]$Stakes,
+    [switch]$NormalizeMissingStakes,
     [string[]]$PlanReviewers,
     [bool]$PlanRevise = $true,
     [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
@@ -67,6 +68,7 @@ $runDir = Initialize-RunDir -RunId (New-RunId)
 $go = @{ Goal = $theGoal; RunDir = $runDir; MaxCostTier = $MaxCostTier; FleetPath = $FleetPath; ToolsPath = $ToolsPath }
 if ($PSBoundParameters.ContainsKey('Budget')) { $go['BudgetCap'] = $Budget }
 if ($PSBoundParameters.ContainsKey('Stakes')) { $go['StakesOverride'] = $Stakes }
+if ($NormalizeMissingStakes) { $go['NormalizeMissingStakes'] = $true }
 
 # Test seams: a canned plan and/or forced-success spawner so the suite never calls a model.
 if ($env:BATON_GO_TEST_PLAN) {
@@ -158,7 +160,12 @@ if ($Execute) {
     }
     $go['Spawner'] = New-AgenticSpawner @spawnArgs
     $go['DiffProvider'] = { Get-RunDiff -Worktree $wt.worktree -BaseSha $wt.base_sha }.GetNewClosure()
-    $go['NormalizeMissingStakes'] = $true
+    # #101: default --execute hard-requires planner stakes (no silent normalize).
+    # Opt back into the aging normalize+warn path with -NormalizeMissingStakes, or
+    # force every task with --stakes / -Stakes.
+    if (-not $NormalizeMissingStakes -and -not $PSBoundParameters.ContainsKey('Stakes')) {
+        $go['RequireTaskStakes'] = $true
+    }
     if ($verifyEnabled) {
         # Shared frozen-contracts map: the preflight closure populates+validates it from
         # the base revision; the verifying spawner reads it per task. Both close over the
@@ -198,14 +205,15 @@ try {
 }
 
 if ($Execute -and $wt) {
-    if ($result.status -in @('plan-rejected','plan-gate-degraded')) {
-        # The Plan Gate rejected BEFORE the walk. The worktree/branch were created up
-        # front but are untouched by construction (the gate precedes any DAG walk /
-        # labor), so discard both — a rejected run must leave nothing behind, and the
-        # report must not advertise a dead branch. Best-effort + guarded: cleanup
-        # failure never crashes the run. ONLY on pre-labor Plan Gate stops; every other
-        # status keeps the branch for the human to merge. Remove the worktree first, THEN delete the
-        # branch (git refuses to delete a branch still checked out in a worktree).
+    if ($result.status -in @('plan-rejected','plan-gate-degraded','plan-invalid','plan-failed')) {
+        # These statuses all halt BEFORE the walk. The worktree/branch were created up
+        # front but are untouched by construction (the Plan Gate, stakes hard-require,
+        # and plan-failure paths all return before any DAG walk / labor), so discard
+        # both — a pre-labor halt must leave nothing behind, and the report must not
+        # advertise a dead branch. Best-effort + guarded: cleanup failure never crashes
+        # the run. ONLY on pre-labor stops; every other status keeps the branch for the
+        # human to merge. Remove the worktree first, THEN delete the branch (git refuses
+        # to delete a branch still checked out in a worktree).
         try { Remove-RunWorktree -Worktree $wt.worktree -RepoPath $repo -Force } catch { }
         try { & git -C $repo branch -D $wt.branch 2>$null | Out-Null } catch { }
         $result.branch = $null

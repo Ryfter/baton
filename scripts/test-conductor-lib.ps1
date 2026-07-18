@@ -704,6 +704,56 @@ ERROR: You have hit your usage limit. Try again later.
             $rPG4f.status -eq 'completed' -and
             (Get-Content -Raw (Join-Path $run4f 'events.jsonl')) -match 'missing stakes normalized to standard.*applied policy: depth med, economy routing')
 
+        # #101: -RequireTaskStakes hard-fails when a task lacks stakes (no normalize, no override).
+        $pgSeenReq = [System.Collections.ArrayList]@()
+        $pgSpawnReq = { param($t) [void]$pgSeenReq.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $runReq = Join-Path $pgHome 'pg-require-stakes'
+        $rReq = Invoke-Conductor -Goal 'g' -RunDir $runReq -Planner $pgPlanner -Spawner $pgSpawnReq -RequireTaskStakes
+        Check 'PG4g RequireTaskStakes + missing stakes -> plan-invalid' (
+            $rReq.status -eq 'plan-invalid' -and
+            (Get-Content -Raw (Join-Path $runReq 'events.jsonl')) -match 'PLAN-INVALID .+ task\(s\) missing stakes: t1, t2' -and
+            @($pgSeenReq).Count -eq 0)
+        $runReqOk = Join-Path $pgHome 'pg-require-stakes-ok'
+        $rReqOk = Invoke-Conductor -Goal 'g' -RunDir $runReqOk -Planner $pgPlannerStaked -Spawner $pgSpawnReq -RequireTaskStakes
+        Check 'PG4h RequireTaskStakes + present stakes -> completed' ($rReqOk.status -eq 'completed')
+
+        # F2 (#101 review): the RequireTaskStakes revise re-check must reject INVALID-value
+        # stakes, not just missing ones — parity with the initial hard-require pass. In the
+        # live path ConvertTo-PlanObject already rejects out-of-set stakes at revise-parse
+        # time (fail-open to the original plan), so an invalid value can only reach the
+        # re-check if that upstream guard is ever bypassed. This drives the re-check guard
+        # directly: shadow Invoke-PlanRevise to hand back a revised plan whose task carries
+        # an out-of-set 'urgent' stakes. The real function is restored right after.
+        function Invoke-PlanRevise {
+            param($Goal, $PlanJson, $ReviseBrief, $Run, $RunDir, $MaxCostTier, $FleetPath, $ToolsPath, $RegistryLines, $Dispatcher)
+            @{ run_id = $Run.run_id; goal = $Goal; budget_cap = $Run.budget_cap; tasks = @(
+                [pscustomobject]@{ id='t1-rev'; desc='revised'; command=''; capability='reasoning'; model_pick=''; depends_on=@(); est_cost_tier='free'; reversible=$true; stakes='urgent'; stakes_basis='revised' }
+            ) }
+        }
+        $pgSeenInv = [System.Collections.ArrayList]@()
+        $pgSpawnInv = { param($t) [void]$pgSeenInv.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $runInv = Join-Path $pgHome 'pg-require-revise-invalid'
+        $rInv = Invoke-Conductor -Goal 'g' -RunDir $runInv -Planner $pgPlannerStaked -Spawner $pgSpawnInv `
+            -PlanGate -PlanReviewers @('a','b') -PlanGateDispatcher $gateImportant `
+            -FleetPath $refFleetPG -ToolsPath $pgTools -RequireTaskStakes
+        Check 'PG4i RequireTaskStakes revise re-check rejects invalid-value stakes -> plan-invalid, no dispatch' (
+            $rInv.status -eq 'plan-invalid' -and
+            (Get-Content -Raw (Join-Path $runInv 'events.jsonl')) -match 'task t1-rev has invalid stakes/stakes_basis' -and
+            @($pgSeenInv).Count -eq 0)
+        . "$PSScriptRoot/conductor-lib.ps1"   # restore the real Invoke-PlanRevise after the shadow
+
+        # F3 (#101 review): precedence — -RequireTaskStakes (hard contract) wins over
+        # -NormalizeMissingStakes when BOTH are passed; missing stakes must halt, not normalize.
+        $pgSeenBoth = [System.Collections.ArrayList]@()
+        $pgSpawnBoth = { param($t) [void]$pgSeenBoth.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $runBoth = Join-Path $pgHome 'pg-require-wins'
+        $rBoth = Invoke-Conductor -Goal 'g' -RunDir $runBoth -Planner $pgPlanner -Spawner $pgSpawnBoth -RequireTaskStakes -NormalizeMissingStakes
+        Check 'PG4j RequireTaskStakes wins over NormalizeMissingStakes (both -> plan-invalid halt)' (
+            $rBoth.status -eq 'plan-invalid' -and
+            (Get-Content -Raw (Join-Path $runBoth 'events.jsonl')) -match 'PLAN-INVALID .+ task\(s\) missing stakes' -and
+            (Get-Content -Raw (Join-Path $runBoth 'events.jsonl')) -notmatch 'missing stakes normalized to standard' -and
+            @($pgSeenBoth).Count -eq 0)
+
         # PG5: important finding + -PlanRevise:$false -> no revise dispatch, original walked,
         # event notes the disabled auto-revise.
         $pgReviseCount5 = @{ n = 0 }

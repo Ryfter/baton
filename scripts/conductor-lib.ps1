@@ -694,6 +694,7 @@ function Invoke-Conductor {
         [switch]$Verify,
         [scriptblock]$VerifyPreflight,
         [switch]$NormalizeMissingStakes,
+        [switch]$RequireTaskStakes,
         [ValidateSet('low','standard','high')][string]$StakesOverride
     )
     if (-not $RunDir) { $RunDir = Initialize-RunDir }
@@ -709,11 +710,19 @@ function Invoke-Conductor {
         return (Complete-Run -RunDir $RunDir -Plan $empty -Status 'plan-failed')
     }
     $plan.run_id = $runId
+    # Stakes policy (d086 / #101):
+    #   -StakesOverride            → force every task (operator --stakes)
+    #   -NormalizeMissingStakes    → opt-in soft path (legacy / non-execute aging)
+    #   -RequireTaskStakes         → hard-fail on missing (default --execute)
+    #   none of the above          → leave plan alone (library / plan-only)
     $missingStakesPolicyMessage = 'missing stakes normalized to standard; applied policy: depth med, economy routing, capped by run and task cost tiers'
-    if ($NormalizeMissingStakes -or $PSBoundParameters.ContainsKey('StakesOverride')) {
+    $hasStakesOverride = $PSBoundParameters.ContainsKey('StakesOverride')
+    # Precedence when switches collide: StakesOverride > RequireTaskStakes > NormalizeMissingStakes > none.
+    # -RequireTaskStakes is an explicit hard contract, so it wins over the soft -NormalizeMissingStakes.
+    if ($hasStakesOverride -or ($NormalizeMissingStakes -and -not $RequireTaskStakes)) {
         $missingStakes = 0
         foreach ($plannedTask in @($plan.tasks)) {
-            if ($PSBoundParameters.ContainsKey('StakesOverride')) {
+            if ($hasStakesOverride) {
                 $plannedTask | Add-Member -NotePropertyName stakes -NotePropertyValue $StakesOverride -Force
                 $plannedTask | Add-Member -NotePropertyName stakes_basis -NotePropertyValue "operator override: --stakes $StakesOverride" -Force
             } elseif ([string]::IsNullOrWhiteSpace([string]$plannedTask.stakes)) {
@@ -725,12 +734,37 @@ function Invoke-Conductor {
             }
             if ([string]$plannedTask.stakes -notin @('low','standard','high') -or
                 [string]::IsNullOrWhiteSpace([string]$plannedTask.stakes_basis)) {
-                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'error' -Message "task $($plannedTask.id) has invalid stakes/stakes_basis")
+                $softInvalidMsg = "task $($plannedTask.id) has invalid stakes/stakes_basis"
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'error' -Message $softInvalidMsg)
+                [Console]::Error.WriteLine($softInvalidMsg)
                 return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-invalid')
             }
         }
         if ($missingStakes -gt 0) {
             Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'warn' -Message "$missingStakes task(s) $missingStakesPolicyMessage")
+        }
+    } elseif ($RequireTaskStakes) {
+        $missingStakeIds = [System.Collections.ArrayList]@()
+        foreach ($plannedTask in @($plan.tasks)) {
+            $taskStakes = [string]$plannedTask.stakes
+            $taskBasis = [string]$plannedTask.stakes_basis
+            if ([string]::IsNullOrWhiteSpace($taskStakes) -or $taskBasis -eq 'legacy plan omitted stakes') {
+                [void]$missingStakeIds.Add([string]$plannedTask.id)
+                continue
+            }
+            if ($taskStakes -notin @('low','standard','high') -or [string]::IsNullOrWhiteSpace($taskBasis)) {
+                $invalidMsg = "task $($plannedTask.id) has invalid stakes/stakes_basis"
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'error' -Message $invalidMsg)
+                [Console]::Error.WriteLine($invalidMsg)
+                return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-invalid')
+            }
+        }
+        if ($missingStakeIds.Count -gt 0) {
+            $idList = (@($missingStakeIds) -join ', ')
+            $haltMsg = "PLAN-INVALID — task(s) missing stakes: $idList — add stakes and stakes_basis to each task, or pass --stakes <low|standard|high>, or -NormalizeMissingStakes"
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'error' -Message $haltMsg)
+            [Console]::Error.WriteLine($haltMsg)
+            return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-invalid')
         }
     }
     ($plan | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'plan.json') -Encoding utf8NoBOM
@@ -793,7 +827,7 @@ function Invoke-Conductor {
                     }
                     $plan = $revisedPlan
                     $plan.run_id = $runId
-                    if ($PSBoundParameters.ContainsKey('StakesOverride')) {
+                    if ($hasStakesOverride) {
                         foreach ($revisedTask in @($plan.tasks)) {
                             $revisedTask | Add-Member -NotePropertyName stakes -NotePropertyValue $StakesOverride -Force
                             $revisedTask | Add-Member -NotePropertyName stakes_basis -NotePropertyValue "operator override: --stakes $StakesOverride" -Force
@@ -803,6 +837,31 @@ function Invoke-Conductor {
                         $revisedMissingStakes = @($plan.tasks | Where-Object { [string]$_.stakes_basis -eq 'legacy plan omitted stakes' }).Count
                         if ($revisedMissingStakes -gt 0) {
                             Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'warn' -Message "$revisedMissingStakes task(s) $missingStakesPolicyMessage")
+                        }
+                    } elseif ($revisionApplied -and $RequireTaskStakes) {
+                        foreach ($revisedTask in @($plan.tasks)) {
+                            $revTaskStakes = [string]$revisedTask.stakes
+                            $revTaskBasis = [string]$revisedTask.stakes_basis
+                            if ([string]::IsNullOrWhiteSpace($revTaskStakes) -or $revTaskBasis -eq 'legacy plan omitted stakes') {
+                                continue
+                            }
+                            if ($revTaskStakes -notin @('low','standard','high') -or [string]::IsNullOrWhiteSpace($revTaskBasis)) {
+                                $revInvalidMsg = "task $($revisedTask.id) has invalid stakes/stakes_basis"
+                                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'error' -Message $revInvalidMsg)
+                                [Console]::Error.WriteLine($revInvalidMsg)
+                                return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-invalid')
+                            }
+                        }
+                        $revisedMissingIds = @($plan.tasks | Where-Object {
+                            [string]::IsNullOrWhiteSpace([string]$_.stakes) -or
+                            [string]$_.stakes_basis -eq 'legacy plan omitted stakes'
+                        } | ForEach-Object { [string]$_.id })
+                        if ($revisedMissingIds.Count -gt 0) {
+                            $revIdList = ($revisedMissingIds -join ', ')
+                            $revHaltMsg = "PLAN-INVALID — task(s) missing stakes: $revIdList — add stakes and stakes_basis to each task, or pass --stakes <low|standard|high>, or -NormalizeMissingStakes"
+                            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'policy' -Level 'error' -Message $revHaltMsg)
+                            [Console]::Error.WriteLine($revHaltMsg)
+                            return (Complete-Run -RunDir $RunDir -Plan $plan -Status 'plan-invalid')
                         }
                     }
                 } else {
