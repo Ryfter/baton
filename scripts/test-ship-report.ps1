@@ -27,7 +27,9 @@ try {
     New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 
     # Fleet journal: Write-FleetJournalLine shape (placeholder providers only).
-    # Timestamps are UTC (Z) so they line up with PR mergedAt/first-commit window.
+    # Phase tags use ONLY the real LinearPhases vocabulary (research|design|
+    # code.sprint-N|review) — there is no phase:fix / phase:verification in the real
+    # model, so the fix + verification rows classify from their SUMMARY text.
     $journalLines = @(
         '# Model Routing Log'
         '# --- entries below this line ---'
@@ -35,14 +37,18 @@ try {
         '2026-07-10T11:00:00Z | fleet | worker-a | 30s | exit:0 | "more build work" | host:testbox | phase:code.sprint-1 | tok:1000(estimate)'
         '2026-07-10T12:00:00Z | fleet | worker-b | 45s | exit:0 | "adversarial review of diff" | host:testbox | phase:review | tok:25000(exact)'
         '2026-07-10T12:30:00Z | fleet | worker-local | 10s | exit:0 | "powershell lens review" | host:testbox | phase:review | tok:0(estimate)'
-        '2026-07-10T13:00:00Z | fleet | worker-b | 20s | exit:0 | "fix pass on findings" | host:testbox | phase:fix | tok:2000(exact)'
-        '2026-07-10T14:00:00Z | fleet | worker-local | 5s | exit:0 | "full local gate + pytest" | host:testbox | phase:verification | tok:0(estimate)'
+        '2026-07-10T13:00:00Z | fleet | worker-b | 20s | exit:0 | "fix pass on findings" | host:testbox | phase:code.sprint-1 | tok:2000(exact)'
+        '2026-07-10T14:00:00Z | fleet | worker-local | 5s | exit:0 | "full local gate + pytest" | host:testbox | phase:review | tok:0(estimate)'
+        # Real writer emits zzz numeric offsets, not Z (fleet-lib.ps1:618). -06:00 == 15:30Z, in-window build row.
+        '2026-07-10T09:30:00-06:00 | fleet | worker-a | 15s | exit:0 | "kickoff build" | host:testbox | phase:code.sprint-1 | tok:500(estimate)'
         # Outside window (should be ignored when window is set)
         '2026-07-01T09:00:00Z | fleet | worker-old | 1s | exit:0 | "unrelated prior work" | host:testbox | tok:99999(exact)'
     )
     Set-Content -LiteralPath $journal -Value ($journalLines -join "`n") -Encoding utf8NoBOM
 
-    # Usage journal: one lockout (cap-death) for worker-a in window.
+    # Usage journal: ONE real cap-death for worker-a in window == a lockout PLUS its
+    # matching failover recovery (worker=original_worker). That pair must count as 1,
+    # not 2. A third lockout sits outside the window.
     $usageRows = @(
         (@{ ts = '2026-07-10T10:30:00.0000000Z'; event = 'lockout'; worker = 'worker-a'; reason = 'cap' } | ConvertTo-Json -Compress)
         (@{ ts = '2026-07-10T10:45:00.0000000Z'; event = 'failover'; worker = 'worker-a'; original_worker = 'worker-a'; substitute = 'worker-b'; reason = 'cap' } | ConvertTo-Json -Compress)
@@ -73,18 +79,31 @@ try {
     Check 'J8 non-fleet skipped' ($null -eq (Parse-FleetJournalLine -Line '2026-07-10T10:00:00Z | route | x | y'))
 
     $rows = @(Read-FleetJournalRows -Path $journal)
-    Check 'J9 reads all fleet rows' ($rows.Count -eq 7)
+    Check 'J9 reads all fleet rows' ($rows.Count -eq 8)
 
-    # ---- stage classification ----
-    Check 'S1 code phase -> build' ((Get-ShipReportStage -Row $parsed) -eq 'build')
+    # ---- stage classification (summary is the real signal; phase = secondary hint) ----
+    Check 'S1 build summary/phase -> build' ((Get-ShipReportStage -Row $parsed) -eq 'build')
     $rev = Parse-FleetJournalLine -Line $journalLines[4]
     Check 'S2 review phase -> review' ((Get-ShipReportStage -Row $rev) -eq 'review')
+    # Fix + verification have NO phase in the real model — they classify from summary text.
     $fix = Parse-FleetJournalLine -Line $journalLines[6]
-    Check 'S3 fix phase -> fix' ((Get-ShipReportStage -Row $fix) -eq 'fix')
+    Check 'S3 fix via summary (phase is code.sprint-1) -> fix' ((Get-ShipReportStage -Row $fix) -eq 'fix')
     $ver = Parse-FleetJournalLine -Line $journalLines[7]
-    Check 'S4 verification phase -> verification' ((Get-ShipReportStage -Row $ver) -eq 'verification')
+    Check 'S4 verification via summary (phase is review) -> verification' ((Get-ShipReportStage -Row $ver) -eq 'verification')
     $kw = [ordered]@{ phase = ''; summary = 'run adversarial review now'; provider = 'x'; tokens = 0; tokens_basis = 'estimate' }
     Check 'S5 summary keyword -> review' ((Get-ShipReportStage -Row $kw) -eq 'review')
+    # Most-specific-first ordering: shared tokens ('findings'/'test') must not misroute.
+    $kwFix = [ordered]@{ phase = ''; summary = 'fix pass addressing review findings'; provider = 'x'; tokens = 0; tokens_basis = 'estimate' }
+    Check 'S6 fix-before-review ordering -> fix' ((Get-ShipReportStage -Row $kwFix) -eq 'fix')
+    $kwRev = [ordered]@{ phase = ''; summary = 'deep review of diff'; provider = 'x'; tokens = 0; tokens_basis = 'estimate' }
+    Check 'S7 review keyword -> review' ((Get-ShipReportStage -Row $kwRev) -eq 'review')
+    $kwVer = [ordered]@{ phase = ''; summary = 'verification gate run'; provider = 'x'; tokens = 0; tokens_basis = 'estimate' }
+    Check 'S8 verification keyword -> verification' ((Get-ShipReportStage -Row $kwVer) -eq 'verification')
+    # Secondary phase hint maps to REAL vocabulary when summary is neutral.
+    $phaseBuild = [ordered]@{ phase = 'code.sprint-2'; summary = 'did some things'; provider = 'x'; tokens = 0; tokens_basis = 'estimate' }
+    Check 'S9 real phase code.sprint-N hint -> build' ((Get-ShipReportStage -Row $phaseBuild) -eq 'build')
+    $phaseRev = [ordered]@{ phase = 'review'; summary = 'general notes'; provider = 'x'; tokens = 0; tokens_basis = 'estimate' }
+    Check 'S10 real phase review hint -> review' ((Get-ShipReportStage -Row $phaseRev) -eq 'review')
 
     # ---- token fold (never silent exact+estimate sum) ----
     $mixed = @(
@@ -137,13 +156,26 @@ CONFIRMED-COUNT: 8
     $to = ConvertTo-ShipReportDateTime -Ts '2026-07-11T00:00:00Z'
     $windowed = Select-FleetRowsInWindow -Rows $rows -From $from -To $to
     Check 'W1 window drops old row' (@($windowed | Where-Object { $_.provider -eq 'worker-old' }).Count -eq 0)
-    Check 'W2 window keeps in-range rows' ($windowed.Count -eq 6)
+    Check 'W2 window keeps in-range rows' ($windowed.Count -eq 7)
 
     # ---- cap-death fold ----
     $usage = @(Read-UsageJournalRows -Path $usagePath)
     $cap = Get-ShipReportCapDeaths -UsageRows $usage -FleetRows $windowed -From $from -To $to
-    Check 'C1 counts lockout+failover in window' ($cap.count -eq 2)
-    Check 'C2 ignores out-of-window lockout' ($true)  # covered by count==2
+    # One lockout + its recovery failover = ONE cap-death, not two.
+    Check 'C1 lockout+its failover recovery -> 1 cap-death' ($cap.count -eq 1)
+    # Out-of-window lockout (2026-07-01) is filtered: widening the window to include it
+    # yields 2 lockouts, proving the window bound is actually applied (not vacuous).
+    $capWide = Get-ShipReportCapDeaths -UsageRows $usage -FleetRows $windowed `
+        -From (ConvertTo-ShipReportDateTime -Ts '2026-06-01T00:00:00Z') -To $to
+    Check 'C2 widened window includes the 2026-07-01 lockout -> 2' ($capWide.count -eq 2)
+    # Two INDEPENDENT lockouts (different workers) -> 2; the failover is not double-counted.
+    $twoLockRows = @(
+        [pscustomobject]@{ ts = '2026-07-10T10:30:00Z'; event = 'lockout'; worker = 'worker-a'; reason = 'cap' }
+        [pscustomobject]@{ ts = '2026-07-10T13:30:00Z'; event = 'lockout'; worker = 'worker-b'; reason = 'cap' }
+        [pscustomobject]@{ ts = '2026-07-10T10:45:00Z'; event = 'failover'; worker = 'worker-a'; original_worker = 'worker-a'; substitute = 'worker-b' }
+    )
+    $capTwo = Get-ShipReportCapDeaths -UsageRows $twoLockRows -FleetRows $windowed -From $from -To $to
+    Check 'C3 two independent lockouts -> 2 (failover not counted)' ($capTwo.count -eq 2)
 
     # ---- duration / token format helpers ----
     $t0 = ConvertTo-ShipReportDateTime -Ts '2026-07-10T10:00:00Z'
@@ -233,15 +265,20 @@ CONFIRMED-COUNT: 8
     Check 'A1 card has PR' ($card.pr_number -eq 94)
     Check 'A2 build mentions worker-a' ($card.dimensions.build -match 'worker-a')
     Check 'A3 build surfaces exact basis' ($card.dimensions.build -match 'exact')
-    Check 'A4 build surfaces estimate separately when present' (
-        ($card.dimensions.build -match 'estimate') -or ([long]$card.tokens.by_stage.build.estimate_total -ge 0)
+    # Build stage estimate = worker-a 1000 (row[3]) + 500 (numeric-offset row) = 1500,
+    # kept separate from the 439000 exact; the dimension surfaces the estimate basis.
+    Check 'A4 build estimate total is exactly 1500, shown separately' (
+        ([long]$card.tokens.by_stage.build.estimate_total -eq 1500) -and ($card.dimensions.build -match 'estimate')
     )
     Check 'A5 build includes cap-death' ($card.dimensions.build -match 'cap-death')
     Check 'A6 build includes commits' ($card.dimensions.build -match '8 commit')
     Check 'A7 review has findings' ($card.dimensions.review -match 'findings')
     Check 'A8 review depth deep' ($card.dimensions.review -match 'deep')
     Check 'A9 fix mentions worker-b' ($card.dimensions.fix -match 'worker-b')
-    Check 'A10 verification not empty-or-na-ok' ($card.dimensions.verification -match 'verification|n/a|tok')
+    # Exactly one verification dispatch (worker-local, 0 tokens estimate).
+    Check 'A10 verification renders dispatch + zero-token fold' (
+        $card.dimensions.verification -eq '1 verification dispatch, worker-local 0 tok'
+    )
     Check 'A11 wall-clock present' ($card.dimensions.wall_clock -match '~')
     Check 'A12 conductor not tracked' ($card.dimensions.conductor_overhead -eq 'not tracked')
     Check 'A13 outcome merged sha short' ($card.dimensions.outcome -match 'merged `fcfc1df`')
@@ -261,6 +298,19 @@ CONFIRMED-COUNT: 8
     Check 'M4 markdown honest mixed-basis note when both present' (
         ([long]$card.tokens.exact_total -eq 0) -or ([long]$card.tokens.estimate_total -eq 0) -or ($md -match 'Token bases not combined')
     )
+
+    # ---- pipe in verdict must not break the card's markdown table (cell escaping) ----
+    $pipeMeta = [ordered]@{
+        pr_number = 7; title = 'pipe'; state = 'MERGED'; branch = 'feature/pipe'
+        base_branch = 'master'; merged_at = $null; merge_sha = 'deadbeef'
+        url = ''; linked_issue = $null; commit_count = 1; first_commit_at = $null
+        comment_bodies = @('VERDICT: needs work | also see notes'); body = ''
+    }
+    $pipeCard = Build-ShipReportCard -FleetRows @() -UsageRows @() -Decisions @() -PrMeta $pipeMeta
+    Check 'M5 review dim carries raw verdict pipe pre-render' ($pipeCard.dimensions.review -match '\|')
+    $pipeMd = Format-ShipReportCard -Card $pipeCard
+    Check 'M6 rendered card escapes verdict pipe to slash' ($pipeMd -match 'needs work / also see notes')
+    Check 'M7 rendered card has no raw pipe inside the verdict cell' (-not ($pipeMd -match 'needs work \| also'))
 
     # ---- missing-data honesty ----
     $emptyCard = Build-ShipReportCard -FleetRows @() -UsageRows @() -Decisions @() -PrMeta $null -GitStats $null

@@ -214,19 +214,28 @@ function Read-FleetJournalRows {
 
 function Get-ShipReportStage {
     <# Classify a fleet row into build|review|fix|verification.
-       Prefer explicit phase tags; fall back to summary keywords; default build. #>
+       Summary text is the REAL signal: fix and verification have no phase in the
+       real model (job-lib LinearPhases = research|design|code.sprint-N|review), so
+       Write-FleetJournalLine never emits phase:fix / phase:verification. Match the
+       summary MOST-SPECIFIC-FIRST (fix, verification, review, build) with anchored
+       keywords so shared tokens ('findings', 'test') don't collide. Phase tags are a
+       SECONDARY hint mapped to the real vocabulary (review -> review;
+       code.sprint-N / research / design -> build). Default build. #>
     param($Row)
+    $sum = ([string]$Row.summary).ToLowerInvariant()
+    if ($sum) {
+        # fix before review: "fix pass ... review findings" must land on fix.
+        if ($sum -match '\b(fix[- ]?pass|polish|repair finding|address(?:es|ing)? findings?)\b') { return 'fix' }
+        if ($sum -match '\b(verification|verif|acceptance.?gate|pytest|test suite|full local gate)\b') { return 'verification' }
+        if ($sum -match '\b(review|lens|adversarial|findings?|verdict)\b') { return 'review' }
+        if ($sum -match '\b(build|implement|implementation|sprint|scaffold)\b') { return 'build' }
+    }
+    # Secondary hint: REAL phase vocabulary only (no fictional fix/verification phases).
     $phase = ([string]$Row.phase).ToLowerInvariant()
     if ($phase) {
-        if ($phase -match 'review|lens|adversarial|panel') { return 'review' }
-        if ($phase -match 'fix|polish|repair') { return 'fix' }
-        if ($phase -match 'verif|gate|test') { return 'verification' }
-        if ($phase -match 'code|sprint|build|implement|research|design') { return 'build' }
+        if ($phase -match 'review') { return 'review' }
+        if ($phase -match 'code|sprint|research|design|build|implement') { return 'build' }
     }
-    $sum = ([string]$Row.summary).ToLowerInvariant()
-    if ($sum -match '\b(review|lens|adversarial|findings?|verdict)\b') { return 'review' }
-    if ($sum -match '\b(fix pass|fix-pass|polish|repair finding|address finding)\b') { return 'fix' }
-    if ($sum -match '\b(verif|acceptance.?gate|pytest|test suite|full local gate)\b') { return 'verification' }
     return 'build'
 }
 
@@ -326,7 +335,11 @@ function Read-UsageJournalRows {
 }
 
 function Get-ShipReportCapDeaths {
-    <# Count lockout + failover events in window for workers seen in fleet rows. #>
+    <# Count DISTINCT cap-deaths in window for workers seen in fleet rows.
+       A real cap-death emits a `lockout` event AND a matching `failover` event
+       (Add-UsageFailoverEvent, worker=original_worker) — the failover is the
+       RECOVERY of that lockout, not a second death. Counting both double-counts,
+       so count `lockout` events only. #>
     param(
         [object[]]$UsageRows = @(),
         [object[]]$FleetRows = @(),
@@ -344,7 +357,7 @@ function Get-ShipReportCapDeaths {
     $events = [System.Collections.ArrayList]@()
     foreach ($u in @($UsageRows)) {
         $kind = [string]$u.event
-        if ($kind -notin @('lockout', 'failover')) { continue }
+        if ($kind -ne 'lockout') { continue }
         $worker = [string]$u.worker
         if (-not $worker) { $worker = [string]$u.original_worker }
         if ($workers.Count -gt 0 -and $worker -and -not $workers.ContainsKey($worker)) { continue }
@@ -786,13 +799,16 @@ function Format-ShipReportCard {
     [void]$sb.AppendLine('| Dimension | Value |')
     [void]$sb.AppendLine('|---|---|')
     $dims = $Card.dimensions
-    [void]$sb.AppendLine(('| Build | {0} |' -f $dims.build))
-    [void]$sb.AppendLine(('| Review | {0} |' -f $dims.review))
-    [void]$sb.AppendLine(('| Fix passes | {0} |' -f $dims.fix))
-    [void]$sb.AppendLine(('| Verification | {0} |' -f $dims.verification))
-    [void]$sb.AppendLine(('| Wall-clock | {0} |' -f $dims.wall_clock))
-    [void]$sb.AppendLine(('| Conductor overhead | {0} |' -f $dims.conductor_overhead))
-    [void]$sb.AppendLine(('| Outcome | {0} |' -f $dims.outcome))
+    # Escape '|' in VALUE cells so verdict/summary text can't break the table row
+    # (same treatment Format-ShipReportTrendTable applies to its own cells).
+    $esc = { param($v) ([string]$v) -replace '\|', '/' }
+    [void]$sb.AppendLine(('| Build | {0} |' -f (& $esc $dims.build)))
+    [void]$sb.AppendLine(('| Review | {0} |' -f (& $esc $dims.review)))
+    [void]$sb.AppendLine(('| Fix passes | {0} |' -f (& $esc $dims.fix)))
+    [void]$sb.AppendLine(('| Verification | {0} |' -f (& $esc $dims.verification)))
+    [void]$sb.AppendLine(('| Wall-clock | {0} |' -f (& $esc $dims.wall_clock)))
+    [void]$sb.AppendLine(('| Conductor overhead | {0} |' -f (& $esc $dims.conductor_overhead)))
+    [void]$sb.AppendLine(('| Outcome | {0} |' -f (& $esc $dims.outcome)))
     [void]$sb.AppendLine('')
     # Honesty note for mixed token bases (d059)
     $ex = [long]$Card.tokens.exact_total
