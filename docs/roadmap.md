@@ -1,11 +1,11 @@
 # Roadmap
 
-**Last updated:** 2026-07-17
-**Status:** `v1.19.0` shipped — *the instrument ABI (d091, #92+#104): any language, one
-return contract. Generic HTTP + stdio-json transports, python tools routable, exact local
-token counts, `max_prompt_bytes` pre-flight, and the `context_overflow` reactive class.
-v1.18.0/v1.17.0 (same week) shipped usage-aware failover (d083+d090) and authoritative
-`--execute` governance (d086 node #1).* Plans 1–11 + the Fleet Conductor
+**Last updated:** 2026-07-18
+**Status:** `v1.20.0` shipped — *per-PR ship report (`/baton:ship-report`, #106): pipeline-level
+cost/quality/choreography cards from fleet journals + git + GitHub; and `--execute` now
+hard-requires task stakes (#101, d089 flip): fail-loud, no normalize+warn shim. v1.19.0
+shipped the instrument ABI (d091); v1.18.0/v1.17.0 shipped usage-aware failover (d083+d090)
+and authoritative `--execute` governance (d086 node #1).* Plans 1–11 + the Fleet Conductor
 release (v1.2.0) + fourteen minor releases since (v1.3 → v1.15) are all live: governed fleet,
 learning router, front porch, GEPA optimizer, the coach, the project command center, agentic
 executor, quality gates, usage governor, direct-model commands, and per-model token telemetry.
@@ -59,9 +59,10 @@ flip its defaults on `--execute`, don't rebuild it:**
    hatch override, python/http tools routable, stdio-json for any language), `max_prompt_bytes`
    enforced pre-flight, `context_overflow` reactive class. See
    [`releases/2026-07-17-v1.19.0.md`](releases/2026-07-17-v1.19.0.md).
-5. **Real-project bakeoff** — Baton vs. the manager/engineer baseline on real slices (security fix,
-   feature, migration); measure completion / human intervention / gate catches / regressions / time /
-   **effective-cost**, incl. a quota-failure run (= d083). The missing end-to-end proof.
+5. **Real-project bakeoff** — **IN PROGRESS (#93, spec committed 2026-07-18, slices ratified):**
+   Baton vs. the manager/engineer baseline on 4 real MyDashboard slices (security fix, feature,
+   refactor, + induced quota failure); measured via `/baton:ship-report` cards: completion / human
+   intervention / gate catches / regressions / time / **effective-cost**. The missing end-to-end proof.
 
 **Then (prior committed order):**
 
@@ -74,9 +75,9 @@ flip its defaults on `--execute`, don't rebuild it:**
    ship-report spec, #106, feeds it.)
 
 **New since 2026-07-16 (from live incidents + thinking session — pre-briefs in Grimdex `projects/baton/notes/`):**
-- **#101** — flip missing-stakes normalize+warn to hard-require (d089 deferral).
+- ~~**#101**~~ — shipped v1.20.0 (PR #113): `--execute` hard-requires task stakes, fail-loud.
 - ~~**#104**~~ — shipped with v1.19.0 (see above).
-- **#106** — per-PR ship report: pipeline-level cost/quality cards (spec committed).
+- ~~**#106**~~ — shipped v1.20.0 (PR #112): `/baton:ship-report` per-PR cost/quality cards.
 - **Unnumbered candidates:** durable scheduling (highest-leverage; Task-Scheduler steps + mailbox),
   SDLC loop (`--from-issue` intake + evidence write-back), reproducer panel role + shared
   verdict enum, effort-as-routing-dimension.
