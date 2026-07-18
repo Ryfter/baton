@@ -54,8 +54,10 @@ providers:
 '@
 
     # canned single-task plan + canned gate verdict
-    $profiledPlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"write feature","capability":"code-gen","depends_on":[],"est_cost_tier":"free","reversible":true,"verify_profile":"unit"}]}'
-    $unprofiledPlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"write feature","capability":"code-gen","depends_on":[],"est_cost_tier":"free","reversible":true}]}'
+    # #101: default --execute hard-requires stakes; happy-path fixtures carry them.
+    $profiledPlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"write feature","capability":"code-gen","depends_on":[],"est_cost_tier":"free","reversible":true,"verify_profile":"unit","stakes":"standard","stakes_basis":"ordinary bounded feature"}]}'
+    $unprofiledPlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"write feature","capability":"code-gen","depends_on":[],"est_cost_tier":"free","reversible":true,"stakes":"standard","stakes_basis":"ordinary bounded feature"}]}'
+    $missingStakesPlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"write feature","capability":"code-gen","depends_on":[],"est_cost_tier":"free","reversible":true,"verify_profile":"unit"}]}'
     $env:BATON_GO_TEST_PLAN = $profiledPlan
     $env:BATON_GO_TEST_GATE = 'accept'
 
@@ -93,13 +95,44 @@ function Invoke-TestExecDispatcher {
     Check 'E9 run branch exists in the target repo' ($branches -match 'baton/run-')
     Check 'E9a plain execute defaulted Plan Gate on' (Test-Path (Join-Path $res.run_dir 'plan-review.json'))
     Check 'E9b plain execute defaulted verification on' (Test-Path (Join-Path $res.run_dir 'tasks/t1/verification.json'))
-    Check 'E9c missing stakes normalized with a warning' (
+    # #101: plan with ALL stakes present → no missing-stakes policy event (happy path above).
+    Check 'E9c-present plan with stakes present does not emit missing-stakes policy' (
+        $res.status -eq 'completed' -and
         ((Get-Content -Raw (Join-Path $res.run_dir 'plan.json') | ConvertFrom-Json).tasks[0].stakes -eq 'standard') -and
-        ((Get-Content -Raw (Join-Path $res.run_dir 'events.jsonl')) -match 'missing stakes normalized to standard.*applied policy: depth med, economy routing') -and
-        ((Get-Content -Raw (Join-Path $res.run_dir 'events.jsonl')) -notmatch '#98'))
+        ((Get-Content -Raw (Join-Path $res.run_dir 'events.jsonl')) -notmatch 'missing stakes normalized to standard') -and
+        ((Get-Content -Raw (Join-Path $res.run_dir 'events.jsonl')) -notmatch 'PLAN-INVALID .+ task\(s\) missing stakes'))
+
+    # #101: default --execute + missing stakes → PLAN-INVALID loud halt (no normalize).
+    $env:BATON_GO_TEST_PLAN = $missingStakesPlan
+    $stderrMissing = Join-Path $tmpRoot 'missing-stakes.err'
+    $rawMissing = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $repo -Json 2>$stderrMissing | Out-String
+    $exitMissing = $LASTEXITCODE
+    $resMissing = $rawMissing | ConvertFrom-Json
+    $eventsMissing = Get-Content -Raw (Join-Path $resMissing.run_dir 'events.jsonl')
+    $errMissing = if (Test-Path -LiteralPath $stderrMissing) { Get-Content -Raw -LiteralPath $stderrMissing } else { '' }
+    Check 'E9c missing stakes HALTS loud (plan-invalid, named task, exit 1)' (
+        $exitMissing -eq 1 -and $resMissing.status -eq 'plan-invalid' -and [double]$resMissing.spend -eq 0 -and
+        $eventsMissing -match 'PLAN-INVALID .+ task\(s\) missing stakes: t1' -and
+        $eventsMissing -match 'add stakes and stakes_basis' -and
+        $eventsMissing -match '-NormalizeMissingStakes' -and
+        $errMissing -match 'PLAN-INVALID .+ task\(s\) missing stakes: t1' -and
+        $eventsMissing -notmatch 'missing stakes normalized to standard')
+    $env:BATON_GO_TEST_PLAN = $profiledPlan
+
+    # #101: opt-in normalize+warn retained (byte-for-byte policy message).
+    $env:BATON_GO_TEST_PLAN = $missingStakesPlan
+    $rawNorm = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -NormalizeMissingStakes -RepoPath $repo -Json | Out-String
+    $resNorm = $rawNorm | ConvertFrom-Json
+    Check 'E9c-norm -NormalizeMissingStakes proceeds with today''s warning' (
+        $resNorm.status -eq 'completed' -and
+        ((Get-Content -Raw (Join-Path $resNorm.run_dir 'plan.json') | ConvertFrom-Json).tasks[0].stakes -eq 'standard') -and
+        ((Get-Content -Raw (Join-Path $resNorm.run_dir 'events.jsonl')) -match 'missing stakes normalized to standard.*applied policy: depth med, economy routing, capped by run and task cost tiers'))
+    $env:BATON_GO_TEST_PLAN = $profiledPlan
 
     $stakesParam = (Get-Command "$PSScriptRoot/fleet-go.ps1").Parameters['Stakes']
     if ($null -ne $stakesParam) {
+        # --stakes override on a plan that omits stakes still proceeds (override path).
+        $env:BATON_GO_TEST_PLAN = $missingStakesPlan
         $rawStakes = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -Stakes high -NoPlanGate -NoGate -RepoPath $repo -Json | Out-String
         $resStakes = $rawStakes | ConvertFrom-Json
         $stakesTask = (Get-Content -Raw (Join-Path $resStakes.run_dir 'plan.json') | ConvertFrom-Json).tasks[0]
@@ -112,6 +145,7 @@ function Invoke-TestExecDispatcher {
             $stakesDecision.stakes_basis -eq 'operator override: --stakes high' -and
             $stakesDecision.cost_tier -eq $stakesTask.est_cost_tier)
         Check 'E9i -StakesOverride is an alias for -Stakes' (@($stakesParam.Aliases) -contains 'StakesOverride')
+        $env:BATON_GO_TEST_PLAN = $profiledPlan
     } else {
         Check 'E9h -Stakes overrides every task and records operator basis' $false
         Check 'E9i -StakesOverride is an alias for -Stakes' $false
@@ -283,7 +317,7 @@ function Invoke-TestPlanGateDispatch($name, $prompt) {
     $resPlanFailed = $rawPlanFailed | ConvertFrom-Json
     Check 'E26 plan-failed emits JSON then exits 1' ($exitPlanFailed -eq 1 -and $resPlanFailed.status -eq 'plan-failed')
 
-    $failingPlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"write feature","capability":"code-gen","depends_on":[],"est_cost_tier":"free","reversible":true,"verify_profile":"failing"}]}'
+    $failingPlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"write feature","capability":"code-gen","depends_on":[],"est_cost_tier":"free","reversible":true,"verify_profile":"failing","stakes":"standard","stakes_basis":"ordinary bounded feature"}]}'
     $env:BATON_GO_TEST_PLAN = $failingPlan
     $rawVerifyFailed = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $repo -Json | Out-String
     $exitVerifyFailed = $LASTEXITCODE
@@ -305,14 +339,14 @@ function Invoke-TestExecDispatcher {
     Check 'E28 failed emits JSON then exits 1' ($exitFailed -eq 1 -and $resFailed.status -eq 'failed')
     $env:BATON_GO_TEST_EXEC_DISPATCHER = $dispFile
 
-    $budgetPlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"write feature","capability":"code-gen","depends_on":[],"est_cost_tier":"paid","reversible":true,"verify_profile":"unit"}]}'
+    $budgetPlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"write feature","capability":"code-gen","depends_on":[],"est_cost_tier":"paid","reversible":true,"verify_profile":"unit","stakes":"standard","stakes_basis":"ordinary bounded feature"}]}'
     $env:BATON_GO_TEST_PLAN = $budgetPlan
     $rawBudget = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -Budget 0 -RepoPath $repo -Json | Out-String
     $exitBudget = $LASTEXITCODE
     $resBudget = $rawBudget | ConvertFrom-Json
     Check 'E29 budget pause remains exit 0' ($exitBudget -eq 0 -and $resBudget.status -eq 'interrupted-budget')
 
-    $destructivePlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"publish feature","capability":"code-gen","depends_on":[],"est_cost_tier":"free","reversible":false,"verify_profile":"unit"}]}'
+    $destructivePlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"publish feature","capability":"code-gen","depends_on":[],"est_cost_tier":"free","reversible":false,"verify_profile":"unit","stakes":"standard","stakes_basis":"ordinary bounded feature"}]}'
     $env:BATON_GO_TEST_PLAN = $destructivePlan
     $rawDestructive = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $repo -Json | Out-String
     $exitDestructive = $LASTEXITCODE

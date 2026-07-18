@@ -704,6 +704,19 @@ ERROR: You have hit your usage limit. Try again later.
             $rPG4f.status -eq 'completed' -and
             (Get-Content -Raw (Join-Path $run4f 'events.jsonl')) -match 'missing stakes normalized to standard.*applied policy: depth med, economy routing')
 
+        # #101: -RequireTaskStakes hard-fails when a task lacks stakes (no normalize, no override).
+        $pgSeenReq = [System.Collections.ArrayList]@()
+        $pgSpawnReq = { param($t) [void]$pgSeenReq.Add($t.id); @{ ok=$true; spend=0.0; chose='m'; why='ran'; alternatives=@() } }
+        $runReq = Join-Path $pgHome 'pg-require-stakes'
+        $rReq = Invoke-Conductor -Goal 'g' -RunDir $runReq -Planner $pgPlanner -Spawner $pgSpawnReq -RequireTaskStakes
+        Check 'PG4g RequireTaskStakes + missing stakes -> plan-invalid' (
+            $rReq.status -eq 'plan-invalid' -and
+            (Get-Content -Raw (Join-Path $runReq 'events.jsonl')) -match 'PLAN-INVALID .+ task\(s\) missing stakes: t1, t2' -and
+            @($pgSeenReq).Count -eq 0)
+        $runReqOk = Join-Path $pgHome 'pg-require-stakes-ok'
+        $rReqOk = Invoke-Conductor -Goal 'g' -RunDir $runReqOk -Planner $pgPlannerStaked -Spawner $pgSpawnReq -RequireTaskStakes
+        Check 'PG4h RequireTaskStakes + present stakes -> completed' ($rReqOk.status -eq 'completed')
+
         # PG5: important finding + -PlanRevise:$false -> no revise dispatch, original walked,
         # event notes the disabled auto-revise.
         $pgReviseCount5 = @{ n = 0 }
