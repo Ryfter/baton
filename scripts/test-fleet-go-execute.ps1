@@ -105,9 +105,16 @@ function Invoke-TestExecDispatcher {
     # #101: default --execute + missing stakes → PLAN-INVALID loud halt (no normalize).
     $env:BATON_GO_TEST_PLAN = $missingStakesPlan
     $stderrMissing = Join-Path $tmpRoot 'missing-stakes.err'
+    # plan-invalid is a provable pre-walk zero-labor stop, so its worktree/branch must be
+    # discarded like plan-rejected — the halt must not linger a dead branch or advertise one.
+    $wtDirMissing = Join-Path (Split-Path (Resolve-Path $repo).Path -Parent) '.baton-worktrees'
+    $wtBeforeMissing = @(Get-ChildItem -Path $wtDirMissing -Directory -ErrorAction SilentlyContinue).Count
+    $brBeforeMissing = @(& git -C $repo branch --list 'baton/run-*').Count
     $rawMissing = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $repo -Json 2>$stderrMissing | Out-String
     $exitMissing = $LASTEXITCODE
     $resMissing = $rawMissing | ConvertFrom-Json
+    $wtAfterMissing = @(Get-ChildItem -Path $wtDirMissing -Directory -ErrorAction SilentlyContinue).Count
+    $brAfterMissing = @(& git -C $repo branch --list 'baton/run-*').Count
     $eventsMissing = Get-Content -Raw (Join-Path $resMissing.run_dir 'events.jsonl')
     $errMissing = if (Test-Path -LiteralPath $stderrMissing) { Get-Content -Raw -LiteralPath $stderrMissing } else { '' }
     Check 'E9c missing stakes HALTS loud (plan-invalid, named task, exit 1)' (
@@ -117,6 +124,10 @@ function Invoke-TestExecDispatcher {
         $eventsMissing -match '-NormalizeMissingStakes' -and
         $errMissing -match 'PLAN-INVALID .+ task\(s\) missing stakes: t1' -and
         $eventsMissing -notmatch 'missing stakes normalized to standard')
+    Check 'E9c-clean plan-invalid nulls branch/worktree and leaves none behind' (
+        [string]::IsNullOrEmpty([string]$resMissing.branch) -and
+        [string]::IsNullOrEmpty([string]$resMissing.worktree) -and
+        $brAfterMissing -eq $brBeforeMissing -and $wtAfterMissing -eq $wtBeforeMissing)
     $env:BATON_GO_TEST_PLAN = $profiledPlan
 
     # #101: opt-in normalize+warn retained (byte-for-byte policy message).
@@ -238,12 +249,19 @@ function Invoke-TestExecDispatcher {
         $resNoVerify.status -eq 'completed' -and (Test-Path (Join-Path $resNoVerify.run_dir 'plan-review.json')) -and
         $resNoVerify.acceptance.verdict -eq 'accept' -and -not (Test-Path (Join-Path $resNoVerify.run_dir 'tasks/t1/verification.json')))
 
+    # This preflight rejection is a pre-walk plan-invalid stop, so its untouched worktree
+    # is discarded (Finding 1): worktree/branch nulled, nothing left behind.
+    $wtDirNP = Join-Path (Split-Path (Resolve-Path $repo).Path -Parent) '.baton-worktrees'
+    $wtBeforeNP = @(Get-ChildItem -Path $wtDirNP -Directory -ErrorAction SilentlyContinue).Count
     $rawNeedsProfile = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $repo -Json | Out-String
     $exitNeedsProfile = $LASTEXITCODE
     $resNeedsProfile = $rawNeedsProfile | ConvertFrom-Json
+    $wtAfterNP = @(Get-ChildItem -Path $wtDirNP -Directory -ErrorAction SilentlyContinue).Count
     Check 'E9g default verify rejects an unprofiled edit before labor' (
         $exitNeedsProfile -eq 1 -and $resNeedsProfile.status -eq 'plan-invalid' -and [double]$resNeedsProfile.spend -eq 0 -and
-        -not (Test-Path (Join-Path ([string]$resNeedsProfile.worktree) 'feature.txt')))
+        [string]::IsNullOrEmpty([string]$resNeedsProfile.worktree) -and
+        [string]::IsNullOrEmpty([string]$resNeedsProfile.branch) -and
+        $wtAfterNP -eq $wtBeforeNP)
     $env:BATON_GO_TEST_PLAN = $profiledPlan
 
     # ---- F3: plan-gate reject under -Execute leaves NO worktree/branch behind ----

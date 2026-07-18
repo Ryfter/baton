@@ -205,14 +205,15 @@ try {
 }
 
 if ($Execute -and $wt) {
-    if ($result.status -in @('plan-rejected','plan-gate-degraded')) {
-        # The Plan Gate rejected BEFORE the walk. The worktree/branch were created up
-        # front but are untouched by construction (the gate precedes any DAG walk /
-        # labor), so discard both — a rejected run must leave nothing behind, and the
-        # report must not advertise a dead branch. Best-effort + guarded: cleanup
-        # failure never crashes the run. ONLY on pre-labor Plan Gate stops; every other
-        # status keeps the branch for the human to merge. Remove the worktree first, THEN delete the
-        # branch (git refuses to delete a branch still checked out in a worktree).
+    if ($result.status -in @('plan-rejected','plan-gate-degraded','plan-invalid','plan-failed')) {
+        # These statuses all halt BEFORE the walk. The worktree/branch were created up
+        # front but are untouched by construction (the Plan Gate, stakes hard-require,
+        # and plan-failure paths all return before any DAG walk / labor), so discard
+        # both — a pre-labor halt must leave nothing behind, and the report must not
+        # advertise a dead branch. Best-effort + guarded: cleanup failure never crashes
+        # the run. ONLY on pre-labor stops; every other status keeps the branch for the
+        # human to merge. Remove the worktree first, THEN delete the branch (git refuses
+        # to delete a branch still checked out in a worktree).
         try { Remove-RunWorktree -Worktree $wt.worktree -RepoPath $repo -Force } catch { }
         try { & git -C $repo branch -D $wt.branch 2>$null | Out-Null } catch { }
         $result.branch = $null
