@@ -23,6 +23,7 @@ param(
     [switch]$NoGate,
     [switch]$NoVerify,
     [Alias('StakesOverride')][ValidateSet('low','standard','high')][string]$Stakes,
+    [switch]$NormalizeMissingStakes,
     [string[]]$PlanReviewers,
     [bool]$PlanRevise = $true,
     [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
@@ -67,6 +68,7 @@ $runDir = Initialize-RunDir -RunId (New-RunId)
 $go = @{ Goal = $theGoal; RunDir = $runDir; MaxCostTier = $MaxCostTier; FleetPath = $FleetPath; ToolsPath = $ToolsPath }
 if ($PSBoundParameters.ContainsKey('Budget')) { $go['BudgetCap'] = $Budget }
 if ($PSBoundParameters.ContainsKey('Stakes')) { $go['StakesOverride'] = $Stakes }
+if ($NormalizeMissingStakes) { $go['NormalizeMissingStakes'] = $true }
 
 # Test seams: a canned plan and/or forced-success spawner so the suite never calls a model.
 if ($env:BATON_GO_TEST_PLAN) {
@@ -158,7 +160,12 @@ if ($Execute) {
     }
     $go['Spawner'] = New-AgenticSpawner @spawnArgs
     $go['DiffProvider'] = { Get-RunDiff -Worktree $wt.worktree -BaseSha $wt.base_sha }.GetNewClosure()
-    $go['NormalizeMissingStakes'] = $true
+    # #101: default --execute hard-requires planner stakes (no silent normalize).
+    # Opt back into the aging normalize+warn path with -NormalizeMissingStakes, or
+    # force every task with --stakes / -Stakes.
+    if (-not $NormalizeMissingStakes -and -not $PSBoundParameters.ContainsKey('Stakes')) {
+        $go['RequireTaskStakes'] = $true
+    }
     if ($verifyEnabled) {
         # Shared frozen-contracts map: the preflight closure populates+validates it from
         # the base revision; the verifying spawner reads it per task. Both close over the
