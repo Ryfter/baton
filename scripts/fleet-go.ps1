@@ -166,6 +166,9 @@ if ($Execute) {
     if (-not $NormalizeMissingStakes -and -not $PSBoundParameters.ContainsKey('Stakes')) {
         $go['RequireTaskStakes'] = $true
     }
+    # Thread the target repo into the planner so evidence can list verification
+    # profiles from HEAD (.baton/verification.json) — #119.
+    $go['RepoPath'] = $repo
     if ($verifyEnabled) {
         # Shared frozen-contracts map: the preflight closure populates+validates it from
         # the base revision; the verifying spawner reads it per task. Both close over the

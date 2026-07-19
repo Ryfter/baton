@@ -133,6 +133,60 @@ try {
     # v1.11.1: codex planned capability "code-parallel" (a baton COMMAND name) and no
     # provider claims it -> walk failed. The schema must pin the routing vocabulary.
     Check 'T38a planner schema constrains capability vocabulary' (($pp -match 'code-gen') -and ($pp -notmatch '"capability": "<capability or empty>"'))
+    # #119: planner schema must teach verify_profile + allowed_paths (plan gate / VerifyPreflight).
+    Check 'VP1a planner prompt includes verify_profile' ($pp -match 'verify_profile')
+    Check 'VP1b planner prompt includes allowed_paths' ($pp -match 'allowed_paths')
+    Check 'VP1c planner prompt requires profile for code-gen when available' ($pp -match 'must name a verify_profile')
+    Check 'VP1d planner prompt fails-closed red intermediate rule' ($pp -match 'failing-test \+ fix pair must be ONE task')
+
+    # VP2: with a committed .baton/verification.json, evidence lists profile names (hermetic).
+    $vpRepo = Join-Path ([System.IO.Path]::GetTempPath()) "cond-vp-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $vpRepo | Out-Null
+    try {
+        & git -C $vpRepo init -q 2>$null | Out-Null
+        & git -C $vpRepo config user.email 'test@test.local' 2>$null | Out-Null
+        & git -C $vpRepo config user.name 'baton-test' 2>$null | Out-Null
+        $vpCfgDir = Join-Path $vpRepo '.baton'
+        New-Item -ItemType Directory -Force -Path $vpCfgDir | Out-Null
+        $vpCfg = @{ schema = 1; profiles = @{ 'pytest-full' = @{ preset = 'pytest'; args = @('tests') } } }
+        ConvertTo-Json -InputObject $vpCfg -Depth 6 | Set-Content -LiteralPath (Join-Path $vpCfgDir 'verification.json') -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $vpRepo 'README.md') -Value 'seed' -Encoding utf8NoBOM
+        & git -C $vpRepo add -A 2>$null | Out-Null
+        & git -C $vpRepo commit -q -m 'seed verify config' 2>$null | Out-Null
+        $ppWith = Build-PlannerPrompt -Goal 'add a feature' -RepoPath $vpRepo
+        Check 'VP2a evidence lists verification profile from repo' ($ppWith -match 'Verification profiles available in the target repo: pytest-full')
+        Check 'VP2b profile name appears in prompt' ($ppWith -match 'pytest-full')
+    } finally {
+        Remove-Item -Recurse -Force $vpRepo -ErrorAction SilentlyContinue
+    }
+
+    # VP3: no config / no repo => no profiles line, no throw.
+    $ppBare = Build-PlannerPrompt -Goal 'docs only'
+    Check 'VP3a no RepoPath => no profiles line' ($ppBare -notmatch 'Verification profiles available')
+    $vpEmpty = Join-Path ([System.IO.Path]::GetTempPath()) "cond-vp-empty-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $vpEmpty | Out-Null
+    try {
+        & git -C $vpEmpty init -q 2>$null | Out-Null
+        & git -C $vpEmpty config user.email 'test@test.local' 2>$null | Out-Null
+        & git -C $vpEmpty config user.name 'baton-test' 2>$null | Out-Null
+        Set-Content -LiteralPath (Join-Path $vpEmpty 'README.md') -Value 'seed' -Encoding utf8NoBOM
+        & git -C $vpEmpty add -A 2>$null | Out-Null
+        & git -C $vpEmpty commit -q -m 'seed no verify' 2>$null | Out-Null
+        $ppNoCfg = $null
+        $vpThrew = $false
+        try { $ppNoCfg = Build-PlannerPrompt -Goal 'add a feature' -RepoPath $vpEmpty }
+        catch { $vpThrew = $true }
+        Check 'VP3b repo without verification.json => no throw' (-not $vpThrew)
+        Check 'VP3c repo without verification.json => no profiles line' ($ppNoCfg -and ($ppNoCfg -notmatch 'Verification profiles available'))
+        $ppBadPath = $null
+        $vpBadThrew = $false
+        try { $ppBadPath = Build-PlannerPrompt -Goal 'x' -RepoPath (Join-Path $vpEmpty 'does-not-exist') }
+        catch { $vpBadThrew = $true }
+        Check 'VP3d nonexistent RepoPath => no throw' (-not $vpBadThrew)
+        Check 'VP3e nonexistent RepoPath => no profiles line' ($ppBadPath -and ($ppBadPath -notmatch 'Verification profiles available'))
+    } finally {
+        Remove-Item -Recurse -Force $vpEmpty -ErrorAction SilentlyContinue
+    }
 
     $refFleet = Join-Path $PSScriptRoot '../references/fleet.yaml'
     $tmpTools = Join-Path ([System.IO.Path]::GetTempPath()) "cond-tools-$([System.IO.Path]::GetRandomFileName()).yaml"
