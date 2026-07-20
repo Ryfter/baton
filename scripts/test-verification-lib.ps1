@@ -217,18 +217,28 @@ Start-Sleep -Seconds 120
     Assert "V3 diff outside allowed paths -> scope-violation, fail closed" ($v3.verdict -eq 'scope-violation' -and $v3.failure_category -eq 'scope-violation' -and -not $v3.ok)
     # #125: directory-prefix allowed_paths (trailing '/') + segment-boundary safety.
     # Exact entries keep prior semantics; empty AllowedPaths remains unenforced (V1).
+    # Prefix-admitted files pass scope but cap grade at bounded (not strong).
     $v3p = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v3p') -ProtectedPreHashes $protPre -DiffFiles @('app/urlnorm.py') -AllowedPaths @('app/')
     Assert "V3p directory prefix app/ allows app/urlnorm.py" ($v3p.scope_ok -and $v3p.ok -and $v3p.verdict -eq 'pass')
+    Assert "V3p-grade prefix-admitted file caps grade at bounded (not strong)" ($v3p.grade -eq 'bounded')
     $v3q = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v3q') -ProtectedPreHashes $protPre -DiffFiles @('apple/x.py') -AllowedPaths @('app/')
     Assert "V3q directory prefix app/ does NOT allow apple/x.py (segment boundary)" ($v3q.verdict -eq 'scope-violation' -and $v3q.failure_category -eq 'scope-violation' -and -not $v3q.ok -and -not $v3q.scope_ok)
     $v3r = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v3r') -ProtectedPreHashes $protPre -DiffFiles @('app/urlnorm.py', 'docs/readme.md') -AllowedPaths @('app/', 'docs/readme.md')
     Assert "V3r mixed exact+prefix list allows nested + exact" ($v3r.scope_ok -and $v3r.ok)
+    Assert "V3r-grade any prefix-admitted file caps grade at bounded" ($v3r.grade -eq 'bounded')
     $v3s = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v3s') -ProtectedPreHashes $protPre -DiffFiles @('app/urlnorm.py', 'other/b.py') -AllowedPaths @('app/', 'docs/readme.md')
     Assert "V3s mixed list still blocks paths outside exact+prefix" ($v3s.verdict -eq 'scope-violation' -and -not $v3s.scope_ok)
     $v3t = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v3t') -ProtectedPreHashes $protPre -DiffFiles @('src/a.ps1') -AllowedPaths @('src/a.ps1')
     Assert "V3t exact entry still passes (unchanged semantics)" ($v3t.scope_ok -and $v3t.ok)
+    Assert "V3t-grade exact-only list still earns strong" ($v3t.grade -eq 'strong')
     $v3u = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v3u') -ProtectedPreHashes $protPre -DiffFiles @('app/other.py') -AllowedPaths @('app/urlnorm.py')
     Assert "V3u exact file entry still blocks sibling under same dir when not listed" ($v3u.verdict -eq 'scope-violation' -and -not $v3u.scope_ok)
+    # Bare dir name (no trailing '/') is exact-only: must NOT silently admit children.
+    $v3v = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v3v') -ProtectedPreHashes $protPre -DiffFiles @('app/x.py') -AllowedPaths @('app')
+    Assert "V3v bare 'app' entry does NOT admit app/x.py (fail closed)" ($v3v.verdict -eq 'scope-violation' -and -not $v3v.scope_ok -and -not $v3v.ok)
+    # Traversal in diff paths: StartsWith never normalizes '..'; reject explicitly.
+    $v3w = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v3w') -ProtectedPreHashes $protPre -DiffFiles @('app/../other/x.py') -AllowedPaths @('app/')
+    Assert "V3w diff path with .. is scope-violation (not admitted by prefix)" ($v3w.verdict -eq 'scope-violation' -and -not $v3w.scope_ok -and -not $v3w.ok)
     # Protected-oracle mutation
     Set-Content -LiteralPath (Join-Path $repo 'oracle.txt') -Value 'TAMPERED' -Encoding utf8NoBOM
     $v4 = Invoke-VerificationContract -Contract $demo -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v4') -ProtectedPreHashes $protPre

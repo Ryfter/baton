@@ -384,9 +384,10 @@ function Invoke-VerifyCommand {
 function Get-VerificationGrade {
     <# Deterministic evidence grade (codex-ringer §6, V1 simplification recorded in
        the plan): any violation/failure -> invalid; STRONG requires a declared AND
-       intact protected oracle plus full diff scoping; everything else that passed
-       is BOUNDED; the contract's grade_ceiling (e.g. file-exists-nonempty -> weak)
-       caps the result. The worker never selects its own grade. #>
+       intact protected oracle plus full exact-list diff scoping; everything else
+       that passed is BOUNDED; the contract's grade_ceiling (e.g. file-exists-nonempty
+       -> weak) caps the result. Prefix-only scope cannot earn strong. The worker
+       never selects its own grade. #>
     param(
         [Parameter(Mandatory)][hashtable]$Contract,
         [Parameter(Mandatory)][bool]$Passed,
@@ -397,11 +398,14 @@ function Get-VerificationGrade {
         # A declared protected path with no pre-hash was never verified: the oracle
         # integrity is UNKNOWN, so it cannot earn `strong`. Defaults true so callers
         # without protected paths are unaffected.
-        [bool]$ProtectedVerified = $true
+        [bool]$ProtectedVerified = $true,
+        # True only when every diff file matched an EXACT allowed_paths entry
+        # (not merely a directory-prefix). Prefix-admitted scope caps at bounded.
+        [bool]$ScopeExact = $true
     )
     if (-not $Passed) { return 'invalid' }
     $rank = @{ strong = 3; bounded = 2; weak = 1 }
-    $computed = if ($ProtectedDeclared -and $ProtectedIntact -and $ProtectedVerified -and $ScopeEnforced -and $ScopeOk) { 'strong' } else { 'bounded' }
+    $computed = if ($ProtectedDeclared -and $ProtectedIntact -and $ProtectedVerified -and $ScopeEnforced -and $ScopeOk -and $ScopeExact) { 'strong' } else { 'bounded' }
     $ceiling = [string]$Contract.grade_ceiling
     if (-not $rank.ContainsKey($ceiling)) { $ceiling = 'strong' }
     if ($rank[$computed] -le $rank[$ceiling]) { return $computed }
@@ -440,23 +444,31 @@ function Invoke-VerificationContract {
     #    A5 closes that zero-change loophole in V2.
     $scopeEnforced = (@($AllowedPaths).Count -gt 0)
     $scopeOk = $true
+    # Vacuously exact when no files were admitted via prefix (incl. empty DiffFiles).
+    $scopeExact = $true
     if ($scopeEnforced) {
         # Entries ending in '/' are directory prefixes (segment-safe: "app/" matches
         # "app/x.py" but not "apple/x.py"). All other entries stay exact membership.
+        # Windows semantics: case-insensitive comparison means "app/" also admits
+        # "APP/" even on case-sensitive filesystems.
         $allowedNorm = @($AllowedPaths | ForEach-Object { ([string]$_).Replace('\', '/').ToLowerInvariant() } | Where-Object { $_ })
         $exactAllowed = @($allowedNorm | Where-Object { -not $_.EndsWith('/') })
         $prefixAllowed = @($allowedNorm | Where-Object { $_.EndsWith('/') })
         foreach ($df in @($DiffFiles)) {
             if ([string]::IsNullOrWhiteSpace([string]$df)) { continue }
             $dfNorm = ([string]$df).Replace('\', '/').ToLowerInvariant()
-            $matched = $false
-            if ($exactAllowed -contains $dfNorm) { $matched = $true }
-            if (-not $matched) {
+            # Match fleet-backlog traversal guard: reject any '..' segment unnormalized.
+            if ($dfNorm -match '(^|/)\.\.(/|$)') { $scopeOk = $false; break }
+            $matchedExact = $false
+            $matchedPrefix = $false
+            if ($exactAllowed -contains $dfNorm) { $matchedExact = $true }
+            if (-not $matchedExact) {
                 foreach ($pfx in $prefixAllowed) {
-                    if ($dfNorm.StartsWith($pfx, [System.StringComparison]::Ordinal)) { $matched = $true; break }
+                    if ($dfNorm.StartsWith($pfx, [System.StringComparison]::Ordinal)) { $matchedPrefix = $true; break }
                 }
             }
-            if (-not $matched) { $scopeOk = $false; break }
+            if (-not $matchedExact -and -not $matchedPrefix) { $scopeOk = $false; break }
+            if ($matchedPrefix) { $scopeExact = $false }
         }
     }
     $result.scope_ok = $scopeOk
@@ -525,6 +537,6 @@ function Invoke-VerificationContract {
     $result.verdict = 'pass'; $result.ok = $true
     $result.grade = Get-VerificationGrade -Contract $Contract -Passed $true `
         -ProtectedDeclared $protDeclared -ProtectedIntact $protIntact -ProtectedVerified $protVerified `
-        -ScopeEnforced $scopeEnforced -ScopeOk $scopeOk
+        -ScopeEnforced $scopeEnforced -ScopeOk $scopeOk -ScopeExact $scopeExact
     return $result
 }

@@ -399,7 +399,7 @@ function Build-PlannerPrompt {
       "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true,
       "stakes": "low|standard|high", "stakes_basis": "<one concrete risk/size sentence>",
       "verify_profile": "<REQUIRED for code-gen/code-transform when verification is on: a profile name from the target repo's .baton/verification.json (see evidence); empty otherwise>",
-      "allowed_paths": ["<exact repo-relative file paths, OR a directory prefix ending in '/' (e.g. \"app/\"); prefer naming concrete files when known; use the target repo's real top-level directories from the evidence (never guess); empty = unrestricted (avoid for code-gen)>"] }
+      "allowed_paths": ["<exact repo-relative file paths, OR a directory prefix ending in '/' (e.g. \"app/\"); prefer naming concrete files when known; use the target repo's real top-level directories from the evidence (never guess); * globs are NOT supported on this path (a plan with scripts/* fails closed here; fleet-backlog uses globs for the same field name elsewhere); empty = unrestricted (avoid for code-gen)>"] }
   ]
 }
 
@@ -432,13 +432,22 @@ A failing-test + fix pair must be ONE task (per-task verification fails closed o
         } catch { }
         # Fail-soft: cheap repo-layout facts so the planner can name real allowed_paths
         # prefixes instead of guessing (e.g. "src" when code lives under "app/").
+        # --full-tree: ls-tree is CWD-relative without it; RepoPath may be a subdir.
         # No repo / not a git repo / command failure => no line, never throw. Cap at 20.
+        # Filter: drop hostile names (len>64 or chars outside [\w.\-]); git C-escapes
+        # control chars, but we do not rely on that silently.
         try {
-            $topDirs = @(& git -C $RepoPath ls-tree -d --name-only HEAD 2>$null)
+            $topDirs = @(& git -C $RepoPath ls-tree --full-tree -d --name-only HEAD 2>$null)
             if ($LASTEXITCODE -eq 0 -and $topDirs.Count -gt 0) {
-                $capped = @($topDirs | ForEach-Object { [string]$_ } | Where-Object { $_ } | Select-Object -First 20)
-                if ($capped.Count -gt 0) {
-                    $evi = $evi + "`nTarget repo top-level directories: " + ($capped -join ', ')
+                $safeDirs = @(
+                    $topDirs | ForEach-Object { [string]$_ } |
+                        Where-Object { $_ -and $_.Length -le 64 -and $_ -match '^[\w.\-]+$' }
+                )
+                if ($safeDirs.Count -gt 0) {
+                    $capped = @($safeDirs | Select-Object -First 20)
+                    $layoutLine = $capped -join ', '
+                    if ($safeDirs.Count -gt 20) { $layoutLine = $layoutLine + ', ... (truncated)' }
+                    $evi = $evi + "`nTarget repo top-level directories: " + $layoutLine
                 }
             }
         } catch { }
@@ -469,7 +478,18 @@ A failing-test + fix pair must be ONE task (per-task verification fails closed o
     }
     if ($null -eq $resolved) { $resolved = $script:DefaultPlannerPrompt }
 
-    return $resolved.Replace('{{schema}}', $schema).Replace('{{evi}}', $evi).Replace('{{Goal}}', $Goal)
+    # Single-pass token substitution: never rescan already-substituted content
+    # (a directory literally named {{Goal}} must not expand to the goal text).
+    $schemaVal = $schema; $eviVal = $evi; $goalVal = $Goal
+    return [regex]::Replace($resolved, '\{\{(schema|evi|Goal)\}\}', {
+        param($m)
+        switch ($m.Groups[1].Value) {
+            'schema' { return $schemaVal }
+            'evi'    { return $eviVal }
+            'Goal'   { return $goalVal }
+            default  { return $m.Value }
+        }
+    })
 }
 
 function Invoke-PlanPhase {
