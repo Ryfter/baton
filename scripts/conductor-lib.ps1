@@ -399,7 +399,7 @@ function Build-PlannerPrompt {
       "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true,
       "stakes": "low|standard|high", "stakes_basis": "<one concrete risk/size sentence>",
       "verify_profile": "<REQUIRED for code-gen/code-transform when verification is on: a profile name from the target repo's .baton/verification.json (see evidence); empty otherwise>",
-      "allowed_paths": ["<repo-relative files/dirs this task may modify; empty = unrestricted (avoid for code-gen)>"] }
+      "allowed_paths": ["<exact repo-relative file paths, OR a directory prefix ending in '/' (e.g. \"app/\"); prefer naming concrete files when known; use the target repo's real top-level directories from the evidence (never guess); empty = unrestricted (avoid for code-gen)>"] }
   ]
 }
 
@@ -427,6 +427,18 @@ A failing-test + fix pair must be ONE task (per-task verification fails closed o
                 }
                 if ($names.Count -gt 0) {
                     $evi = $evi + "`nVerification profiles available in the target repo: " + ($names -join ', ')
+                }
+            }
+        } catch { }
+        # Fail-soft: cheap repo-layout facts so the planner can name real allowed_paths
+        # prefixes instead of guessing (e.g. "src" when code lives under "app/").
+        # No repo / not a git repo / command failure => no line, never throw. Cap at 20.
+        try {
+            $topDirs = @(& git -C $RepoPath ls-tree -d --name-only HEAD 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $topDirs.Count -gt 0) {
+                $capped = @($topDirs | ForEach-Object { [string]$_ } | Where-Object { $_ } | Select-Object -First 20)
+                if ($capped.Count -gt 0) {
+                    $evi = $evi + "`nTarget repo top-level directories: " + ($capped -join ', ')
                 }
             }
         } catch { }

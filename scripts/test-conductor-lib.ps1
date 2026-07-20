@@ -138,6 +138,10 @@ try {
     Check 'VP1b planner prompt includes allowed_paths' ($pp -match 'allowed_paths')
     Check 'VP1c planner prompt requires profile for code-gen when available' ($pp -match 'must name a verify_profile')
     Check 'VP1d planner prompt fails-closed red intermediate rule' ($pp -match 'failing-test \+ fix pair must be ONE task')
+    # #125: schema wording must match directory-prefix enforcement (trailing '/').
+    Check 'VP1e allowed_paths schema documents exact paths OR directory prefix ending in /' (
+        ($pp -match 'directory prefix ending in') -and ($pp -match 'never guess')
+    )
 
     # VP2: with a committed .baton/verification.json, evidence lists profile names (hermetic).
     $vpRepo = Join-Path ([System.IO.Path]::GetTempPath()) "cond-vp-$([System.IO.Path]::GetRandomFileName())"
@@ -184,8 +188,50 @@ try {
         catch { $vpBadThrew = $true }
         Check 'VP3d nonexistent RepoPath => no throw' (-not $vpBadThrew)
         Check 'VP3e nonexistent RepoPath => no profiles line' ($ppBadPath -and ($ppBadPath -notmatch 'Verification profiles available'))
+        # #125: no RepoPath / non-repo => no top-level-directories line either.
+        Check 'VL0a no RepoPath => no top-level-directories line' ($ppBare -notmatch 'Target repo top-level directories:')
+        Check 'VL0b nonexistent RepoPath => no top-level-directories line' ($ppBadPath -and ($ppBadPath -notmatch 'Target repo top-level directories:'))
     } finally {
         Remove-Item -Recurse -Force $vpEmpty -ErrorAction SilentlyContinue
+    }
+
+    # VL1: temp git repo with top-level dirs => evidence lists them (hermetic; no model calls).
+    $vlRepo = Join-Path ([System.IO.Path]::GetTempPath()) "cond-vl-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $vlRepo | Out-Null
+    try {
+        & git -C $vlRepo init -q 2>$null | Out-Null
+        & git -C $vlRepo config user.email 'test@test.local' 2>$null | Out-Null
+        & git -C $vlRepo config user.name 'baton-test' 2>$null | Out-Null
+        foreach ($dname in @('app', 'docs', 'scripts', 'tests')) {
+            $dpath = Join-Path $vlRepo $dname
+            New-Item -ItemType Directory -Force -Path $dpath | Out-Null
+            Set-Content -LiteralPath (Join-Path $dpath '.keep') -Value '' -Encoding utf8NoBOM
+        }
+        Set-Content -LiteralPath (Join-Path $vlRepo 'README.md') -Value 'seed' -Encoding utf8NoBOM
+        & git -C $vlRepo add -A 2>$null | Out-Null
+        & git -C $vlRepo commit -q -m 'seed layout' 2>$null | Out-Null
+        $ppLayout = $null
+        $vlThrew = $false
+        try { $ppLayout = Build-PlannerPrompt -Goal 'touch app code' -RepoPath $vlRepo }
+        catch { $vlThrew = $true }
+        Check 'VL1a with dirs => no throw' (-not $vlThrew)
+        Check 'VL1b evidence lists top-level directories line' ($ppLayout -match 'Target repo top-level directories:')
+        Check 'VL1c evidence includes app and tests' (($ppLayout -match '\bapp\b') -and ($ppLayout -match '\btests\b'))
+        # Non-git directory path: no line, no throw.
+        $vlNongit = Join-Path ([System.IO.Path]::GetTempPath()) "cond-vl-nongit-$([System.IO.Path]::GetRandomFileName())"
+        New-Item -ItemType Directory -Force -Path $vlNongit | Out-Null
+        try {
+            $ppNongit = $null
+            $vlNgThrew = $false
+            try { $ppNongit = Build-PlannerPrompt -Goal 'x' -RepoPath $vlNongit }
+            catch { $vlNgThrew = $true }
+            Check 'VL2a non-git path => no throw' (-not $vlNgThrew)
+            Check 'VL2b non-git path => no top-level-directories line' ($ppNongit -and ($ppNongit -notmatch 'Target repo top-level directories:'))
+        } finally {
+            Remove-Item -Recurse -Force $vlNongit -ErrorAction SilentlyContinue
+        }
+    } finally {
+        Remove-Item -Recurse -Force $vlRepo -ErrorAction SilentlyContinue
     }
 
     $refFleet = Join-Path $PSScriptRoot '../references/fleet.yaml'

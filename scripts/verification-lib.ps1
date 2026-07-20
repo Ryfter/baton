@@ -441,10 +441,22 @@ function Invoke-VerificationContract {
     $scopeEnforced = (@($AllowedPaths).Count -gt 0)
     $scopeOk = $true
     if ($scopeEnforced) {
-        $allowedSet = @($AllowedPaths | ForEach-Object { ([string]$_).Replace('\', '/').ToLowerInvariant() })
+        # Entries ending in '/' are directory prefixes (segment-safe: "app/" matches
+        # "app/x.py" but not "apple/x.py"). All other entries stay exact membership.
+        $allowedNorm = @($AllowedPaths | ForEach-Object { ([string]$_).Replace('\', '/').ToLowerInvariant() } | Where-Object { $_ })
+        $exactAllowed = @($allowedNorm | Where-Object { -not $_.EndsWith('/') })
+        $prefixAllowed = @($allowedNorm | Where-Object { $_.EndsWith('/') })
         foreach ($df in @($DiffFiles)) {
             if ([string]::IsNullOrWhiteSpace([string]$df)) { continue }
-            if ((([string]$df).Replace('\', '/').ToLowerInvariant()) -notin $allowedSet) { $scopeOk = $false; break }
+            $dfNorm = ([string]$df).Replace('\', '/').ToLowerInvariant()
+            $matched = $false
+            if ($exactAllowed -contains $dfNorm) { $matched = $true }
+            if (-not $matched) {
+                foreach ($pfx in $prefixAllowed) {
+                    if ($dfNorm.StartsWith($pfx, [System.StringComparison]::Ordinal)) { $matched = $true; break }
+                }
+            }
+            if (-not $matched) { $scopeOk = $false; break }
         }
     }
     $result.scope_ok = $scopeOk
