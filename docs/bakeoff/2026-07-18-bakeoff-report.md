@@ -125,3 +125,46 @@ about the "least-proven" critique. That is worth more than a green scorecard wou
 **Next:** fix #125 (with #123 and #124 close behind), then re-run all four Arm A slices from scratch
 and update this report with a real head-to-head. The Arm B branches are deliberately left unmerged
 so both arms can face an identical `main`.
+
+---
+
+## 6. The 2026-07-23 re-run — the chain goes two layers deeper
+
+After #125's fix merged (PR #126, all 11 adversarial-review findings applied) and deployed, Arm A
+re-ran S1 under logged conditions: target `main` had moved again (baseline now **814 tests**; both
+slice defects verified still present, all four issues still open), labor pool = 4 per the d094
+roster change (so this re-run is explicitly *not* a clean A/B against the 07-18 attempts), and the
+primary's expired operator hold was deliberately kept in place so the pool matched Arm B's era.
+
+**The #125 fix held** — zero layout or path findings in either attempt. The gate then found the
+next two layers:
+
+6. **#127 — the economy caps collide with a paid-only agentic roster.** The planner is prompted to
+   prefer cheap tiers and correctly calls narrow work low-stakes; the stakes policy caps low at
+   `free` — but every agentic provider is `paid`, and the only free/local providers cannot edit
+   files. Low-stakes code-gen can never dispatch anyone, and nothing tells the planner the real
+   floor. Two individually-correct principles ("match spend to stakes", "prefer cheapest") collide
+   in a roster where cheap agentic labor does not exist.
+7. **#128 — the Catch-22.** With a legitimate `--stakes high` override (the slice is security work;
+   the planner's `low` classification was itself wrong by the policy's own text), the planner
+   produced its best plan yet — incorporating the prior gate's advice, adding the demanded
+   remediation task. The gate correctly rejected *that* too: an always-on remediation task no-ops
+   on the happy path, and verification correctly demotes an empty diff to failure. No remediation
+   task → "missing-task" finding; always-on remediation task → guaranteed A5 failure. **The plan
+   language cannot express conditional remediation, and task outputs cannot flow between tasks
+   (#115).** The gate demands a plan shape the engine cannot execute.
+
+Re-run stopped there by the standing 2-rejection discipline: the planner was visibly *improving*
+across attempts and the gate was right both times — they are converging on the engine's
+expressiveness ceiling, which no retry budget fixes. S2/S3/S4 remain blocked (#127; and forcing
+`--stakes high` onto a sparkline chart would be depth mis-matching — dishonest measurement).
+Total re-run cost: **$0 labor**, ~16 minutes, two more filed defects.
+
+**Amended verdict.** Unchanged in direction, sharpened in diagnosis: the manual baseline still
+wins outright (4/4 vs 0/4), and the blocking layer is no longer configuration or plumbing — it is
+that **the golden path's quality gates are ahead of its execution engine**. The gate correctly
+requires research→implement→review→remediate with data flowing between tasks; the engine cannot
+yet express conditional tasks or pass task outputs. The remedy is already on the roadmap in
+recognizable form: #115 (task-output bus) + C3 (engine-level rework loop, now unparked by
+evidence) + #127's tier-floor evidence. Until those land, re-running produces identical
+rejections, so #93 stays open with this report as its state of record.
