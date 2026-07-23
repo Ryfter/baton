@@ -381,7 +381,12 @@ function Build-PlannerPrompt {
         - Substitution uses [string]::Replace, NOT -replace: $Goal is untrusted
           user text, and a regex replacement would treat literal '$1'/'$&' in the
           goal as backreferences and corrupt the prompt. #>
-    param([Parameter(Mandatory)][string]$Goal, [string[]]$RegistryLines = @(), [string]$Template)
+    param(
+        [Parameter(Mandatory)][string]$Goal,
+        [string[]]$RegistryLines = @(),
+        [string]$Template,
+        [string]$RepoPath
+    )
     $schema = @'
 {
   "run_id": "<id>",
@@ -392,7 +397,9 @@ function Build-PlannerPrompt {
       "capability": "<ROUTING capability: code-gen for creating/editing files or code, code-transform, reasoning, research, summarize, triage, review — or empty. NEVER a baton command name>",
       "model_pick": "<model or empty>",
       "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true,
-      "stakes": "low|standard|high", "stakes_basis": "<one concrete risk/size sentence>" }
+      "stakes": "low|standard|high", "stakes_basis": "<one concrete risk/size sentence>",
+      "verify_profile": "<REQUIRED for code-gen/code-transform when verification is on: a profile name from the target repo's .baton/verification.json (see evidence); empty otherwise>",
+      "allowed_paths": ["<exact repo-relative file paths, OR a directory prefix ending in '/' (e.g. \"app/\"); prefer naming concrete files when known; use the target repo's real top-level directories from the evidence (never guess); * globs are NOT supported on this path (a plan with scripts/* fails closed here; fleet-backlog uses globs for the same field name elsewhere); empty = unrestricted (avoid for code-gen)>"] }
   ]
 }
 
@@ -400,10 +407,51 @@ Stakes classification: low for narrow, reversible, low-blast-radius work;
 standard for ordinary bounded feature or bugfix work; high for security/privacy/auth,
 migrations, release/publish, cross-cutting architecture, or high-cost-to-reverse work.
 stakes_basis is one concrete sentence naming the risk or size signal.
+Every code-gen/code-transform task must name a verify_profile from the available list when one exists.
+A failing-test + fix pair must be ONE task (per-task verification fails closed on a deliberately-red intermediate task).
 '@
     $evi = if ($RegistryLines.Count) {
         "Tools already wired locally:`n" + (($RegistryLines | ForEach-Object { "- $_" }) -join "`n")
     } else { 'Tools already wired locally: (none)' }
+
+    # Fail-soft: surface profile names from the target repo's HEAD config so the planner
+    # can emit verify_profile. No repo / no config / unparseable => no line, never throw.
+    if (-not [string]::IsNullOrWhiteSpace($RepoPath)) {
+        try {
+            $rawCfg = & git -C $RepoPath show 'HEAD:.baton/verification.json' 2>$null
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace((@($rawCfg) -join ''))) {
+                $doc = (@($rawCfg) -join "`n") | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+                $names = @()
+                if ($doc -is [hashtable] -and $doc.profiles -is [hashtable]) {
+                    $names = @($doc.profiles.Keys | ForEach-Object { [string]$_ } | Where-Object { $_ } | Sort-Object)
+                }
+                if ($names.Count -gt 0) {
+                    $evi = $evi + "`nVerification profiles available in the target repo: " + ($names -join ', ')
+                }
+            }
+        } catch { }
+        # Fail-soft: cheap repo-layout facts so the planner can name real allowed_paths
+        # prefixes instead of guessing (e.g. "src" when code lives under "app/").
+        # --full-tree: ls-tree is CWD-relative without it; RepoPath may be a subdir.
+        # No repo / not a git repo / command failure => no line, never throw. Cap at 20.
+        # Filter: drop hostile names (len>64 or chars outside [\w.\-]); git C-escapes
+        # control chars, but we do not rely on that silently.
+        try {
+            $topDirs = @(& git -C $RepoPath ls-tree --full-tree -d --name-only HEAD 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $topDirs.Count -gt 0) {
+                $safeDirs = @(
+                    $topDirs | ForEach-Object { [string]$_ } |
+                        Where-Object { $_ -and $_.Length -le 64 -and $_ -match '^[\w.\-]+$' }
+                )
+                if ($safeDirs.Count -gt 0) {
+                    $capped = @($safeDirs | Select-Object -First 20)
+                    $layoutLine = $capped -join ', '
+                    if ($safeDirs.Count -gt 20) { $layoutLine = $layoutLine + ', ... (truncated)' }
+                    $evi = $evi + "`nTarget repo top-level directories: " + $layoutLine
+                }
+            }
+        } catch { }
+    }
 
     $requiredPlaceholders = @('{{schema}}', '{{evi}}', '{{Goal}}')
     # Slice B: a caller-supplied template (the shadow challenger) wins when it
@@ -430,7 +478,18 @@ stakes_basis is one concrete sentence naming the risk or size signal.
     }
     if ($null -eq $resolved) { $resolved = $script:DefaultPlannerPrompt }
 
-    return $resolved.Replace('{{schema}}', $schema).Replace('{{evi}}', $evi).Replace('{{Goal}}', $Goal)
+    # Single-pass token substitution: never rescan already-substituted content
+    # (a directory literally named {{Goal}} must not expand to the goal text).
+    $schemaVal = $schema; $eviVal = $evi; $goalVal = $Goal
+    return [regex]::Replace($resolved, '\{\{(schema|evi|Goal)\}\}', {
+        param($m)
+        switch ($m.Groups[1].Value) {
+            'schema' { return $schemaVal }
+            'evi'    { return $eviVal }
+            'Goal'   { return $goalVal }
+            default  { return $m.Value }
+        }
+    })
 }
 
 function Invoke-PlanPhase {
@@ -446,7 +505,8 @@ function Invoke-PlanPhase {
         [string[]]$RegistryLines = @(),
         [scriptblock]$Dispatcher,
         [string]$RunDir,
-        [scriptblock]$ShadowResolver
+        [scriptblock]$ShadowResolver,
+        [string]$RepoPath
     )
     $dispatch = {
         param($cand, $prompt)
@@ -474,6 +534,7 @@ function Invoke-PlanPhase {
     }
     $promptParams = @{ Goal = $Goal; RegistryLines = $RegistryLines }
     if ($shadowTemplate) { $promptParams.Template = $shadowTemplate }
+    if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $promptParams.RepoPath = $RepoPath }
     $prompt = Build-PlannerPrompt @promptParams
     $res = & $dispatch $cands[0] $prompt
     if ([int]$res.exit_code -ne 0) { return $null }
@@ -616,7 +677,8 @@ function Invoke-PlanRevise {
         [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
         [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
         [string[]]$RegistryLines = @(),
-        [scriptblock]$Dispatcher
+        [scriptblock]$Dispatcher,
+        [string]$RepoPath
     )
     $dispatch = {
         param($cand, $prompt)
@@ -639,7 +701,9 @@ function Invoke-PlanRevise {
         # Reuse the standard planner prompt, then append the prior plan + the brief. Literal
         # concatenation only — $PlanJson/$ReviseBrief are untrusted; never -replace (a '$1'/'$&'
         # in the text would be read as a regex backreference and corrupt the prompt).
-        $base = Build-PlannerPrompt -Goal $Goal -RegistryLines $RegistryLines
+        $promptBuild = @{ Goal = $Goal; RegistryLines = $RegistryLines }
+        if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $promptBuild.RepoPath = $RepoPath }
+        $base = Build-PlannerPrompt @promptBuild
         $prompt = $base + "`n`n## Prior plan (JSON)`n" + $PlanJson +
                   "`n`n## Peer review findings — revise the plan to address these`n" + $ReviseBrief +
                   "`n`nEmit the FULL revised plan as JSON in the same schema. Address every finding you can without expanding scope."
@@ -695,7 +759,8 @@ function Invoke-Conductor {
         [scriptblock]$VerifyPreflight,
         [switch]$NormalizeMissingStakes,
         [switch]$RequireTaskStakes,
-        [ValidateSet('low','standard','high')][string]$StakesOverride
+        [ValidateSet('low','standard','high')][string]$StakesOverride,
+        [string]$RepoPath
     )
     if (-not $RunDir) { $RunDir = Initialize-RunDir }
     else { New-Item -ItemType Directory -Force -Path $RunDir | Out-Null }
@@ -703,7 +768,14 @@ function Invoke-Conductor {
 
     # 1. Plan phase.
     $plan = if ($Planner) { & $Planner $Goal }
-            else { Invoke-PlanPhase -Goal $Goal -RunId $runId -BudgetCap $BudgetCap -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath -Dispatcher $Dispatcher -RunDir $RunDir }
+            else {
+                $planArgs = @{
+                    Goal = $Goal; RunId = $runId; BudgetCap = $BudgetCap; MaxCostTier = $MaxCostTier
+                    FleetPath = $FleetPath; ToolsPath = $ToolsPath; Dispatcher = $Dispatcher; RunDir = $RunDir
+                }
+                if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $planArgs.RepoPath = $RepoPath }
+                Invoke-PlanPhase @planArgs
+            }
     if ($null -eq $plan) {
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'error' -Level 'error' -Message 'planning failed')
         $empty = @{ run_id = $runId; goal = $Goal; budget_cap = $BudgetCap; tasks = @() }
@@ -818,8 +890,13 @@ function Invoke-Conductor {
                 if ($PlanRevise) {
                     # One revise pass, then walk whichever plan survives (no re-gate, Slice 2).
                     $priorPlan = $plan
-                    $revisedPlan = Invoke-PlanRevise -Goal $Goal -PlanJson $planJsonText -ReviseBrief ([string]$pgRes.revise_brief) `
-                        -Run $plan -RunDir $RunDir -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath -Dispatcher $Dispatcher
+                    $reviseArgs = @{
+                        Goal = $Goal; PlanJson = $planJsonText; ReviseBrief = [string]$pgRes.revise_brief
+                        Run = $plan; RunDir = $RunDir; MaxCostTier = $MaxCostTier
+                        FleetPath = $FleetPath; ToolsPath = $ToolsPath; Dispatcher = $Dispatcher
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $reviseArgs.RepoPath = $RepoPath }
+                    $revisedPlan = Invoke-PlanRevise @reviseArgs
                     $revisionApplied = -not [object]::ReferenceEquals($priorPlan, $revisedPlan)
                     if ($PlanGateFailLoud -and -not $revisionApplied) {
                         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan-gate' -Level 'error' -Message 'PLAN GATE DEGRADED — required revise pass failed — no labor will run')

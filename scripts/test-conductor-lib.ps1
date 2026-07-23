@@ -133,6 +133,143 @@ try {
     # v1.11.1: codex planned capability "code-parallel" (a baton COMMAND name) and no
     # provider claims it -> walk failed. The schema must pin the routing vocabulary.
     Check 'T38a planner schema constrains capability vocabulary' (($pp -match 'code-gen') -and ($pp -notmatch '"capability": "<capability or empty>"'))
+    # #119: planner schema must teach verify_profile + allowed_paths (plan gate / VerifyPreflight).
+    Check 'VP1a planner prompt includes verify_profile' ($pp -match 'verify_profile')
+    Check 'VP1b planner prompt includes allowed_paths' ($pp -match 'allowed_paths')
+    Check 'VP1c planner prompt requires profile for code-gen when available' ($pp -match 'must name a verify_profile')
+    Check 'VP1d planner prompt fails-closed red intermediate rule' ($pp -match 'failing-test \+ fix pair must be ONE task')
+    # #125: schema wording must match directory-prefix enforcement (trailing '/').
+    Check 'VP1e allowed_paths schema documents exact paths OR directory prefix ending in /' (
+        ($pp -match 'directory prefix ending in') -and ($pp -match 'never guess')
+    )
+    Check 'VP1f allowed_paths schema notes * globs are NOT supported on this path' (
+        ($pp -match 'globs are NOT supported') -or ($pp -match '\* globs are NOT supported')
+    )
+
+    # VP2: with a committed .baton/verification.json, evidence lists profile names (hermetic).
+    $vpRepo = Join-Path ([System.IO.Path]::GetTempPath()) "cond-vp-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $vpRepo | Out-Null
+    try {
+        & git -C $vpRepo init -q 2>$null | Out-Null
+        & git -C $vpRepo config user.email 'test@test.local' 2>$null | Out-Null
+        & git -C $vpRepo config user.name 'baton-test' 2>$null | Out-Null
+        $vpCfgDir = Join-Path $vpRepo '.baton'
+        New-Item -ItemType Directory -Force -Path $vpCfgDir | Out-Null
+        $vpCfg = @{ schema = 1; profiles = @{ 'pytest-full' = @{ preset = 'pytest'; args = @('tests') } } }
+        ConvertTo-Json -InputObject $vpCfg -Depth 6 | Set-Content -LiteralPath (Join-Path $vpCfgDir 'verification.json') -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $vpRepo 'README.md') -Value 'seed' -Encoding utf8NoBOM
+        & git -C $vpRepo add -A 2>$null | Out-Null
+        & git -C $vpRepo commit -q -m 'seed verify config' 2>$null | Out-Null
+        $ppWith = Build-PlannerPrompt -Goal 'add a feature' -RepoPath $vpRepo
+        Check 'VP2a evidence lists verification profile from repo' ($ppWith -match 'Verification profiles available in the target repo: pytest-full')
+        Check 'VP2b profile name appears in prompt' ($ppWith -match 'pytest-full')
+    } finally {
+        Remove-Item -Recurse -Force $vpRepo -ErrorAction SilentlyContinue
+    }
+
+    # VP3: no config / no repo => no profiles line, no throw.
+    $ppBare = Build-PlannerPrompt -Goal 'docs only'
+    Check 'VP3a no RepoPath => no profiles line' ($ppBare -notmatch 'Verification profiles available')
+    $vpEmpty = Join-Path ([System.IO.Path]::GetTempPath()) "cond-vp-empty-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $vpEmpty | Out-Null
+    try {
+        & git -C $vpEmpty init -q 2>$null | Out-Null
+        & git -C $vpEmpty config user.email 'test@test.local' 2>$null | Out-Null
+        & git -C $vpEmpty config user.name 'baton-test' 2>$null | Out-Null
+        Set-Content -LiteralPath (Join-Path $vpEmpty 'README.md') -Value 'seed' -Encoding utf8NoBOM
+        & git -C $vpEmpty add -A 2>$null | Out-Null
+        & git -C $vpEmpty commit -q -m 'seed no verify' 2>$null | Out-Null
+        $ppNoCfg = $null
+        $vpThrew = $false
+        try { $ppNoCfg = Build-PlannerPrompt -Goal 'add a feature' -RepoPath $vpEmpty }
+        catch { $vpThrew = $true }
+        Check 'VP3b repo without verification.json => no throw' (-not $vpThrew)
+        Check 'VP3c repo without verification.json => no profiles line' ($ppNoCfg -and ($ppNoCfg -notmatch 'Verification profiles available'))
+        $ppBadPath = $null
+        $vpBadThrew = $false
+        try { $ppBadPath = Build-PlannerPrompt -Goal 'x' -RepoPath (Join-Path $vpEmpty 'does-not-exist') }
+        catch { $vpBadThrew = $true }
+        Check 'VP3d nonexistent RepoPath => no throw' (-not $vpBadThrew)
+        Check 'VP3e nonexistent RepoPath => no profiles line' ($ppBadPath -and ($ppBadPath -notmatch 'Verification profiles available'))
+        # #125: no RepoPath / non-repo => no top-level-directories line either.
+        Check 'VL0a no RepoPath => no top-level-directories line' ($ppBare -notmatch 'Target repo top-level directories:')
+        Check 'VL0b nonexistent RepoPath => no top-level-directories line' ($ppBadPath -and ($ppBadPath -notmatch 'Target repo top-level directories:'))
+    } finally {
+        Remove-Item -Recurse -Force $vpEmpty -ErrorAction SilentlyContinue
+    }
+
+    # VL1: temp git repo with top-level dirs => evidence lists them (hermetic; no model calls).
+    $vlRepo = Join-Path ([System.IO.Path]::GetTempPath()) "cond-vl-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path $vlRepo | Out-Null
+    try {
+        & git -C $vlRepo init -q 2>$null | Out-Null
+        & git -C $vlRepo config user.email 'test@test.local' 2>$null | Out-Null
+        & git -C $vlRepo config user.name 'baton-test' 2>$null | Out-Null
+        foreach ($dname in @('app', 'docs', 'scripts', 'tests')) {
+            $dpath = Join-Path $vlRepo $dname
+            New-Item -ItemType Directory -Force -Path $dpath | Out-Null
+            Set-Content -LiteralPath (Join-Path $dpath '.keep') -Value '' -Encoding utf8NoBOM
+        }
+        Set-Content -LiteralPath (Join-Path $vlRepo 'README.md') -Value 'seed' -Encoding utf8NoBOM
+        & git -C $vlRepo add -A 2>$null | Out-Null
+        & git -C $vlRepo -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m 'seed layout' 2>$null | Out-Null
+        Check 'VL1-commit seed commit succeeded' ($LASTEXITCODE -eq 0)
+        $ppLayout = $null
+        $vlThrew = $false
+        try { $ppLayout = Build-PlannerPrompt -Goal 'touch app code' -RepoPath $vlRepo }
+        catch { $vlThrew = $true }
+        Check 'VL1a with dirs => no throw' (-not $vlThrew)
+        Check 'VL1b evidence lists top-level directories line' ($ppLayout -match 'Target repo top-level directories:')
+        # Anchor to the evidence line (schema example also contains "app/" — do not match bare).
+        Check 'VL1c evidence includes app and tests on layout line' (
+            ($ppLayout -match 'Target repo top-level directories:.*\bapp\b') -and
+            ($ppLayout -match 'Target repo top-level directories:.*\btests\b')
+        )
+        # --full-tree: RepoPath = subdirectory must still list REPO-ROOT top-level dirs.
+        $vlSub = Join-Path $vlRepo 'app'
+        $ppSub = $null
+        $vlSubThrew = $false
+        try { $ppSub = Build-PlannerPrompt -Goal 'touch app code' -RepoPath $vlSub }
+        catch { $vlSubThrew = $true }
+        Check 'VL1d RepoPath=subdir => no throw' (-not $vlSubThrew)
+        Check 'VL1e RepoPath=subdir still lists repo-root dirs (full-tree)' (
+            ($ppSub -match 'Target repo top-level directories:.*\bapp\b') -and
+            ($ppSub -match 'Target repo top-level directories:.*\bdocs\b') -and
+            ($ppSub -match 'Target repo top-level directories:.*\bscripts\b')
+        )
+        # Single-pass tokens: dir literally named {{Goal}} must not expand to goal text in layout.
+        $hostileName = '{{Goal}}'
+        $hostilePath = Join-Path $vlRepo $hostileName
+        New-Item -ItemType Directory -Force -Path $hostilePath | Out-Null
+        Set-Content -LiteralPath (Join-Path $hostilePath '.keep') -Value '' -Encoding utf8NoBOM
+        & git -C $vlRepo add -A 2>$null | Out-Null
+        & git -C $vlRepo -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m 'add hostile dir name' 2>$null | Out-Null
+        Check 'VL1f hostile-name commit succeeded' ($LASTEXITCODE -eq 0)
+        $goalText = 'UNIQUE_GOAL_MARKER_xyzzy'
+        $ppHostile = Build-PlannerPrompt -Goal $goalText -RepoPath $vlRepo
+        # Layout line must not contain the expanded goal (single-pass). Hostile name is
+        # also filtered by the safe-name regex, so it should not appear either.
+        $layoutMatch = [regex]::Match($ppHostile, 'Target repo top-level directories:([^\r\n]+)')
+        $layoutBody = if ($layoutMatch.Success) { $layoutMatch.Groups[1].Value } else { '' }
+        Check 'VL1g layout line present after hostile dir' ($layoutMatch.Success)
+        Check 'VL1h goal text does NOT appear inside layout line (single-pass)' ($layoutBody -notmatch [regex]::Escape($goalText))
+        Check 'VL1i hostile {{Goal}} dir name filtered from layout' ($layoutBody -notmatch [regex]::Escape('{{Goal}}'))
+        # Non-git directory path: no line, no throw.
+        $vlNongit = Join-Path ([System.IO.Path]::GetTempPath()) "cond-vl-nongit-$([System.IO.Path]::GetRandomFileName())"
+        New-Item -ItemType Directory -Force -Path $vlNongit | Out-Null
+        try {
+            $ppNongit = $null
+            $vlNgThrew = $false
+            try { $ppNongit = Build-PlannerPrompt -Goal 'x' -RepoPath $vlNongit }
+            catch { $vlNgThrew = $true }
+            Check 'VL2a non-git path => no throw' (-not $vlNgThrew)
+            Check 'VL2b non-git path => no top-level-directories line' ($ppNongit -and ($ppNongit -notmatch 'Target repo top-level directories:'))
+        } finally {
+            Remove-Item -Recurse -Force $vlNongit -ErrorAction SilentlyContinue
+        }
+    } finally {
+        Remove-Item -Recurse -Force $vlRepo -ErrorAction SilentlyContinue
+    }
 
     $refFleet = Join-Path $PSScriptRoot '../references/fleet.yaml'
     $tmpTools = Join-Path ([System.IO.Path]::GetTempPath()) "cond-tools-$([System.IO.Path]::GetRandomFileName()).yaml"
