@@ -70,10 +70,18 @@ function Add-MemoryEvent {
         $Id = "mem-$stamp-$rand"
     }
     $sig = Get-MemorySignature -Text $Problem
+    # Core refs always present (null when absent). Optional task_id / stakes_basis
+    # pass through for conductor-ledger ingest without inventing a parallel schema.
+    $refOut = @{ job = $Refs['job']; run = $Refs['run']; decision = $Refs['decision'] }
+    foreach ($extraKey in @('task_id', 'stakes_basis')) {
+        if ($Refs -is [hashtable] -and $Refs.ContainsKey($extraKey) -and -not [string]::IsNullOrWhiteSpace([string]$Refs[$extraKey])) {
+            $refOut[$extraKey] = $Refs[$extraKey]
+        }
+    }
     $row = [ordered]@{
         ts = $Timestamp; id = $Id; kind = $Kind; signature = $sig; problem = $Problem
         approach = $Approach; outcome = $Outcome; tags = @($Tags); source = $Source
-        refs = @{ job = $Refs['job']; run = $Refs['run']; decision = $Refs['decision'] }
+        refs = $refOut
         scope = $Scope; promoted = $false
     }
     try {
