@@ -135,8 +135,10 @@ function Test-ProviderAgentic {
 function Get-CapabilityCostTierFloor {
     <# Cheapest cost_tier among enabled fleet providers that claim $Capability.
        For code-gen/code-transform, only edit-eligible providers count
-       (Test-ProviderAgentic). Returns 'local'|'free'|'paid'|'UNAVAILABLE'.
-       Fail-soft: missing/unparseable fleet => 'UNAVAILABLE', never throws. #>
+       (Test-ProviderAgentic). Also applies Select-Capability context floors
+       (Get-CapabilityFloors + known-too-small context). Returns
+       'local'|'free'|'paid'|'UNAVAILABLE'. Fail-soft: missing/unparseable
+       fleet => 'UNAVAILABLE', never throws. #>
     param(
         [Parameter(Mandatory)][string]$Capability,
         [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml')
@@ -147,6 +149,12 @@ function Get-CapabilityCostTierFloor {
         }
         $providers = @(Read-Fleet -Path $FleetPath)
         $generalCaps = @(Get-GeneralCapabilities -FleetPath $FleetPath)
+        # Mirror Select-Capability (routing-lib ~153-155). Fail-soft if floors helper
+        # is out of scope (routing-lib normally in scope via this file's header).
+        $capFloors = @{}
+        if (Get-Command Get-CapabilityFloors -ErrorAction SilentlyContinue) {
+            $capFloors = Get-CapabilityFloors -FleetPath $FleetPath
+        }
         $bestRank = 99
         $bestTier = $null
         foreach ($prov in $providers) {
@@ -157,6 +165,11 @@ function Get-CapabilityCostTierFloor {
             if (-not $claimsCap) { continue }
             if ($Capability -in @('code-gen', 'code-transform')) {
                 if (-not (Test-ProviderAgentic -Provider $prov)) { continue }
+            }
+            # Same as Select-Capability: known-too-small context disqualifies;
+            # unknown/missing context never does.
+            if ($capFloors.ContainsKey($Capability) -and $prov.context) {
+                if ([int]$prov.context -lt $capFloors[$Capability]) { continue }
             }
             $tierName = [string]$prov.cost_tier
             if ($tierName -notin @('local', 'free', 'paid')) { continue }

@@ -477,6 +477,12 @@ A failing-test + fix pair must be ONE task (per-task verification fails closed o
             if (Test-Path -LiteralPath $FleetPath) {
                 $fleetProviders = @(Read-Fleet -Path $FleetPath)
                 $generalCaps = @(Get-GeneralCapabilities -FleetPath $FleetPath)
+                # Mirror Select-Capability context floors (routing-lib Get-CapabilityFloors
+                # + `$p.context < floor`). Fail-soft if floors helper is out of scope.
+                $capFloors = @{}
+                if (Get-Command Get-CapabilityFloors -ErrorAction SilentlyContinue) {
+                    $capFloors = Get-CapabilityFloors -FleetPath $FleetPath
+                }
                 # Fixed planner vocabulary (schema + plan-review) so UNAVAILABLE is visible.
                 $floorCaps = @('code-gen', 'code-transform', 'research', 'review', 'plan-review', 'reasoning', 'summarize', 'triage')
                 $floorParts = [System.Collections.Generic.List[string]]::new()
@@ -491,6 +497,11 @@ A failing-test + fix pair must be ONE task (per-task verification fails closed o
                         if (-not $claimsCap) { continue }
                         if ($floorCap -in @('code-gen', 'code-transform')) {
                             if (-not (Test-PlannerProviderEditEligible -Provider $prov)) { continue }
+                        }
+                        # Same as Select-Capability: known-too-small context disqualifies;
+                        # unknown/missing context never does.
+                        if ($capFloors.ContainsKey($floorCap) -and $prov.context) {
+                            if ([int]$prov.context -lt $capFloors[$floorCap]) { continue }
                         }
                         $tierName = [string]$prov.cost_tier
                         if ($tierName -notin @('local', 'free', 'paid')) { continue }

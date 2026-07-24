@@ -329,6 +329,39 @@ providers:
         catch { $tfMissThrew = $true }
         Check 'TF2b missing fleet file => no throw' (-not $tfMissThrew)
         Check 'TF2c missing fleet file => no floors line' ($ppMissing -and ($ppMissing -notmatch $floorsHeader))
+        # TF3 (#127 review): capability_floors context filter — known-small cheap
+        # provider must not understate the reported floor (Select-Capability parity).
+        $tfCtxFleet = Join-Path ([System.IO.Path]::GetTempPath()) "cond-tf-ctx-$([System.IO.Path]::GetRandomFileName()).yaml"
+        Set-Content -LiteralPath $tfCtxFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: [summarize]
+capability_floors:
+  summarize: 65536
+providers:
+  - name: cheap-small
+    kind: cli
+    enabled: true
+    cost_tier: local
+    platform: local
+    capabilities: [summarize]
+    context: 8192
+    command_template: 'echo "{{prompt}}"'
+  - name: mid-eligible
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: local
+    capabilities: [summarize]
+    context: 131072
+    command_template: 'echo "{{prompt}}"'
+'@
+        try {
+            $ppCtx = Build-PlannerPrompt -Goal 'summarize docs' -FleetPath $tfCtxFleet
+            $ctxLine = [regex]::Match([string]$ppCtx, 'Capability tier floors \(cheapest tier with an eligible provider\): ([^\r\n]+)')
+            $ctxBody = if ($ctxLine.Success) { $ctxLine.Groups[1].Value } else { '' }
+            Check 'TF3 context floor excludes cheap under-context provider' ($ctxBody -match 'summarize=free')
+        } finally {
+            Remove-Item -Force $tfCtxFleet -ErrorAction SilentlyContinue
+        }
     } finally {
         Remove-Item -Force $tfFleet -ErrorAction SilentlyContinue
     }
