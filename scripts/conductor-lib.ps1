@@ -356,7 +356,9 @@ Schema:
 
 Rules: give each task a unique id; use depends_on to order; set reversible=false
 ONLY for steps that commit to master, force-push, delete outside a worktree, or
-publish externally; prefer the cheapest est_cost_tier that can do the job. Set stakes
+publish externally; prefer the cheapest est_cost_tier AT WHICH AN ELIGIBLE PROVIDER
+EXISTS — see the capability tier floors in the evidence; never set a task's
+est_cost_tier below its capability's floor. Set stakes
 to low for narrow, reversible, low-blast-radius work; standard for ordinary bounded
 feature or bugfix work; high for security/privacy/auth, migrations, release/publish,
 cross-cutting architecture, or other high-cost-to-reverse work. stakes_basis must be
@@ -368,6 +370,17 @@ planning work that already exists.
 ## Goal
 {{Goal}}
 '@
+
+function Test-PlannerProviderEditEligible {
+    <# Mirror of Test-ProviderAgentic (fleet-executor-lib.ps1 / d078+d091) for the
+       planner evidence path only — keeps conductor-lib free of the executor import.
+       Explicit agentic flag wins; else platform ∈ {claude,codex,gemini}; http /
+       stdio-json kinds are never edit-eligible. #>
+    param([Parameter(Mandatory)]$Provider)
+    if ([string]$Provider.kind -in @('http', 'stdio-json')) { return $false }
+    if ($null -ne $Provider.agentic) { return [bool]$Provider.agentic }
+    return (([string]$Provider.platform) -in @('claude', 'codex', 'gemini'))
+}
 
 function Build-PlannerPrompt {
     <# Instruct a model to decompose the goal into a task DAG (strict JSON).
@@ -385,7 +398,8 @@ function Build-PlannerPrompt {
         [Parameter(Mandatory)][string]$Goal,
         [string[]]$RegistryLines = @(),
         [string]$Template,
-        [string]$RepoPath
+        [string]$RepoPath,
+        [string]$FleetPath
     )
     $schema = @'
 {
@@ -403,6 +417,7 @@ function Build-PlannerPrompt {
   ]
 }
 
+prefer the cheapest est_cost_tier AT WHICH AN ELIGIBLE PROVIDER EXISTS — see the capability tier floors in the evidence; never set a task's est_cost_tier below its capability's floor.
 Stakes classification: low for narrow, reversible, low-blast-radius work;
 standard for ordinary bounded feature or bugfix work; high for security/privacy/auth,
 migrations, release/publish, cross-cutting architecture, or high-cost-to-reverse work.
@@ -448,6 +463,45 @@ A failing-test + fix pair must be ONE task (per-task verification fails closed o
                     $layoutLine = $capped -join ', '
                     if ($safeDirs.Count -gt 20) { $layoutLine = $layoutLine + ', ... (truncated)' }
                     $evi = $evi + "`nTarget repo top-level directories: " + $layoutLine
+                }
+            }
+        } catch { }
+    }
+
+    # Fail-soft (#127): capability tier floors from the live fleet so the planner
+    # never emits est_cost_tier below a tier that actually has an eligible provider.
+    # Missing/unparseable fleet.yaml => no line, never throw. code-gen/code-transform
+    # floors count only edit-eligible providers (mirrors Test-ProviderAgentic).
+    if (-not [string]::IsNullOrWhiteSpace($FleetPath)) {
+        try {
+            if (Test-Path -LiteralPath $FleetPath) {
+                $fleetProviders = @(Read-Fleet -Path $FleetPath)
+                $generalCaps = @(Get-GeneralCapabilities -FleetPath $FleetPath)
+                # Fixed planner vocabulary (schema + plan-review) so UNAVAILABLE is visible.
+                $floorCaps = @('code-gen', 'code-transform', 'research', 'review', 'plan-review', 'reasoning', 'summarize', 'triage')
+                $floorParts = [System.Collections.Generic.List[string]]::new()
+                foreach ($floorCap in $floorCaps) {
+                    $bestRank = 99
+                    $bestTier = $null
+                    foreach ($prov in $fleetProviders) {
+                        if ($prov.enabled -ne $true) { continue }
+                        $claims = $prov.capabilities
+                        $claimsCap = if ($null -ne $claims) { @($claims) -contains $floorCap }
+                                     else { $generalCaps -contains $floorCap }
+                        if (-not $claimsCap) { continue }
+                        if ($floorCap -in @('code-gen', 'code-transform')) {
+                            if (-not (Test-PlannerProviderEditEligible -Provider $prov)) { continue }
+                        }
+                        $tierName = [string]$prov.cost_tier
+                        if ($tierName -notin @('local', 'free', 'paid')) { continue }
+                        $rank = Get-CostTierRank $tierName
+                        if ($rank -lt $bestRank) { $bestRank = $rank; $bestTier = $tierName }
+                    }
+                    if ($null -eq $bestTier) { [void]$floorParts.Add("${floorCap}=UNAVAILABLE") }
+                    else { [void]$floorParts.Add("${floorCap}=$bestTier") }
+                }
+                if ($floorParts.Count -gt 0) {
+                    $evi = $evi + "`nCapability tier floors (cheapest tier with an eligible provider): " + ($floorParts -join ', ')
                 }
             }
         } catch { }
@@ -535,6 +589,7 @@ function Invoke-PlanPhase {
     $promptParams = @{ Goal = $Goal; RegistryLines = $RegistryLines }
     if ($shadowTemplate) { $promptParams.Template = $shadowTemplate }
     if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $promptParams.RepoPath = $RepoPath }
+    if (-not [string]::IsNullOrWhiteSpace($FleetPath)) { $promptParams.FleetPath = $FleetPath }
     $prompt = Build-PlannerPrompt @promptParams
     $res = & $dispatch $cands[0] $prompt
     if ([int]$res.exit_code -ne 0) { return $null }
@@ -703,6 +758,7 @@ function Invoke-PlanRevise {
         # in the text would be read as a regex backreference and corrupt the prompt).
         $promptBuild = @{ Goal = $Goal; RegistryLines = $RegistryLines }
         if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $promptBuild.RepoPath = $RepoPath }
+        if (-not [string]::IsNullOrWhiteSpace($FleetPath)) { $promptBuild.FleetPath = $FleetPath }
         $base = Build-PlannerPrompt @promptBuild
         $prompt = $base + "`n`n## Prior plan (JSON)`n" + $PlanJson +
                   "`n`n## Peer review findings — revise the plan to address these`n" + $ReviseBrief +

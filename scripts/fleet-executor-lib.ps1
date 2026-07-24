@@ -132,6 +132,57 @@ function Test-ProviderAgentic {
     return (([string]$Provider.platform) -in @('claude', 'codex', 'gemini'))
 }
 
+function Get-CapabilityCostTierFloor {
+    <# Cheapest cost_tier among enabled fleet providers that claim $Capability.
+       For code-gen/code-transform, only edit-eligible providers count
+       (Test-ProviderAgentic). Returns 'local'|'free'|'paid'|'UNAVAILABLE'.
+       Fail-soft: missing/unparseable fleet => 'UNAVAILABLE', never throws. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml')
+    )
+    try {
+        if ([string]::IsNullOrWhiteSpace($FleetPath) -or -not (Test-Path -LiteralPath $FleetPath)) {
+            return 'UNAVAILABLE'
+        }
+        $providers = @(Read-Fleet -Path $FleetPath)
+        $generalCaps = @(Get-GeneralCapabilities -FleetPath $FleetPath)
+        $bestRank = 99
+        $bestTier = $null
+        foreach ($prov in $providers) {
+            if ($prov.enabled -ne $true) { continue }
+            $claims = $prov.capabilities
+            $claimsCap = if ($null -ne $claims) { @($claims) -contains $Capability }
+                         else { $generalCaps -contains $Capability }
+            if (-not $claimsCap) { continue }
+            if ($Capability -in @('code-gen', 'code-transform')) {
+                if (-not (Test-ProviderAgentic -Provider $prov)) { continue }
+            }
+            $tierName = [string]$prov.cost_tier
+            if ($tierName -notin @('local', 'free', 'paid')) { continue }
+            $rank = Get-CostTierRank $tierName
+            if ($rank -lt $bestRank) { $bestRank = $rank; $bestTier = $tierName }
+        }
+        if ($null -eq $bestTier) { return 'UNAVAILABLE' }
+        return $bestTier
+    } catch {
+        return 'UNAVAILABLE'
+    }
+}
+
+function Format-ZeroCandidateWhy {
+    <# Human-readable failure for the New-AgenticSpawner zero-candidate seam (#127).
+       Names the stakes/tier collision and the cheapest eligible floor — message
+       only; does not change routing. #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)][string]$TierCap,
+        [Parameter(Mandatory)][string]$Stakes,
+        [Parameter(Mandatory)][string]$Floor
+    )
+    return "capability ${Capability}: no eligible provider at tier <=${TierCap} (stakes ${Stakes} caps tier; cheapest eligible = ${Floor}). Remedies: raise task est_cost_tier, or re-run with --stakes standard|high."
+}
+
 function Test-ProviderDepthTier {
     <# Capability probe for depth_applied: true when the selected provider CAN
        apply a safe named tier fragment on the CLI path (defines a non-empty
@@ -420,8 +471,12 @@ function New-AgenticSpawner {
         # via a platform field, so require source='fleet' before the agentic test.
         $cands = @($raw | Where-Object { ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and (Test-ProviderAgentic -Provider $_) })
         if ($cands.Count -lt 1) {
+            # Message-only remedy (#127): name the stakes/tier collision; do NOT auto-escalate.
+            $floor = Get-CapabilityCostTierFloor -Capability $cap -FleetPath $FleetPath
+            $whyZero = Format-ZeroCandidateWhy -Capability $cap -TierCap $policy.max_cost_tier `
+                -Stakes $policy.stakes -Floor $floor
             return @{
-                ok = $false; spend = 0.0; chose = ''; why = "no edit-capable candidate for '$cap'"; alternatives = @()
+                ok = $false; spend = 0.0; chose = ''; why = $whyZero; alternatives = @()
                 stakes = $policy.stakes; stakes_basis = $policy.stakes_basis; depth_tier = $policy.depth_tier
                 selection_mode = $policy.selection_mode; tier_cap = $policy.max_cost_tier
                 depth_applied = $false; selected_cost_tier = ''

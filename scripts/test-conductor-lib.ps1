@@ -271,6 +271,68 @@ try {
         Remove-Item -Recurse -Force $vlRepo -ErrorAction SilentlyContinue
     }
 
+    # TF1 (#127): capability tier floors evidence — non-agentic local must NOT lower
+    # code-gen floor; summarize may be local; unclaimed cap = UNAVAILABLE; fail-soft.
+    Check 'TF0 schema contains floor cost rule' (
+        ($pp -match 'AT WHICH AN ELIGIBLE PROVIDER EXISTS') -and
+        ($pp -match "never set a task's est_cost_tier below its capability's floor")
+    )
+    $tfFleet = Join-Path ([System.IO.Path]::GetTempPath()) "cond-tf-fleet-$([System.IO.Path]::GetRandomFileName()).yaml"
+    Set-Content -LiteralPath $tfFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: [code-gen, reasoning, summarize]
+providers:
+  - name: paid-agentic
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    platform: codex
+    capabilities: [code-gen, research, review, plan-review, reasoning, triage]
+    command_template: 'echo "{{prompt}}"'
+  - name: local-nonagentic-codegen
+    kind: cli
+    enabled: true
+    cost_tier: local
+    platform: local
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+  - name: local-summarize
+    kind: cli
+    enabled: true
+    cost_tier: local
+    platform: local
+    capabilities: [summarize]
+    command_template: 'echo "{{prompt}}"'
+'@
+    try {
+        $ppFloors = $null
+        $tfThrew = $false
+        try { $ppFloors = Build-PlannerPrompt -Goal 'implement feature' -FleetPath $tfFleet }
+        catch { $tfThrew = $true }
+        Check 'TF1a with fleet => no throw' (-not $tfThrew)
+        $floorsLineMatch = [regex]::Match([string]$ppFloors, 'Capability tier floors \(cheapest tier with an eligible provider\): ([^\r\n]+)')
+        $floorsBody = if ($floorsLineMatch.Success) { $floorsLineMatch.Groups[1].Value } else { '' }
+        Check 'TF1b floors line present' $floorsLineMatch.Success
+        # Non-agentic local claiming code-gen must NOT lower the code-gen floor.
+        Check 'TF1c code-gen floor is paid (non-agentic local ignored)' ($floorsBody -match 'code-gen=paid')
+        Check 'TF1d summarize floor is local' ($floorsBody -match 'summarize=local')
+        # code-transform is in the fixed vocab but nobody claims it.
+        Check 'TF1e unclaimed capability = UNAVAILABLE' ($floorsBody -match 'code-transform=UNAVAILABLE')
+        Check 'TF1f research floor is paid' ($floorsBody -match 'research=paid')
+        # No FleetPath => no evidence line (schema prose still mentions "tier floors" — match the line header).
+        $floorsHeader = 'Capability tier floors \(cheapest tier with an eligible provider\):'
+        $ppNoFleet = Build-PlannerPrompt -Goal 'docs only'
+        Check 'TF2a no FleetPath => no floors line' ($ppNoFleet -notmatch $floorsHeader)
+        # Missing fleet file => no line, no throw.
+        $ppMissing = $null
+        $tfMissThrew = $false
+        try { $ppMissing = Build-PlannerPrompt -Goal 'x' -FleetPath (Join-Path ([System.IO.Path]::GetTempPath()) "no-such-fleet-$([System.IO.Path]::GetRandomFileName()).yaml") }
+        catch { $tfMissThrew = $true }
+        Check 'TF2b missing fleet file => no throw' (-not $tfMissThrew)
+        Check 'TF2c missing fleet file => no floors line' ($ppMissing -and ($ppMissing -notmatch $floorsHeader))
+    } finally {
+        Remove-Item -Force $tfFleet -ErrorAction SilentlyContinue
+    }
+
     $refFleet = Join-Path $PSScriptRoot '../references/fleet.yaml'
     $tmpTools = Join-Path ([System.IO.Path]::GetTempPath()) "cond-tools-$([System.IO.Path]::GetRandomFileName()).yaml"
     Set-Content -Path $tmpTools -Value 'tools: []' -Encoding utf8NoBOM
