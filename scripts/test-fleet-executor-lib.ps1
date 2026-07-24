@@ -67,6 +67,104 @@ try {
     Check 'A9 agentic:true cannot grant HTTP edit powers' (-not (Test-ProviderAgentic -Provider @{ kind = 'http'; agentic = $true; platform = 'codex' }))
     Check 'A10 agentic:true cannot grant stdio-json edit powers' (-not (Test-ProviderAgentic -Provider @{ kind = 'stdio-json'; agentic = $true; platform = 'codex' }))
 
+    # ---- Format-ZeroCandidateWhy / Get-CapabilityCostTierFloor (#127) ----
+    $zcMsg = Format-ZeroCandidateWhy -Capability 'code-gen' -TierCap 'free' -Stakes 'low' -Floor 'paid'
+    Check 'ZC1 message names capability and tier cap' (
+        ($zcMsg -match 'capability code-gen:') -and ($zcMsg -match 'tier <=free'))
+    Check 'ZC2 message names stakes and floor' (
+        ($zcMsg -match 'stakes low caps tier') -and ($zcMsg -match 'cheapest eligible = paid'))
+    Check 'ZC3 message lists remedies' (
+        ($zcMsg -match 'raise task est_cost_tier') -and ($zcMsg -match '--stakes standard\|high'))
+    $zcFloorFleet = Join-Path $tmpRoot 'zc-floor-fleet.yaml'
+    Set-Content -LiteralPath $zcFloorFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: [code-gen, summarize]
+providers:
+  - name: paid-agentic
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    platform: codex
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+  - name: local-nonagentic
+    kind: cli
+    enabled: true
+    cost_tier: local
+    platform: local
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+  - name: local-sum
+    kind: cli
+    enabled: true
+    cost_tier: local
+    platform: local
+    capabilities: [summarize]
+    command_template: 'echo "{{prompt}}"'
+'@
+    Check 'ZC4 code-gen floor is paid (non-agentic local ignored)' (
+        (Get-CapabilityCostTierFloor -Capability 'code-gen' -FleetPath $zcFloorFleet) -eq 'paid')
+    Check 'ZC5 summarize floor is local' (
+        (Get-CapabilityCostTierFloor -Capability 'summarize' -FleetPath $zcFloorFleet) -eq 'local')
+    Check 'ZC6 unclaimed capability is UNAVAILABLE' (
+        (Get-CapabilityCostTierFloor -Capability 'plan-review' -FleetPath $zcFloorFleet) -eq 'UNAVAILABLE')
+    Check 'ZC7 missing fleet is UNAVAILABLE fail-soft' (
+        (Get-CapabilityCostTierFloor -Capability 'code-gen' -FleetPath (Join-Path $tmpRoot 'no-fleet.yaml')) -eq 'UNAVAILABLE')
+    # Context-floor parity with Select-Capability (#127 review): a known-small-context
+    # cheap provider must not understate the reported floor.
+    $zcCtxFleet = Join-Path $tmpRoot 'zc-ctx-floor-fleet.yaml'
+    Set-Content -LiteralPath $zcCtxFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: [summarize]
+capability_floors:
+  summarize: 65536
+providers:
+  - name: cheap-small
+    kind: cli
+    enabled: true
+    cost_tier: local
+    platform: local
+    capabilities: [summarize]
+    context: 8192
+    command_template: 'echo "{{prompt}}"'
+  - name: mid-eligible
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: local
+    capabilities: [summarize]
+    context: 131072
+    command_template: 'echo "{{prompt}}"'
+'@
+    Check 'ZC8 context floor excludes cheap under-context provider' (
+        (Get-CapabilityCostTierFloor -Capability 'summarize' -FleetPath $zcCtxFleet) -eq 'free')
+
+    # ---- Eligibility agreement: Test-ProviderAgentic vs Test-PlannerProviderEditEligible ----
+    # Drift guard for the intentional mirror pair (d078/d091 / #127 review).
+    # Same case table intent as conductor suite if ever split; load planner mirror here.
+    if (-not (Get-Command Test-PlannerProviderEditEligible -ErrorAction SilentlyContinue)) {
+        . "$PSScriptRoot/conductor-lib.ps1"
+    }
+    $eligCases = @(
+        @{ name='http agentic true';          kind='http';       agentic=$true;  platform='codex';   expect=$false }
+        @{ name='stdio-json agentic true';    kind='stdio-json'; agentic=$true;  platform='claude';  expect=$false }
+        @{ name='cli agentic true';           kind='cli';        agentic=$true;  platform='local';   expect=$true }
+        @{ name='cli agentic false';          kind='cli';        agentic=$false; platform='codex';   expect=$false }
+        @{ name='cli agentic absent codex';   kind='cli';        agentic=$null;  platform='codex';   expect=$true }
+        @{ name='cli agentic absent claude';  kind='cli';        agentic=$null;  platform='claude';  expect=$true }
+        @{ name='cli agentic absent gemini';  kind='cli';        agentic=$null;  platform='gemini';  expect=$true }
+        @{ name='cli agentic absent other';   kind='cli';        agentic=$null;  platform='local';   expect=$false }
+        @{ name='cli agentic absent noplat';  kind='cli';        agentic=$null;  platform=$null;     expect=$false }
+        @{ name='http agentic false';         kind='http';       agentic=$false; platform='codex';   expect=$false }
+        @{ name='cli agentic true noplat';    kind='cli';        agentic=$true;  platform=$null;     expect=$true }
+    )
+    foreach ($ec in $eligCases) {
+        $prov = @{ kind = $ec.kind }
+        if ($null -ne $ec.agentic) { $prov['agentic'] = $ec.agentic }
+        if ($null -ne $ec.platform) { $prov['platform'] = $ec.platform }
+        $a = [bool](Test-ProviderAgentic -Provider $prov)
+        $b = [bool](Test-PlannerProviderEditEligible -Provider $prov)
+        Check "EA $($ec.name) agreement" (($a -eq $b) -and ($a -eq $ec.expect))
+    }
+
     if (Get-Command Test-ProviderDepthTier -ErrorAction SilentlyContinue) {
         $tierProvider = @{ kind='cli'; command_template='tool {{tier_args}} "{{prompt}}"'; tier_med='--effort medium' }
         Check 'DT1 valid CLI named tier with consuming template is applied' (Test-ProviderDepthTier -Provider $tierProvider -DepthTier med)
@@ -240,7 +338,10 @@ providers:
         $sp4 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetLocalOnly -ToolsPath $toolsPath -Dispatcher $noopDisp
         $r4 = & $sp4 $task
         Check 'P13 local-only fleet -> not ok' ($r4.ok -eq $false)
-        Check 'P14 message names the capability' ($r4.why -match "no edit-capable candidate for 'code-gen'")
+        Check 'P14 message names the capability and tier collision (#127)' (
+            ($r4.why -match 'capability code-gen:') -and
+            ($r4.why -match 'cheapest eligible = UNAVAILABLE') -and
+            ($r4.why -match 'raise task est_cost_tier'))
 
         # agentic: true override on a local entry -> eligible
         $fleetOverride = Join-Path $env:BATON_HOME 'fleet-override.yaml'
@@ -278,7 +379,8 @@ tools:
         $sp6 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetLocalOnly -ToolsPath $toolsWithPlatform -Dispatcher $noopDisp
         $r6 = & $sp6 $task
         Check 'I1a tools.yaml platform:codex candidate does not make local-only fleet edit-capable' ($r6.ok -eq $false)
-        Check 'I1a why says no edit-capable candidate' ($r6.why -match 'no edit-capable candidate')
+        Check 'I1a why says capability tier collision (#127)' (
+            ($r6.why -match 'capability code-gen:') -and ($r6.why -match 'cheapest eligible'))
 
         # Main fleet (has fake-agentic) + the same tools.yaml entry -> must still pick
         # the fleet candidate, never the tool.
