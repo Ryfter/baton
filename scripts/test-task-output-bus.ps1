@@ -313,6 +313,20 @@ fact: bar uses Baz
     Check 'H5b authority comment mentions allowed_paths / oracle' (
         ($src -match 'allowed_paths') -and ($src -match 'oracle'))
 
+    # Scope brief (#136): allowed_paths named in the worker prompt, oracle stays authority
+    $scoped = Build-AgenticWorkerPrompt -TaskDesc 'edit stuff' -AllowedPaths @('app/', 'tests/')
+    Check 'H6 scope brief names the allowed paths' (
+        ($scoped -match 'Scope: create or modify files ONLY') -and ($scoped -match 'app/, tests/'))
+    Check 'H6b scope brief sits after Task and before the output instruction' (
+        ($scoped.IndexOf('Task: edit stuff') -lt $scoped.IndexOf('Scope: create or modify')) -and
+        ($scoped.IndexOf('Scope: create or modify') -lt $scoped.IndexOf($instr)))
+    $unscoped = Build-AgenticWorkerPrompt -TaskDesc 'edit stuff'
+    Check 'H6c no allowed_paths -> no scope brief' (
+        $unscoped.IndexOf('Scope: create or modify') -lt 0)
+    $blankScoped = Build-AgenticWorkerPrompt -TaskDesc 'edit stuff' -AllowedPaths @('', '   ')
+    Check 'H6d whitespace-only allowed_paths behave like none' (
+        $blankScoped.IndexOf('Scope: create or modify') -lt 0)
+
     if ($script:fail -eq 0) {
         Write-Host "`nALL CHECKS PASS"
         exit 0
