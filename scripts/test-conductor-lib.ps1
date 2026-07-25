@@ -1156,8 +1156,24 @@ ERROR: You have hit your usage limit. Try again later.
     $sp = { param($t) @{ ok=$false; spend=0.0; chose=''; why='capability triage: no eligible provider at tier <=free (stakes low caps tier; cheapest eligible = paid)'; alternatives=@() } }
     $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp
     Check 'WHY1 status failed' ($res.status -eq 'failed')
-    $whyEv = @(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'error' })
+    $whyEv = @(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match '"kind":"error"' })
     Check 'WHY2 error event carries the why' (@($whyEv | Where-Object { $_ -match 'no eligible provider at tier' }).Count -ge 1)
+    Remove-Item $d -Recurse -Force
+
+    # WHY3: failure with EMPTY why still journals the task desc (fallback unchanged)
+    $d = New-VfRun
+    $sp = { param($t) @{ ok=$false; spend=0.0; chose=''; why=''; alternatives=@() } }
+    $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp
+    $emptyWhyEv = @(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match '"kind":"error"' })
+    Check 'WHY3 empty why falls back to desc' (@($emptyWhyEv | Where-Object { $_ -match '"message":"edit"' }).Count -ge 1)
+    Remove-Item $d -Recurse -Force
+
+    # WHY4: successful task keeps desc on the finished event (why never substitutes)
+    $d = New-VfRun
+    $sp = { param($t) @{ ok=$true; spend=0.0; chose='w'; why='picked w for reasons'; alternatives=@() } }
+    $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp
+    $finEv = @(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match '"kind":"finished"' })
+    Check 'WHY4 finished event keeps desc' (@($finEv | Where-Object { $_ -match '"message":"edit"' }).Count -ge 1)
     Remove-Item $d -Recurse -Force
 
     # VF7: -Verify ABSENT -> byte-for-byte unchanged (no verification events even if $r carries them)
