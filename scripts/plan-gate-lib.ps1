@@ -138,7 +138,9 @@ same frozen contract (hard ceiling enforced in engine code). Therefore:
 do NOT demand an in-DAG remediation/fix-up task after review tasks — its
 absence is NOT a missing-task defect, and an explicit always-on remediation
 task in a plan SHOULD be flagged as overbuild (it cannot pass verification
-when it has nothing to fix).
+when it has nothing to fix). This applies ONLY to post-review remediation:
+missing IMPLEMENTATION, research, or verification tasks the goal genuinely
+requires are still missing-task defects — flag those as before.
 
 ## Goal
 $Goal
