@@ -446,8 +446,10 @@ $script:TaskOutputBusTruncMarker = '(truncated)'
 
 # Engine-owned rework (#128 slice 2 / engine-expressiveness §4). Mechanical ceiling
 # enforced in code, never by prompt text. Default 1 = old single evidence-informed
-# retry subsumed as rework cycle #1.
+# retry subsumed as rework cycle #1. AbsoluteMaxRework is the hard code backstop
+# (spec §4.3): LLM-authored task.max_rework can never raise above it.
 $script:DefaultMaxRework = 1
+$script:AbsoluteMaxRework = 3
 $script:ReworkableFailureCategories = @(
     'check-failed', 'check-timeout', 'no-change',
     'expected-file-missing', 'expected-file-empty', 'expected-file-unchanged'
@@ -942,43 +944,106 @@ function New-AgenticSpawner {
 }
 
 function Resolve-MaxRework {
-    <# Mechanical rework ceiling. Precedence: explicit Override > task.max_rework >
-       env BATON_MAX_REWORK > $script:DefaultMaxRework. Always clamped to >= 0. #>
+    <# Mechanical rework ceiling (spec §4.3). Hard code AbsoluteMaxRework is always
+       the outer clamp. Precedence:
+         1. explicit Override (hard-clamped)
+         2. resolved = min(AbsoluteMaxRework, envOrDefault,
+                           taskValue-if-present-else-envOrDefault)
+       envOrDefault = BATON_MAX_REWORK if set, else DefaultMaxRework (1).
+       Task.max_rework may LOWER below the operator/env ceiling, never raise above
+       it — an LLM plan emitting max_rework:50 cannot beat the operator. Always
+       clamped to >= 0. #>
     param(
         $Task = $null,
         $Override = $null
     )
-    $n = $null
+    $hard = [int]$script:AbsoluteMaxRework
     if ($null -ne $Override -and "$Override" -ne '') {
+        $n = $null
         try { $n = [int]$Override } catch { $n = $null }
+        if ($null -eq $n) { $n = [int]$script:DefaultMaxRework }
+        if ($n -lt 0) { $n = 0 }
+        return [Math]::Min($hard, $n)
     }
-    if ($null -eq $n -and $null -ne $Task) {
+
+    $envOrDefault = [int]$script:DefaultMaxRework
+    if ($env:BATON_MAX_REWORK -and "$env:BATON_MAX_REWORK" -ne '') {
+        try { $envOrDefault = [int]$env:BATON_MAX_REWORK } catch { $envOrDefault = [int]$script:DefaultMaxRework }
+    }
+    if ($envOrDefault -lt 0) { $envOrDefault = 0 }
+
+    $taskVal = $null
+    if ($null -ne $Task) {
         $has = if ($Task -is [System.Collections.IDictionary]) {
             $Task.Contains('max_rework')
         } else {
             $null -ne $Task.PSObject.Properties['max_rework']
         }
         if ($has -and $null -ne $Task.max_rework -and "$($Task.max_rework)" -ne '') {
-            try { $n = [int]$Task.max_rework } catch { $n = $null }
+            try { $taskVal = [int]$Task.max_rework } catch { $taskVal = $null }
         }
     }
-    if ($null -eq $n -and $env:BATON_MAX_REWORK -and "$env:BATON_MAX_REWORK" -ne '') {
-        try { $n = [int]$env:BATON_MAX_REWORK } catch { $n = $null }
-    }
-    if ($null -eq $n) { $n = [int]$script:DefaultMaxRework }
-    if ($n -lt 0) { $n = 0 }
-    return $n
+    $taskOrEnv = if ($null -ne $taskVal) { $taskVal } else { $envOrDefault }
+    if ($taskOrEnv -lt 0) { $taskOrEnv = 0 }
+    return [Math]::Min($hard, [Math]::Min($envOrDefault, $taskOrEnv))
 }
 
 function Normalize-ReworkEvidenceText {
-    <# Whitespace-normalized form for identical-findings halt. Byte-identical after
-       CRLF→LF, collapse of horizontal whitespace, and trim. #>
+    <# Normalize evidence for the identical-findings halt. Collapses whitespace,
+       then masks volatile tokens that otherwise make consecutive failures look
+       distinct: ISO-8601/RFC timestamps, GUIDs, hex strings >= 8 chars, and
+       absolute paths under temp/run dirs.
+       Residual risk: arbitrary volatile output (counters, nonces outside these
+       patterns) can still defeat the identical-evidence check; AbsoluteMaxRework
+       hard cap is the real backstop. #>
     param([AllowEmptyString()][AllowNull()][string]$Text = '')
     if ($null -eq $Text) { return '' }
     $t = [string]$Text
     $t = $t -replace "`r`n", "`n" -replace "`r", "`n"
     $t = $t -replace '[ \t]+', ' '
     $t = $t -replace ' *\n *', "`n"
+
+    # Absolute paths under temp / run dirs -> fixed placeholder (before hex so
+    # path segments with hex chars don't get partially rewritten first).
+    $tempRoots = [System.Collections.Generic.List[string]]::new()
+    foreach ($cand in @(
+        [System.IO.Path]::GetTempPath(),
+        $env:TEMP, $env:TMP, $env:TMPDIR,
+        $env:BATON_HOME
+    )) {
+        if ([string]::IsNullOrWhiteSpace([string]$cand)) { continue }
+        try {
+            $full = [System.IO.Path]::GetFullPath([string]$cand).TrimEnd('\', '/')
+            if ($full -and -not ($tempRoots -contains $full)) { [void]$tempRoots.Add($full) }
+        } catch { }
+    }
+    foreach ($root in $tempRoots) {
+        $esc = [regex]::Escape($root) -replace '/', '[\\/]' -replace '\\\\', '[\\/]'
+        # Also accept either slash style after the root.
+        $t = [regex]::Replace($t, "(?i)$esc[\\/][^\s`"'<>|]+", '<TEMP_PATH>')
+    }
+    # Common temp path shapes not covered by env (portable fixtures / cross-box).
+    $t = [regex]::Replace($t,
+        '(?i)(?:[A-Z]:[\\/](?:Users[\\/][^\\/\s]+[\\/]AppData[\\/]Local[\\/]Temp|Windows[\\/]Temp)|/tmp|/var/tmp)[\\/][^\s`"''<>|]+',
+        '<TEMP_PATH>')
+
+    # ISO-8601 / RFC-3339 timestamps (with optional fractional seconds + TZ).
+    $t = [regex]::Replace($t,
+        '\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?',
+        '<TIMESTAMP>')
+    # RFC-1123-ish date headers (e.g. "Mon, 24 Jul 2026 12:34:56 GMT").
+    $t = [regex]::Replace($t,
+        '(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2}(?: GMT| UTC)?',
+        '<TIMESTAMP>')
+
+    # GUIDs (before bare hex so the full GUID collapses as one token).
+    $t = [regex]::Replace($t,
+        '(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b',
+        '<GUID>')
+
+    # Hex strings >= 8 chars (git shas, content hashes in check output).
+    $t = [regex]::Replace($t, '(?i)\b[0-9a-f]{8,}\b', '<HEX>')
+
     return $t.Trim()
 }
 
@@ -1272,14 +1337,21 @@ function New-VerifyingSpawner {
             if ($outcome -eq 'passed') { break }
         }
 
-        if (
-            [string]$final.v.verdict -ne 'pass' -and
-            -not $haltReason -and
-            $reworkCycles -ge $maxRework -and
-            $maxRework -gt 0 -and
-            (Test-ReworkableFailure -FailureCategory ([string]$final.v.failure_category) -or $reworkCycles -gt 0)
-        ) {
-            $haltReason = 'max_rework'
+        # Stamp haltReason from the actual exit cause — not "max_rework" for every
+        # post-cycle non-pass. Non-reworkable category (e.g. scope-violation after a
+        # rework attempt) uses the category name; ceiling exhaustion uses max_rework;
+        # identical-evidence is already set inside the loop.
+        if ([string]$final.v.verdict -ne 'pass' -and -not $haltReason) {
+            $finalCat = [string]$final.v.failure_category
+            if ($reworkCycles -gt 0 -and -not (Test-ReworkableFailure -FailureCategory $finalCat)) {
+                $haltReason = if ($finalCat) { $finalCat } else { 'non-reworkable' }
+            } elseif (
+                $reworkCycles -ge $maxRework -and
+                $maxRework -gt 0 -and
+                (Test-ReworkableFailure -FailureCategory $finalCat)
+            ) {
+                $haltReason = 'max_rework'
+            }
         }
 
         $v = $final.v

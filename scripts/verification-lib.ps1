@@ -412,6 +412,55 @@ function Get-VerificationGrade {
     return $ceiling
 }
 
+function Test-DiffFilesInAllowedPaths {
+    <# #125 scope matcher (exact membership OR directory-prefix). Entries ending
+       in '/' are segment-safe directory prefixes ("app/" matches "app/x.py" but
+       not "apple/x.py"); all other entries are exact. Case-insensitive. Rejects
+       any unnormalized '..' segment. Empty AllowedPaths => not enforced (ok).
+       Returns @{ ok; enforced; scope_exact; first_offender }. #>
+    param(
+        [string[]]$DiffFiles = @(),
+        [string[]]$AllowedPaths = @()
+    )
+    $enforced = (@($AllowedPaths | Where-Object { $_ }).Count -gt 0)
+    $out = [ordered]@{
+        ok             = $true
+        enforced       = $enforced
+        scope_exact    = $true
+        first_offender = ''
+    }
+    if (-not $enforced) { return $out }
+    $allowedNorm = @(
+        $AllowedPaths |
+            ForEach-Object { ([string]$_).Replace('\', '/').ToLowerInvariant() } |
+            Where-Object { $_ }
+    )
+    $exactAllowed = @($allowedNorm | Where-Object { -not $_.EndsWith('/') })
+    $prefixAllowed = @($allowedNorm | Where-Object { $_.EndsWith('/') })
+    foreach ($df in @($DiffFiles)) {
+        if ([string]::IsNullOrWhiteSpace([string]$df)) { continue }
+        $dfNorm = ([string]$df).Replace('\', '/').ToLowerInvariant()
+        if ($dfNorm -match '(^|/)\.\.(/|$)') {
+            $out.ok = $false; $out.first_offender = [string]$df; return $out
+        }
+        $matchedExact = $false
+        $matchedPrefix = $false
+        if ($exactAllowed -contains $dfNorm) { $matchedExact = $true }
+        if (-not $matchedExact) {
+            foreach ($pfx in $prefixAllowed) {
+                if ($dfNorm.StartsWith($pfx, [System.StringComparison]::Ordinal)) {
+                    $matchedPrefix = $true; break
+                }
+            }
+        }
+        if (-not $matchedExact -and -not $matchedPrefix) {
+            $out.ok = $false; $out.first_offender = [string]$df; return $out
+        }
+        if ($matchedPrefix) { $out.scope_exact = $false }
+    }
+    return $out
+}
+
 function Invoke-VerificationContract {
     <# The façade V2 consumes. Orchestrates: run argv -> expected files (A5 content
        bar) -> protected-oracle integrity -> diff scope -> deterministic grade.
@@ -442,35 +491,10 @@ function Invoke-VerificationContract {
     #    scope-SUBSET test, never for non-emptiness — a no-op change with empty
     #    expect_files can still pass. The proof-by-diff (non-empty task diff) half of
     #    A5 closes that zero-change loophole in V2.
-    $scopeEnforced = (@($AllowedPaths).Count -gt 0)
-    $scopeOk = $true
-    # Vacuously exact when no files were admitted via prefix (incl. empty DiffFiles).
-    $scopeExact = $true
-    if ($scopeEnforced) {
-        # Entries ending in '/' are directory prefixes (segment-safe: "app/" matches
-        # "app/x.py" but not "apple/x.py"). All other entries stay exact membership.
-        # Windows semantics: case-insensitive comparison means "app/" also admits
-        # "APP/" even on case-sensitive filesystems.
-        $allowedNorm = @($AllowedPaths | ForEach-Object { ([string]$_).Replace('\', '/').ToLowerInvariant() } | Where-Object { $_ })
-        $exactAllowed = @($allowedNorm | Where-Object { -not $_.EndsWith('/') })
-        $prefixAllowed = @($allowedNorm | Where-Object { $_.EndsWith('/') })
-        foreach ($df in @($DiffFiles)) {
-            if ([string]::IsNullOrWhiteSpace([string]$df)) { continue }
-            $dfNorm = ([string]$df).Replace('\', '/').ToLowerInvariant()
-            # Match fleet-backlog traversal guard: reject any '..' segment unnormalized.
-            if ($dfNorm -match '(^|/)\.\.(/|$)') { $scopeOk = $false; break }
-            $matchedExact = $false
-            $matchedPrefix = $false
-            if ($exactAllowed -contains $dfNorm) { $matchedExact = $true }
-            if (-not $matchedExact) {
-                foreach ($pfx in $prefixAllowed) {
-                    if ($dfNorm.StartsWith($pfx, [System.StringComparison]::Ordinal)) { $matchedPrefix = $true; break }
-                }
-            }
-            if (-not $matchedExact -and -not $matchedPrefix) { $scopeOk = $false; break }
-            if ($matchedPrefix) { $scopeExact = $false }
-        }
-    }
+    $scopeMatch = Test-DiffFilesInAllowedPaths -DiffFiles $DiffFiles -AllowedPaths $AllowedPaths
+    $scopeEnforced = [bool]$scopeMatch.enforced
+    $scopeOk = [bool]$scopeMatch.ok
+    $scopeExact = [bool]$scopeMatch.scope_exact
     $result.scope_ok = $scopeOk
     if (-not $scopeOk) {
         $result.verdict = 'scope-violation'; $result.failure_category = 'scope-violation'

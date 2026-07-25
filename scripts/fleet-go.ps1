@@ -160,6 +160,8 @@ if ($Execute) {
     }
     $go['Spawner'] = New-AgenticSpawner @spawnArgs
     $go['DiffProvider'] = { Get-RunDiff -Worktree $wt.worktree -BaseSha $wt.base_sha }.GetNewClosure()
+    # Acceptance-rework scope check needs the live worktree (git name-only vs pre-rework tree).
+    $go['Worktree'] = $wt.worktree
     # #101: default --execute hard-requires planner stakes (no silent normalize).
     # Opt back into the aging normalize+warn path with -NormalizeMissingStakes, or
     # force every task with --stakes / -Stakes.

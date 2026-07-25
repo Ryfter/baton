@@ -90,11 +90,28 @@ providers:
 
     # ---- Pure helpers ----
     Check 'H1 DefaultMaxRework is 1' ($script:DefaultMaxRework -eq 1)
+    Check 'H1b AbsoluteMaxRework is 3' ($script:AbsoluteMaxRework -eq 3)
     Check 'H2 Resolve-MaxRework default 1' ((Resolve-MaxRework) -eq 1)
-    Check 'H3 Resolve-MaxRework task field' ((Resolve-MaxRework -Task ([pscustomobject]@{ max_rework = 2 })) -eq 2)
-    Check 'H4 Resolve-MaxRework override wins' ((Resolve-MaxRework -Task ([pscustomobject]@{ max_rework = 9 }) -Override 0) -eq 0)
+    # task.max_rework may LOWER under the operator ceiling, never raise: no env => envOrDefault=1
+    Check 'H3 Resolve-MaxRework task=2 no env -> 1 (operator default caps)' (
+        (Resolve-MaxRework -Task ([pscustomobject]@{ max_rework = 2 })) -eq 1)
+    $env:BATON_MAX_REWORK = '1'
+    Check 'H3b task=50 + env=1 -> 1' ((Resolve-MaxRework -Task ([pscustomobject]@{ max_rework = 50 })) -eq 1)
+    Remove-Item env:BATON_MAX_REWORK -ErrorAction SilentlyContinue
+    Check 'H3c task=0 -> 0 (may lower)' ((Resolve-MaxRework -Task ([pscustomobject]@{ max_rework = 0 })) -eq 0)
+    $env:BATON_MAX_REWORK = '2'
+    Check 'H3d env=2 task=1 -> 1 (task lowers)' ((Resolve-MaxRework -Task ([pscustomobject]@{ max_rework = 1 })) -eq 1)
+    Check 'H3e env=2 no task -> 2' ((Resolve-MaxRework) -eq 2)
+    $env:BATON_MAX_REWORK = '5'
+    Check 'H3f env=5 no task -> hardcap 3' ((Resolve-MaxRework) -eq 3)
+    Remove-Item env:BATON_MAX_REWORK -ErrorAction SilentlyContinue
+    Check 'H4 Resolve-MaxRework override 0 wins' ((Resolve-MaxRework -Task ([pscustomobject]@{ max_rework = 9 }) -Override 0) -eq 0)
+    Check 'H4b Override 9 hard-clamped to AbsoluteMaxRework' ((Resolve-MaxRework -Override 9) -eq 3)
     Check 'H5 Normalize collapses whitespace' (
         (Normalize-ReworkEvidenceText -Text "a  b`r`n c ") -eq (Normalize-ReworkEvidenceText -Text "a b`nc"))
+    $normA = Normalize-ReworkEvidenceText -Text "fail at 2026-07-24T12:34:56Z path=$($env:TEMP)\rework-aaa\out.txt done"
+    $normB = Normalize-ReworkEvidenceText -Text "fail at 2026-07-24T99:00:00Z path=$($env:TEMP)\rework-bbb\out.txt done"
+    Check 'H5b Normalize masks timestamp+temp path (identical after)' ($normA -eq $normB -and $normA -match '<TIMESTAMP>' -and $normA -match '<TEMP_PATH>')
     Check 'H6 Test-ReworkableFailure check-failed' (Test-ReworkableFailure -FailureCategory 'check-failed')
     Check 'H7 Test-ReworkableFailure scope-violation false' (-not (Test-ReworkableFailure -FailureCategory 'scope-violation'))
     Check 'H8 Test-ReworkableFailure protected-path false' (-not (Test-ReworkableFailure -FailureCategory 'protected-path-mutated'))
@@ -294,6 +311,35 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     Check 'E3 only two labor dispatches' ($callCountE.Value -eq 2)
     Check 'E4 no third attempt row' (@(Get-Attempts $fxE.runDir).Count -eq 2)
 
+    # ---- (e2) identical-evidence halt when evidences differ ONLY by volatile tokens ----
+    $fxE2 = New-VerifyFixture -Name 'e2' -VProfile $passProfile -Root $tmpRoot
+    $hookVol = Join-Path $tmpRoot 'hook-volatile.ps1'
+    Set-Content -LiteralPath $hookVol -Encoding utf8NoBOM -Value @'
+function Invoke-TestVerify { param($Task, $Attempt, $Grew)
+    $ts = if ($Attempt -eq 1) { '2026-07-24T10:00:00Z' } else { '2026-07-24T11:22:33Z' }
+    $tmpFile = Join-Path $env:TEMP ("rework-vol-$Attempt-" + [guid]::NewGuid().ToString() + ".txt")
+    Set-Content -LiteralPath $tmpFile -Value "ASSERT failed: expected 2 got 1 at $ts file=$tmpFile" -Encoding utf8NoBOM
+    return @{
+        verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'
+        proves='hooked'; output_path=$tmpFile; duration_ms=5
+    }
+}
+'@
+    $callCountE2 = [ref]0
+    $dispE2 = {
+        param($pick, $prompt)
+        $callCountE2.Value++
+        Set-Content -LiteralPath (Join-Path (Get-Location).Path "e2-$($callCountE2.Value).txt") -Value 'x' -Encoding utf8NoBOM
+        @{ stdout = "## Task output`nsame residue"; stderr = ''; exit_code = 0; duration_s = 0 }
+    }.GetNewClosure()
+    $inE2 = New-AgenticSpawner -Worktree $fxE2.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fxE2.runDir -Dispatcher $dispE2
+    $vsE2 = New-VerifyingSpawner -InnerSpawner $inE2 -Worktree $fxE2.wt.worktree -BaseSha $fxE2.wt.base_sha -RunDir $fxE2.runDir -FrozenContracts $fxE2.frozen -MaxRework 2
+    $env:BATON_VERIFY_TEST_HOOK = $hookVol
+    try { $rvE2 = & $vsE2 (New-VerifyTask) } finally { Remove-Item env:BATON_VERIFY_TEST_HOOK -ErrorAction SilentlyContinue }
+    Check 'E2v1 volatile tokens still halt identical-evidence' ([string]$rvE2.verification.rework_halt_reason -eq 'identical-evidence')
+    Check 'E2v2 only one rework cycle (second failure matched after normalize)' ($rvE2.verification.rework_cycles -eq 1)
+    Check 'E2v3 only two labor dispatches' ($callCountE2.Value -eq 2)
+
     # ---- (f) scope-violation -> NO rework (fail-closed unchanged) ----
     $forbidDisp = {
         param($pick, $prompt)
@@ -313,6 +359,31 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     Check 'F4 retried false' ($rvF.verification.retried -eq $false)
     Check 'F5 exactly one attempt row' (@(Get-Attempts $fxF.runDir).Count -eq 1)
     Check 'F6 no rework-evidence file' (-not (Test-Path -LiteralPath (Join-Path $fxF.runDir 'tasks/t1/rework-evidence-1.md')))
+    Check 'F7 no max_rework halt on initial scope-violation' ([string]$rvF.verification.rework_halt_reason -eq '')
+
+    # ---- (f2) rework produces scope-violation -> haltReason is category, not max_rework ----
+    $hookFailThenScope = Join-Path $tmpRoot 'hook-fail-then-scope.ps1'
+    # Attempt 1: check-failed (reworkable). Attempt 2+: we still report check-failed from the
+    # hook, but the dispatcher writes an out-of-scope file so the real verify path would
+    # scope-violate — force category via hook on attempt>=2 for hermetic control.
+    Set-Content -LiteralPath $hookFailThenScope -Encoding utf8NoBOM -Value @'
+function Invoke-TestVerify { param($Task, $Attempt, $Grew)
+    if ($Attempt -ge 2) {
+        return @{ verdict='scope-violation'; ok=$false; grade='invalid'; failure_category='scope-violation'; proves='hooked'; output_path=''; duration_ms=5 }
+    }
+    $out = Join-Path $env:TEMP "rework-fts-$([guid]::NewGuid()).txt"
+    Set-Content -LiteralPath $out -Value 'ASSERT fail first' -Encoding utf8NoBOM
+    return @{ verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'; proves='hooked'; output_path=$out; duration_ms=5 }
+}
+'@
+    $fxF2 = New-VerifyFixture -Name 'f2' -VProfile $passProfile -Root $tmpRoot
+    $inF2 = New-AgenticSpawner -Worktree $fxF2.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fxF2.runDir -Dispatcher $writeDisp
+    $vsF2 = New-VerifyingSpawner -InnerSpawner $inF2 -Worktree $fxF2.wt.worktree -BaseSha $fxF2.wt.base_sha -RunDir $fxF2.runDir -FrozenContracts $fxF2.frozen
+    $env:BATON_VERIFY_TEST_HOOK = $hookFailThenScope
+    try { $rvF2 = & $vsF2 (New-VerifyTask) } finally { Remove-Item env:BATON_VERIFY_TEST_HOOK -ErrorAction SilentlyContinue }
+    Check 'F2-1 rework attempted once' ($rvF2.verification.rework_cycles -eq 1)
+    Check 'F2-2 haltReason is scope-violation not max_rework' ([string]$rvF2.verification.rework_halt_reason -eq 'scope-violation')
+    Check 'F2-3 not ok' ($rvF2.ok -eq $false)
 
     # ---- (g) old single-retry path absent: exactly max_rework cycles total; no double-retry ----
     # With max_rework=1, total attempts = 1 + 1 = 2. Grep spawner source has no second independent retry.
@@ -405,6 +476,101 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     Check 'H2-2 both panels ran' ($gateCalls2.Value -eq 2)
     Check 'H2-3 prior retained on disk' (Test-Path -LiteralPath (Join-Path $runH2 'acceptance-prior.json'))
     Check 'H2-4 final gate has prior_acceptance' ($null -ne $resH2.acceptance.prior_acceptance)
+
+    # ---- (h3) acceptance-rework IN-SCOPE file -> re-panel happens ----
+    $repoAcc = New-TempRepo -Root (Join-Path $tmpRoot 'acc-in')
+    $wtAccIn = New-RunWorktree -RepoPath $repoAcc -RunId 'acc-in-wt'
+    $runH3 = Join-Path $tmpRoot 'run-h3'; New-Item -ItemType Directory -Force -Path $runH3 | Out-Null
+    $gateCalls3 = [ref]0
+    $gaterH3 = {
+        param($art, $goal)
+        $gateCalls3.Value++
+        if ($gateCalls3.Value -eq 1) {
+            return [ordered]@{
+                verdict = 'polish'; reason = 'needs fix'; counts = @{ critical = 0; important = 1; minor = 0 }
+                findings = @(@{ severity = 'important'; area = 'x'; summary = 'fix me'; agreed = $true })
+                polish_brief = 'POLISH BRIEF — fix me'; degraded = $false
+            }
+        }
+        return [ordered]@{
+            verdict = 'accept'; reason = 'ok'; counts = @{ critical = 0; important = 0; minor = 0 }
+            findings = @(); polish_brief = 'No polish needed — artifact accepted as-is.'; degraded = $false
+        }
+    }.GetNewClosure()
+    $spH3 = {
+        param($t)
+        # Only the acceptance-rework attempt mutates the worktree (walk is a no-op)
+        # so the scope check sees the rework attempt's real diff.
+        if ([string]$t.id -eq 'acceptance-rework-1') {
+            New-Item -ItemType Directory -Force -Path (Join-Path $wtAccIn.worktree 'src') | Out-Null
+            Set-Content -LiteralPath (Join-Path $wtAccIn.worktree 'src/fixed.ps1') -Value 'fixed' -Encoding utf8NoBOM
+        }
+        @{ ok = $true; spend = 0.01; chose = 'fake-agentic'; why = 'in-scope rework'; alternatives = @() }
+    }.GetNewClosure()
+    $planH3 = {
+        param($g)
+        @{
+            goal = $g; budget_cap = $null
+            tasks = @([pscustomobject]@{
+                id = 't1'; desc = 'implement'; command = ''; capability = 'code-gen'
+                depends_on = @(); est_cost_tier = 'free'; reversible = $true
+                verify_profile = 'unit'; allowed_paths = @('src/')
+                stakes = 'high'; stakes_basis = 'auth'
+            })
+        }
+    }
+    $resH3 = Invoke-Conductor -Goal 'g' -RunDir $runH3 -Planner $planH3 -Spawner $spH3 `
+        -Gater $gaterH3 -GateArtifact 'diff body' -AcceptanceGate:$true -AcceptanceFailLoud `
+        -Worktree $wtAccIn.worktree
+    $evH3 = Get-Content -LiteralPath (Join-Path $runH3 'events.jsonl') -Raw
+    Check 'H3-acc1 in-scope rework re-panels' ($gateCalls3.Value -eq 2)
+    Check 'H3-acc2 status completed' ($resH3.status -eq 'completed')
+    Check 'H3-acc3 no scope-violation event' ($evH3 -notmatch 'acceptance-rework-scope-violation')
+
+    # ---- (h4) acceptance-rework OUT-OF-SCOPE file -> halt event, no re-panel ----
+    $repoAccOut = New-TempRepo -Root (Join-Path $tmpRoot 'acc-out')
+    $wtAccOut = New-RunWorktree -RepoPath $repoAccOut -RunId 'acc-out-wt'
+    $runH4 = Join-Path $tmpRoot 'run-h4'; New-Item -ItemType Directory -Force -Path $runH4 | Out-Null
+    $gateCalls4 = [ref]0
+    $gaterH4 = {
+        param($art, $goal)
+        $gateCalls4.Value++
+        return [ordered]@{
+            verdict = 'polish'; reason = 'needs fix'; counts = @{ critical = 0; important = 1; minor = 0 }
+            findings = @(@{ severity = 'important'; area = 'x'; summary = 'fix me'; agreed = $true })
+            polish_brief = 'POLISH BRIEF — fix me'; degraded = $false
+        }
+    }.GetNewClosure()
+    $spH4 = {
+        param($t)
+        # Walk is a no-op; only acceptance-rework writes (out of union scope).
+        if ([string]$t.id -eq 'acceptance-rework-1') {
+            New-Item -ItemType Directory -Force -Path (Join-Path $wtAccOut.worktree 'secrets') | Out-Null
+            Set-Content -LiteralPath (Join-Path $wtAccOut.worktree 'secrets/leak.txt') -Value 'nope' -Encoding utf8NoBOM
+        }
+        @{ ok = $true; spend = 0.01; chose = 'fake-agentic'; why = 'out-of-scope rework'; alternatives = @() }
+    }.GetNewClosure()
+    $planH4 = {
+        param($g)
+        @{
+            goal = $g; budget_cap = $null
+            tasks = @([pscustomobject]@{
+                id = 't1'; desc = 'implement'; command = ''; capability = 'code-gen'
+                depends_on = @(); est_cost_tier = 'free'; reversible = $true
+                verify_profile = 'unit'; allowed_paths = @('src/')
+                stakes = 'high'; stakes_basis = 'auth'
+            })
+        }
+    }
+    $resH4 = Invoke-Conductor -Goal 'g' -RunDir $runH4 -Planner $planH4 -Spawner $spH4 `
+        -Gater $gaterH4 -GateArtifact 'diff body' -AcceptanceGate:$true -AcceptanceFailLoud `
+        -Worktree $wtAccOut.worktree
+    $evH4 = Get-Content -LiteralPath (Join-Path $runH4 'events.jsonl') -Raw
+    Check 'H4-acc1 out-of-scope does NOT re-panel' ($gateCalls4.Value -eq 1)
+    Check 'H4-acc2 status needs-polish' ($resH4.status -eq 'needs-polish')
+    Check 'H4-acc3 acceptance-rework-scope-violation event' ($evH4 -match 'acceptance-rework-scope-violation')
+    Check 'H4-acc4 scope diff retained' (Test-Path -LiteralPath (Join-Path $runH4 'acceptance-rework-scope-diff.txt'))
+    Check 'H4-acc5 prior retained' (Test-Path -LiteralPath (Join-Path $runH4 'acceptance-prior.json'))
 
 } finally {
     if ($null -eq $savedBatonHome) { Remove-Item env:BATON_HOME -ErrorAction SilentlyContinue }
