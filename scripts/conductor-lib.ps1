@@ -18,6 +18,7 @@
 . "$PSScriptRoot/effective-cost-lib.ps1"   # run-level effective cost (slice 1)
 . "$PSScriptRoot/cost-resolver-lib.ps1"   # realized-cost metering (slice 2)
 . "$PSScriptRoot/prompt-pool-lib.ps1"   # Slice B: live shadow A/B pool bookkeeping
+. "$PSScriptRoot/verification-lib.ps1"   # Test-DiffFilesInAllowedPaths (#125 matcher) for acceptance-rework scope
 
 function New-RunId {
     param([datetime]$Now = (Get-Date))
@@ -849,7 +850,11 @@ function Invoke-Conductor {
         [switch]$NormalizeMissingStakes,
         [switch]$RequireTaskStakes,
         [ValidateSet('low','standard','high')][string]$StakesOverride,
-        [string]$RepoPath
+        [string]$RepoPath,
+        # Optional execute worktree: used by acceptance-rework scope check (#128 review).
+        # When set, post-rework labor is diffed via git (same mechanism as the verifier)
+        # against the UNION of plan tasks' allowed_paths before re-paneling.
+        [string]$Worktree = ''
     )
     if (-not $RunDir) { $RunDir = Initialize-RunDir }
     else { New-Item -ItemType Directory -Force -Path $RunDir | Out-Null }
@@ -1287,88 +1292,180 @@ function Invoke-Conductor {
             Add-RunDecision -RunDir $RunDir -Decision $accRwDec
             [void]$decisions.Add($accRwDec)
 
+            # Pre-rework tree snapshot so we can scope-check ONLY the rework attempt's
+            # diff (acceptance-rework has no frozen contract — without this the verifying
+            # spawner falls through to UNVERIFIED and allowed_paths are cosmetic).
+            $preAccTree = $null
+            if (-not [string]::IsNullOrWhiteSpace($Worktree) -and (Test-Path -LiteralPath $Worktree -PathType Container)) {
+                if (Get-Command Get-WorktreeTreeSha -ErrorAction SilentlyContinue) {
+                    try { $preAccTree = Get-WorktreeTreeSha -Worktree $Worktree } catch { $preAccTree = $null }
+                } else {
+                    try {
+                        & git -C $Worktree add -A 2>$null | Out-Null
+                        if ($LASTEXITCODE -eq 0) {
+                            $preAccTree = [string](& git -C $Worktree write-tree 2>$null)
+                            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($preAccTree)) { $preAccTree = $null }
+                            else { $preAccTree = $preAccTree.Trim() }
+                        }
+                    } catch { $preAccTree = $null }
+                }
+            }
+
             $accRwResult = $null
             try { $accRwResult = & $Spawner $accTask } catch {
                 $accRwResult = @{ ok = $false; spend = 0.0; why = $_.Exception.Message }
             }
             if ($null -ne $accRwResult.spend) { $spend += [double]$accRwResult.spend }
 
-            # Refresh artifact from DiffProvider when present so the re-panel sees labor.
-            if ($DiffProvider) {
-                try {
-                    $produced2 = [string](& $DiffProvider)
-                    if (-not [string]::IsNullOrWhiteSpace($produced2)) {
-                        Set-Content -LiteralPath (Join-Path $RunDir 'changes.diff') -Value $produced2 -Encoding utf8NoBOM
-                        $art = $produced2
-                    }
-                } catch { }
+            # Scope gate BEFORE re-panel: rework labor must stay inside the UNION of
+            # all plan tasks' allowed_paths (#125 exact + prefix matcher).
+            $accScopeBlocked = $false
+            $unionPaths = [System.Collections.Generic.List[string]]::new()
+            foreach ($pt in $planTasks) {
+                foreach ($ap in @($pt.allowed_paths)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$ap)) { [void]$unionPaths.Add([string]$ap) }
+                }
             }
-
-            $gate2 = $null
-            $gate2Err = $null
-            try {
-                $gate2 = if ($Gater) { & $Gater $art $plan.goal }
-                        else {
-                            $gateArgs2 = @{
-                                Artifact = $art; Task = $plan.goal; MaxCostTier = $MaxCostTier
-                                FleetPath = $FleetPath; ToolsPath = $ToolsPath
-                            }
-                            if ($AcceptancePanel) { $gateArgs2['Panel'] = $true }
-                            if ($AcceptanceFailLoud) { $gateArgs2['FailLoud'] = $true }
-                            Invoke-AcceptanceGate @gateArgs2
+            if ($unionPaths.Count -eq 0) {
+                # Scope was never enforced for this run — skip check, journal a one-line note.
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'gate' -Level 'info' -Message 'acceptance-rework scope check skipped — no allowed_paths declared on any plan task')
+            } elseif (-not [string]::IsNullOrWhiteSpace($Worktree) -and $preAccTree -and (Test-Path -LiteralPath $Worktree -PathType Container)) {
+                $postAccTree = $null
+                if (Get-Command Get-WorktreeTreeSha -ErrorAction SilentlyContinue) {
+                    try { $postAccTree = Get-WorktreeTreeSha -Worktree $Worktree } catch { $postAccTree = $null }
+                } else {
+                    try {
+                        & git -C $Worktree add -A 2>$null | Out-Null
+                        if ($LASTEXITCODE -eq 0) {
+                            $postAccTree = [string](& git -C $Worktree write-tree 2>$null)
+                            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($postAccTree)) { $postAccTree = $null }
+                            else { $postAccTree = $postAccTree.Trim() }
                         }
-            } catch { $gate2 = $null; $gate2Err = $_.Exception.Message }
-
-            # Retain both verdicts: prior on disk + on the final gate object.
-            $priorSnap = [ordered]@{
-                verdict = [string]$priorGate.verdict
-                reason = [string]$priorGate.reason
-                counts = $priorGate.counts
-                polish_brief = [string]$priorGate.polish_brief
-                findings = @($priorGate.findings)
-            }
-            ($priorSnap | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'acceptance-prior.json') -Encoding utf8NoBOM
-
-            if ($null -eq $gate2 -or -not $gate2.verdict) {
-                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message "acceptance rework re-panel produced no verdict$(if ($gate2Err) { ": $gate2Err" })")
-                # Halt loudly; keep prior polish as the gate result with prior retained.
-                $gate = $priorGate
-                if ($gate -is [System.Collections.IDictionary]) {
-                    $gate['prior_acceptance'] = $priorSnap
-                    $gate['rework'] = @{ attempted = $true; evidence_path = $accEvidPath; outcome = 'failed'; reason = 're-panel-no-verdict' }
-                } else {
-                    $gate | Add-Member -NotePropertyName prior_acceptance -NotePropertyValue $priorSnap -Force
-                    $gate | Add-Member -NotePropertyName rework -NotePropertyValue @{ attempted = $true; evidence_path = $accEvidPath; outcome = 'failed' } -Force
+                    } catch { $postAccTree = $null }
                 }
-                $finalStatus = 'needs-polish'
-            } else {
-                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Message "acceptance re-panel verdict: $($gate2.verdict) — $($gate2.reason)")
-                if ($gate2 -is [System.Collections.IDictionary]) {
-                    $gate2['prior_acceptance'] = $priorSnap
-                    $gate2['rework'] = @{
-                        attempted = $true; evidence_path = $accEvidPath
-                        outcome = if ([string]$gate2.verdict -eq 'accept') { 'passed' } else { 'failed' }
-                        labor_ok = [bool]$accRwResult.ok
+                $accDiffFiles = @()
+                if ($postAccTree -and $preAccTree -ne $postAccTree) {
+                    $accDiffFiles = @(& git -C $Worktree diff --name-only $preAccTree $postAccTree 2>$null | Where-Object { $_ })
+                }
+                $scopeMatch = Test-DiffFilesInAllowedPaths -DiffFiles $accDiffFiles -AllowedPaths @($unionPaths)
+                if (-not [bool]$scopeMatch.ok) {
+                    $accScopeBlocked = $true
+                    $offender = [string]$scopeMatch.first_offender
+                    $scopeDiffPath = Join-Path $RunDir 'acceptance-rework-scope-diff.txt'
+                    $diffBody = if ($accDiffFiles.Count -gt 0) { ($accDiffFiles -join "`n") } else { '(no files listed)' }
+                    if ($postAccTree -and $preAccTree) {
+                        try {
+                            $unified = @(& git -C $Worktree diff $preAccTree $postAccTree 2>$null)
+                            if ($unified) { $diffBody = ($unified -join "`n") }
+                        } catch { }
                     }
-                } else {
-                    $gate2 | Add-Member -NotePropertyName prior_acceptance -NotePropertyValue $priorSnap -Force
-                    $gate2 | Add-Member -NotePropertyName rework -NotePropertyValue @{
-                        attempted = $true; evidence_path = $accEvidPath
-                        outcome = if ([string]$gate2.verdict -eq 'accept') { 'passed' } else { 'failed' }
-                    } -Force
+                    Set-Content -LiteralPath $scopeDiffPath -Value $diffBody -Encoding utf8NoBOM
+                    $msg = "acceptance-rework wrote out-of-scope path '$offender' (union of plan allowed_paths); re-panel skipped — diff retained at $scopeDiffPath"
+                    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'acceptance-rework-scope-violation' -Level 'error' -Message $msg)
+                    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'error' -Message $msg)
+                    $priorSnapScope = [ordered]@{
+                        verdict = [string]$priorGate.verdict
+                        reason = [string]$priorGate.reason
+                        counts = $priorGate.counts
+                        polish_brief = [string]$priorGate.polish_brief
+                        findings = @($priorGate.findings)
+                    }
+                    ($priorSnapScope | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'acceptance-prior.json') -Encoding utf8NoBOM
+                    $gate = $priorGate
+                    $reworkMeta = @{
+                        attempted = $true; evidence_path = $accEvidPath; outcome = 'failed'
+                        reason = 'acceptance-rework-scope-violation'; offender = $offender
+                        scope_diff_path = $scopeDiffPath
+                    }
+                    if ($gate -is [System.Collections.IDictionary]) {
+                        $gate['prior_acceptance'] = $priorSnapScope
+                        $gate['rework'] = $reworkMeta
+                    } else {
+                        $gate | Add-Member -NotePropertyName prior_acceptance -NotePropertyValue $priorSnapScope -Force
+                        $gate | Add-Member -NotePropertyName rework -NotePropertyValue $reworkMeta -Force
+                    }
+                    $finalStatus = 'needs-polish'
                 }
-                $gate = $gate2
-                if ([string]$gate2.verdict -eq 'accept') {
-                    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-passed' -Message 'acceptance rework passed — panel accept')
-                    $finalStatus = 'completed'
-                } elseif ([string]$gate2.verdict -eq 'reject') {
-                    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message 'acceptance rework failed — panel reject')
-                    $finalStatus = 'rejected'
+            }
+
+            if (-not $accScopeBlocked) {
+                # Refresh artifact from DiffProvider when present so the re-panel sees labor.
+                if ($DiffProvider) {
+                    try {
+                        $produced2 = [string](& $DiffProvider)
+                        if (-not [string]::IsNullOrWhiteSpace($produced2)) {
+                            Set-Content -LiteralPath (Join-Path $RunDir 'changes.diff') -Value $produced2 -Encoding utf8NoBOM
+                            $art = $produced2
+                        }
+                    } catch { }
+                }
+
+                $gate2 = $null
+                $gate2Err = $null
+                try {
+                    $gate2 = if ($Gater) { & $Gater $art $plan.goal }
+                            else {
+                                $gateArgs2 = @{
+                                    Artifact = $art; Task = $plan.goal; MaxCostTier = $MaxCostTier
+                                    FleetPath = $FleetPath; ToolsPath = $ToolsPath
+                                }
+                                if ($AcceptancePanel) { $gateArgs2['Panel'] = $true }
+                                if ($AcceptanceFailLoud) { $gateArgs2['FailLoud'] = $true }
+                                Invoke-AcceptanceGate @gateArgs2
+                            }
+                } catch { $gate2 = $null; $gate2Err = $_.Exception.Message }
+
+                # Retain both verdicts: prior on disk + on the final gate object.
+                $priorSnap = [ordered]@{
+                    verdict = [string]$priorGate.verdict
+                    reason = [string]$priorGate.reason
+                    counts = $priorGate.counts
+                    polish_brief = [string]$priorGate.polish_brief
+                    findings = @($priorGate.findings)
+                }
+                ($priorSnap | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'acceptance-prior.json') -Encoding utf8NoBOM
+
+                if ($null -eq $gate2 -or -not $gate2.verdict) {
+                    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message "acceptance rework re-panel produced no verdict$(if ($gate2Err) { ": $gate2Err" })")
+                    # Halt loudly; keep prior polish as the gate result with prior retained.
+                    $gate = $priorGate
+                    if ($gate -is [System.Collections.IDictionary]) {
+                        $gate['prior_acceptance'] = $priorSnap
+                        $gate['rework'] = @{ attempted = $true; evidence_path = $accEvidPath; outcome = 'failed'; reason = 're-panel-no-verdict' }
+                    } else {
+                        $gate | Add-Member -NotePropertyName prior_acceptance -NotePropertyValue $priorSnap -Force
+                        $gate | Add-Member -NotePropertyName rework -NotePropertyValue @{ attempted = $true; evidence_path = $accEvidPath; outcome = 'failed' } -Force
+                    }
+                    $finalStatus = 'needs-polish'
                 } else {
-                    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message "acceptance rework failed — panel $($gate2.verdict)")
-                    $finalStatus = if ($AcceptanceFailLoud -and $gate2.degraded) { 'acceptance-degraded' }
-                                   elseif ($AcceptanceFailLoud) { 'needs-polish' }
-                                   else { $finalStatus }
+                    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Message "acceptance re-panel verdict: $($gate2.verdict) — $($gate2.reason)")
+                    if ($gate2 -is [System.Collections.IDictionary]) {
+                        $gate2['prior_acceptance'] = $priorSnap
+                        $gate2['rework'] = @{
+                            attempted = $true; evidence_path = $accEvidPath
+                            outcome = if ([string]$gate2.verdict -eq 'accept') { 'passed' } else { 'failed' }
+                            labor_ok = [bool]$accRwResult.ok
+                        }
+                    } else {
+                        $gate2 | Add-Member -NotePropertyName prior_acceptance -NotePropertyValue $priorSnap -Force
+                        $gate2 | Add-Member -NotePropertyName rework -NotePropertyValue @{
+                            attempted = $true; evidence_path = $accEvidPath
+                            outcome = if ([string]$gate2.verdict -eq 'accept') { 'passed' } else { 'failed' }
+                        } -Force
+                    }
+                    $gate = $gate2
+                    if ([string]$gate2.verdict -eq 'accept') {
+                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-passed' -Message 'acceptance rework passed — panel accept')
+                        $finalStatus = 'completed'
+                    } elseif ([string]$gate2.verdict -eq 'reject') {
+                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message 'acceptance rework failed — panel reject')
+                        $finalStatus = 'rejected'
+                    } else {
+                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message "acceptance rework failed — panel $($gate2.verdict)")
+                        $finalStatus = if ($AcceptanceFailLoud -and $gate2.degraded) { 'acceptance-degraded' }
+                                       elseif ($AcceptanceFailLoud) { 'needs-polish' }
+                                       else { $finalStatus }
+                    }
                 }
             }
         }
