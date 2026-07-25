@@ -1170,7 +1170,10 @@ function Invoke-Conductor {
             }
         }
         $kind = if ($r.ok) { 'finished' } else { 'error' }
-        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind $kind -Message $task.desc)
+        # A failing result's why is the diagnostic (e.g. the zero-candidate remedy, #135) —
+        # journal it; the operator already has the desc from this task's 'started' event.
+        $termMsg = if (-not $r.ok -and -not [string]::IsNullOrWhiteSpace([string]$r.why)) { [string]$r.why } else { $task.desc }
+        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind $kind -Message $termMsg)
         if (-not $r.ok) {
             $failStatus = if ($Verify -and $r.verification -and [string]$r.verification.verdict -ne 'pass') { 'verification-failed' } else { 'failed' }
             return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status $failStatus -PendingTaskId $task.id)

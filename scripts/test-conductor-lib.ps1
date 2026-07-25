@@ -1150,6 +1150,16 @@ ERROR: You have hit your usage limit. Try again later.
     Check 'VF6 unverified event' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-unverified' }).Count -ge 1)
     Remove-Item $d -Recurse -Force
 
+    # WHY1-3 (#135): dispatch failure (zero candidates -> chose='') journals the spawner's
+    # why in the terminal error event, not the task description the operator already has.
+    $d = New-VfRun
+    $sp = { param($t) @{ ok=$false; spend=0.0; chose=''; why='capability triage: no eligible provider at tier <=free (stakes low caps tier; cheapest eligible = paid)'; alternatives=@() } }
+    $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp
+    Check 'WHY1 status failed' ($res.status -eq 'failed')
+    $whyEv = @(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'error' })
+    Check 'WHY2 error event carries the why' (@($whyEv | Where-Object { $_ -match 'no eligible provider at tier' }).Count -ge 1)
+    Remove-Item $d -Recurse -Force
+
     # VF7: -Verify ABSENT -> byte-for-byte unchanged (no verification events even if $r carries them)
     $d = New-VfRun
     $sp = { param($t) @{ ok=$true; spend=0.0; chose='w'; why='ok'; alternatives=@(); verification=@{ verdict='pass'; grade='strong'; failure_category=''; proves='x'; retried=$false } } }
