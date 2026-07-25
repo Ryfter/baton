@@ -1,6 +1,6 @@
 # Engine expressiveness — task-output bus + engine-owned rework (design)
 
-**Date:** 2026-07-24 · **Status:** DRAFT — awaiting Kevin's review · **Issues:** #115, #128 (+C3
+**Date:** 2026-07-24 · **Status:** APPROVED (Kevin, 2026-07-24 — defaults as written) · **Issues:** #115, #128 (+C3
 unparked), with #127 as adjacent evidence · **Driving evidence:** the #93 bakeoff's terminal
 finding (report §6): *the quality gates are ahead of the execution engine.* Terms per
 `docs/glossary.md`.
