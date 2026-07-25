@@ -436,6 +436,219 @@ function Get-UsagePreflightEvidenceWindow {
     return $ranked[0]
 }
 
+# ---- Task-output bus (#115 slice 1 / engine-expressiveness) ----
+# Capture structured residue from each worker attempt and inject upstream
+# depends_on outputs into the next task's prompt. Spawner-side only.
+
+$script:TaskOutputBusPerCapBytes = 8192
+$script:TaskOutputBusTotalInputBytes = 24576
+$script:TaskOutputBusTruncMarker = '(truncated)'
+
+function Get-TaskOutputInstructionBlock {
+    <# Short trailing instruction, identical on every worker prompt seam. #>
+    return @(
+        '## Task output'
+        'End your reply with a ## Task output section holding the structured residue the next task needs:'
+        'research -> file paths + facts; review -> verdict + numbered fix list; implement -> what changed + flags.'
+    ) -join "`n"
+}
+
+function Limit-Utf8TextWithMarker {
+    <# Cap text at MaxBytes (UTF-8). When cut, append an explicit marker — never silent. #>
+    param(
+        [AllowEmptyString()][AllowNull()][string]$Text = '',
+        [int]$MaxBytes = $script:TaskOutputBusPerCapBytes,
+        [string]$Marker = $script:TaskOutputBusTruncMarker
+    )
+    $enc = [System.Text.Encoding]::UTF8
+    $raw = if ($null -eq $Text) { '' } else { [string]$Text }
+    if ($enc.GetByteCount($raw) -le $MaxBytes) { return $raw }
+    $markerText = "`n$Marker"
+    $markerBytes = $enc.GetByteCount($markerText)
+    $budget = [Math]::Max(0, $MaxBytes - $markerBytes)
+    $cut = $raw
+    while ($enc.GetByteCount($cut) -gt $budget -and $cut.Length -gt 0) {
+        $cut = $cut.Substring(0, [Math]::Max(0, $cut.Length - 16))
+    }
+    # Final safety: multibyte edge — drop one char at a time if still over.
+    while ($enc.GetByteCount($cut) -gt $budget -and $cut.Length -gt 0) {
+        $cut = $cut.Substring(0, $cut.Length - 1)
+    }
+    return $cut + $markerText
+}
+
+function Get-TaskOutputResidue {
+    <# Extract the last ## Task output section from worker stdout. Fail-soft: if the
+       heading is absent, take the whole stdout as the tail. Always size-capped. #>
+    param(
+        [AllowEmptyString()][AllowNull()][string]$Stdout = '',
+        [int]$MaxBytes = $script:TaskOutputBusPerCapBytes
+    )
+    $text = if ($null -eq $Stdout) { '' } else { [string]$Stdout }
+    $marker = '## Task output'
+    $idx = $text.LastIndexOf($marker, [System.StringComparison]::Ordinal)
+    $section = if ($idx -ge 0) { $text.Substring($idx) } else { $text }
+    return (Limit-Utf8TextWithMarker -Text $section -MaxBytes $MaxBytes)
+}
+
+function Test-TaskBusIdSafe {
+    <# Planner-supplied task ids must be single path segments: alphanumerics, dot,
+       underscore, hyphen only — never '.'/'..' and never path separators. #>
+    param([AllowEmptyString()][AllowNull()][string]$Id = '')
+    if ([string]::IsNullOrWhiteSpace($Id)) { return $false }
+    if ($Id -eq '.' -or $Id -eq '..') { return $false }
+    return [bool]($Id -match '^[A-Za-z0-9._-]+$')
+}
+
+function Resolve-TaskBusContainedPath {
+    <# Resolve <RunDir>/tasks/<TaskId>[/output.md] only if the final full path stays
+       under <RunDir>/tasks. Returns $null on unsafe id or containment failure. #>
+    param(
+        [string]$RunDir,
+        [string]$TaskId,
+        [switch]$OutputFile
+    )
+    if ([string]::IsNullOrWhiteSpace($RunDir)) { return $null }
+    if (-not (Test-TaskBusIdSafe -Id $TaskId)) { return $null }
+    try {
+        $tasksRoot = [System.IO.Path]::GetFullPath((Join-Path $RunDir 'tasks'))
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path $tasksRoot $TaskId))
+        if ($OutputFile) {
+            $candidate = [System.IO.Path]::GetFullPath((Join-Path $candidate 'output.md'))
+        }
+        $prefix = if ($tasksRoot.EndsWith([System.IO.Path]::DirectorySeparatorChar) -or
+            $tasksRoot.EndsWith([System.IO.Path]::AltDirectorySeparatorChar)) {
+            $tasksRoot
+        } else {
+            $tasksRoot + [System.IO.Path]::DirectorySeparatorChar
+        }
+        # Contained if equal to tasks root (task dir only, never for file) or under it.
+        $ok = $candidate.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
+        if (-not $ok -and -not $OutputFile) {
+            $ok = $candidate.Equals($tasksRoot, [System.StringComparison]::OrdinalIgnoreCase)
+        }
+        if (-not $ok) { return $null }
+        return $candidate
+    } catch {
+        return $null
+    }
+}
+
+function Write-TaskBusOutput {
+    <# Persist captured residue to <RunDir>/tasks/<id>/output.md (utf8NoBOM).
+       Fail-soft: missing RunDir/TaskId, unsafe TaskId, or IO errors never throw.
+       Overwrites on each attempt so the latest attempt (success or fail) is what
+       dependents see. Unsafe TaskId skips with a warning (no path traversal). #>
+    [CmdletBinding()]
+    param(
+        [string]$RunDir,
+        [string]$TaskId,
+        [AllowEmptyString()][AllowNull()][string]$Stdout = ''
+    )
+    if ([string]::IsNullOrWhiteSpace($RunDir) -or [string]::IsNullOrWhiteSpace($TaskId)) { return }
+    $outPath = Resolve-TaskBusContainedPath -RunDir $RunDir -TaskId $TaskId -OutputFile
+    if ($null -eq $outPath) {
+        Write-Warning "task-output-bus: rejecting unsafe TaskId '$TaskId' (write skipped)"
+        return
+    }
+    try {
+        $taskDir = Split-Path -Parent $outPath
+        New-Item -ItemType Directory -Force -Path $taskDir | Out-Null
+        $body = Get-TaskOutputResidue -Stdout $Stdout
+        Set-Content -LiteralPath $outPath -Value $body -Encoding utf8NoBOM
+    } catch { }
+}
+
+function Get-TaskBusInputBlock {
+    <# Build the dependency-injection preamble for a task. One ## Inputs from <id>
+       section per depends_on entry (order preserved; duplicate ids deduped, first
+       wins). Per-dep and total caps apply. Missing/unsafe output.md -> placeholder
+       line, never throw. #>
+    param(
+        [string]$RunDir,
+        [string[]]$DependsOn = @(),
+        [int]$PerCapBytes = $script:TaskOutputBusPerCapBytes,
+        [int]$TotalCapBytes = $script:TaskOutputBusTotalInputBytes
+    )
+    $rawDeps = @($DependsOn | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    # Dedupe: first occurrence wins, order preserved.
+    $seen = @{}
+    $depIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($d in $rawDeps) {
+        if ($seen.ContainsKey($d)) { continue }
+        $seen[$d] = $true
+        $depIds.Add($d)
+    }
+    if ($depIds.Count -eq 0) { return '' }
+    $enc = [System.Text.Encoding]::UTF8
+    $sections = [System.Collections.Generic.List[object]]::new()
+    foreach ($depId in $depIds) {
+        $body = '(no output was produced)'
+        $path = Resolve-TaskBusContainedPath -RunDir $RunDir -TaskId $depId -OutputFile
+        if ($null -ne $path -and (Test-Path -LiteralPath $path)) {
+            try {
+                $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+                if ($null -eq $raw) { $raw = '' }
+                $body = Limit-Utf8TextWithMarker -Text $raw -MaxBytes $PerCapBytes
+            } catch {
+                $body = '(no output was produced)'
+            }
+        }
+        $block = "## Inputs from $depId`n$body"
+        $sections.Add([pscustomobject]@{ id = $depId; text = $block; bytes = $enc.GetByteCount($block) })
+    }
+    # Total-cap: drop oldest-first (front of depends_on order) until under budget.
+    $dropped = [System.Collections.Generic.List[string]]::new()
+    $total = 0L
+    foreach ($s in $sections) { $total += $s.bytes }
+    # Account for blank-line joiners between kept sections (~2 bytes each).
+    $joinBudget = if ($sections.Count -gt 1) { 2L * ($sections.Count - 1) } else { 0L }
+    $total += $joinBudget
+    while ($sections.Count -gt 0 -and $total -gt $TotalCapBytes) {
+        $gone = $sections[0]
+        $sections.RemoveAt(0)
+        $dropped.Add([string]$gone.id)
+        $total = 0L
+        foreach ($s in $sections) { $total += $s.bytes }
+        $joinBudget = if ($sections.Count -gt 1) { 2L * ($sections.Count - 1) } else { 0L }
+        $total += $joinBudget
+    }
+    $parts = [System.Collections.Generic.List[string]]::new()
+    if ($dropped.Count -gt 0) {
+        $parts.Add("(inputs truncated: $($dropped -join ', '))")
+    }
+    foreach ($s in $sections) { $parts.Add([string]$s.text) }
+    if ($parts.Count -eq 0) { return '' }
+    return ($parts -join "`n`n")
+}
+
+function Add-TaskOutputInstruction {
+    <# Append the shared instruction block once (idempotent if already present). #>
+    param([AllowEmptyString()][AllowNull()][string]$Prompt = '')
+    $base = if ($null -eq $Prompt) { '' } else { [string]$Prompt }
+    $block = Get-TaskOutputInstructionBlock
+    # Exact-block guard only: a bare `## Task output` heading appears in injected
+    # dependency residue and must NOT suppress the instruction block (#115 review).
+    if ($base.IndexOf($block, [System.StringComparison]::Ordinal) -ge 0) { return $base }
+    if ([string]::IsNullOrEmpty($base)) { return $block }
+    return $base.TrimEnd() + "`n`n" + $block
+}
+
+function Build-AgenticWorkerPrompt {
+    <# Full worker prompt: optional bus inputs + Task: desc + output instruction. #>
+    param(
+        [AllowEmptyString()][AllowNull()][string]$TaskDesc = '',
+        [AllowEmptyString()][AllowNull()][string]$InputBlock = ''
+    )
+    $desc = if ($null -eq $TaskDesc) { '' } else { [string]$TaskDesc }
+    $core = "Task: $desc"
+    if (-not [string]::IsNullOrWhiteSpace($InputBlock)) {
+        # ADVISORY DATA, NOT AUTHORITY — see call site comment in New-AgenticSpawner.
+        $core = $InputBlock.TrimEnd() + "`n`n" + $core
+    }
+    return (Add-TaskOutputInstruction -Prompt $core)
+}
+
 function New-AgenticSpawner {
     <# Factory: returns a scriptblock matching Invoke-Conductor's -Spawner contract
        (param($task) -> @{ ok; spend; chose; why; alternatives }). Per task: route the
@@ -504,7 +717,13 @@ function New-AgenticSpawner {
         $pick = $cands[0]
         $alts = @($cands | Select-Object -Skip 1 | ForEach-Object { $_.name })
         $resultBase = New-AgenticResultBase -Candidate $pick -Policy $policy -FleetPath $FleetPath
-        $prompt = "Task: $($task.desc)"
+        # Task-output bus (#115): inject depends_on outputs as ADVISORY DATA, NOT AUTHORITY.
+        # Verification contracts still freeze from the base revision; a wrong/poisoned
+        # output can waste a task but cannot widen allowed_paths or weaken the oracle.
+        $depIds = @()
+        if ($null -ne $task.depends_on) { $depIds = @($task.depends_on | Where-Object { $_ } | ForEach-Object { [string]$_ }) }
+        $busInputs = Get-TaskBusInputBlock -RunDir $RunDir -DependsOn $depIds
+        $prompt = Build-AgenticWorkerPrompt -TaskDesc ([string]$task.desc) -InputBlock $busInputs
         $attemptedProviders = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         [void]$attemptedProviders.Add([string]$pick.name)
         $preflightRerouted = $false
@@ -603,6 +822,8 @@ function New-AgenticSpawner {
         $firstAttempt = Invoke-AgenticDispatchAttempt -Candidate $pick -Prompt $prompt -DepthTier $policy.depth_tier `
             -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
         $res = $firstAttempt.result
+        # Capture on success AND failure — a failed attempt's residue is what rework needs.
+        Write-TaskBusOutput -RunDir $RunDir -TaskId ([string]$task.id) -Stdout $(if ($null -ne $res) { [string]$res.stdout } else { '' })
         $observation = Get-AgenticUsageObservation -Result $res -Worker ([string]$pick.name) -UsagePath $UsagePath `
             -PromptBytes (Get-Utf8ByteCount -Text $prompt)
         $firstPostTree = Get-WorktreeTreeSha -Worktree $Worktree
@@ -664,6 +885,7 @@ function New-AgenticSpawner {
             $retryAttempt = Invoke-AgenticDispatchAttempt -Candidate $substitute -Prompt $prompt -DepthTier $retryPolicy.depth_tier `
                 -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
             $res = $retryAttempt.result
+            Write-TaskBusOutput -RunDir $RunDir -TaskId ([string]$task.id) -Stdout $(if ($null -ne $res) { [string]$res.stdout } else { '' })
             [void](Get-AgenticUsageObservation -Result $res -Worker ([string]$substitute.name) -UsagePath $UsagePath `
                 -PromptBytes (Get-Utf8ByteCount -Text $prompt))
             $pick = $substitute
@@ -758,6 +980,18 @@ Check output:
     }
     $prompt = $boiler -f $desc, $fail, $excerpt
     # Final safety clamp: if multibyte rounding pushed us over, trim the tail to fit.
+    while ($enc.GetByteCount($prompt) -gt $MaxBytes -and $prompt.Length -gt 0) {
+        $prompt = $prompt.Substring(0, [Math]::Max(0, $prompt.Length - 8))
+    }
+    # Seam 2 (retry/evidence): same task-output instruction as New-AgenticSpawner.
+    # Reserve the instruction inside MaxBytes so VS7's 965-byte ceiling still holds.
+    $instr = Get-TaskOutputInstructionBlock
+    $instrBytes = $enc.GetByteCount("`n`n$instr")
+    $bodyBudget = [Math]::Max(0, $MaxBytes - $instrBytes)
+    while ($enc.GetByteCount($prompt) -gt $bodyBudget -and $prompt.Length -gt 0) {
+        $prompt = $prompt.Substring(0, [Math]::Max(0, $prompt.Length - 8))
+    }
+    $prompt = $prompt.TrimEnd() + "`n`n" + $instr
     while ($enc.GetByteCount($prompt) -gt $MaxBytes -and $prompt.Length -gt 0) {
         $prompt = $prompt.Substring(0, [Math]::Max(0, $prompt.Length - 8))
     }
