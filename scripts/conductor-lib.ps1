@@ -1343,6 +1343,37 @@ function Invoke-Conductor {
                         }
                     } catch { $postAccTree = $null }
                 }
+                if (-not $postAccTree) {
+                    # Post-rework snapshot failed: the rework diff is uncheckable (same class
+                    # as the pre-snapshot gap, #134) — an empty diff here would wave labor
+                    # through unchecked. Fail closed, mirroring the uncheckable branch below.
+                    $accScopeBlocked = $true
+                    $msg = "acceptance-rework scope uncheckable — post-rework tree snapshot unavailable; re-panel skipped (fail-closed, union of plan allowed_paths declared)"
+                    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'acceptance-rework-scope-violation' -Level 'error' -Message $msg)
+                    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'error' -Message $msg)
+                    $priorSnapPost = [ordered]@{
+                        verdict = [string]$priorGate.verdict
+                        reason = [string]$priorGate.reason
+                        counts = $priorGate.counts
+                        polish_brief = [string]$priorGate.polish_brief
+                        findings = @($priorGate.findings)
+                    }
+                    ($priorSnapPost | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'acceptance-prior.json') -Encoding utf8NoBOM
+                    $gate = $priorGate
+                    $reworkMetaPost = @{
+                        attempted = $true; evidence_path = $accEvidPath; outcome = 'failed'
+                        reason = 'scope-uncheckable'
+                    }
+                    if ($gate -is [System.Collections.IDictionary]) {
+                        $gate['prior_acceptance'] = $priorSnapPost
+                        $gate['rework'] = $reworkMetaPost
+                    } else {
+                        $gate | Add-Member -NotePropertyName prior_acceptance -NotePropertyValue $priorSnapPost -Force
+                        $gate | Add-Member -NotePropertyName rework -NotePropertyValue $reworkMetaPost -Force
+                    }
+                    $finalStatus = 'needs-polish'
+                }
+                if (-not $accScopeBlocked) { # post-snapshot guard: body keeps original indent for diff minimalism
                 $accDiffFiles = @()
                 if ($postAccTree -and $preAccTree -ne $postAccTree) {
                     $accDiffFiles = @(& git -C $Worktree diff --name-only $preAccTree $postAccTree 2>$null | Where-Object { $_ })
@@ -1386,6 +1417,7 @@ function Invoke-Conductor {
                     }
                     $finalStatus = 'needs-polish'
                 }
+                } # end post-snapshot guard (if -not $accScopeBlocked)
             } elseif (-not [string]::IsNullOrWhiteSpace($Worktree)) {
                 # Scope was demanded (non-empty union, worktree provided) but the pre-rework
                 # tree snapshot is unavailable (tree-sha failure or worktree vanished): the

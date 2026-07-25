@@ -611,6 +611,60 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     Check 'H5-acc5 prior retained' (Test-Path -LiteralPath (Join-Path $runH5 'acceptance-prior.json'))
     Check 'H5-acc6 rework reason scope-uncheckable' ([string]$resH5.acceptance.rework.reason -eq 'scope-uncheckable')
 
+    # ---- (h5b) worktree EXISTS but is not a git repo -> pre-snapshot fails -> same fail-closed ----
+    $plainDir = Join-Path $tmpRoot 'plain-not-a-repo'; New-Item -ItemType Directory -Force -Path $plainDir | Out-Null
+    $runH5b = Join-Path $tmpRoot 'run-h5b'; New-Item -ItemType Directory -Force -Path $runH5b | Out-Null
+    $gateCalls5b = [ref]0
+    $gaterH5b = {
+        param($art, $goal)
+        $gateCalls5b.Value++
+        return [ordered]@{
+            verdict = 'polish'; reason = 'needs fix'; counts = @{ critical = 0; important = 1; minor = 0 }
+            findings = @(@{ severity = 'important'; area = 'x'; summary = 'fix me'; agreed = $true })
+            polish_brief = 'POLISH BRIEF — fix me'; degraded = $false
+        }
+    }.GetNewClosure()
+    $resH5b = Invoke-Conductor -Goal 'g' -RunDir $runH5b -Planner $planH5 -Spawner $spH5 `
+        -Gater $gaterH5b -GateArtifact 'diff body' -AcceptanceGate:$true -AcceptanceFailLoud `
+        -Worktree $plainDir
+    $evH5b = Get-Content -LiteralPath (Join-Path $runH5b 'events.jsonl') -Raw
+    Check 'H5b-1 non-repo worktree does NOT re-panel' ($gateCalls5b.Value -eq 1)
+    Check 'H5b-2 status needs-polish' ($resH5b.status -eq 'needs-polish')
+    Check 'H5b-3 uncheckable named in event' ($evH5b -match 'scope uncheckable')
+    Check 'H5b-4 rework reason scope-uncheckable' ([string]$resH5b.acceptance.rework.reason -eq 'scope-uncheckable')
+
+    # ---- (h5c) POST-rework snapshot fails (spawner severs the worktree's .git link) -> fail-closed ----
+    $repoAccPost = New-TempRepo -Root (Join-Path $tmpRoot 'acc-post')
+    $wtAccPost = New-RunWorktree -RepoPath $repoAccPost -RunId 'acc-post-wt'
+    $runH5c = Join-Path $tmpRoot 'run-h5c'; New-Item -ItemType Directory -Force -Path $runH5c | Out-Null
+    $gateCalls5c = [ref]0
+    $gaterH5c = {
+        param($art, $goal)
+        $gateCalls5c.Value++
+        return [ordered]@{
+            verdict = 'polish'; reason = 'needs fix'; counts = @{ critical = 0; important = 1; minor = 0 }
+            findings = @(@{ severity = 'important'; area = 'x'; summary = 'fix me'; agreed = $true })
+            polish_brief = 'POLISH BRIEF — fix me'; degraded = $false
+        }
+    }.GetNewClosure()
+    $spH5c = {
+        param($t)
+        # Pre-snapshot succeeds (live worktree); the rework attempt then severs the
+        # .git link so the POST snapshot cannot be taken.
+        if ([string]$t.id -eq 'acceptance-rework-1') {
+            Remove-Item -LiteralPath (Join-Path $wtAccPost.worktree '.git') -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        @{ ok = $true; spend = 0.01; chose = 'fake-agentic'; why = 'rework attempt'; alternatives = @() }
+    }.GetNewClosure()
+    $resH5c = Invoke-Conductor -Goal 'g' -RunDir $runH5c -Planner $planH5 -Spawner $spH5c `
+        -Gater $gaterH5c -GateArtifact 'diff body' -AcceptanceGate:$true -AcceptanceFailLoud `
+        -Worktree $wtAccPost.worktree
+    $evH5c = Get-Content -LiteralPath (Join-Path $runH5c 'events.jsonl') -Raw
+    Check 'H5c-1 post-uncheckable does NOT re-panel' ($gateCalls5c.Value -eq 1)
+    Check 'H5c-2 status needs-polish' ($resH5c.status -eq 'needs-polish')
+    Check 'H5c-3 post-rework snapshot named in event' ($evH5c -match 'post-rework tree snapshot unavailable')
+    Check 'H5c-4 rework reason scope-uncheckable' ([string]$resH5c.acceptance.rework.reason -eq 'scope-uncheckable')
+
 } finally {
     if ($null -eq $savedBatonHome) { Remove-Item env:BATON_HOME -ErrorAction SilentlyContinue }
     else { $env:BATON_HOME = $savedBatonHome }
