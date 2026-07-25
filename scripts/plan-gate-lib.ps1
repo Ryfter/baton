@@ -130,6 +130,16 @@ Severity: critical = the plan will fail, damage something, or build the
 wrong thing; important = the plan should be revised before running; minor =
 nit. Be specific in each summary.
 
+Engine rework contract: after any task whose verification fails on its check
+(and after an acceptance panel returns needs-polish with findings), the ENGINE
+automatically synthesizes one evidence-only rework attempt that inherits the
+failing task's allowed_paths/verify_profile/stakes and re-verifies against the
+same frozen contract (hard ceiling enforced in engine code). Therefore:
+do NOT demand an in-DAG remediation/fix-up task after review tasks — its
+absence is NOT a missing-task defect, and an explicit always-on remediation
+task in a plan SHOULD be flagged as overbuild (it cannot pass verification
+when it has nothing to fix).
+
 ## Goal
 $Goal
 

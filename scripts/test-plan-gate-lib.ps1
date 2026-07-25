@@ -143,6 +143,11 @@ try {
     Check '8c contains area vocabulary' ($prompt8.Contains('scope|ordering|cost|risk|missing-task|overbuild|capability|reversibility'))
     Check '8d contains ONLY-JSON instruction' ($prompt8.Contains('ONLY a JSON array'))
     Check '8e names goal + plan sections' ($prompt8.Contains('## Goal') -and $prompt8.Contains('## Plan (JSON)'))
+    # Slice 3 (#128): engine-owned rework — reviewers must not demand in-DAG remediation
+    Check '8f rework contract: do NOT demand in-DAG remediation' ($prompt8.Contains('do NOT demand an in-DAG remediation'))
+    Check '8g rework contract: always-on remediation is overbuild' ($prompt8.Contains('flagged as overbuild'))
+    Check '8h severity briefing intact' ($prompt8.Contains('Severity: critical = the plan will fail'))
+    Check '8i schema block intact' ($prompt8.Contains('"area": "scope|ordering|cost|risk|missing-task|overbuild|capability|reversibility"'))
 
     # ---- Case 9: Format-ReviseBrief ordering (agreed-first, then severity desc) ----
     $fset9 = @(
