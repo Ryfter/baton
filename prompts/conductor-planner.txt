@@ -8,7 +8,9 @@ Schema:
 
 Rules: give each task a unique id; use depends_on to order; set reversible=false
 ONLY for steps that commit to master, force-push, delete outside a worktree, or
-publish externally; prefer the cheapest est_cost_tier that can do the job. Set stakes
+publish externally; prefer the cheapest est_cost_tier AT WHICH AN ELIGIBLE PROVIDER
+EXISTS — see the capability tier floors in the evidence; never set a task's
+est_cost_tier below its capability's floor. Set stakes
 to low for narrow, reversible, low-blast-radius work; standard for ordinary bounded
 feature or bugfix work; high for security/privacy/auth, migrations, release/publish,
 cross-cutting architecture, or other high-cost-to-reverse work. stakes_basis must be
