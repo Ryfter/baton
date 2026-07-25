@@ -444,6 +444,17 @@ $script:TaskOutputBusPerCapBytes = 8192
 $script:TaskOutputBusTotalInputBytes = 24576
 $script:TaskOutputBusTruncMarker = '(truncated)'
 
+# Engine-owned rework (#128 slice 2 / engine-expressiveness §4). Mechanical ceiling
+# enforced in code, never by prompt text. Default 1 = old single evidence-informed
+# retry subsumed as rework cycle #1. AbsoluteMaxRework is the hard code backstop
+# (spec §4.3): LLM-authored task.max_rework can never raise above it.
+$script:DefaultMaxRework = 1
+$script:AbsoluteMaxRework = 3
+$script:ReworkableFailureCategories = @(
+    'check-failed', 'check-timeout', 'no-change',
+    'expected-file-missing', 'expected-file-empty', 'expected-file-unchanged'
+)
+
 function Get-TaskOutputInstructionBlock {
     <# Short trailing instruction, identical on every worker prompt seam. #>
     return @(
@@ -932,14 +943,188 @@ function New-AgenticSpawner {
     }.GetNewClosure()
 }
 
+function Resolve-MaxRework {
+    <# Mechanical rework ceiling (spec §4.3). Hard code AbsoluteMaxRework is always
+       the outer clamp. Precedence:
+         1. explicit Override (hard-clamped)
+         2. resolved = min(AbsoluteMaxRework, envOrDefault,
+                           taskValue-if-present-else-envOrDefault)
+       envOrDefault = BATON_MAX_REWORK if set, else DefaultMaxRework (1).
+       Task.max_rework may LOWER below the operator/env ceiling, never raise above
+       it — an LLM plan emitting max_rework:50 cannot beat the operator. Always
+       clamped to >= 0. #>
+    param(
+        $Task = $null,
+        $Override = $null
+    )
+    $hard = [int]$script:AbsoluteMaxRework
+    if ($null -ne $Override -and "$Override" -ne '') {
+        $n = $null
+        try { $n = [int]$Override } catch { $n = $null }
+        if ($null -eq $n) { $n = [int]$script:DefaultMaxRework }
+        if ($n -lt 0) { $n = 0 }
+        return [Math]::Min($hard, $n)
+    }
+
+    $envOrDefault = [int]$script:DefaultMaxRework
+    if ($env:BATON_MAX_REWORK -and "$env:BATON_MAX_REWORK" -ne '') {
+        try { $envOrDefault = [int]$env:BATON_MAX_REWORK } catch { $envOrDefault = [int]$script:DefaultMaxRework }
+    }
+    if ($envOrDefault -lt 0) { $envOrDefault = 0 }
+
+    $taskVal = $null
+    if ($null -ne $Task) {
+        $has = if ($Task -is [System.Collections.IDictionary]) {
+            $Task.Contains('max_rework')
+        } else {
+            $null -ne $Task.PSObject.Properties['max_rework']
+        }
+        if ($has -and $null -ne $Task.max_rework -and "$($Task.max_rework)" -ne '') {
+            try { $taskVal = [int]$Task.max_rework } catch { $taskVal = $null }
+        }
+    }
+    $taskOrEnv = if ($null -ne $taskVal) { $taskVal } else { $envOrDefault }
+    if ($taskOrEnv -lt 0) { $taskOrEnv = 0 }
+    return [Math]::Min($hard, [Math]::Min($envOrDefault, $taskOrEnv))
+}
+
+function Normalize-ReworkEvidenceText {
+    <# Normalize evidence for the identical-findings halt. Collapses whitespace,
+       then masks volatile tokens that otherwise make consecutive failures look
+       distinct: ISO-8601/RFC timestamps, GUIDs, hex strings >= 8 chars, and
+       absolute paths under temp/run dirs.
+       Residual risk: arbitrary volatile output (counters, nonces outside these
+       patterns) can still defeat the identical-evidence check; AbsoluteMaxRework
+       hard cap is the real backstop. #>
+    param([AllowEmptyString()][AllowNull()][string]$Text = '')
+    if ($null -eq $Text) { return '' }
+    $t = [string]$Text
+    $t = $t -replace "`r`n", "`n" -replace "`r", "`n"
+    $t = $t -replace '[ \t]+', ' '
+    $t = $t -replace ' *\n *', "`n"
+
+    # Absolute paths under temp / run dirs -> fixed placeholder (before hex so
+    # path segments with hex chars don't get partially rewritten first).
+    $tempRoots = [System.Collections.Generic.List[string]]::new()
+    foreach ($cand in @(
+        [System.IO.Path]::GetTempPath(),
+        $env:TEMP, $env:TMP, $env:TMPDIR,
+        $env:BATON_HOME
+    )) {
+        if ([string]::IsNullOrWhiteSpace([string]$cand)) { continue }
+        try {
+            $full = [System.IO.Path]::GetFullPath([string]$cand).TrimEnd('\', '/')
+            if ($full -and -not ($tempRoots -contains $full)) { [void]$tempRoots.Add($full) }
+        } catch { }
+    }
+    foreach ($root in $tempRoots) {
+        $esc = [regex]::Escape($root) -replace '/', '[\\/]' -replace '\\\\', '[\\/]'
+        # Also accept either slash style after the root.
+        $t = [regex]::Replace($t, "(?i)$esc[\\/][^\s`"'<>|]+", '<TEMP_PATH>')
+    }
+    # Common temp path shapes not covered by env (portable fixtures / cross-box).
+    $t = [regex]::Replace($t,
+        '(?i)(?:[A-Z]:[\\/](?:Users[\\/][^\\/\s]+[\\/]AppData[\\/]Local[\\/]Temp|Windows[\\/]Temp)|/tmp|/var/tmp)[\\/][^\s`"''<>|]+',
+        '<TEMP_PATH>')
+
+    # ISO-8601 / RFC-3339 timestamps (with optional fractional seconds + TZ).
+    $t = [regex]::Replace($t,
+        '\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?',
+        '<TIMESTAMP>')
+    # RFC-1123-ish date headers (e.g. "Mon, 24 Jul 2026 12:34:56 GMT").
+    $t = [regex]::Replace($t,
+        '(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2}(?: GMT| UTC)?',
+        '<TIMESTAMP>')
+
+    # GUIDs (before bare hex so the full GUID collapses as one token).
+    $t = [regex]::Replace($t,
+        '(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b',
+        '<GUID>')
+
+    # Hex strings >= 8 chars (git shas, content hashes in check output).
+    $t = [regex]::Replace($t, '(?i)\b[0-9a-f]{8,}\b', '<HEX>')
+
+    return $t.Trim()
+}
+
+function Build-ReworkEvidenceText {
+    <# Engine invents nothing: repackage check-output excerpt + the failing task's
+       bus residue (Get-TaskBusInputBlock semantics for size caps / missing placeholder).
+       Used as the rework task description. #>
+    param(
+        [Parameter(Mandatory)]$Task,
+        [Parameter(Mandatory)][hashtable]$Verification,
+        [string]$RunDir = '',
+        [int]$CheckExcerptMaxBytes = 4096
+    )
+    $parts = [System.Collections.Generic.List[string]]::new()
+    $fail = [string]$Verification.failure_category
+    if ($fail) { [void]$parts.Add("Failure: $fail") }
+
+    $checkOut = ''
+    $op = [string]$Verification.output_path
+    if ($op -and (Test-Path -LiteralPath $op)) {
+        try {
+            $raw = Get-Content -LiteralPath $op -Raw -ErrorAction Stop
+            if ($null -eq $raw) { $raw = '' }
+            $checkOut = Limit-Utf8TextWithMarker -Text $raw -MaxBytes $CheckExcerptMaxBytes
+        } catch { $checkOut = '' }
+    }
+    [void]$parts.Add('Check output:')
+    [void]$parts.Add($(if ($checkOut) { $checkOut } else { '(empty)' }))
+
+    $tid = [string]$Task.id
+    if ($RunDir -and $tid) {
+        # Same caps / missing placeholder as depends_on injection — treat the failed
+        # task's own output.md as the residue the rework must see.
+        $busBlock = Get-TaskBusInputBlock -RunDir $RunDir -DependsOn @($tid)
+        if ([string]::IsNullOrWhiteSpace($busBlock)) {
+            [void]$parts.Add("## Inputs from $tid`n(no output was produced)")
+        } else {
+            [void]$parts.Add($busBlock)
+        }
+    }
+    return ($parts -join "`n")
+}
+
+function Write-ReworkEvidenceFile {
+    <# Persist triggering evidence under tasks/<id>/rework-evidence-<N>.md so the
+       decisions.jsonl row can name a path, not content. Returns the absolute path. #>
+    param(
+        [Parameter(Mandatory)][string]$TaskDir,
+        [Parameter(Mandatory)][int]$Cycle,
+        [AllowEmptyString()][string]$Text = ''
+    )
+    New-Item -ItemType Directory -Force -Path $TaskDir | Out-Null
+    $path = Join-Path $TaskDir "rework-evidence-$Cycle.md"
+    Set-Content -LiteralPath $path -Value $Text -Encoding utf8NoBOM
+    return $path
+}
+
+function New-ReworkTaskFromEvidence {
+    <# Synthesize ONE rework task: desc = verbatim evidence; allowed_paths,
+       verify_profile, stakes (and every other property) inherited from the failing
+       task. Engine invents nothing beyond the packaging. #>
+    param(
+        [Parameter(Mandatory)]$SourceTask,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$EvidenceText
+    )
+    $t = $SourceTask.PSObject.Copy()
+    $t.desc = $EvidenceText
+    return $t
+}
+
+function Test-ReworkableFailure {
+    <# Check-fail family only. Scope/oracle violations stay fail-closed (no rework). #>
+    param([AllowEmptyString()][string]$FailureCategory = '')
+    return ([string]$FailureCategory -in $script:ReworkableFailureCategories)
+}
+
 function Format-VerifyEvidencePrompt {
-    <# The bounded retry brief (codex-ringer §7): original task + deterministic failure
-       category + a capped raw-output excerpt + the fix-in-place instruction. No restart,
-       no scope broadening. The WHOLE prompt is bounded to <=965 UTF-8 bytes ($MaxBytes)
-       so the one retry survives inline-interpolation instruments (e.g. agy) that dispatch
-       the prompt as a single shell arg under the project's hard 965-byte ceiling. The
-       excerpt takes only the byte budget the fixed parts leave; a long task desc is
-       tail-truncated before the prompt is ever allowed to exceed the ceiling. #>
+    <# Bounded evidence brief (legacy 965-byte path, still used by tests / inline
+       instruments). Slice 2 rework packaging prefers Build-ReworkEvidenceText
+       (bus-aware, evidence-only). Original task + failure category + capped excerpt
+       + fix-in-place instruction, whole prompt <=965 UTF-8 bytes. #>
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$TaskDesc,
         [Parameter(Mandatory)][hashtable]$Verification,
@@ -1022,23 +1207,25 @@ function Add-VerifyAttemptRow {
 }
 
 function New-VerifyingSpawner {
-    <# Wrap an inner agentic spawner with the d082 verification sub-lifecycle. Per task:
-       no verify_profile / no frozen contract -> delegate + mark unverified. Otherwise:
-       freeze pre-hashes just before the attempt, run the inner attempt, compute the task
-       diff, run the frozen contract, apply outcome precedence (codex-ringer §7 + A5
-       non-empty diff), and on a check-fail/timeout/no-change do exactly ONE
-       evidence-informed retry in the SAME worktree. Writes attempts.jsonl +
-       verification.json under tasks/<id>/. Returns the augmented spawner result Task 1
-       consumes. Never a third attempt; scope/oracle violation fails closed with no retry;
-       a verification pass despite an inner nonzero exit stands (the warning rides
-       inner.why into the augmented `why`). #>
+    <# Wrap an inner agentic spawner with the d082 verification sub-lifecycle + the
+       engine-owned rework loop (#128 slice 2). Per task: no verify_profile / no frozen
+       contract -> delegate + mark unverified. Otherwise: freeze pre-hashes once before
+       attempt 1, run the inner attempt, compute the task diff, run the frozen contract,
+       apply A5 non-empty-diff. On a check-fail family verdict the engine synthesizes
+       up to max_rework (default 1) evidence-only rework tasks in the SAME worktree —
+       this SUBSUMES the old single evidence-informed retry (one loop, one counter, one
+       journal vocabulary). Scope/oracle violations stay fail-closed with NO rework.
+       Identical normalized failure evidence across consecutive cycles halts without
+       re-sending. Writes attempts.jsonl + verification.json (+ rework-evidence-N.md). #>
     param(
         [Parameter(Mandatory)][scriptblock]$InnerSpawner,
         [Parameter(Mandatory)][string]$Worktree,
         [Parameter(Mandatory)][string]$BaseSha,
         [Parameter(Mandatory)][string]$RunDir,
-        [Parameter(Mandatory)][hashtable]$FrozenContracts
+        [Parameter(Mandatory)][hashtable]$FrozenContracts,
+        $MaxRework = $null
     )
+    $maxReworkOverride = $MaxRework
     return {
         param($task)
         $prof = [string]$task.verify_profile
@@ -1053,10 +1240,7 @@ function New-VerifyingSpawner {
         $allowed = @($task.allowed_paths | Where-Object { $_ } | ForEach-Object { [string]$_ })
 
         # A5 baseline (review I1): freeze the PRE-TASK state ONCE, before attempt 1, and
-        # judge BOTH attempts against it — codex-ringer §7 / design A5 both specify the
-        # pre-task baseline. Re-freezing per attempt judged attempt 2 against attempt 1's
-        # end-state, which false-passed an add-then-revert retry (net-zero vs base — the
-        # exact A5 loophole) and false-failed a legitimate no-further-edit repair.
+        # judge EVERY attempt (including rework) against it — codex-ringer §7 / design A5.
         $protPre0   = Get-VerifyPathHashes -WorktreeRoot $Worktree -Paths @($contract.protected_paths)
         $expectPre0 = Get-VerifyPathHashes -WorktreeRoot $Worktree -Paths @($contract.expect_files)
         $taskStartTree = Get-WorktreeTreeSha -Worktree $Worktree
@@ -1080,8 +1264,8 @@ function New-VerifyingSpawner {
             }
             # A5 (adjudication): an edit task's PASS also requires a non-empty task diff
             # vs the pre-task baseline. A "passing" check over a tree unchanged since task
-            # start is demoted to a retry-eligible no-change failure (closes the V1
-            # zero-change loophole on BOTH attempts).
+            # start is demoted to a rework-eligible no-change failure (closes the V1
+            # zero-change loophole on EVERY attempt).
             if ([string]$v.verdict -eq 'pass' -and -not $grew) {
                 $v.verdict = 'fail'; $v.ok = $false; $v.grade = 'invalid'; $v.failure_category = 'no-change'
             }
@@ -1099,41 +1283,95 @@ function New-VerifyingSpawner {
             verdict = $a1.v.verdict; grade = $a1.v.grade; failure_category = $a1.v.failure_category; duration_ms = $a1.v.duration_ms
         }
         $final = $a1
-        $retried = $false
         $firstFail = [string]$a1.v.failure_category
-        # Spend accrues across ALL attempts (review M2) — a retry's labor must not drop
+        # Spend accrues across ALL attempts (review M2) — rework labor must not drop
         # attempt 1's spend once realized cost lands via the Get-RunCost seam.
         $totalSpend = [double]$a1.inner.spend
 
-        # Retry precedence: pass -> done. scope/oracle violation or spawn/infra failure ->
-        # fail-closed, NO retry. check-failed / check-timeout / no-change / expected-file-*
-        # -> exactly one evidence-informed retry in the SAME worktree.
-        $retryable = @('check-failed', 'check-timeout', 'no-change', 'expected-file-missing', 'expected-file-empty', 'expected-file-unchanged')
-        if ([string]$a1.v.verdict -ne 'pass' -and ([string]$a1.v.failure_category -in $retryable)) {
-            $retried = $true
-            $evidencePrompt = Format-VerifyEvidencePrompt -TaskDesc ([string]$task.desc) -Verification $a1.v -OutputPath ([string]$a1.v.output_path)
-            $retryTask = $task.PSObject.Copy()
-            $retryTask.desc = $evidencePrompt
-            $a2 = & $runAttempt $retryTask 2
-            Add-VerifyAttemptRow -RunTaskDir $taskDir -Attempt 2 -Row @{
-                worker = [string]$a2.inner.chose; worker_ok = [bool]$a2.inner.ok; diff_grew = $a2.grew
-                verdict = $a2.v.verdict; grade = $a2.v.grade; failure_category = $a2.v.failure_category; duration_ms = $a2.v.duration_ms
+        # Engine-owned rework loop (slice 2): SUBSUMES the old single evidence-informed
+        # retry. Counter is mechanical (Resolve-MaxRework); never prompt text.
+        # Precedence: pass -> done. scope/oracle or non-reworkable -> fail-closed, NO rework.
+        # check-fail family -> up to max_rework evidence-only rework cycles in SAME worktree.
+        $maxRework = Resolve-MaxRework -Task $task -Override $maxReworkOverride
+        $reworkCycles = 0
+        $reworks = [System.Collections.Generic.List[object]]::new()
+        $prevEvidenceNorm = $null
+        $haltReason = ''
+
+        while (
+            [string]$final.v.verdict -ne 'pass' -and
+            (Test-ReworkableFailure -FailureCategory ([string]$final.v.failure_category)) -and
+            $reworkCycles -lt $maxRework
+        ) {
+            $evidenceText = Build-ReworkEvidenceText -Task $task -Verification $final.v -RunDir $RunDir
+            $evidenceNorm = Normalize-ReworkEvidenceText -Text $evidenceText
+
+            # Identical-findings halt: never re-send the same feedback. Applies when a
+            # prior cycle already failed — compare this failure's evidence to the evidence
+            # that triggered the previous rework (i.e. the previous failure).
+            if ($reworkCycles -ge 1 -and $null -ne $prevEvidenceNorm -and $evidenceNorm -eq $prevEvidenceNorm) {
+                $haltReason = 'identical-evidence'
+                break
             }
-            $final = $a2
-            $totalSpend += [double]$a2.inner.spend
+
+            $reworkCycles++
+            $evidencePath = Write-ReworkEvidenceFile -TaskDir $taskDir -Cycle $reworkCycles -Text $evidenceText
+            $prevEvidenceNorm = $evidenceNorm
+            $reworkTask = New-ReworkTaskFromEvidence -SourceTask $task -EvidenceText $evidenceText
+            $attemptNo = $reworkCycles + 1
+            $aN = & $runAttempt $reworkTask $attemptNo
+            Add-VerifyAttemptRow -RunTaskDir $taskDir -Attempt $attemptNo -Row @{
+                worker = [string]$aN.inner.chose; worker_ok = [bool]$aN.inner.ok; diff_grew = $aN.grew
+                verdict = $aN.v.verdict; grade = $aN.v.grade; failure_category = $aN.v.failure_category; duration_ms = $aN.v.duration_ms
+            }
+            $final = $aN
+            $totalSpend += [double]$aN.inner.spend
+            $outcome = if ([string]$aN.v.verdict -eq 'pass') { 'passed' } else { 'failed' }
+            [void]$reworks.Add([ordered]@{
+                cycle            = $reworkCycles
+                evidence_path    = $evidencePath
+                outcome          = $outcome
+                failure_category = [string]$aN.v.failure_category
+                attempt          = $attemptNo
+            })
+            if ($outcome -eq 'passed') { break }
+        }
+
+        # Stamp haltReason from the actual exit cause — not "max_rework" for every
+        # post-cycle non-pass. Non-reworkable category (e.g. scope-violation after a
+        # rework attempt) uses the category name; ceiling exhaustion uses max_rework;
+        # identical-evidence is already set inside the loop.
+        if ([string]$final.v.verdict -ne 'pass' -and -not $haltReason) {
+            $finalCat = [string]$final.v.failure_category
+            if ($reworkCycles -gt 0 -and -not (Test-ReworkableFailure -FailureCategory $finalCat)) {
+                $haltReason = if ($finalCat) { $finalCat } else { 'non-reworkable' }
+            } elseif (
+                $reworkCycles -ge $maxRework -and
+                $maxRework -gt 0 -and
+                (Test-ReworkableFailure -FailureCategory $finalCat)
+            ) {
+                $haltReason = 'max_rework'
+            }
         }
 
         $v = $final.v
+        $retried = ($reworkCycles -gt 0)  # compat alias: rework cycle(s) attempted
         $verObj = @{
             verdict = [string]$v.verdict; grade = [string]$v.grade
             failure_category = [string]$v.failure_category; first_failure_category = $firstFail
-            proves = [string]$v.proves; output_path = [string]$v.output_path; retried = $retried
+            proves = [string]$v.proves; output_path = [string]$v.output_path
+            retried = $retried
+            rework_cycles = $reworkCycles
+            max_rework = $maxRework
+            rework_halt_reason = $haltReason
+            reworks = @($reworks)
         }
-        ConvertTo-Json -InputObject $verObj -Depth 6 | Set-Content -LiteralPath (Join-Path $taskDir 'verification.json') -Encoding utf8NoBOM
+        ConvertTo-Json -InputObject $verObj -Depth 8 | Set-Content -LiteralPath (Join-Path $taskDir 'verification.json') -Encoding utf8NoBOM
 
         $passed = ([string]$v.verdict -eq 'pass')
         $why = if ($passed) { "$($final.inner.why); verified (grade $($v.grade))" }
                else { "$($final.inner.why); verification $($v.verdict): $($v.failure_category)" }
+        if ($haltReason -and -not $passed) { $why += "; rework halted ($haltReason)" }
         $result = @{
             ok = $passed; spend = [double]$totalSpend; chose = [string]$final.inner.chose
             why = $why; alternatives = @($final.inner.alternatives)

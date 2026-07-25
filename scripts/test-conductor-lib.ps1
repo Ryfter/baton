@@ -1121,7 +1121,7 @@ ERROR: You have hit your usage limit. Try again later.
     $sp = { param($t) @{ ok=$false; spend=0.0; chose='w'; why='fail'; alternatives=@(); verification=@{ verdict='fail'; grade='invalid'; failure_category='check-failed'; proves='x'; retried=$true; first_failure_category='check-failed' } } }
     $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp -Verify -VerifyPreflight { param($p) @{ ok=$true } }
     Check 'VF3 status verification-failed' ($res.status -eq 'verification-failed')
-    Check 'VF3 retry event' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-retry-started' }).Count -ge 1)
+    Check 'VF3 rework event' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-rework-started' }).Count -ge 1)
     Check 'VF3 failed event' (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'task-verification-failed' }).Count -ge 1)
     Remove-Item $d -Recurse -Force
 
@@ -1166,7 +1166,7 @@ ERROR: You have hit your usage limit. Try again later.
     $sec = Format-VerificationSection -RunDir $d -Plan $plan
     Check 'VF8a section present' ($sec -match '## Verification')
     Check 'VF8b pass+grade rendered' ($sec -match 'PASS \(grade strong\)')
-    Check 'VF8c retry noted' ($sec -match 'after 1 retry')
+    Check 'VF8c rework noted' ($sec -match 'after 1 rework')
     Check 'VF8d proves rendered' ($sec -match 'the suite passes')
     $empty = Format-VerificationSection -RunDir (New-VfRun) -Plan $plan
     Check 'VF8e no verified task -> empty' ($empty -eq '')
