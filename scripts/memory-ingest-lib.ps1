@@ -17,7 +17,7 @@
 # Event kinds that are pure routing / bookkeeping — never become memory rows.
 $script:MemoryIngestRoutingNoiseKinds = @(
     'started', 'spent', 'policy', 'shadow', 'plan-gate',
-    'task-verification-started', 'task-retry-started', 'task-unverified',
+    'task-verification-started', 'task-retry-started', 'task-rework-started', 'task-unverified',
     'interrupt', 'verification'
 )
 

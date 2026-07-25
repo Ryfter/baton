@@ -1260,10 +1260,12 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
         $env:BATON_VERIFY_TEST_HOOK = $hook2
         try { $rv2 = & $vs2 (New-VerifyTask) } finally { Remove-Item env:BATON_VERIFY_TEST_HOOK -ErrorAction SilentlyContinue }
         Check 'VS2 retried true' ($rv2.verification.retried -eq $true)
+        Check 'VS2 rework_cycles 1 (retry subsumed)' ($rv2.verification.rework_cycles -eq 1)
         Check 'VS2 final ok true' ($rv2.ok -eq $true)
         Check 'VS2 two attempt rows' (@(Get-Attempts $fx2.runDir).Count -eq 2)
         Check 'VS2 first_failure_category check-failed' ($rv2.verification.first_failure_category -eq 'check-failed')
-        Check 'VS2 final retry preserves resolved depth policy metadata' (
+        Check 'VS2 rework evidence file written' (Test-Path -LiteralPath (Join-Path $fx2.runDir 'tasks/t1/rework-evidence-1.md'))
+        Check 'VS2 final rework preserves resolved depth policy metadata' (
             $rv2.stakes -eq 'standard' -and $rv2.stakes_basis -eq 'legacy plan omitted stakes' -and
             $rv2.depth_tier -eq 'med' -and $rv2.selection_mode -eq 'economy' -and
             $rv2.tier_cap -eq 'free' -and $rv2.depth_applied -eq $true -and
@@ -1284,9 +1286,10 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
         Check 'VS3 not ok' ($rv3.ok -eq $false)
         Check 'VS3 verdict fail' ($rv3.verification.verdict -eq 'fail')
         Check 'VS3 retried true' ($rv3.verification.retried -eq $true)
+        Check 'VS3 rework_cycles 1' ($rv3.verification.rework_cycles -eq 1)
         Check 'VS3 two attempt rows' (@(Get-Attempts $fx3.runDir).Count -eq 2)
 
-        # VS4 scope-violation -> fail closed, NO retry (inner writes an out-of-scope file).
+        # VS4 scope-violation -> fail closed, NO rework (inner writes an out-of-scope file).
         $fx4 = New-VerifyFixture -Name 'vs4' -VProfile $passProfile
         $in4 = New-AgenticSpawner -Worktree $fx4.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fx4.runDir -Dispatcher $forbidDisp
         $vs4 = New-VerifyingSpawner -InnerSpawner $in4 -Worktree $fx4.wt.worktree -BaseSha $fx4.wt.base_sha -RunDir $fx4.runDir -FrozenContracts $fx4.frozen
@@ -1294,10 +1297,11 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
         Check 'VS4 verdict scope-violation' ($rv4.verification.verdict -eq 'scope-violation')
         Check 'VS4 not ok' ($rv4.ok -eq $false)
         Check 'VS4 not retried' ($rv4.verification.retried -eq $false)
-        Check 'VS4 exactly one attempt row (no retry)' (@(Get-Attempts $fx4.runDir).Count -eq 1)
+        Check 'VS4 rework_cycles 0' ($rv4.verification.rework_cycles -eq 0)
+        Check 'VS4 exactly one attempt row (no rework)' (@(Get-Attempts $fx4.runDir).Count -eq 1)
 
         # VS5 A5 no-change: check exits 0 but inner writes nothing -> demoted to no-change,
-        # retry-eligible (2 rows), still fails.
+        # rework-eligible (2 rows), still fails.
         $fx5 = New-VerifyFixture -Name 'vs5' -VProfile $passProfile
         $in5 = New-AgenticSpawner -Worktree $fx5.wt.worktree -FleetPath $fleetPath -ToolsPath $toolsPath -RunDir $fx5.runDir -Dispatcher $noopDisp2
         $vs5 = New-VerifyingSpawner -InnerSpawner $in5 -Worktree $fx5.wt.worktree -BaseSha $fx5.wt.base_sha -RunDir $fx5.runDir -FrozenContracts $fx5.frozen
