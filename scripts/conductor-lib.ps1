@@ -1386,6 +1386,36 @@ function Invoke-Conductor {
                     }
                     $finalStatus = 'needs-polish'
                 }
+            } elseif (-not [string]::IsNullOrWhiteSpace($Worktree)) {
+                # Scope was demanded (non-empty union, worktree provided) but the pre-rework
+                # tree snapshot is unavailable (tree-sha failure or worktree vanished): the
+                # rework diff cannot be scope-checked. Fail closed — never silently re-panel
+                # unchecked labor (#134).
+                $accScopeBlocked = $true
+                $msg = "acceptance-rework scope uncheckable — pre-rework tree snapshot unavailable; re-panel skipped (fail-closed, union of plan allowed_paths declared)"
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'acceptance-rework-scope-violation' -Level 'error' -Message $msg)
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'error' -Message $msg)
+                $priorSnapUncheck = [ordered]@{
+                    verdict = [string]$priorGate.verdict
+                    reason = [string]$priorGate.reason
+                    counts = $priorGate.counts
+                    polish_brief = [string]$priorGate.polish_brief
+                    findings = @($priorGate.findings)
+                }
+                ($priorSnapUncheck | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $RunDir 'acceptance-prior.json') -Encoding utf8NoBOM
+                $gate = $priorGate
+                $reworkMetaUncheck = @{
+                    attempted = $true; evidence_path = $accEvidPath; outcome = 'failed'
+                    reason = 'scope-uncheckable'
+                }
+                if ($gate -is [System.Collections.IDictionary]) {
+                    $gate['prior_acceptance'] = $priorSnapUncheck
+                    $gate['rework'] = $reworkMetaUncheck
+                } else {
+                    $gate | Add-Member -NotePropertyName prior_acceptance -NotePropertyValue $priorSnapUncheck -Force
+                    $gate | Add-Member -NotePropertyName rework -NotePropertyValue $reworkMetaUncheck -Force
+                }
+                $finalStatus = 'needs-polish'
             }
 
             if (-not $accScopeBlocked) {

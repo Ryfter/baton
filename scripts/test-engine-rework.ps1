@@ -572,6 +572,45 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     Check 'H4-acc4 scope diff retained' (Test-Path -LiteralPath (Join-Path $runH4 'acceptance-rework-scope-diff.txt'))
     Check 'H4-acc5 prior retained' (Test-Path -LiteralPath (Join-Path $runH4 'acceptance-prior.json'))
 
+    # ---- (h5) acceptance-rework scope UNCHECKABLE (no pre-rework tree) -> fail-closed, no re-panel (#134) ----
+    # Worktree path that does not exist: the pre-rework snapshot cannot be taken, so with a
+    # non-empty allowed_paths union the rework diff is uncheckable — must halt, never silently
+    # proceed to re-panel.
+    $runH5 = Join-Path $tmpRoot 'run-h5'; New-Item -ItemType Directory -Force -Path $runH5 | Out-Null
+    $gateCalls5 = [ref]0
+    $gaterH5 = {
+        param($art, $goal)
+        $gateCalls5.Value++
+        return [ordered]@{
+            verdict = 'polish'; reason = 'needs fix'; counts = @{ critical = 0; important = 1; minor = 0 }
+            findings = @(@{ severity = 'important'; area = 'x'; summary = 'fix me'; agreed = $true })
+            polish_brief = 'POLISH BRIEF — fix me'; degraded = $false
+        }
+    }.GetNewClosure()
+    $spH5 = { param($t) @{ ok = $true; spend = 0.01; chose = 'fake-agentic'; why = 'rework attempt'; alternatives = @() } }
+    $planH5 = {
+        param($g)
+        @{
+            goal = $g; budget_cap = $null
+            tasks = @([pscustomobject]@{
+                id = 't1'; desc = 'implement'; command = ''; capability = 'code-gen'
+                depends_on = @(); est_cost_tier = 'free'; reversible = $true
+                verify_profile = 'unit'; allowed_paths = @('src/')
+                stakes = 'high'; stakes_basis = 'auth'
+            })
+        }
+    }
+    $resH5 = Invoke-Conductor -Goal 'g' -RunDir $runH5 -Planner $planH5 -Spawner $spH5 `
+        -Gater $gaterH5 -GateArtifact 'diff body' -AcceptanceGate:$true -AcceptanceFailLoud `
+        -Worktree (Join-Path $tmpRoot 'no-such-worktree')
+    $evH5 = Get-Content -LiteralPath (Join-Path $runH5 'events.jsonl') -Raw
+    Check 'H5-acc1 uncheckable does NOT re-panel' ($gateCalls5.Value -eq 1)
+    Check 'H5-acc2 status needs-polish' ($resH5.status -eq 'needs-polish')
+    Check 'H5-acc3 scope-violation vocabulary event' ($evH5 -match 'acceptance-rework-scope-violation')
+    Check 'H5-acc4 uncheckable named in event' ($evH5 -match 'scope uncheckable')
+    Check 'H5-acc5 prior retained' (Test-Path -LiteralPath (Join-Path $runH5 'acceptance-prior.json'))
+    Check 'H5-acc6 rework reason scope-uncheckable' ([string]$resH5.acceptance.rework.reason -eq 'scope-uncheckable')
+
 } finally {
     if ($null -eq $savedBatonHome) { Remove-Item env:BATON_HOME -ErrorAction SilentlyContinue }
     else { $env:BATON_HOME = $savedBatonHome }
