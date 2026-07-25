@@ -126,6 +126,63 @@ fact: bar uses Baz
     $i1 = $pD.IndexOf('## Inputs from t1')
     Check 'D6 deps injected in depends_on order' (($i0 -ge 0) -and ($i1 -gt $i0))
     Check 'D7 Task: desc still present' ($pD -match 'Task: consume upstream')
+    # Instruction block must SURVIVE dependency injection (residue headings alone
+    # must not trip the idempotency guard — #115 review finding #1).
+    $instrD = Get-TaskOutputInstructionBlock
+    Check 'D8 instruction block survives dep injection' ($pD.IndexOf($instrD) -ge 0)
+    Check 'D8b instruction unique second line present after Inputs' (
+        ($pD -match 'End your reply with a ## Task output section') -and
+        ($pD.IndexOf('## Inputs from t0') -ge 0) -and
+        ($pD.LastIndexOf('End your reply with a ## Task output section') -gt $pD.IndexOf('## Inputs from t0')))
+
+    # (d2) path containment: hostile TaskId must not write outside run dir
+    $escRun = Join-Path $tmpRoot 'escape-run'
+    New-Item -ItemType Directory -Force -Path $escRun | Out-Null
+    $naiveWrite = [System.IO.Path]::GetFullPath((Join-Path $escRun 'tasks/../../x/output.md'))
+    if (Test-Path -LiteralPath $naiveWrite) {
+        Remove-Item -LiteralPath $naiveWrite -Force -ErrorAction SilentlyContinue
+    }
+    $warnsWrite = $null
+    Write-TaskBusOutput -RunDir $escRun -TaskId '../../x' -Stdout 'LEAKED' `
+        -WarningVariable warnsWrite -WarningAction SilentlyContinue
+    Check 'D9 hostile TaskId does not write outside run dir' (
+        -not (Test-Path -LiteralPath $naiveWrite))
+    Check 'D9b no tasks tree created for hostile id' (
+        -not (Test-Path -LiteralPath (Join-Path $escRun 'tasks')))
+    Check 'D9c write warning path taken' (
+        (@($warnsWrite).Count -gt 0) -and
+        ((@($warnsWrite | ForEach-Object { [string]$_ }) -join ' ') -match 'unsafe TaskId'))
+
+    # (d3) path containment: hostile depId must not read outside run dir
+    # Bait file at the path a naive Join-Path would open for depId '../..'
+    $naiveRead = [System.IO.Path]::GetFullPath((Join-Path $escRun 'tasks/../../output.md'))
+    $naiveReadDir = Split-Path -Parent $naiveRead
+    if (-not (Test-Path -LiteralPath $naiveReadDir)) {
+        New-Item -ItemType Directory -Force -Path $naiveReadDir | Out-Null
+    }
+    Set-Content -LiteralPath $naiveRead -Value 'SECRET-PAYLOAD-DO-NOT-LEAK' -Encoding utf8NoBOM
+    $hostileInj = Get-TaskBusInputBlock -RunDir $escRun -DependsOn @('../..')
+    Check 'D10 hostile depId injects placeholder' ($hostileInj -match '\(no output was produced\)')
+    Check 'D10b hostile depId does not leak external content' (
+        $hostileInj -notmatch 'SECRET-PAYLOAD-DO-NOT-LEAK')
+    $naiveReadX = [System.IO.Path]::GetFullPath((Join-Path $escRun 'tasks/../../x/output.md'))
+    $naiveReadXDir = Split-Path -Parent $naiveReadX
+    if (-not (Test-Path -LiteralPath $naiveReadXDir)) {
+        New-Item -ItemType Directory -Force -Path $naiveReadXDir | Out-Null
+    }
+    Set-Content -LiteralPath $naiveReadX -Value 'SECRET-X-PAYLOAD' -Encoding utf8NoBOM
+    $hostileInjX = Get-TaskBusInputBlock -RunDir $escRun -DependsOn @('../../x')
+    Check 'D10c hostile ../../x dep injects placeholder' ($hostileInjX -match '\(no output was produced\)')
+    Check 'D10d hostile ../../x does not leak' ($hostileInjX -notmatch 'SECRET-X-PAYLOAD')
+
+    # (d4) duplicate depends_on ids: first wins, single section
+    $dedupeRun = Join-Path $tmpRoot 'dedupe-run'
+    New-Item -ItemType Directory -Force -Path $dedupeRun | Out-Null
+    Write-TaskBusOutput -RunDir $dedupeRun -TaskId 't1' -Stdout "## Task output`nonce"
+    $deduped = Get-TaskBusInputBlock -RunDir $dedupeRun -DependsOn @('t1', 't1')
+    $t1Count = ([regex]::Matches($deduped, '(?m)^## Inputs from t1\s*$')).Count
+    Check 'D11 duplicate depends_on injects one section' ($t1Count -eq 1)
+    Check 'D11b duplicate depends_on still has content' ($deduped -match 'once')
 
     # (e) missing dep output -> placeholder, no throw
     $seenE = [ref]''

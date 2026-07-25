@@ -491,50 +491,107 @@ function Get-TaskOutputResidue {
     return (Limit-Utf8TextWithMarker -Text $section -MaxBytes $MaxBytes)
 }
 
+function Test-TaskBusIdSafe {
+    <# Planner-supplied task ids must be single path segments: alphanumerics, dot,
+       underscore, hyphen only — never '.'/'..' and never path separators. #>
+    param([AllowEmptyString()][AllowNull()][string]$Id = '')
+    if ([string]::IsNullOrWhiteSpace($Id)) { return $false }
+    if ($Id -eq '.' -or $Id -eq '..') { return $false }
+    return [bool]($Id -match '^[A-Za-z0-9._-]+$')
+}
+
+function Resolve-TaskBusContainedPath {
+    <# Resolve <RunDir>/tasks/<TaskId>[/output.md] only if the final full path stays
+       under <RunDir>/tasks. Returns $null on unsafe id or containment failure. #>
+    param(
+        [string]$RunDir,
+        [string]$TaskId,
+        [switch]$OutputFile
+    )
+    if ([string]::IsNullOrWhiteSpace($RunDir)) { return $null }
+    if (-not (Test-TaskBusIdSafe -Id $TaskId)) { return $null }
+    try {
+        $tasksRoot = [System.IO.Path]::GetFullPath((Join-Path $RunDir 'tasks'))
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path $tasksRoot $TaskId))
+        if ($OutputFile) {
+            $candidate = [System.IO.Path]::GetFullPath((Join-Path $candidate 'output.md'))
+        }
+        $prefix = if ($tasksRoot.EndsWith([System.IO.Path]::DirectorySeparatorChar) -or
+            $tasksRoot.EndsWith([System.IO.Path]::AltDirectorySeparatorChar)) {
+            $tasksRoot
+        } else {
+            $tasksRoot + [System.IO.Path]::DirectorySeparatorChar
+        }
+        # Contained if equal to tasks root (task dir only, never for file) or under it.
+        $ok = $candidate.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
+        if (-not $ok -and -not $OutputFile) {
+            $ok = $candidate.Equals($tasksRoot, [System.StringComparison]::OrdinalIgnoreCase)
+        }
+        if (-not $ok) { return $null }
+        return $candidate
+    } catch {
+        return $null
+    }
+}
+
 function Write-TaskBusOutput {
     <# Persist captured residue to <RunDir>/tasks/<id>/output.md (utf8NoBOM).
-       Fail-soft: missing RunDir/TaskId or IO errors never throw. Overwrites on
-       each attempt so the latest attempt (success or fail) is what dependents see. #>
+       Fail-soft: missing RunDir/TaskId, unsafe TaskId, or IO errors never throw.
+       Overwrites on each attempt so the latest attempt (success or fail) is what
+       dependents see. Unsafe TaskId skips with a warning (no path traversal). #>
+    [CmdletBinding()]
     param(
         [string]$RunDir,
         [string]$TaskId,
         [AllowEmptyString()][AllowNull()][string]$Stdout = ''
     )
     if ([string]::IsNullOrWhiteSpace($RunDir) -or [string]::IsNullOrWhiteSpace($TaskId)) { return }
+    $outPath = Resolve-TaskBusContainedPath -RunDir $RunDir -TaskId $TaskId -OutputFile
+    if ($null -eq $outPath) {
+        Write-Warning "task-output-bus: rejecting unsafe TaskId '$TaskId' (write skipped)"
+        return
+    }
     try {
-        $taskDir = Join-Path $RunDir "tasks/$TaskId"
+        $taskDir = Split-Path -Parent $outPath
         New-Item -ItemType Directory -Force -Path $taskDir | Out-Null
         $body = Get-TaskOutputResidue -Stdout $Stdout
-        Set-Content -LiteralPath (Join-Path $taskDir 'output.md') -Value $body -Encoding utf8NoBOM
+        Set-Content -LiteralPath $outPath -Value $body -Encoding utf8NoBOM
     } catch { }
 }
 
 function Get-TaskBusInputBlock {
     <# Build the dependency-injection preamble for a task. One ## Inputs from <id>
-       section per depends_on entry (order preserved). Per-dep and total caps apply.
-       Missing output.md -> placeholder line, never throw. #>
+       section per depends_on entry (order preserved; duplicate ids deduped, first
+       wins). Per-dep and total caps apply. Missing/unsafe output.md -> placeholder
+       line, never throw. #>
     param(
         [string]$RunDir,
         [string[]]$DependsOn = @(),
         [int]$PerCapBytes = $script:TaskOutputBusPerCapBytes,
         [int]$TotalCapBytes = $script:TaskOutputBusTotalInputBytes
     )
-    $depIds = @($DependsOn | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    $rawDeps = @($DependsOn | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    # Dedupe: first occurrence wins, order preserved.
+    $seen = @{}
+    $depIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($d in $rawDeps) {
+        if ($seen.ContainsKey($d)) { continue }
+        $seen[$d] = $true
+        $depIds.Add($d)
+    }
     if ($depIds.Count -eq 0) { return '' }
     $enc = [System.Text.Encoding]::UTF8
     $sections = [System.Collections.Generic.List[object]]::new()
     foreach ($depId in $depIds) {
         $body = '(no output was produced)'
-        if (-not [string]::IsNullOrWhiteSpace($RunDir)) {
-            $path = Join-Path $RunDir "tasks/$depId/output.md"
-            if (Test-Path -LiteralPath $path) {
-                try {
-                    $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
-                    if ($null -eq $raw) { $raw = '' }
-                    $body = Limit-Utf8TextWithMarker -Text $raw -MaxBytes $PerCapBytes
-                } catch {
-                    $body = '(no output was produced)'
-                }
+        $path = Resolve-TaskBusContainedPath -RunDir $RunDir -TaskId $depId -OutputFile
+        if ($null -ne $path -and (Test-Path -LiteralPath $path)) {
+            try {
+                $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+                if ($null -eq $raw) { $raw = '' }
+                $body = Limit-Utf8TextWithMarker -Text $raw -MaxBytes $PerCapBytes
+            } catch {
+                $body = '(no output was produced)'
             }
         }
         $block = "## Inputs from $depId`n$body"
@@ -570,8 +627,9 @@ function Add-TaskOutputInstruction {
     param([AllowEmptyString()][AllowNull()][string]$Prompt = '')
     $base = if ($null -eq $Prompt) { '' } else { [string]$Prompt }
     $block = Get-TaskOutputInstructionBlock
+    # Exact-block guard only: a bare `## Task output` heading appears in injected
+    # dependency residue and must NOT suppress the instruction block (#115 review).
     if ($base.IndexOf($block, [System.StringComparison]::Ordinal) -ge 0) { return $base }
-    if ($base -match '(?m)^## Task output\s*$') { return $base }
     if ([string]::IsNullOrEmpty($base)) { return $block }
     return $base.TrimEnd() + "`n`n" + $block
 }
