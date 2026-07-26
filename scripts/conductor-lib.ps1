@@ -290,6 +290,37 @@ function Format-RunReport {
     return $sb.ToString().TrimEnd()
 }
 
+function Format-LaborSection {
+    <# '## Labor' report section for a labor-unavailable halt (#124): plain-language
+       cause + known per-provider availability, so an empty labor pool never reads
+       as a verification/implementation defect in report.md. Wording is seam-
+       neutral: the halt may be pre-dispatch (zero candidates, preflight hold) or
+       MID-dispatch (quota-death with no peer, possibly after partial labor) — no
+       'before dispatch' claims. Cell text is pipe/newline-escaped: provider names
+       and failure classifications are data, not markdown. #>
+    param([Parameter(Mandatory)]$Result)
+    $esc = { param($v) (([string]$v) -replace '\|', '/') -replace "`r?`n", ' ' }
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine('## Labor')
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('No edit-eligible worker was available to finish this task — the run halted on labor availability. This is an availability problem, not an implementation defect.')
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine("Why: $(& $esc $Result.why)")
+    $excl = @($Result.exclusions)
+    if ($excl.Count -gt 0) {
+        [void]$sb.AppendLine('')
+        [void]$sb.AppendLine('Known exclusions (may be partial on post-selection halts):')
+        [void]$sb.AppendLine('')
+        [void]$sb.AppendLine('| Provider | Stage | Reason | Reset |')
+        [void]$sb.AppendLine('|---|---|---|---|')
+        foreach ($e in $excl) {
+            $reset = if ($e.eta) { [string]$e.eta } elseif ($e.reset_at) { [string]$e.reset_at } else { '' }
+            [void]$sb.AppendLine("| $(& $esc $e.name) | $(& $esc $e.stage) | $(& $esc $e.reason) | $(& $esc $reset) |")
+        }
+    }
+    return $sb.ToString().TrimEnd()
+}
+
 function Resolve-GateArtifact {
     <# The artifact text to gate: literal -Artifact wins; else `git diff <range>` for
        -Diff; else ''. A git failure returns '' (fail-open -> the phase no-ops). #>
@@ -669,7 +700,10 @@ function Complete-Run {
         [string]$Status = 'completed',
         [string]$PendingTaskId = '',
         $Gate = $null,
-        [object[]]$TaskCosts = @()
+        [object[]]$TaskCosts = @(),
+        # #124: the failing spawner result when the halt was labor availability —
+        # renders the '## Labor' section so report.md names the real cause.
+        $LaborFailure = $null
     )
     $report = Format-RunReport -Plan $Plan -Decisions @($Decisions) -Spend $Spend -Status $Status -PendingTaskId $PendingTaskId
     if ($Gate) {
@@ -679,6 +713,9 @@ function Complete-Run {
     $verSection = Format-VerificationSection -RunDir $RunDir -Plan $Plan
     if ($verSection) {
         $report = $report + "`n`n" + $verSection
+    }
+    if ($LaborFailure) {
+        $report = $report + "`n`n" + (Format-LaborSection -Result $LaborFailure)
     }
     # Effective cost (slice 1): only when a gate produced a verdict (a quality signal).
     $effectiveCost = $null
@@ -1169,14 +1206,25 @@ function Invoke-Conductor {
                 Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-verification-failed' -Level 'warn' -Message "verification failed ($($v.failure_category))")
             }
         }
+        # #124: a labor-availability halt gets its own event + terminal status so the
+        # run never reads as a verification/implementation defect. The spawner sets
+        # labor='unavailable' only when availability (lockout/hold/no-peer) — not
+        # tier/config — emptied the pool.
+        $laborUnavailable = (-not $r.ok) -and ([string]$r.labor -eq 'unavailable')
+        if ($laborUnavailable) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'worker-selection-failed' -Level 'error' -Message ([string]$r.why))
+        }
         $kind = if ($r.ok) { 'finished' } else { 'error' }
         # A failing result's why is the diagnostic (e.g. the zero-candidate remedy, #135) —
         # journal it; the operator already has the desc from this task's 'started' event.
         $termMsg = if (-not $r.ok -and -not [string]::IsNullOrWhiteSpace([string]$r.why)) { [string]$r.why } else { $task.desc }
         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind $kind -Message $termMsg)
         if (-not $r.ok) {
-            $failStatus = if ($Verify -and $r.verification -and [string]$r.verification.verdict -ne 'pass') { 'verification-failed' } else { 'failed' }
-            return (Complete-Run -RunDir $RunDir -Plan $plan -Decisions $decisions -Spend $spend -Status $failStatus -PendingTaskId $task.id)
+            $failStatus = if ($laborUnavailable) { 'labor-unavailable' }
+                          elseif ($Verify -and $r.verification -and [string]$r.verification.verdict -ne 'pass') { 'verification-failed' } else { 'failed' }
+            $crArgs = @{ RunDir = $RunDir; Plan = $plan; Decisions = $decisions; Spend = $spend; Status = $failStatus; PendingTaskId = $task.id }
+            if ($laborUnavailable) { $crArgs.LaborFailure = $r }
+            return (Complete-Run @crArgs)
         }
     }
     # 4. Acceptance phase (d058): runs after a successful walk when policy enables it.

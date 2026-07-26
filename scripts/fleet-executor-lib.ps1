@@ -183,16 +183,120 @@ function Get-CapabilityCostTierFloor {
     }
 }
 
+function Get-EditPoolExclusions {
+    <# Per-provider audit of an empty edit pool (#124). Walks every fleet provider
+       and names why each one cannot take this dispatch, split into 'static'
+       exclusions (config-shaped: disabled / no capability claim / not
+       edit-eligible / context floor / tier cap) and 'usage' exclusions (the
+       provider passes every static check but is out on availability: lockout,
+       cooldown, conserve-mode limited). Callers use the split to tell 'the
+       roster cannot do this' (#127 stakes/tier remedy) from 'everyone who could
+       is out right now' (labor-unavailable). Mirrors Select-Capability's
+       route-around rules: hard states always exclude; 'limited' excludes only
+       under conserve mode. Fail-soft: unreadable fleet -> @(). #>
+    param(
+        [Parameter(Mandatory)][string]$Capability,
+        [Parameter(Mandatory)][string]$TierCap,
+        [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
+        [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl'),
+        [datetime]$Now = [datetime]::UtcNow
+    )
+    try {
+        if ([string]::IsNullOrWhiteSpace($FleetPath) -or -not (Test-Path -LiteralPath $FleetPath)) {
+            return @()
+        }
+        $providers = @(Read-Fleet -Path $FleetPath)
+        $generalCaps = @(Get-GeneralCapabilities -FleetPath $FleetPath)
+        $capFloors = @{}
+        if (Get-Command Get-CapabilityFloors -ErrorAction SilentlyContinue) {
+            $capFloors = Get-CapabilityFloors -FleetPath $FleetPath
+        }
+        $usageRows = @()
+        $conserve = $false
+        if (Get-Command Get-WorkerState -ErrorAction SilentlyContinue) {
+            $usageRows = @(Read-UsageJournal -Path $UsagePath)
+            if ($usageRows.Count -gt 0) { $conserve = Get-ConserveMode -Rows $usageRows }
+        }
+        $rows = [System.Collections.ArrayList]@()
+        foreach ($prov in $providers) {
+            $name = [string]$prov.name
+            if ($prov.enabled -ne $true) {
+                [void]$rows.Add([ordered]@{ name = $name; stage = 'static'; reason = 'disabled'; reset_at = $null; eta = $null })
+                continue
+            }
+            $claims = $prov.capabilities
+            $claimsCap = if ($null -ne $claims) { @($claims) -contains $Capability }
+                         else { $generalCaps -contains $Capability }
+            if (-not $claimsCap) {
+                [void]$rows.Add([ordered]@{ name = $name; stage = 'static'; reason = "does not claim $Capability"; reset_at = $null; eta = $null })
+                continue
+            }
+            if (-not (Test-ProviderAgentic -Provider $prov)) {
+                [void]$rows.Add([ordered]@{ name = $name; stage = 'static'; reason = 'not edit-eligible'; reset_at = $null; eta = $null })
+                continue
+            }
+            if ($capFloors.ContainsKey($Capability) -and $prov.context -and
+                ([int]$prov.context -lt $capFloors[$Capability])) {
+                [void]$rows.Add([ordered]@{ name = $name; stage = 'static'; reason = ("context below {0} floor" -f $capFloors[$Capability]); reset_at = $null; eta = $null })
+                continue
+            }
+            $tierName = [string]$prov.cost_tier
+            if ((Get-CostTierRank $tierName) -gt (Get-CostTierRank $TierCap)) {
+                [void]$rows.Add([ordered]@{ name = $name; stage = 'static'; reason = "cost_tier $tierName above cap $TierCap"; reset_at = $null; eta = $null })
+                continue
+            }
+            # Every static check passed — only availability can have excluded it.
+            if ($usageRows.Count -gt 0) {
+                $st = Get-WorkerState -Worker $name -Rows $usageRows -Now $Now
+                if ([string]$st.state -in @('exhausted', 'cooling_down', 'waiting_for_reset')) {
+                    [void]$rows.Add([ordered]@{ name = $name; stage = 'usage'; reason = [string]$st.state; reset_at = $st.reset_at; eta = $st.eta_human })
+                    continue
+                }
+                if ([string]$st.state -eq 'limited' -and $conserve) {
+                    [void]$rows.Add([ordered]@{ name = $name; stage = 'usage'; reason = 'limited (conserve mode)'; reset_at = $st.reset_at; eta = $st.eta_human })
+                    continue
+                }
+            }
+            # Nothing this audit models excluded it — selection should have kept it.
+            # Say so honestly instead of inventing a cause.
+            [void]$rows.Add([ordered]@{ name = $name; stage = 'static'; reason = 'eligible by this audit (exclusion cause outside model)'; reset_at = $null; eta = $null })
+        }
+        return ([object[]]$rows.ToArray())
+    } catch { return @() }
+}
+
 function Format-ZeroCandidateWhy {
     <# Human-readable failure for the New-AgenticSpawner zero-candidate seam (#127).
-       Names the stakes/tier collision and the cheapest eligible floor — message
-       only; does not change routing. #>
+       Message only; does not change routing. Cause-aware (#124): when the
+       exclusion audit shows availability ('usage') exclusions, the pool COULD do
+       the work but everyone is out — say that, with per-provider resets, instead
+       of the stakes/tier remedy (which would mislead: raising stakes cannot fix
+       a lockout). Without usage exclusions the #127 stakes/tier message stands. #>
     param(
         [Parameter(Mandatory)][string]$Capability,
         [Parameter(Mandatory)][string]$TierCap,
         [Parameter(Mandatory)][string]$Stakes,
-        [Parameter(Mandatory)][string]$Floor
+        [Parameter(Mandatory)][string]$Floor,
+        [object[]]$Exclusions = @()
     )
+    $usageOut = @($Exclusions | Where-Object { [string]$_.stage -eq 'usage' })
+    if ($usageOut.Count -gt 0) {
+        $detail = ($usageOut | ForEach-Object {
+            $bit = "$($_.name): $($_.reason)"
+            if ($_.eta) { $bit += " (resets $($_.eta))" }
+            elseif ($_.reset_at) { $bit += " (reset_at $($_.reset_at))" }
+            $bit
+        }) -join '; '
+        $msg = "capability ${Capability}: labor unavailable — every provider that could take this edit is out: ${detail}. Remedies: wait for the reset, clear a stale lockout (Add-UsageEvent -Kind clear), or enable another edit-eligible provider."
+        # Mixed pool (Grok review medium): when tier-capped providers ALSO exist, the
+        # #127 stakes remedy is still live — dropping it entirely would re-mislead.
+        $tierExcluded = @($Exclusions | Where-Object { [string]$_.stage -eq 'static' -and [string]$_.reason -match 'above cap' })
+        if ($tierExcluded.Count -gt 0) {
+            $names = ($tierExcluded | ForEach-Object { [string]$_.name }) -join ', '
+            $msg += " Note: ${names} sat above the tier cap (${TierCap}) — raising task est_cost_tier or re-running with higher --stakes could also widen the pool."
+        }
+        return $msg
+    }
     return "capability ${Capability}: no eligible provider at tier <=${TierCap} (stakes ${Stakes} caps tier; cheapest eligible = ${Floor}). Remedies: raise task est_cost_tier, or re-run with --stakes standard|high."
 }
 
@@ -721,11 +825,19 @@ function New-AgenticSpawner {
         $cands = @($raw | Where-Object { ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and (Test-ProviderAgentic -Provider $_) })
         if ($cands.Count -lt 1) {
             # Message-only remedy (#127): name the stakes/tier collision; do NOT auto-escalate.
+            # #124: audit per-provider exclusions to tell 'the roster cannot do this'
+            # (static) from 'everyone who could is out right now' (usage -> labor
+            # unavailable); the caller surfaces the distinction as a run status.
             $floor = Get-CapabilityCostTierFloor -Capability $cap -FleetPath $FleetPath
+            $exclusions = @(Get-EditPoolExclusions -Capability $cap -TierCap $policy.max_cost_tier `
+                -FleetPath $FleetPath -UsagePath $UsagePath)
             $whyZero = Format-ZeroCandidateWhy -Capability $cap -TierCap $policy.max_cost_tier `
-                -Stakes $policy.stakes -Floor $floor
+                -Stakes $policy.stakes -Floor $floor -Exclusions $exclusions
+            $laborOut = @($exclusions | Where-Object { [string]$_.stage -eq 'usage' }).Count -gt 0
             return @{
                 ok = $false; spend = 0.0; chose = ''; why = $whyZero; alternatives = @()
+                labor = $(if ($laborOut) { 'unavailable' } else { '' })
+                exclusions = $exclusions
                 stakes = $policy.stakes; stakes_basis = $policy.stakes_basis; depth_tier = $policy.depth_tier
                 selection_mode = $policy.selection_mode; tier_cap = $policy.max_cost_tier
                 depth_applied = $false; selected_cost_tier = ''
@@ -796,6 +908,10 @@ function New-AgenticSpawner {
                             -WindowDecision $crossings -Outcome held
                         return $resultBase + @{
                             ok=$false; spend=0.0; chose=$originalPick.name; why=$holdLine; alternatives=$alts
+                            # #124: the pool emptied POST-selection (preflight hold, no
+                            # substitute) — same labor-unavailable flavor as zero candidates.
+                            labor='unavailable'
+                            exclusions=@([ordered]@{ name=[string]$originalPick.name; stage='usage'; reason='preflight hold (soft cap)'; reset_at=$null; eta=$null })
                         }
                     }
                     $pick = $preflightCandidates[0]
@@ -825,6 +941,13 @@ function New-AgenticSpawner {
                                     -WindowDecision $crossings -Outcome held -AlsoOverCap ([string]$pick.name)
                                 return $resultBase + @{
                                     ok=$false; spend=0.0; chose=$originalPick.name; why=$holdLine; alternatives=$alts
+                                    # #124: original AND substitute both over cap — pool
+                                    # emptied post-selection, labor-unavailable flavor.
+                                    labor='unavailable'
+                                    exclusions=@(
+                                        [ordered]@{ name=[string]$originalPick.name; stage='usage'; reason='preflight hold (soft cap)'; reset_at=$null; eta=$null }
+                                        [ordered]@{ name=[string]$pick.name; stage='usage'; reason='preflight hold (soft cap)'; reset_at=$null; eta=$null }
+                                    )
                                 }
                             }
                         }
@@ -880,10 +1003,17 @@ function New-AgenticSpawner {
                     $pb = if ($null -ne $observation.prompt_bytes) { [Nullable[long]][long]$observation.prompt_bytes } else { [Nullable[long]]$null }
                     $fb = if ($null -ne $observation.overflow_floor_bytes) { [long]$observation.overflow_floor_bytes } else { 35000 }
                     $why = Format-ContextOverflowLine -Provider ([string]$pick.name) -PromptBytes $pb -FloorBytes $fb
-                } else {
-                    $why = "usage failover: $($pick.name) -> no peer available (quality_first; $($observation.classification))"
+                    return $resultBase + @{ ok=$false; spend=0.0; chose=$pick.name; why=$why; alternatives=$alts }
                 }
-                return $resultBase + @{ ok=$false; spend=0.0; chose=$pick.name; why=$why; alternatives=$alts }
+                # #124: quota-death emptied the pool mid-dispatch (no peer) — the
+                # labor-unavailable flavor. Context overflow above is NOT: the roster
+                # simply has no larger-context peer (config-shaped, not availability).
+                $why = "usage failover: $($pick.name) -> no peer available (quality_first; $($observation.classification))"
+                return $resultBase + @{
+                    ok=$false; spend=0.0; chose=$pick.name; why=$why; alternatives=$alts
+                    labor='unavailable'
+                    exclusions=@([ordered]@{ name=[string]$pick.name; stage='usage'; reason="$($observation.classification) (no peer available)"; reset_at=[string]$observation.reset_at; eta=$null })
+                }
             }
             if ($null -eq $preTree -or -not (Restore-WorktreeTreeSnapshot -Worktree $Worktree -TreeSha $preTree)) {
                 if ($isContextOverflow) {
