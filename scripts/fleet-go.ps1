@@ -24,6 +24,10 @@ param(
     [switch]$NoVerify,
     [Alias('StakesOverride')][ValidateSet('low','standard','high')][string]$Stakes,
     [switch]$NormalizeMissingStakes,
+    # #118 onboarding: write a detected .baton/verification.json for an un-onboarded
+    # target repo, then stop (the contract freezes from the base revision, so the
+    # scaffold must be reviewed + committed before a run can use it).
+    [Alias('ScaffoldVerify')][switch]$ScaffoldVerification,
     [string[]]$PlanReviewers,
     [bool]$PlanRevise = $true,
     [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
@@ -50,6 +54,10 @@ $theGoal = @($Goal, $Text | Where-Object { -not [string]::IsNullOrWhiteSpace($_)
 if ([string]::IsNullOrWhiteSpace($theGoal)) { [Console]::Error.WriteLine('Provide a goal via -Goal "<text>" (or -Text).'); exit 2 }
 if ($PlanGate -and $NoPlanGate) { [Console]::Error.WriteLine('Cannot combine -PlanGate with -NoPlanGate.'); exit 2 }
 if ($Verify -and $NoVerify) { [Console]::Error.WriteLine('Cannot combine -Verify with -NoVerify.'); exit 2 }
+if ($ScaffoldVerification -and -not $Execute) {
+    [Console]::Error.WriteLine('-ScaffoldVerification applies to --execute runs (it onboards the repo that labor would edit).')
+    exit 2
+}
 if ($NoGate -and ($PSBoundParameters.ContainsKey('GateArtifact') -or $PSBoundParameters.ContainsKey('GateDiff'))) {
     [Console]::Error.WriteLine('Cannot combine -NoGate with -GateArtifact or -GateDiff.')
     exit 2
@@ -149,6 +157,44 @@ if ($Execute) {
     $repo = if ($PSBoundParameters.ContainsKey('RepoPath') -and $RepoPath) { $RepoPath }
             elseif ($targetFolder) { $targetFolder }
             else { (Get-Location).Path }
+    # Onboarding affordance (#118): an un-onboarded repo can never pass verified
+    # labor — every plan is rejected because no oracle can freeze. Detect it HERE,
+    # before the worktree exists and before any model is dispatched, and hand back
+    # a path forward instead of a correct-but-opaque rejection two gates later.
+    # (The run dir is already allocated by this point; nothing else is.)
+    if ($verifyEnabled) {
+        $onboard = Get-VerifyOnboardingStatus -RepoPath $repo
+        if (-not $onboard.ready) {
+            # A config that already exists (written but not committed, or committed
+            # blank) is NOT a scaffolding problem — writing it again fixes nothing.
+            # Route those to their own remedy rather than a clobber error.
+            if ($ScaffoldVerification -and ([string]$onboard.state -in @('uncommitted', 'empty'))) {
+                [Console]::Error.WriteLine((Format-VerifyOnboardingHelp -Status $onboard -RepoPath $repo))
+                exit 2
+            }
+            if ($ScaffoldVerification) {
+                if (-not $onboard.suggestion) {
+                    [Console]::Error.WriteLine((Format-VerifyOnboardingHelp -Status $onboard -RepoPath $repo))
+                    exit 2
+                }
+                $scaffold = New-VerificationScaffold -RepoPath $repo -Suggestion $onboard.suggestion
+                if (-not $scaffold.ok) {
+                    [Console]::Error.WriteLine("go: could not scaffold $($scaffold.path) — $($scaffold.reason)")
+                    exit 2
+                }
+                Write-Output "Wrote $($scaffold.path) — profile '$($onboard.suggestion.profile_name)' using the '$($onboard.suggestion.preset)' preset ($($onboard.suggestion.evidence))."
+                Write-Output 'Review it, then commit it — the oracle freezes from the base revision, so an uncommitted config cannot be used:'
+                Write-Output ('    git -C "{0}" add .baton/verification.json && git -C "{0}" commit -m "chore: add baton verification config"' -f $repo)
+                Write-Output 'Then re-run the same command without --scaffold-verification.'
+                exit 0
+            }
+            [Console]::Error.WriteLine((Format-VerifyOnboardingHelp -Status $onboard -RepoPath $repo))
+            exit 2
+        }
+    } elseif ($ScaffoldVerification) {
+        [Console]::Error.WriteLine('go: --scaffold-verification has nothing to do with --no-verify (no oracle is used).')
+        exit 2
+    }
     try { $wt = New-RunWorktree -RepoPath $repo -RunId (Split-Path $runDir -Leaf) }
     catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }
     $spawnArgs = @{ Worktree = $wt.worktree; FleetPath = $FleetPath; ToolsPath = $ToolsPath; MaxCostTier = $MaxCostTier; RunDir = $runDir }

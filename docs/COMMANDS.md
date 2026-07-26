@@ -77,10 +77,42 @@ to the right instruments, and runs it — interrupting only for real decisions.
   - `--max-tier <tier>` — cap how expensive an instrument it may reach for.
   - `--plan-gate` / `--plan-reviewers a,b` — run a competitive plan review (see `/baton:plan-gate`) before any labor.
   - `--gate-artifact "<text>"` / `--gate-diff <range>` — run an acceptance gate on the result (see `/baton:gate`).
+  - `--scaffold-verification` — first-run onboarding: write a starter `.baton/verification.json` for the target repo, then stop so you can review and commit it (see below).
+  - `--no-verify` — run without an oracle. Weaker proof; use it when the repo has no test suite to prove work with.
 - **Under the hood:** Plans the request into a DAG, routes each task to the cheapest capable instrument, runs under two guards (budget cap + destructive-action gate), and narrates progress. Interrupts only to cross a budget ceiling or before an irreversible action.
 - **Where results land:** run artifacts under `$BATON_HOME/runs/<run-id>/`; repo edits land in your working tree when `--execute` is set.
 - **Plain example:** `/baton:go "add a --json flag to the export command and test it" --execute --budget 5`.
 - **Gotchas:** It guesses through everything it safely can — that's the design. Set `--budget` for a firm cost stop; add `--plan-gate` to review the plan before spending.
+
+#### First run on a new repo — the verification config
+
+`--execute` proves each task with a real check, so the target repo has to say **how it proves work**. That
+lives in a committed `.baton/verification.json`. Without one, every plan is rejected before any money is
+spent — correct, but a dead end if you don't know the remedy. So `/baton:go --execute` checks first and
+tells you what to do:
+
+```
+go: D:\Dev\yourproject has no .baton/verification.json — verified labor cannot freeze an oracle,
+so every plan would be rejected.
+Detected toolchain: found tests/ with python test files.
+Fix: scaffold the config (writes profile 'pytest-full' using the 'pytest' preset), review it,
+commit it, then re-run:
+    /baton:go "<same request>" --execute --repo "D:\Dev\yourproject" --scaffold-verification
+```
+
+Run that, and it writes a starter config, then stops so you can look it over:
+
+```json
+{ "schema": 1, "profiles": { "pytest-full": { "preset": "pytest", "args": ["tests"] } } }
+```
+
+**Commit it before re-running.** The contract is frozen from the base revision of the run, so a file
+sitting uncommitted in your working tree cannot be used — a worker edit to the config must never be able
+to change the oracle that judges it. (If you forget, the next run says exactly that.)
+
+Presets available: `pytest`, `pwsh-suite`, `node-test`, `file-exists-nonempty`. Each profile can also
+name a raw `argv` instead of a preset. A repo with no recognizable test toolchain gets the schema and the
+preset list rather than an auto-written config — Baton won't quietly hand you a weak oracle.
 
 ### /baton:idea
 - **One-liner:** Turn a raw idea into board-ready GitHub Issues, with one human gate.

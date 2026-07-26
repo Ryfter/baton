@@ -1,6 +1,6 @@
 ---
 description: Natural-language front door — describe an outcome and the Conductor plans it into a task DAG, then runs it under budget/destructive guards. Execute mode defaults Plan Gate, named-panel acceptance, and verified labor on and fails loud when required evidence is degraded. Run artifacts land under BATON_HOME/runs/<run-id>/.
-argument-hint: "<what you want done>" [--execute] [--repo <path>] [--budget <n>] [--max-tier local|free|paid] [--stakes low|standard|high] [--no-plan-gate] [--no-gate] [--no-verify] [--plan-reviewers a,b] [--plan-revise:$false] [--gate-artifact <text> | --gate-diff <range>]
+argument-hint: "<what you want done>" [--execute] [--repo <path>] [--budget <n>] [--max-tier local|free|paid] [--stakes low|standard|high] [--no-plan-gate] [--no-gate] [--no-verify] [--scaffold-verification] [--plan-reviewers a,b] [--plan-revise:$false] [--gate-artifact <text> | --gate-diff <range>]
 ---
 
 # /baton:go
@@ -25,6 +25,7 @@ completion. Stay thin — coordinate, narrate, and let the engine and the fleet 
    #   verification with a required-profile preflight for edit tasks
    # Map --stakes low|standard|high to -Stakes only when supplied.
    # Map --no-plan-gate / --no-gate / --no-verify to -NoPlanGate / -NoGate / -NoVerify.
+   # Map --scaffold-verification to -ScaffoldVerification (execute-only onboarding; see step 4a).
    # Each escape disables only that node; --no-gate still records changes.diff.
    # -PlanReviewers a,b pins the plan roster; -PlanRevise:$false skips one auto-revise.
    # Outside execute, -PlanGate and -GateArtifact/-GateDiff retain their legacy opt-in behavior.
@@ -66,6 +67,16 @@ completion. Stay thin — coordinate, narrate, and let the engine and the fleet 
      offer to retry with a sharper goal.
    - `verification-failed` → a frozen check, scope rule, or oracle failed after labor;
      retain the evidence and branch for diagnosis.
+
+4a. **Un-onboarded target repo (exit 2, nothing spent).** Before any worktree exists,
+   `--execute` checks that the repo has a committed `.baton/verification.json` — the
+   contract it proves work with. If it doesn't, the engine prints the cause, the toolchain
+   it detected, and the exact remedy. Relay that verbatim and offer the choice: re-run with
+   `--scaffold-verification` (writes a starter config, stops so the user reviews and commits
+   it), or `--no-verify` for a weaker unproven run. Do NOT commit the scaffold for them —
+   the oracle freezes from the base revision, so committing it is the user's deliberate act.
+   A repo with no recognizable test toolchain gets the schema and preset list instead of a
+   generated config; help the user write one rather than guessing an oracle.
 
 5. Everything not on the two guards already ran without asking — do not re-litigate it.
    Point the user at the `report.md` for the full plain-English summary.
