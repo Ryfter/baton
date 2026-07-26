@@ -368,7 +368,11 @@ CONFIRMED-COUNT: 8
         ([long]$coFold.fresh_input_total -eq 2060) -and
         ([long]$coFold.cache_read_total -eq 90000)
     )
-    Check 'CO5 fold basis exact + scope label' ($coFold.basis -eq 'exact' -and $coFold.scope -eq 'all-sessions-in-window')
+    Check 'CO5 fold basis exact + scope label + windowed' (
+        $coFold.basis -eq 'exact' -and
+        $coFold.scope -eq 'repo-project-dir-sessions-in-window' -and
+        $coFold.windowed -eq $true
+    )
     $coCard = Build-ShipReportCard `
         -FleetRows $rows -UsageRows $usage -ConductorRows $coRows `
         -Decisions $decisions -PrMeta $prMeta -GitStats $gitStats -RunId 'go-fixture-1'
@@ -392,6 +396,33 @@ CONFIRMED-COUNT: 8
     )
     $sanDir = Get-ConductorTranscriptDir -RepoRoot 'Q:\NoSuchDir\proj.x'
     Check 'CO11 transcript dir sanitization' ((Split-Path -Leaf $sanDir) -eq 'Q--NoSuchDir-proj-x')
+    # Nested subagent transcripts (<session>/subagents/agent-*.jsonl) are conductor
+    # spend too, attributed to the PARENT session (Grok review high, 2026-07-25).
+    $subDir = Join-Path (Join-Path $tDir 'session-one') 'subagents'
+    New-Item -ItemType Directory -Force -Path $subDir | Out-Null
+    $subTurn = @((& $mkTurn 'msg_sub1' '2026-07-10T13:00:00.000Z' 250 5 100 0))
+    Set-Content -LiteralPath (Join-Path $subDir 'agent-abc.jsonl') -Value ($subTurn -join "`n") -Encoding utf8NoBOM
+    $coRows2 = @(Read-ConductorUsageRows -TranscriptDir $tDir)
+    Check 'CO12 nested subagent turn read + attributed to parent session' (
+        ($coRows2.Count -eq 4) -and
+        (@($coRows2 | Where-Object { $_.session -eq 'session-one' }).Count -eq 3)
+    )
+    $coFold2 = Fold-ConductorTokens -Rows $coRows2 -From '2026-07-10T10:00:00Z' -To '2026-07-10T16:00:00Z'
+    Check 'CO13 subagent tokens fold into totals, sessions stay 2' (
+        ([long]$coFold2.output_total -eq 1750) -and ([int]$coFold2.sessions -eq 2) -and ([int]$coFold2.turns -eq 3)
+    )
+    # Open window = lifetime data; the label must say so, never fake a window.
+    $openFold = Fold-ConductorTokens -Rows $coRows2
+    Check 'CO14 open window fold marked unwindowed, includes all rows' (
+        ($openFold.windowed -eq $false) -and ([int]$openFold.turns -eq 4)
+    )
+    $openText = Format-ConductorOverhead -Fold $openFold
+    Check 'CO15 open window label says no window bounds' (
+        ($openText -match 'no window bounds') -and (-not ($openText -match 'in window'))
+    )
+    Check 'CO16 measured label surfaces cache-read + numeric totals' (
+        (Format-ConductorOverhead -Fold $coFold2) -match '1\.8k tok out .+ cache-read'
+    )
 
     # ---- write + --all trend ----
     $written = Write-ShipReportToRunDir -RunDir $runDir -Card $card -Markdown $md
@@ -455,7 +486,7 @@ CONFIRMED-COUNT: 8
 
     # -Branch only with stubbed env: no real git needed if repo empty — still exit 0/2 ok
     # Without gh and with branch, git may fail soft; runner catches and continues.
-    $branchOut = & pwsh -NoProfile -File $cli -Branch 'feature/does-not-exist-xyz' -BatonHome $tmp -RepoRoot $tmp 2>$null | Out-String
+    $branchOut = & pwsh -NoProfile -File $cli -Branch 'feature/does-not-exist-xyz' -BatonHome $tmp -RepoRoot $tmp -TranscriptDir $noTranscripts 2>$null | Out-String
     Check 'CLI12 -Branch exit 0 (soft git miss)' ($LASTEXITCODE -eq 0)
     Check 'CLI13 -Branch renders card' ($branchOut -match 'Ship report|Dimension')
 

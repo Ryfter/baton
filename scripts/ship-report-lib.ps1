@@ -361,11 +361,20 @@ function Read-ConductorUsageRows {
         return @()
     }
     $skipUtc = ConvertTo-ShipReportUtc -Value $SkipFilesBefore
+    $rootFull = (Get-Item -LiteralPath $TranscriptDir).FullName
     $seen = @{}
     $out = [System.Collections.ArrayList]@()
-    foreach ($file in @(Get-ChildItem -Path $TranscriptDir -Filter '*.jsonl' -File -ErrorAction SilentlyContinue)) {
+    # -Recurse: subagent turns live in nested <session>/subagents/agent-*.jsonl files
+    # (same tree cost-resolver-lib walks) and are conductor-side spend too.
+    foreach ($file in @(Get-ChildItem -Path $TranscriptDir -Recurse -Filter '*.jsonl' -File -ErrorAction SilentlyContinue)) {
         if ($skipUtc -and $file.LastWriteTimeUtc -lt $skipUtc) { continue }
-        $sessionId = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+        # Session id = the top-level session, for nested subagent files too: first
+        # segment of the path relative to the transcript root (minus .jsonl when flat).
+        $rel = $file.FullName.Substring($rootFull.Length).TrimStart('\', '/')
+        $firstSeg = ($rel -split '[\\/]')[0]
+        $sessionId = if ($firstSeg -like '*.jsonl') {
+            [System.IO.Path]::GetFileNameWithoutExtension($firstSeg)
+        } else { $firstSeg }
         $reader = [System.IO.StreamReader]::new($file.FullName)
         try {
             while ($null -ne ($line = $reader.ReadLine())) {
@@ -386,7 +395,9 @@ function Read-ConductorUsageRows {
                 }
                 $u = $msg.usage
                 [void]$out.Add([ordered]@{
-                    ts             = ConvertTo-ShipReportDateTime -Ts ([string]$obj.timestamp)
+                    # ConvertTo-ShipReportUtc handles both the raw string and the
+                    # [datetime] ConvertFrom-Json may already have materialized.
+                    ts             = ConvertTo-ShipReportUtc -Value $obj.timestamp
                     session        = $sessionId
                     model          = [string]$msg.model
                     output_tokens  = [long]($u.output_tokens ?? 0)
@@ -440,7 +451,8 @@ function Fold-ConductorTokens {
         fresh_input_total = $freshInputTotal
         cache_read_total  = $cacheReadTotal
         basis             = 'exact'
-        scope             = 'all-sessions-in-window'
+        windowed          = [bool]($fromUtc -or $toUtc)
+        scope             = 'repo-project-dir-sessions-in-window'
     }
 }
 
@@ -454,10 +466,14 @@ function Format-ConductorOverhead {
     }
     $outLabel = Format-ShipReportTokenCount -Tokens ([long]$Fold.output_total)
     $inLabel = Format-ShipReportTokenCount -Tokens ([long]$Fold.fresh_input_total)
+    $crLabel = Format-ShipReportTokenCount -Tokens ([long]$Fold.cache_read_total)
     $sessCount = [int]$Fold.sessions
     $sessLabel = if ($sessCount -eq 1) { '1 session' } else { "$sessCount sessions" }
-    return ('claude {0} tok out + {1} tok fresh-in (exact, {2} in window — upper bound; not summed with instrument totals)' -f `
-        $outLabel, $inLabel, $sessLabel)
+    # An unbounded fold is lifetime data, not a window — say so instead of faking one.
+    $scopeBit = if ($Fold.windowed) { "$sessLabel in window — upper bound" }
+                else { "$sessLabel, no window bounds — all recorded turns" }
+    return ('claude {0} tok out + {1} tok fresh-in + {2} tok cache-read (exact, {3}; not summed with instrument totals)' -f `
+        $outLabel, $inLabel, $crLabel, $scopeBit)
 }
 
 function Get-ShipReportCapDeaths {
