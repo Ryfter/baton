@@ -387,6 +387,75 @@ function Invoke-TestExecDispatcher {
     Check 'E12 non-execute result has no branch key' ($null -eq $res2.PSObject.Properties['branch'])
     Check 'E12a non-execute run did not gain default gates' (
         $null -eq $res2.acceptance -and -not (Test-Path (Join-Path $res2.run_dir 'plan-review.json')))
+
+    # ---- ONB (#118): un-onboarded target repo gets a path forward, pre-plan ----
+    $env:BATON_GO_TEST_SPAWN = $null
+    $env:BATON_GO_TEST_GATE = 'accept'
+    $bare = Join-Path $tmpRoot 'bare-repo'
+    New-Item -ItemType Directory -Force -Path (Join-Path $bare 'tests') | Out-Null
+    & git -C $bare init -q
+    & git -C $bare config user.email 'test@test.local'
+    & git -C $bare config user.name 'baton-test'
+    Set-Content -LiteralPath (Join-Path $bare 'tests/test_thing.py') -Value 'def test_x(): assert True' -Encoding utf8NoBOM
+    & git -C $bare add -A 2>$null | Out-Null
+    & git -C $bare commit -q -m 'init' 2>$null | Out-Null
+
+    $onbErr = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $bare -Json 2>&1 | Out-String
+    $onbCode = $LASTEXITCODE
+    Check 'ONB1 un-onboarded repo halts with exit 2' ($onbCode -eq 2)
+    Check 'ONB2 message names the real cause + the scaffold remedy + --no-verify' (
+        ($onbErr -match 'no \.baton/verification\.json') -and ($onbErr -match 'scaffold-verification') -and ($onbErr -match '--no-verify'))
+    Check 'ONB3 detected the pytest toolchain' ($onbErr -match 'pytest')
+    # PRE-worktree halt: this repo has no run branch and no worktree registered.
+    # (The .baton-worktrees dir itself is shared with the suite's other repo, so
+    # assert against THIS repo's own git state, not the sibling directory.)
+    Check 'ONB4 halt is PRE-worktree: no run branch, no worktree registered' (
+        (-not ((& git -C $bare branch --list 'baton/run-*' | Out-String) -match 'baton/run-')) -and
+        (@(& git -C $bare worktree list | Where-Object { $_ -match 'baton/run-' }).Count -eq 0))
+
+    $scaffoldOut = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $bare -ScaffoldVerification 2>&1 | Out-String
+    Check 'ONB5 scaffold exits 0 and writes the config' (
+        ($LASTEXITCODE -eq 0) -and (Test-Path (Join-Path $bare '.baton/verification.json')))
+    $scaffoldDoc = Get-Content -Raw (Join-Path $bare '.baton/verification.json') | ConvertFrom-Json
+    Check 'ONB6 scaffold uses preset sugar for the detected toolchain' (
+        ($scaffoldDoc.schema -eq 1) -and ($scaffoldDoc.profiles.'pytest-full'.preset -eq 'pytest'))
+    Check 'ONB7 scaffold tells the operator to commit it (freeze is from the base revision)' (
+        ($scaffoldOut -match 'commit') -and ($scaffoldOut -match 'base revision'))
+
+    # Written but NOT committed: the oracle freezes from the base revision, so this
+    # must still halt — with its own message, not the generic 'missing' one.
+    $uncommittedErr = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $bare -Json 2>&1 | Out-String
+    Check 'ONB8 uncommitted config still halts, with the commit-it message' (
+        ($LASTEXITCODE -eq 2) -and ($uncommittedErr -match 'not committed') -and ($uncommittedErr -match 'git -C'))
+
+    & git -C $bare add -A 2>$null | Out-Null
+    & git -C $bare commit -q -m 'chore: verification config' 2>$null | Out-Null
+    $onbPlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"write feature","capability":"code-gen","depends_on":[],"est_cost_tier":"free","reversible":true,"verify_profile":"pytest-full","stakes":"standard","stakes_basis":"ordinary bounded feature"}]}'
+    $env:BATON_GO_TEST_PLAN = $onbPlan
+    $onbAfter = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $bare -Json 2>&1 | Out-String
+    Check 'ONB9 once committed the onboarding halt is gone (run proceeds past the check)' (
+        ($onbAfter -notmatch 'no \.baton/verification\.json') -and ($onbAfter -notmatch 'not committed'))
+    $env:BATON_GO_TEST_PLAN = $profiledPlan
+
+    # --no-verify keeps working on an un-onboarded repo (the escape hatch the
+    # message advertises), and the scaffold flag is refused where it means nothing.
+    $bare2 = Join-Path $tmpRoot 'bare-repo-2'
+    New-Item -ItemType Directory -Force -Path $bare2 | Out-Null
+    & git -C $bare2 init -q
+    & git -C $bare2 config user.email 'test@test.local'
+    & git -C $bare2 config user.name 'baton-test'
+    Set-Content -LiteralPath (Join-Path $bare2 'a.txt') -Value 'hi' -Encoding utf8NoBOM
+    & git -C $bare2 add -A 2>$null | Out-Null
+    & git -C $bare2 commit -q -m 'init' 2>$null | Out-Null
+    $env:BATON_GO_TEST_PLAN = $unprofiledPlan
+    $noVerifyOut = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $bare2 -NoVerify -Json 2>&1 | Out-String
+    Check 'ONB10 --no-verify still runs on an un-onboarded repo' (
+        $noVerifyOut -notmatch 'no \.baton/verification\.json')
+    & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $bare2 -NoVerify -ScaffoldVerification 2>$null | Out-Null
+    Check 'ONB11 --scaffold-verification with --no-verify is refused' ($LASTEXITCODE -eq 2)
+    & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -ScaffoldVerification 2>$null | Out-Null
+    Check 'ONB12 --scaffold-verification without --execute is refused' ($LASTEXITCODE -eq 2)
+    $env:BATON_GO_TEST_PLAN = $profiledPlan
 } finally {
     foreach ($k in $saved.Keys) {
         if ($null -eq $saved[$k]) { Remove-Item "env:$k" -ErrorAction SilentlyContinue }

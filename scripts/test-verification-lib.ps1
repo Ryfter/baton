@@ -277,6 +277,73 @@ Start-Sleep -Seconds 120
     Assert "V11 missing verifier exe -> infrastructure-error, not model-quality fail" ($v11.verdict -eq 'infrastructure-error' -and $v11.failure_category -eq 'spawn-failed')
     $v12 = Invoke-VerificationContract -Contract ([ordered]@{ argv = @('pwsh', '-NoProfile', '-File', $sleeper); cwd = '.'; timeout_s = 2; expect_files = @(); protected_paths = @(); proves = 'p'; grade_ceiling = 'strong' }) -WorktreeRoot $repo -RunTaskDir (Join-Path $tmpRoot 'run\tasks\v12')
     Assert "V12 check timeout -> fail/check-timeout (retry-eligible category)" ($v12.verdict -eq 'fail' -and $v12.failure_category -eq 'check-timeout' -and $v12.timed_out)
+
+    # ---- Onboarding detection + scaffold (#118) ----
+    function New-OnbRepo($name) {
+        $p = Join-Path $tmpRoot $name
+        New-Item -ItemType Directory -Force -Path $p | Out-Null
+        & git -C $p init -q
+        & git -C $p config user.email 'test@test.local'
+        & git -C $p config user.name 'baton-test'
+        return $p
+    }
+    $onbCommit = { param($p) & git -C $p add -A 2>$null | Out-Null; & git -C $p commit -q -m 'x' 2>$null | Out-Null }
+
+    $pyRepo = New-OnbRepo 'onb-py'
+    New-Item -ItemType Directory -Force -Path (Join-Path $pyRepo 'tests') | Out-Null
+    Set-Content -LiteralPath (Join-Path $pyRepo 'tests/test_a.py') -Value 'def test_a(): pass' -Encoding utf8NoBOM
+    & $onbCommit $pyRepo
+    $pySug = Get-VerifySuggestedProfile -RepoPath $pyRepo
+    Assert "ONB-D1 python tests -> pytest preset with tests arg" (
+        $pySug.preset -eq 'pytest' -and @($pySug.args)[0] -eq 'tests' -and $pySug.profile_name -eq 'pytest-full')
+
+    $psRepo = New-OnbRepo 'onb-ps'
+    New-Item -ItemType Directory -Force -Path (Join-Path $psRepo 'scripts') | Out-Null
+    Set-Content -LiteralPath (Join-Path $psRepo 'scripts/test-thing.ps1') -Value '#' -Encoding utf8NoBOM
+    & $onbCommit $psRepo
+    $psSug = Get-VerifySuggestedProfile -RepoPath $psRepo
+    Assert "ONB-D2 pwsh suites -> pwsh-suite preset naming a real relative suite path" (
+        $psSug.preset -eq 'pwsh-suite' -and @($psSug.args)[0] -eq 'scripts/test-thing.ps1')
+
+    $nodeRepo = New-OnbRepo 'onb-node'
+    Set-Content -LiteralPath (Join-Path $nodeRepo 'package.json') -Value '{"name":"x"}' -Encoding utf8NoBOM
+    & $onbCommit $nodeRepo
+    Assert "ONB-D3 package.json -> node-test preset" ((Get-VerifySuggestedProfile -RepoPath $nodeRepo).preset -eq 'node-test')
+
+    $emptyRepo = New-OnbRepo 'onb-empty'
+    Set-Content -LiteralPath (Join-Path $emptyRepo 'readme.md') -Value 'x' -Encoding utf8NoBOM
+    & $onbCommit $emptyRepo
+    Assert "ONB-D4 no toolchain -> no suggestion (never scaffold a weak oracle silently)" (
+        $null -eq (Get-VerifySuggestedProfile -RepoPath $emptyRepo))
+
+    # State machine: missing -> uncommitted -> ready
+    $st1 = Get-VerifyOnboardingStatus -RepoPath $pyRepo
+    Assert "ONB-S1 no config -> state missing, not ready, suggestion attached" (
+        $st1.state -eq 'missing' -and -not $st1.ready -and $null -ne $st1.suggestion)
+    $sc = New-VerificationScaffold -RepoPath $pyRepo -Suggestion $st1.suggestion
+    Assert "ONB-S2 scaffold writes the file" ($sc.ok -and (Test-Path -LiteralPath $sc.path))
+    $scDoc = Get-Content -Raw $sc.path | ConvertFrom-Json
+    Assert "ONB-S3 scaffold is schema 1 preset sugar" (
+        $scDoc.schema -eq 1 -and $scDoc.profiles.'pytest-full'.preset -eq 'pytest')
+    $st2 = Get-VerifyOnboardingStatus -RepoPath $pyRepo
+    Assert "ONB-S4 written-but-uncommitted is its OWN state (freeze reads the base revision)" (
+        $st2.state -eq 'uncommitted' -and -not $st2.ready -and $st2.in_tree -and -not $st2.committed)
+    Assert "ONB-S5 uncommitted help says commit it, not 'add a config'" (
+        ((Format-VerifyOnboardingHelp -Status $st2 -RepoPath $pyRepo) -match 'not committed'))
+    Assert "ONB-S6 scaffold refuses to clobber without -Force" (
+        -not (New-VerificationScaffold -RepoPath $pyRepo -Suggestion $st1.suggestion).ok)
+    & $onbCommit $pyRepo
+    $st3 = Get-VerifyOnboardingStatus -RepoPath $pyRepo
+    Assert "ONB-S7 committed -> ready, no suggestion needed" ($st3.state -eq 'ready' -and $st3.ready -and $null -eq $st3.suggestion)
+
+    $helpMissing = Format-VerifyOnboardingHelp -Status $st1 -RepoPath $pyRepo
+    Assert "ONB-H1 missing help names cause, preset, scaffold flag and the --no-verify escape" (
+        ($helpMissing -match 'no \.baton/verification\.json') -and ($helpMissing -match 'pytest') -and
+        ($helpMissing -match 'scaffold-verification') -and ($helpMissing -match '--no-verify'))
+    $helpNone = Format-VerifyOnboardingHelp -Status (Get-VerifyOnboardingStatus -RepoPath $emptyRepo) -RepoPath $emptyRepo
+    Assert "ONB-H2 undetectable repo gets the schema + preset list, no scaffold promise" (
+        ($helpNone -match 'nothing safe to scaffold') -and ($helpNone -match '"schema": 1') -and
+        ($helpNone -notmatch 'scaffold-verification'))
 } finally {
     if ($null -eq $savedPresetsEnv) { Remove-Item env:BATON_VERIFY_PRESETS -ErrorAction SilentlyContinue }
     else { $env:BATON_VERIFY_PRESETS = $savedPresetsEnv }

@@ -273,6 +273,139 @@ function Get-FrozenVerificationContract {
     return @{ ok = $true; contract = $norm.contract; contract_path = $cpath; reason = '' }
 }
 
+function Get-VerifySuggestedProfile {
+    <# Onboarding detection (#118): guess the target repo's test toolchain from
+       root-level markers and return a ready-to-write profile using preset sugar.
+       Cheap and shallow by design (root + one level) — this is a starting point
+       the operator edits, never an authority. No marker -> $null, and the caller
+       says so plainly rather than scaffolding a weak oracle behind the operator's
+       back. #>
+    param([Parameter(Mandatory)][string]$RepoPath)
+    $has = { param($rel) Test-Path -LiteralPath (Join-Path $RepoPath $rel) }
+    # pytest: an explicit config, or a tests/ dir holding python files.
+    $pyCfg = @('pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini') | Where-Object { & $has $_ }
+    $pyTests = (& $has 'tests') -and
+        @(Get-ChildItem -Path (Join-Path $RepoPath 'tests') -Filter '*.py' -File -Recurse -Depth 1 -ErrorAction SilentlyContinue).Count -gt 0
+    if ($pyTests -or ($pyCfg.Count -gt 0 -and (& $has 'tests'))) {
+        return [ordered]@{
+            profile_name = 'pytest-full'
+            preset       = 'pytest'
+            args         = @('tests')
+            evidence     = 'found tests/ with python test files'
+        }
+    }
+    # pwsh suites: this project's own shape (scripts/test-*.ps1) and the Pester shape.
+    $psSuites = @(Get-ChildItem -Path $RepoPath -Filter 'test-*.ps1' -File -Recurse -Depth 1 -ErrorAction SilentlyContinue)
+    if ($psSuites.Count -eq 0) {
+        $psSuites = @(Get-ChildItem -Path $RepoPath -Filter '*.Tests.ps1' -File -Recurse -Depth 1 -ErrorAction SilentlyContinue)
+    }
+    if ($psSuites.Count -gt 0) {
+        $rel = $psSuites[0].FullName.Substring($RepoPath.TrimEnd('\', '/').Length).TrimStart('\', '/').Replace('\', '/')
+        return [ordered]@{
+            profile_name = 'pwsh-suite'
+            preset       = 'pwsh-suite'
+            args         = @($rel)
+            evidence     = "found $($psSuites.Count) PowerShell test script(s); using $rel"
+        }
+    }
+    if (& $has 'package.json') {
+        $nodeArgs = if (& $has 'test') { @('test') } else { @() }
+        return [ordered]@{
+            profile_name = 'node-test'
+            preset       = 'node-test'
+            args         = $nodeArgs
+            evidence     = 'found package.json'
+        }
+    }
+    return $null
+}
+
+function Get-VerifyOnboardingStatus {
+    <# Is this repo ready for verified labor (#118)? The oracle freezes from the
+       BASE REVISION (Get-FrozenVerificationContract uses `git show <sha>:...`),
+       so a working-tree copy that was never committed does NOT count — that case
+       gets its own state, because 'I already wrote that file' is exactly the
+       confusion it causes. States: 'ready' | 'uncommitted' | 'missing'. #>
+    param(
+        [Parameter(Mandatory)][string]$RepoPath,
+        [string]$BaseRef = 'HEAD'
+    )
+    $worktreeCopy = Join-Path $RepoPath '.baton/verification.json'
+    $inTree = Test-Path -LiteralPath $worktreeCopy -PathType Leaf
+    $committed = $false
+    $raw = & git -C $RepoPath show "$($BaseRef):.baton/verification.json" 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace((@($raw) -join ''))) { $committed = $true }
+    $state = if ($committed) { 'ready' } elseif ($inTree) { 'uncommitted' } else { 'missing' }
+    $suggestion = if ($state -eq 'ready') { $null } else { Get-VerifySuggestedProfile -RepoPath $RepoPath }
+    return [ordered]@{
+        state      = $state
+        ready      = ($state -eq 'ready')
+        path       = $worktreeCopy
+        in_tree    = $inTree
+        committed  = $committed
+        base_ref   = $BaseRef
+        suggestion = $suggestion
+    }
+}
+
+function New-VerificationScaffold {
+    <# Write .baton/verification.json from a detected suggestion (#118). Refuses to
+       clobber an existing file without -Force. Writing is all this does: the file
+       must be COMMITTED before a run can use it, because the contract freezes from
+       the base revision — the caller says so. #>
+    param(
+        [Parameter(Mandatory)][string]$RepoPath,
+        [Parameter(Mandatory)]$Suggestion,
+        [switch]$Force
+    )
+    $dir = Join-Path $RepoPath '.baton'
+    $path = Join-Path $dir 'verification.json'
+    if ((Test-Path -LiteralPath $path) -and -not $Force) {
+        return @{ ok = $false; path = $path; reason = 'already exists (pass -Force to overwrite)' }
+    }
+    $profile = [ordered]@{ preset = [string]$Suggestion.preset }
+    if (@($Suggestion.args).Count -gt 0) { $profile.args = @($Suggestion.args) }
+    $doc = [ordered]@{
+        schema   = 1
+        profiles = [ordered]@{ ([string]$Suggestion.profile_name) = $profile }
+    }
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    ConvertTo-Json -InputObject $doc -Depth 6 | Set-Content -LiteralPath $path -Encoding utf8NoBOM
+    return @{ ok = $true; path = $path; reason = '' }
+}
+
+function Format-VerifyOnboardingHelp {
+    <# The operator-facing path forward when a target repo cannot verify (#118).
+       Names the real cause, the detected toolchain, and the exact next command —
+       a first run must never dead-end on a correct-but-opaque fail-loud. #>
+    param(
+        [Parameter(Mandatory)]$Status,
+        [Parameter(Mandatory)][string]$RepoPath
+    )
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if ([string]$Status.state -eq 'uncommitted') {
+        $lines.Add("go: $RepoPath has .baton/verification.json but it is not committed at $($Status.base_ref).")
+        $lines.Add('The verification contract freezes from the base revision, so an uncommitted config cannot be used.')
+        $lines.Add('Fix: commit it, then re-run.')
+        $lines.Add('    git -C "' + $RepoPath + '" add .baton/verification.json && git -C "' + $RepoPath + '" commit -m "chore: add baton verification config"')
+        return ($lines -join [Environment]::NewLine)
+    }
+    $lines.Add("go: $RepoPath has no .baton/verification.json — verified labor cannot freeze an oracle, so every plan would be rejected.")
+    $s = $Status.suggestion
+    if ($s) {
+        $lines.Add("Detected toolchain: $($s.evidence).")
+        $lines.Add("Fix: scaffold the config (writes profile '$($s.profile_name)' using the '$($s.preset)' preset), review it, commit it, then re-run:")
+        $lines.Add('    /baton:go "<same request>" --execute --repo "' + $RepoPath + '" --scaffold-verification')
+    } else {
+        $lines.Add('No test toolchain detected at the repo root, so there is nothing safe to scaffold automatically.')
+        $lines.Add('Fix: add .baton/verification.json naming how this repo proves work, then commit it. Minimal shape:')
+        $lines.Add('    { "schema": 1, "profiles": { "<name>": { "preset": "pytest", "args": ["tests"] } } }')
+        $lines.Add('Presets available: pytest, pwsh-suite, node-test, file-exists-nonempty.')
+    }
+    $lines.Add('Or run without verification (no oracle, weaker proof): add --no-verify.')
+    return ($lines -join [Environment]::NewLine)
+}
+
 function Get-VerifyPathHashes {
     <# SHA256 per worktree-relative path; 'ABSENT' when the file does not exist.
        Used pre-labor (freeze) and post-check (integrity + the A5 content bar). #>
