@@ -1,11 +1,13 @@
 # Roadmap
 
-**Last updated:** 2026-07-18
-**Status:** `v1.20.0` shipped — *per-PR ship report (`/baton:ship-report`, #106): pipeline-level
-cost/quality/choreography cards from fleet journals + git + GitHub; and `--execute` now
-hard-requires task stakes (#101, d089 flip): fail-loud, no normalize+warn shim. v1.19.0
-shipped the instrument ABI (d091); v1.18.0/v1.17.0 shipped usage-aware failover (d083+d090)
-and authoritative `--execute` governance (d086 node #1).* Plans 1–11 + the Fleet Conductor
+**Last updated:** 2026-07-26
+**Status:** `v1.21.0` shipped — *engine expressiveness (task-output bus #115, engine-owned rework
+loop + gate contract #128) killed the bakeoff's Catch-22; seven defects from the #93 chain fixed
+(#136 #134 #135 #124 #127 #118 + #121); conductor spend is now metered in ship-report cards (#114).
+The **full green walk on a genuinely-undone brief is still owed** — it gates the compound track.
+v1.20.0 shipped the per-PR ship report (#106) and hard-required task stakes (#101, d089 flip);
+v1.19.0 the instrument ABI (d091); v1.18.0/v1.17.0 usage-aware failover (d083+d090) and
+authoritative `--execute` governance (d086 node #1).* Plans 1–11 + the Fleet Conductor
 release (v1.2.0) + fourteen minor releases since (v1.3 → v1.15) are all live: governed fleet,
 learning router, front porch, GEPA optimizer, the coach, the project command center, agentic
 executor, quality gates, usage governor, direct-model commands, and per-model token telemetry.
@@ -59,10 +61,10 @@ flip its defaults on `--execute`, don't rebuild it:**
    hatch override, python/http tools routable, stdio-json for any language), `max_prompt_bytes`
    enforced pre-flight, `context_overflow` reactive class. See
    [`releases/2026-07-17-v1.19.0.md`](releases/2026-07-17-v1.19.0.md).
-5. **Real-project bakeoff** — **IN PROGRESS (#93, spec committed 2026-07-18, slices ratified):**
-   Baton vs. the manager/engineer baseline on 4 real MyDashboard slices (security fix, feature,
-   refactor, + induced quota failure); measured via `/baton:ship-report` cards: completion / human
-   intervention / gate catches / regressions / time / **effective-cost**. The missing end-to-end proof.
+5. ~~**Real-project bakeoff**~~ — **CLOSED 2026-07-24 (#93).** Ran honestly: golden path **0/4**,
+   manual baseline 4/4. Its real product was the defect chain #118–#128, seven of which shipped in
+   v1.21.0. Report: [`bakeoff/2026-07-18-bakeoff-report.md`](bakeoff/2026-07-18-bakeoff-report.md).
+   **Successor proof, still owed:** one full green walk on a genuinely-undone brief.
 
 **Then (prior committed order):**
 
@@ -78,6 +80,12 @@ flip its defaults on `--execute`, don't rebuild it:**
 - ~~**#101**~~ — shipped v1.20.0 (PR #113): `--execute` hard-requires task stakes, fail-loud.
 - ~~**#104**~~ — shipped with v1.19.0 (see above).
 - ~~**#106**~~ — shipped v1.20.0 (PR #112): `/baton:ship-report` per-PR cost/quality cards.
+- ~~**#114**~~ — shipped v1.21.0 (PR #140): conductor spend metered from session transcripts (d096).
+- ~~**#115 slice 1**~~ / ~~**#128**~~ — shipped v1.21.0 (PRs #130/#132/#133): task-output bus,
+  engine-owned rework loop, rework contract in the gate briefing. Mid-DAG gate tasks (#115 rest) open.
+- ~~**#118**~~ — shipped v1.21.0 (PR #142): first-run verification onboarding + docs (d098).
+- ~~**#124**~~ — shipped v1.21.0 (PR #141): `labor-unavailable` status + per-provider exclusions (d097).
+- ~~**#127**~~ / ~~**#134**~~ / ~~**#135**~~ / ~~**#136**~~ — shipped v1.21.0: the bakeoff defect chain.
 - **Unnumbered candidates:** durable scheduling (highest-leverage; Task-Scheduler steps + mailbox),
   SDLC loop (`--from-issue` intake + evidence write-back), reproducer panel role + shared
   verdict enum, effort-as-routing-dimension.
