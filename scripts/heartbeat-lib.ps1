@@ -23,12 +23,9 @@
 #>
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/usage-lib.ps1"
+. "$PSScriptRoot/session-markers-lib.ps1"   # Get-ActiveSessions for the liveness half
 
 $script:HeartbeatWindowHours = 5
-# How soon after a boundary a beat still counts as the one that OPENED the window.
-# Wider than the default 60s epsilon so a slow scheduler start still re-anchors, but far
-# short of the window so a mid-window manual beat never does.
-$script:HeartbeatReanchorGraceSeconds = 600
 
 function Get-HeartbeatStatePath {
     param([string]$BatonHome = (Get-BatonHome))
@@ -69,9 +66,10 @@ function Write-HeartbeatState {
 
 function Resolve-HeartbeatAnchor {
     <# Accept an operator anchor as a clock time ('3:50', '03:50', '15:50') or a full
-       timestamp. A bare clock time means the most recent occurrence of that time at or
-       before -Now, so seeding '3:50' at 16:00 anchors to today's 03:50, not tomorrow's.
-       Unparseable -> $null (caller reports it; never guess a boundary). #>
+       timestamp. A bare clock time means TODAY's occurrence, kept as-is whether that is
+       past or still ahead: the grid math handles both, and rolling a bare time back a
+       day would move the phase by 4h (24 mod 5), silently putting every boundary on the
+       wrong schedule. Unparseable -> $null (caller reports it; never guess a boundary). #>
     param(
         [Parameter(Mandatory)][string]$Anchor,
         [datetimeoffset]$Now = [datetimeoffset]::Now
@@ -79,14 +77,30 @@ function Resolve-HeartbeatAnchor {
     $text = $Anchor.Trim()
     if ([string]::IsNullOrWhiteSpace($text)) { return $null }
     $full = [datetimeoffset]::MinValue
-    if ([datetimeoffset]::TryParse($text, [ref]$full)) {
-        # A bare clock time parses as today's date; roll back if that is still ahead.
-        if ($text -match '^\d{1,2}:\d{2}(:\d{2})?$' -and $full -gt $Now) {
-            return $full.AddDays(-1)
-        }
-        return $full
-    }
+    if ([datetimeoffset]::TryParse($text, [ref]$full)) { return $full }
     return $null
+}
+
+function Test-HeartbeatOpensWindow {
+    <# Did THIS beat start a new window? True when it is the first beat since the most
+       recent boundary. Stated that way rather than "fired within N minutes of a
+       boundary" so the normal Windows failure — the machine asleep at the boundary,
+       task runs late — still re-anchors: that late request genuinely is the window's
+       first, and pretending otherwise would desync the schedule from reality forever.
+       No prior anchor -> true (the first beat necessarily opens one). #>
+    param($PriorAnchor, $LastFiredAt, [datetimeoffset]$Now = [datetimeoffset]::Now)
+    if (-not $PriorAnchor) { return $true }
+    $windowSeconds = $script:HeartbeatWindowHours * 3600
+    $elapsed = ($Now - $PriorAnchor).TotalSeconds
+    if ($elapsed -lt 0) { return $false }          # anchor still ahead: no window open yet
+    if ($elapsed -lt $windowSeconds) {
+        # Still inside the anchor's own window — only the beat that opened it counts,
+        # and that one already happened (it set the anchor).
+        return $false
+    }
+    $mostRecentBoundary = $PriorAnchor.AddSeconds([math]::Floor($elapsed / $windowSeconds) * $windowSeconds)
+    if (-not $LastFiredAt) { return $true }
+    return ($LastFiredAt -lt $mostRecentBoundary)
 }
 
 function Get-HeartbeatEpsilon {
@@ -157,7 +171,7 @@ function Invoke-AnchorHeartbeat {
         try {
             $raw = [string](& $Transport $argv)
         } catch {
-            return [ordered]@{ ok = $false; reason = $_.Exception.Message; input_tokens = 0; output_tokens = 0; cost_usd = $null }
+            return [ordered]@{ ok = $false; reason = $_.Exception.Message; input_tokens = $null; output_tokens = $null; cost_usd = $null; spend_known = $false }
         }
     } else {
         $neutral = Join-Path ([System.IO.Path]::GetTempPath()) 'baton-heartbeat'
@@ -167,10 +181,12 @@ function Invoke-AnchorHeartbeat {
             Set-Location -LiteralPath $neutral
             $raw = [string](& claude @argv 2>&1 | Out-String)
             if ($LASTEXITCODE -ne 0) {
-                return [ordered]@{ ok = $false; reason = "claude exit $LASTEXITCODE"; input_tokens = 0; output_tokens = 0; cost_usd = $null }
+                # Tokens stay UNKNOWN, not zero: a nonzero exit does not prove nothing was
+                # billed, and reporting 0 would understate real spend.
+                return [ordered]@{ ok = $false; reason = "claude exit $LASTEXITCODE"; input_tokens = $null; output_tokens = $null; cost_usd = $null; spend_known = $false }
             }
         } catch {
-            return [ordered]@{ ok = $false; reason = $_.Exception.Message; input_tokens = 0; output_tokens = 0; cost_usd = $null }
+            return [ordered]@{ ok = $false; reason = $_.Exception.Message; input_tokens = $null; output_tokens = $null; cost_usd = $null; spend_known = $false }
         } finally {
             Set-Location $prev
         }
@@ -185,10 +201,13 @@ function Invoke-AnchorHeartbeat {
             input_tokens  = $inTotal
             output_tokens = [long]($u.output_tokens ?? 0)
             cost_usd      = $doc.total_cost_usd
+            spend_known   = $true
             result        = [string]$doc.result
         }
     } catch {
-        return [ordered]@{ ok = $false; reason = 'unparseable claude response'; input_tokens = 0; output_tokens = 0; cost_usd = $null }
+        # Unknown, not zero: the request may well have billed before the response
+        # became unreadable, and reporting 0 would understate real spend.
+        return [ordered]@{ ok = $false; reason = 'unparseable claude response (spend unknown — the request may still have billed)'; input_tokens = $null; output_tokens = $null; cost_usd = $null; spend_known = $false }
     }
 }
 
@@ -224,7 +243,10 @@ function Clear-ExpiredWorkerLockouts {
 function Write-HeartbeatLiveness {
     <# Free half of the beat: a dated liveness stamp the dashboard can read to tell a
        live session from a marker that merely has not hit its TTL yet. Cheap, local,
-       and safe to call when nothing else in the beat succeeded. #>
+       and safe to call when nothing else in the beat succeeded.
+       Reports what the session markers actually say — and marker stamping is itself
+       broken for most session kinds right now (#144), so a live box legitimately reads
+       0 until that is fixed. Reporting the real count beats inventing a plausible one. #>
     param(
         [string]$BatonHome = (Get-BatonHome),
         [datetimeoffset]$Now = [datetimeoffset]::Now
@@ -258,7 +280,7 @@ function Invoke-UsageHeartbeat {
     $statePath = Get-HeartbeatStatePath -BatonHome $BatonHome
     $state = Read-HeartbeatState -Path $statePath
     $anchorResult = if ($SkipAnchor) {
-        [ordered]@{ ok = $true; reason = 'skipped'; input_tokens = 0; output_tokens = 0; cost_usd = 0 }
+        [ordered]@{ ok = $true; reason = 'skipped'; input_tokens = 0; output_tokens = 0; cost_usd = 0; spend_known = $true }
     } else {
         Invoke-AnchorHeartbeat -Model $Model -Transport $Transport
     }
@@ -271,26 +293,28 @@ function Invoke-UsageHeartbeat {
     # schedule by pretending the window restarted. A failed anchor never re-anchors:
     # recording a window start that never happened is the same lie.
     $priorAnchor = if ($state.anchor) { Resolve-HeartbeatAnchor -Anchor ([string]$state.anchor) -Now $Now } else { $null }
-    $startedNewWindow = $false
-    if ($priorAnchor) {
-        $sinceAnchor = ($Now - $priorAnchor).TotalSeconds
-        $intoWindow = $sinceAnchor % ($script:HeartbeatWindowHours * 3600)
-        # Fired within the re-anchor grace after a boundary -> this beat opened the window.
-        $startedNewWindow = ($intoWindow -ge 0 -and $intoWindow -le $script:HeartbeatReanchorGraceSeconds)
+    $lastFired = $null
+    if ($state.last_fired_at) {
+        try { $lastFired = [datetimeoffset]::Parse([string]$state.last_fired_at) } catch { $lastFired = $null }
     }
-    if (-not $state.anchor) {
+    $startedNewWindow = Test-HeartbeatOpensWindow -PriorAnchor $priorAnchor -LastFiredAt $lastFired -Now $Now
+
+    # Only a beat that actually opened a window may move the anchor, and only if the
+    # request succeeded. A failure or a --skip-anchor run records no window start —
+    # inventing one would put every later boundary on a schedule nothing ran on.
+    $realAnchorFired = $anchorResult.ok -and -not $SkipAnchor
+    if ($realAnchorFired -and ($startedNewWindow -or -not $state.anchor)) {
         $state.anchor = $Now.ToString('o')
         $state.anchor_from_beat = $true
-    } elseif ($anchorResult.ok -and -not $SkipAnchor -and $startedNewWindow) {
-        $state.anchor = $Now.ToString('o')
-        $state.anchor_from_beat = $true
     }
-    $state.last_beat_started_window = $startedNewWindow
+    $state.last_beat_started_window = [bool]($realAnchorFired -and $startedNewWindow)
     $state.last_fired_at = $Now.ToString('o')
     $state.beats = [int]$state.beats + 1
     [void](Write-HeartbeatState -State $state -Path $statePath)
 
-    $anchorAt = Resolve-HeartbeatAnchor -Anchor ([string]$state.anchor) -Now $Now
+    # No anchor (a failed or skipped first beat planted none) -> no schedulable boundary.
+    $anchorAt = if ([string]::IsNullOrWhiteSpace([string]$state.anchor)) { $null }
+                else { Resolve-HeartbeatAnchor -Anchor ([string]$state.anchor) -Now $Now }
     $eps = Get-HeartbeatEpsilon -State $state
     $next = if ($anchorAt) { Get-NextHeartbeatBoundary -Anchor $anchorAt -Now $Now -EpsilonSeconds $eps } else { $null }
     return [ordered]@{
@@ -317,8 +341,11 @@ function Get-HeartbeatScheduleCommand {
         'schtasks', '/Create', '/F',
         '/TN', $TaskName,
         '/SC', 'ONCE',
-        '/ST', $local.ToString('HH:mm'),
-        '/SD', $local.ToString('MM/dd/yyyy'),
+        # InvariantCulture: '/' and ':' are culture-REPLACED separators in .NET custom
+        # formats, so a de-DE box would emit '07.26.2026' and schtasks would take the
+        # wrong day or refuse outright.
+        '/ST', $local.ToString('HH:mm', [System.Globalization.CultureInfo]::InvariantCulture),
+        '/SD', $local.ToString('MM/dd/yyyy', [System.Globalization.CultureInfo]::InvariantCulture),
         '/TR', ('pwsh -NoProfile -WindowStyle Hidden -File "{0}" -Now -Reschedule' -f $ScriptPath)
     )
 }

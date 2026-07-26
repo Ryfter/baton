@@ -19,9 +19,15 @@ try {
     $a1 = Resolve-HeartbeatAnchor -Anchor '3:50' -Now $now
     Check 'A1 bare clock time resolves to TODAY when already past' (
         $a1.Hour -eq 3 -and $a1.Minute -eq 50 -and $a1.Day -eq 26)
+    # A bare time still ahead must stay on TODAY. Rolling back a day would shift the
+    # grid phase by 4h (24 mod 5) and put every later boundary on the wrong schedule.
     $a2 = Resolve-HeartbeatAnchor -Anchor '23:50' -Now $now
-    Check 'A2 bare clock time still ahead rolls BACK a day (never schedules from the future)' (
-        $a2.Hour -eq 23 -and $a2.Day -eq 25)
+    Check 'A2 bare clock time still ahead stays on today (no 24h rollback / no 4h phase shift)' (
+        $a2.Hour -eq 23 -and $a2.Day -eq 26)
+    $a2b = Resolve-HeartbeatAnchor -Anchor '3:50' -Now ([datetimeoffset]::Parse('2026-07-26T03:49:00-06:00'))
+    $a2bNext = Get-NextHeartbeatBoundary -Anchor $a2b -Now ([datetimeoffset]::Parse('2026-07-26T03:49:00-06:00')) -EpsilonSeconds 60
+    Check 'A2c seeding one minute BEFORE the reset schedules that same reset, not +4h' (
+        $a2bNext.boundary_at -eq [datetimeoffset]::Parse('2026-07-26T03:51:00-06:00'))
     Check 'A3 full timestamp passes through' (
         (Resolve-HeartbeatAnchor -Anchor '2026-07-20T08:15:00-06:00' -Now $now).Day -eq 20)
     Check 'A4 junk -> null (never guess a boundary)' ($null -eq (Resolve-HeartbeatAnchor -Anchor 'lunchtime' -Now $now))
@@ -125,12 +131,63 @@ try {
     Check 'F8 -SkipAnchor spends nothing and says so' (
         $beatSkip.anchor.reason -eq 'skipped' -and $beatSkip.anchor.input_tokens -eq 0)
 
+    # ---- phantom-anchor guards (Grok review high): a beat that never opened a window
+    # must not seed one, or every later boundary sits on a schedule nothing ran on ----
+    $freshFail = Join-Path $tmp 'fresh-fail'
+    New-Item -ItemType Directory -Force -Path $freshFail | Out-Null
+    $fpath = Get-HeartbeatStatePath -BatonHome $freshFail
+    $failBeat = Invoke-UsageHeartbeat -Transport { param($argv) throw 'not logged in' } -BatonHome $freshFail -Now ([datetimeoffset]::Parse('2026-07-26T09:00:00-06:00'))
+    Check 'P1 FAILED first beat with no prior anchor plants NO anchor' (
+        [string]::IsNullOrWhiteSpace([string](Read-HeartbeatState -Path $fpath).anchor))
+    Check 'P2 failed first beat reports no schedulable boundary' ($null -eq $failBeat.next)
+    $freshSkip = Join-Path $tmp 'fresh-skip'
+    New-Item -ItemType Directory -Force -Path $freshSkip | Out-Null
+    [void](Invoke-UsageHeartbeat -SkipAnchor -BatonHome $freshSkip -Now ([datetimeoffset]::Parse('2026-07-26T09:00:00-06:00')))
+    Check 'P3 --skip-anchor with no prior anchor plants NO anchor either' (
+        [string]::IsNullOrWhiteSpace([string](Read-HeartbeatState -Path (Get-HeartbeatStatePath -BatonHome $freshSkip)).anchor))
+    $freshOk = Join-Path $tmp 'fresh-ok'
+    New-Item -ItemType Directory -Force -Path $freshOk | Out-Null
+    [void](Invoke-UsageHeartbeat -Transport $fakeOk -BatonHome $freshOk -Now ([datetimeoffset]::Parse('2026-07-26T09:00:00-06:00')))
+    Check 'P4 a SUCCESSFUL first beat does anchor' (
+        -not [string]::IsNullOrWhiteSpace([string](Read-HeartbeatState -Path (Get-HeartbeatStatePath -BatonHome $freshOk)).anchor))
+    Check 'P5 failed beat does not claim it started a window' (
+        (Read-HeartbeatState -Path $fpath).last_beat_started_window -eq $false)
+
+    # ---- sleep-through: the machine was asleep at the boundary and the task ran late.
+    # That late request IS the window's first, so it MUST re-anchor or the schedule
+    # desyncs from reality permanently (Grok review medium) ----
+    $slept = Test-HeartbeatOpensWindow -PriorAnchor ([datetimeoffset]::Parse('2026-07-26T03:51:00-06:00')) `
+        -LastFiredAt ([datetimeoffset]::Parse('2026-07-26T03:51:00-06:00')) -Now ([datetimeoffset]::Parse('2026-07-26T09:05:00-06:00'))
+    Check 'W1 a beat 74 min past the boundary still counts as opening the window' ($slept -eq $true)
+    $midw = Test-HeartbeatOpensWindow -PriorAnchor ([datetimeoffset]::Parse('2026-07-26T08:51:00-06:00')) `
+        -LastFiredAt ([datetimeoffset]::Parse('2026-07-26T08:51:00-06:00')) -Now ([datetimeoffset]::Parse('2026-07-26T11:30:00-06:00'))
+    Check 'W2 a manual mid-window beat does NOT count as opening one' ($midw -eq $false)
+    $second = Test-HeartbeatOpensWindow -PriorAnchor ([datetimeoffset]::Parse('2026-07-26T03:51:00-06:00')) `
+        -LastFiredAt ([datetimeoffset]::Parse('2026-07-26T09:05:00-06:00')) -Now ([datetimeoffset]::Parse('2026-07-26T09:10:00-06:00'))
+    Check 'W3 a SECOND beat in the same window does not re-open it' ($second -eq $false)
+    Check 'W4 no prior anchor -> the first beat opens a window' (
+        (Test-HeartbeatOpensWindow -PriorAnchor $null -LastFiredAt $null -Now $now) -eq $true)
+
+    # ---- spend honesty: unknown must never be reported as zero (Grok review medium) ----
+    $unk = Invoke-AnchorHeartbeat -Transport { param($argv) 'not json at all' }
+    Check 'U1 unparseable response reports spend UNKNOWN, not zero' (
+        (-not $unk.ok) -and ($null -eq $unk.input_tokens) -and ($unk.spend_known -eq $false))
+    Check 'U2 unparseable reason says the request may still have billed' ($unk.reason -match 'may still have billed')
+    Check 'U3 a successful call marks spend known' (
+        (Invoke-AnchorHeartbeat -Transport $fakeOk).spend_known -eq $true)
+
     # ---- schedule command shape (built, never executed here) ----
     $cmd = @(Get-HeartbeatScheduleCommand -At ([datetimeoffset]::Parse('2026-07-26T08:51:00-06:00')) -TaskName 'TestHb' -ScriptPath 'C:/x/fleet-heartbeat.ps1')
     Check 'K1 registers a ONE-SHOT task (5h does not divide 24h; no daily time can express it)' (
         ($cmd -contains '/SC') -and ($cmd -contains 'ONCE'))
     Check 'K2 task re-registers itself after firing' (($cmd -join ' ') -match '-Reschedule')
     Check 'K3 names the task and forces replacement' (($cmd -contains '/F') -and ($cmd -join ' ') -match 'TestHb')
+    # Culture-proof: '/' and ':' are culture-REPLACED separators in .NET custom formats,
+    # so a de-DE box would otherwise emit '07.26.2026' and schtasks would misread the day.
+    $sdIdx = [array]::IndexOf($cmd, '/SD')
+    $stIdx = [array]::IndexOf($cmd, '/ST')
+    Check 'K4 /SD is invariant MM/dd/yyyy regardless of host culture' ($cmd[$sdIdx + 1] -eq '07/26/2026')
+    Check 'K5 /ST is invariant HH:mm' ($cmd[$stIdx + 1] -eq '08:51')
 
     # ---- CLI surface (hermetic: --status and --print-schedule only) ----
     $cli = Join-Path $PSScriptRoot 'fleet-heartbeat.ps1'

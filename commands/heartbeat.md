@@ -16,8 +16,10 @@ Three jobs run on each beat; only the first spends anything:
    subscription-authenticated request that starts the window.
 2. **Clear expired lockouts** (free) — workers whose `reset_at` has passed get an explicit
    `clear` row, so the labor pool stops reporting a lockout that is over.
-3. **Session liveness** (free) — stamps a marker the dashboard can read to tell a live session
-   from one that merely hasn't hit its TTL.
+3. **Session liveness** (free) — stamps a dated record of how many sessions are currently
+   marked active, so a dashboard can tell a live session from a marker that merely hasn't
+   aged out. Note: it reports what the session markers say, and marker stamping itself is
+   currently broken for most session kinds (#144) — expect `0` until that lands.
 
 ## Steps
 
