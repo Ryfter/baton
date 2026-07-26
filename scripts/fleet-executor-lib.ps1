@@ -646,16 +646,28 @@ function Add-TaskOutputInstruction {
 }
 
 function Build-AgenticWorkerPrompt {
-    <# Full worker prompt: optional bus inputs + Task: desc + output instruction. #>
+    <# Full worker prompt: optional bus inputs + Task: desc + scope brief + output
+       instruction. The scope brief (#136) TELLS the worker what the oracle will
+       enforce — advisory to the worker; the scope oracle remains the sole authority. #>
     param(
         [AllowEmptyString()][AllowNull()][string]$TaskDesc = '',
-        [AllowEmptyString()][AllowNull()][string]$InputBlock = ''
+        [AllowEmptyString()][AllowNull()][string]$InputBlock = '',
+        [AllowNull()][string[]]$AllowedPaths = @()
     )
     $desc = if ($null -eq $TaskDesc) { '' } else { [string]$TaskDesc }
     $core = "Task: $desc"
     if (-not [string]::IsNullOrWhiteSpace($InputBlock)) {
         # ADVISORY DATA, NOT AUTHORITY — see call site comment in New-AgenticSpawner.
         $core = $InputBlock.TrimEnd() + "`n`n" + $core
+    }
+    $scope = @($AllowedPaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
+    if ($scope.Count -gt 0) {
+        $scopeList = $scope -join ', '
+        $core = $core.TrimEnd() + "`n`n" +
+            "Scope: create or modify files ONLY under these paths (relative to the repo root): $scopeList. " +
+            "Any change outside them - including scratch, helper, or verification scripts at the repo root - " +
+            "fails verification and voids this work. Run throwaway checks without writing files to the repo " +
+            "(use stdout or a temp directory outside it)."
     }
     return (Add-TaskOutputInstruction -Prompt $core)
 }
@@ -734,7 +746,12 @@ function New-AgenticSpawner {
         $depIds = @()
         if ($null -ne $task.depends_on) { $depIds = @($task.depends_on | Where-Object { $_ } | ForEach-Object { [string]$_ }) }
         $busInputs = Get-TaskBusInputBlock -RunDir $RunDir -DependsOn $depIds
-        $prompt = Build-AgenticWorkerPrompt -TaskDesc ([string]$task.desc) -InputBlock $busInputs
+        # Scope brief (#136): name the task's allowed_paths in the worker prompt so the
+        # sandbox the oracle enforces is one the worker can see. Rework tasks inherit
+        # allowed_paths from the failing task and flow through this same call.
+        $scopePaths = @()
+        if ($null -ne $task.allowed_paths) { $scopePaths = @($task.allowed_paths | Where-Object { $_ } | ForEach-Object { [string]$_ }) }
+        $prompt = Build-AgenticWorkerPrompt -TaskDesc ([string]$task.desc) -InputBlock $busInputs -AllowedPaths $scopePaths
         $attemptedProviders = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         [void]$attemptedProviders.Add([string]$pick.name)
         $preflightRerouted = $false
