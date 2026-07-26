@@ -19,6 +19,7 @@ param(
     [switch]$All,
     [switch]$Json,
     [switch]$Post,
+    [string]$TranscriptDir = '',
     [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { $null })
 )
 $ErrorActionPreference = 'Stop'
@@ -115,6 +116,18 @@ try {
 
     $fleetRows = @(Read-FleetJournalRows -Path $defaults.fleet_journal)
     $usageRows = @(Read-UsageJournalRows -Path $defaults.usage_journal)
+
+    # Conductor meter (#114): Claude Code transcript usage for this repo's project dir.
+    # Coarse file prune by the earliest window bound we can know pre-card (first commit);
+    # the precise window filter happens inside Build-ShipReportCard's fold.
+    $resolvedTranscriptDir = $TranscriptDir
+    if (-not $resolvedTranscriptDir) {
+        $resolvedTranscriptDir = Get-ConductorTranscriptDir -RepoRoot $RepoRoot
+    }
+    $skipBefore = $null
+    if ($gitStats -and $gitStats.first_commit_at) { $skipBefore = $gitStats.first_commit_at }
+    elseif ($prMeta -and $prMeta.first_commit_at) { $skipBefore = $prMeta.first_commit_at }
+    $conductorRows = @(Read-ConductorUsageRows -TranscriptDir $resolvedTranscriptDir -SkipFilesBefore $skipBefore)
     $decisions = @()
     $effCost = $null
     if ($resolvedRunDir) {
@@ -125,6 +138,7 @@ try {
     $card = Build-ShipReportCard `
         -FleetRows $fleetRows `
         -UsageRows $usageRows `
+        -ConductorRows $conductorRows `
         -Decisions $decisions `
         -PrMeta $prMeta `
         -GitStats $gitStats `

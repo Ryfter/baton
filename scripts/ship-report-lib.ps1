@@ -143,7 +143,7 @@ function Parse-FleetJournalLine {
     <# Derive structured row from Write-FleetJournalLine format (fleet-lib.ps1).
        Fields: ts | fleet | provider | Ns | exit:N | "summary" | host:X
                [| job:…] [| phase:…] [| tier:…] | tok:N(exact|estimate) #>
-    param([Parameter(Mandatory)][string]$Line)
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Line)
     $trim = $Line.Trim()
     if ([string]::IsNullOrWhiteSpace($trim) -or $trim.StartsWith('#')) { return $null }
     $fields = @($trim -split '\s*\|\s*')
@@ -206,6 +206,7 @@ function Read-FleetJournalRows {
         return @()
     }
     $rows = foreach ($line in (Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $parsed = Parse-FleetJournalLine -Line $line
         if ($null -ne $parsed) { $parsed }
     }
@@ -332,6 +333,147 @@ function Read-UsageJournalRows {
         try { [void]$out.Add(($line | ConvertFrom-Json -ErrorAction Stop)) } catch { }
     }
     return ([object[]]$out.ToArray())
+}
+
+function Get-ConductorTranscriptDir {
+    <# Claude Code transcript dir for a repo: ~/.claude/projects/<sanitized-path>,
+       where every non-alphanumeric path char becomes '-' (D:\Dev\Baton -> D--Dev-Baton).
+       Existence is the caller's concern — missing dir just means 'not metered'. #>
+    param([Parameter(Mandatory)][string]$RepoRoot)
+    $resolved = $RepoRoot
+    try { $resolved = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction Stop).Path } catch { }
+    $san = ($resolved -replace '[^A-Za-z0-9-]', '-').TrimEnd('-')
+    return (Join-Path (Join-Path $HOME '.claude/projects') $san)
+}
+
+function Read-ConductorUsageRows {
+    <# Parse Claude Code session transcripts (*.jsonl) into per-turn usage rows.
+       Only type=assistant records with message.usage count. The SAME message id can
+       appear on multiple lines (one per content block) carrying the SAME usage —
+       dedupe by message.id (fallback requestId) or spend double-counts.
+       -SkipFilesBefore prunes whole files by last-write time (a file written last
+       before the window start cannot contain in-window turns). Missing dir -> @(). #>
+    param(
+        [string]$TranscriptDir,
+        $SkipFilesBefore
+    )
+    if ([string]::IsNullOrWhiteSpace($TranscriptDir) -or -not (Test-Path -LiteralPath $TranscriptDir)) {
+        return @()
+    }
+    $skipUtc = ConvertTo-ShipReportUtc -Value $SkipFilesBefore
+    $rootFull = (Get-Item -LiteralPath $TranscriptDir).FullName
+    $seen = @{}
+    $out = [System.Collections.ArrayList]@()
+    # -Recurse: subagent turns live in nested <session>/subagents/agent-*.jsonl files
+    # (same tree cost-resolver-lib walks) and are conductor-side spend too.
+    foreach ($file in @(Get-ChildItem -Path $TranscriptDir -Recurse -Filter '*.jsonl' -File -ErrorAction SilentlyContinue)) {
+        if ($skipUtc -and $file.LastWriteTimeUtc -lt $skipUtc) { continue }
+        # Session id = the top-level session, for nested subagent files too: first
+        # segment of the path relative to the transcript root (minus .jsonl when flat).
+        $rel = $file.FullName.Substring($rootFull.Length).TrimStart('\', '/')
+        $firstSeg = ($rel -split '[\\/]')[0]
+        $sessionId = if ($firstSeg -like '*.jsonl') {
+            [System.IO.Path]::GetFileNameWithoutExtension($firstSeg)
+        } else { $firstSeg }
+        $reader = [System.IO.StreamReader]::new($file.FullName)
+        try {
+            while ($null -ne ($line = $reader.ReadLine())) {
+                # Cheap substring prefilter — transcripts run to tens of MB and most
+                # lines are not assistant turns; JSON-parse only plausible candidates.
+                if ($line.IndexOf('"assistant"') -lt 0 -or $line.IndexOf('"usage"') -lt 0) { continue }
+                $obj = $null
+                try { $obj = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+                if ([string]$obj.type -ne 'assistant') { continue }
+                $msg = $obj.message
+                if ($null -eq $msg -or $null -eq $msg.usage) { continue }
+                $msgId = [string]$msg.id
+                if (-not $msgId) { $msgId = [string]$obj.requestId }
+                if ($msgId) {
+                    $dedupeKey = "$sessionId/$msgId"
+                    if ($seen.ContainsKey($dedupeKey)) { continue }
+                    $seen[$dedupeKey] = $true
+                }
+                $u = $msg.usage
+                [void]$out.Add([ordered]@{
+                    # ConvertTo-ShipReportUtc handles both the raw string and the
+                    # [datetime] ConvertFrom-Json may already have materialized.
+                    ts             = ConvertTo-ShipReportUtc -Value $obj.timestamp
+                    session        = $sessionId
+                    model          = [string]$msg.model
+                    output_tokens  = [long]($u.output_tokens ?? 0)
+                    input_tokens   = [long]($u.input_tokens ?? 0)
+                    cache_creation = [long]($u.cache_creation_input_tokens ?? 0)
+                    cache_read     = [long]($u.cache_read_input_tokens ?? 0)
+                })
+            }
+        } finally {
+            $reader.Dispose()
+        }
+    }
+    return ([object[]]$out.ToArray())
+}
+
+function Fold-ConductorTokens {
+    <# Windowed conductor-spend fold over Read-ConductorUsageRows output.
+       Basis is 'exact' (API-reported usage). This meter is SEPARATE from the
+       instrument folds and must never be summed into them (d059: different
+       meter, different money). fresh_input = input + cache_creation (tokens the
+       API actually processed anew); cache reads reported apart. #>
+    param(
+        [object[]]$Rows = @(),
+        $From,
+        $To
+    )
+    $fromUtc = ConvertTo-ShipReportUtc -Value $From
+    $toUtc = ConvertTo-ShipReportUtc -Value $To
+    $outputTotal = [long]0
+    $freshInputTotal = [long]0
+    $cacheReadTotal = [long]0
+    $turns = 0
+    $sessions = @{}
+    foreach ($r in @($Rows)) {
+        if ($null -eq $r) { continue }
+        $ts = ConvertTo-ShipReportUtc -Value $r.ts
+        if ($null -eq $ts) { continue }
+        if ($fromUtc -and $ts -lt $fromUtc) { continue }
+        if ($toUtc -and $ts -gt $toUtc) { continue }
+        $turns++
+        $outputTotal += [long]$r.output_tokens
+        $freshInputTotal += ([long]$r.input_tokens + [long]$r.cache_creation)
+        $cacheReadTotal += [long]$r.cache_read
+        $s = [string]$r.session
+        if ($s) { $sessions[$s] = $true }
+    }
+    return [ordered]@{
+        turns             = $turns
+        sessions          = $sessions.Count
+        output_total      = $outputTotal
+        fresh_input_total = $freshInputTotal
+        cache_read_total  = $cacheReadTotal
+        basis             = 'exact'
+        windowed          = [bool]($fromUtc -or $toUtc)
+        scope             = 'repo-project-dir-sessions-in-window'
+    }
+}
+
+function Format-ConductorOverhead {
+    <# Card cell for the conductor meter. Measured: token totals + upper-bound
+       caveat (every conductor session in the window counts, not just this PR's).
+       Unmeasured: an explicit 'not metered' line — never a silent zero (d059). #>
+    param($Fold)
+    if ($null -eq $Fold -or [int]$Fold.turns -le 0) {
+        return 'not metered (no conductor telemetry in window; instrument-only totals)'
+    }
+    $outLabel = Format-ShipReportTokenCount -Tokens ([long]$Fold.output_total)
+    $inLabel = Format-ShipReportTokenCount -Tokens ([long]$Fold.fresh_input_total)
+    $crLabel = Format-ShipReportTokenCount -Tokens ([long]$Fold.cache_read_total)
+    $sessCount = [int]$Fold.sessions
+    $sessLabel = if ($sessCount -eq 1) { '1 session' } else { "$sessCount sessions" }
+    # An unbounded fold is lifetime data, not a window — say so instead of faking one.
+    $scopeBit = if ($Fold.windowed) { "$sessLabel in window — upper bound" }
+                else { "$sessLabel, no window bounds — all recorded turns" }
+    return ('claude {0} tok out + {1} tok fresh-in + {2} tok cache-read (exact, {3}; not summed with instrument totals)' -f `
+        $outLabel, $inLabel, $crLabel, $scopeBit)
 }
 
 function Get-ShipReportCapDeaths {
@@ -599,6 +741,7 @@ function Build-ShipReportCard {
     param(
         [object[]]$FleetRows = @(),
         [object[]]$UsageRows = @(),
+        [object[]]$ConductorRows = @(),
         [object[]]$Decisions = @(),
         $PrMeta,
         $GitStats,
@@ -644,6 +787,11 @@ function Build-ShipReportCard {
     $allFold = Fold-ShipReportTokens -Rows @($windowed)
 
     $cap = Get-ShipReportCapDeaths -UsageRows $UsageRows -FleetRows $windowed -From $from -To $to
+
+    # Conductor meter (#114): windowed fold over Claude-side transcript usage.
+    # Separate meter from the instrument folds — never summed into tokens.* (d059).
+    $conductorFold = Fold-ConductorTokens -Rows $ConductorRows -From $from -To $to
+    $conductorText = Format-ConductorOverhead -Fold $conductorFold
 
     $reviewTexts = @()
     if ($PrMeta -and $PrMeta.comment_bodies) { $reviewTexts = @($PrMeta.comment_bodies) }
@@ -750,9 +898,10 @@ function Build-ShipReportCard {
             fix                 = $fixText
             verification        = $verifyText
             wall_clock          = $wallText
-            conductor_overhead  = 'not tracked'
+            conductor_overhead  = $conductorText
             outcome             = $outcomeText
         }
+        conductor            = $conductorFold
         tokens               = [ordered]@{
             exact_total    = [long]$allFold.exact_total
             estimate_total = [long]$allFold.estimate_total
