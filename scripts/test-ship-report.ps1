@@ -76,6 +76,9 @@ try {
     Check 'J5 parses host' ($parsed.host -eq 'testbox')
     Check 'J6 parses phase' ($parsed.phase -eq 'code.sprint-1')
     Check 'J7 comment lines skipped' ($null -eq (Parse-FleetJournalLine -Line '# Model Routing Log'))
+    # The real journal can contain blank lines; empty string must not throw on the
+    # mandatory-param binding (live-smoke defect found 2026-07-25 building #114).
+    Check 'J7b empty line tolerated' ($null -eq (Parse-FleetJournalLine -Line ''))
     Check 'J8 non-fleet skipped' ($null -eq (Parse-FleetJournalLine -Line '2026-07-10T10:00:00Z | route | x | y'))
 
     $rows = @(Read-FleetJournalRows -Path $journal)
@@ -280,7 +283,8 @@ CONFIRMED-COUNT: 8
         $card.dimensions.verification -eq '1 verification dispatch, worker-local 0 tok'
     )
     Check 'A11 wall-clock present' ($card.dimensions.wall_clock -match '~')
-    Check 'A12 conductor not tracked' ($card.dimensions.conductor_overhead -eq 'not tracked')
+    # No -ConductorRows supplied -> the meter renders the explicit honest fallback (#114).
+    Check 'A12 conductor not metered fallback' ($card.dimensions.conductor_overhead -match 'not metered')
     Check 'A13 outcome merged sha short' ($card.dimensions.outcome -match 'merged `fcfc1df`')
     Check 'A14 defects placeholder' ($card.dimensions.outcome -match 'post-merge defects')
     Check 'A15 confirmed rate is number' ($card.review.confirmed_rate -is [double] -or $card.review.confirmed_rate -eq 1)
@@ -317,8 +321,77 @@ CONFIRMED-COUNT: 8
     Check 'H1 empty build is n/a' ($emptyCard.dimensions.build -eq 'n/a')
     Check 'H2 empty review is n/a' ($emptyCard.dimensions.review -eq 'n/a')
     Check 'H3 empty wall-clock is n/a' ($emptyCard.dimensions.wall_clock -eq 'n/a')
-    Check 'H4 conductor always not tracked' ($emptyCard.dimensions.conductor_overhead -eq 'not tracked')
+    Check 'H4 conductor not metered when no rows' ($emptyCard.dimensions.conductor_overhead -match 'not metered')
     Check 'H5 empty findings rate n/a' ($emptyCard.review.confirmed_rate -eq 'n/a')
+
+    # ---- conductor meter (#114): transcript parse + windowed fold ----
+    $tDir = Join-Path $tmp 'transcripts'
+    New-Item -ItemType Directory -Force -Path $tDir | Out-Null
+    # Session one: msg_01 in-window DUPLICATED across two lines (same id, same usage —
+    # the real one-line-per-content-block shape); msg_02 out-of-window; plus a user
+    # line, a malformed line, and an assistant line without usage — all skipped.
+    $mkTurn = {
+        param($msgId, $ts, $outTok, $inTok, $cacheCre, $cacheRead)
+        @{
+            type = 'assistant'; timestamp = $ts
+            message = @{
+                id = $msgId; model = 'claude-fixture'
+                usage = @{
+                    input_tokens = $inTok; output_tokens = $outTok
+                    cache_creation_input_tokens = $cacheCre; cache_read_input_tokens = $cacheRead
+                }
+            }
+        } | ConvertTo-Json -Depth 6 -Compress
+    }
+    $sessionOne = @(
+        (& $mkTurn 'msg_01' '2026-07-10T12:00:00.000Z' 1000 50 2000 90000)
+        (& $mkTurn 'msg_01' '2026-07-10T12:00:00.000Z' 1000 50 2000 90000)
+        (& $mkTurn 'msg_02' '2026-07-09T08:00:00.000Z' 700 5 0 0)
+        (@{ type = 'user'; timestamp = '2026-07-10T12:01:00.000Z'; message = @{ role = 'user' } } | ConvertTo-Json -Compress)
+        '{"type":"assistant","usage" broken json line'
+        (@{ type = 'assistant'; timestamp = '2026-07-10T12:02:00.000Z'; message = @{ id = 'msg_nousage'; model = 'claude-fixture' } } | ConvertTo-Json -Depth 4 -Compress)
+    )
+    Set-Content -LiteralPath (Join-Path $tDir 'session-one.jsonl') -Value ($sessionOne -join "`n") -Encoding utf8NoBOM
+    $sessionTwo = @((& $mkTurn 'msg_03' '2026-07-10T15:00:00.000Z' 500 10 0 0))
+    Set-Content -LiteralPath (Join-Path $tDir 'session-two.jsonl') -Value ($sessionTwo -join "`n") -Encoding utf8NoBOM
+
+    $coRows = @(Read-ConductorUsageRows -TranscriptDir $tDir)
+    Check 'CO1 dedupe by message id (3 rows from 4 usage lines)' ($coRows.Count -eq 3)
+    Check 'CO2 rows carry session + model' (
+        (@($coRows | Where-Object { $_.session -eq 'session-two' }).Count -eq 1) -and
+        ($coRows[0].model -eq 'claude-fixture')
+    )
+    $coFold = Fold-ConductorTokens -Rows $coRows -From '2026-07-10T10:00:00Z' -To '2026-07-10T16:00:00Z'
+    Check 'CO3 windowed fold: 2 turns, 2 sessions' ([int]$coFold.turns -eq 2 -and [int]$coFold.sessions -eq 2)
+    Check 'CO4 output/fresh-in/cache-read sums' (
+        ([long]$coFold.output_total -eq 1500) -and
+        ([long]$coFold.fresh_input_total -eq 2060) -and
+        ([long]$coFold.cache_read_total -eq 90000)
+    )
+    Check 'CO5 fold basis exact + scope label' ($coFold.basis -eq 'exact' -and $coFold.scope -eq 'all-sessions-in-window')
+    $coCard = Build-ShipReportCard `
+        -FleetRows $rows -UsageRows $usage -ConductorRows $coRows `
+        -Decisions $decisions -PrMeta $prMeta -GitStats $gitStats -RunId 'go-fixture-1'
+    Check 'CO6 measured dimension: claude + exact + upper bound' (
+        ($coCard.dimensions.conductor_overhead -match '^claude ') -and
+        ($coCard.dimensions.conductor_overhead -match 'exact') -and
+        ($coCard.dimensions.conductor_overhead -match 'upper bound')
+    )
+    Check 'CO7 conductor meter never leaks into instrument totals' (
+        ([long]$coCard.tokens.exact_total -eq [long]$card.tokens.exact_total) -and
+        ([long]$coCard.tokens.estimate_total -eq [long]$card.tokens.estimate_total)
+    )
+    Check 'CO8 card json carries conductor block' (
+        ($null -ne $coCard.conductor) -and ([long]$coCard.conductor.output_total -eq 1500)
+    )
+    Check 'CO9 missing transcript dir -> no rows' (
+        @(Read-ConductorUsageRows -TranscriptDir (Join-Path $tDir 'nope')).Count -eq 0
+    )
+    Check 'CO10 SkipFilesBefore prunes all files' (
+        @(Read-ConductorUsageRows -TranscriptDir $tDir -SkipFilesBefore ([datetime]::UtcNow.AddDays(1))).Count -eq 0
+    )
+    $sanDir = Get-ConductorTranscriptDir -RepoRoot 'Q:\NoSuchDir\proj.x'
+    Check 'CO11 transcript dir sanitization' ((Split-Path -Leaf $sanDir) -eq 'Q--NoSuchDir-proj-x')
 
     # ---- write + --all trend ----
     $written = Write-ShipReportToRunDir -RunDir $runDir -Card $card -Markdown $md
@@ -371,10 +444,14 @@ CONFIRMED-COUNT: 8
     $runOnly = Join-Path $runsRoot 'go-wip'
     New-Item -ItemType Directory -Force -Path $runOnly | Out-Null
     # Seed a tiny journal already in BATON_HOME
-    $wipOut = & pwsh -NoProfile -File $cli -RunDir $runOnly -BatonHome $tmp 2>$null | Out-String
+    # -TranscriptDir pinned to a nonexistent fixture path: the CLI must NEVER read the
+    # real ~/.claude/projects transcripts from a test (hermeticity), and the missing
+    # dir exercises the honest 'not metered' fallback.
+    $noTranscripts = Join-Path $tmp 'no-transcripts'
+    $wipOut = & pwsh -NoProfile -File $cli -RunDir $runOnly -BatonHome $tmp -TranscriptDir $noTranscripts 2>$null | Out-String
     Check 'CLI9 -RunDir exit 0' ($LASTEXITCODE -eq 0)
     Check 'CLI10 -RunDir writes ship-report.md' (Test-Path (Join-Path $runOnly 'ship-report.md'))
-    Check 'CLI11 -RunDir card has conductor gap' ($wipOut -match 'not tracked')
+    Check 'CLI11 -RunDir card has conductor not-metered fallback' ($wipOut -match 'not metered')
 
     # -Branch only with stubbed env: no real git needed if repo empty — still exit 0/2 ok
     # Without gh and with branch, git may fail soft; runner catches and continues.
@@ -384,7 +461,7 @@ CONFIRMED-COUNT: 8
 
     # --post without PR number should fail when only branch... already covered.
     # Post with PR will call real gh unless we only test the guard:
-    & pwsh -NoProfile -File $cli -Branch 'x' -Post -BatonHome $tmp 2>$null | Out-Null
+    & pwsh -NoProfile -File $cli -Branch 'x' -Post -BatonHome $tmp -RepoRoot $tmp -TranscriptDir $noTranscripts 2>$null | Out-Null
     Check 'CLI14 --post without PR exits 2' ($LASTEXITCODE -eq 2)
 
     # In-process post with stub
