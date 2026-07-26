@@ -35,6 +35,10 @@ Assert "would deploy effective-cost-lib.ps1" ($out -match 'effective-cost-lib\.p
 Assert "would deploy fleet-effective-cost.ps1" ($out -match 'fleet-effective-cost\.ps1')
 Assert "would deploy ship-report-lib.ps1" ($out -match 'ship-report-lib\.ps1')
 Assert "would deploy fleet-ship-report.ps1" ($out -match 'fleet-ship-report\.ps1')
+# The heartbeat runs from the DEPLOYED path (the scheduled task points at
+# ~/.claude/scripts), so a missing deploy entry silently breaks the schedule.
+Assert "would deploy heartbeat-lib.ps1" ($out -match 'heartbeat-lib\.ps1')
+Assert "would deploy fleet-heartbeat.ps1" ($out -match 'fleet-heartbeat\.ps1')
 Assert "would deploy routing-dispatch.ps1" ($out -match 'routing-dispatch\.ps1')
 Assert "would deploy routing-learn.ps1"   ($out -match 'routing-learn\.ps1')
 Assert "would deploy routing-calibrate.ps1" ($out -match 'routing-calibrate\.ps1')
