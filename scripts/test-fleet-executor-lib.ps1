@@ -137,6 +137,72 @@ providers:
     Check 'ZC8 context floor excludes cheap under-context provider' (
         (Get-CapabilityCostTierFloor -Capability 'summarize' -FleetPath $zcCtxFleet) -eq 'free')
 
+    # ---- Get-EditPoolExclusions + cause-aware zero-candidate why (#124) ----
+    $epUsage = Join-Path $tmpRoot 'ep-usage.jsonl'
+    (@{ ts = '2026-01-01T00:00:00Z'; event = 'lockout'; worker = 'paid-agentic'; reason = 'cap'; reset_at = '2030-01-01T00:00:00Z' } | ConvertTo-Json -Compress) |
+        Set-Content -LiteralPath $epUsage -Encoding utf8NoBOM
+    $excl = @(Get-EditPoolExclusions -Capability 'code-gen' -TierCap 'paid' -FleetPath $zcFloorFleet -UsagePath $epUsage)
+    # reset_at format-agnostic: ConvertFrom-Json materializes the journal's ISO string
+    # as [datetime], so Get-WorkerState's [string] cast yields a locale rendering.
+    Check 'EP1 locked-out eligible provider -> usage exclusion with reset_at' (
+        @($excl | Where-Object { $_.name -eq 'paid-agentic' -and $_.stage -eq 'usage' -and $_.reason -eq 'waiting_for_reset' -and "$($_.reset_at)" -match '2030' }).Count -eq 1)
+    Check 'EP2 non-agentic provider -> static not edit-eligible' (
+        @($excl | Where-Object { $_.name -eq 'local-nonagentic' -and $_.stage -eq 'static' -and $_.reason -eq 'not edit-eligible' }).Count -eq 1)
+    Check 'EP3 non-claiming provider -> static does-not-claim' (
+        @($excl | Where-Object { $_.name -eq 'local-sum' -and $_.stage -eq 'static' -and $_.reason -match 'does not claim' }).Count -eq 1)
+    $exclFree = @(Get-EditPoolExclusions -Capability 'code-gen' -TierCap 'free' -FleetPath $zcFloorFleet -UsagePath (Join-Path $tmpRoot 'no-usage.jsonl'))
+    Check 'EP4 tier above cap -> static exclusion (no usage journal)' (
+        @($exclFree | Where-Object { $_.name -eq 'paid-agentic' -and $_.stage -eq 'static' -and $_.reason -match 'above cap free' }).Count -eq 1)
+    Check 'EP5 missing fleet fail-soft empty' (
+        @(Get-EditPoolExclusions -Capability 'code-gen' -TierCap 'paid' -FleetPath (Join-Path $tmpRoot 'no-fleet.yaml') -UsagePath $epUsage).Count -eq 0)
+    $zcAvail = Format-ZeroCandidateWhy -Capability 'code-gen' -TierCap 'paid' -Stakes 'standard' -Floor 'paid' -Exclusions $excl
+    Check 'ZC9 usage exclusions -> availability-shaped why, no stakes remedy' (
+        ($zcAvail -match 'labor unavailable') -and ($zcAvail -match 'paid-agentic') -and ($zcAvail -notmatch 'stakes'))
+    $zcStatic = Format-ZeroCandidateWhy -Capability 'code-gen' -TierCap 'free' -Stakes 'low' -Floor 'paid' -Exclusions $exclFree
+    Check 'ZC10 static-only exclusions keep the #127 stakes/tier message' (
+        ($zcStatic -match 'stakes low caps tier') -and ($zcStatic -notmatch 'labor unavailable'))
+
+    # Spawner zero-candidate seam: an availability-emptied pool sets labor='unavailable'
+    # and carries the exclusion audit on the result (#124).
+    $luFleet = Join-Path $tmpRoot 'lu-fleet.yaml'
+    Set-Content -LiteralPath $luFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: [code-gen]
+providers:
+  - name: locked-agentic
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    platform: codex
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+'@
+    $luUsage = Join-Path $tmpRoot 'lu-usage.jsonl'
+    (@{ ts = '2026-01-01T00:00:00Z'; event = 'lockout'; worker = 'locked-agentic'; reason = 'cap'; reset_at = '2030-01-01T00:00:00Z' } | ConvertTo-Json -Compress) |
+        Set-Content -LiteralPath $luUsage -Encoding utf8NoBOM
+    $luRun = Join-Path $tmpRoot 'lu-run'
+    New-Item -ItemType Directory -Force -Path $luRun | Out-Null
+    $luSp = New-AgenticSpawner -Worktree (Join-Path $tmpRoot 'lu-wt-absent') -FleetPath $luFleet `
+        -ToolsPath (Join-Path $tmpRoot 'lu-tools-absent.yaml') -MaxCostTier 'paid' -RunDir $luRun `
+        -UsagePath $luUsage -RatingsPath (Join-Path $tmpRoot 'lu-ratings.jsonl') `
+        -JournalPath (Join-Path $tmpRoot 'lu-journal.jsonl') `
+        -ProbeCachePath (Join-Path $tmpRoot 'lu-probe.jsonl') -FleetJournalPath (Join-Path $tmpRoot 'lu-fj.md')
+    $luR = & $luSp @{ id = 't1'; desc = 'edit thing'; command = 'edit'; capability = 'code-gen' }
+    Check 'LU1 spawner flags labor unavailable' ($luR.ok -eq $false -and [string]$luR.labor -eq 'unavailable')
+    Check 'LU2 why is availability-shaped and names the provider' (
+        ($luR.why -match 'labor unavailable') -and ($luR.why -match 'locked-agentic'))
+    Check 'LU3 exclusion audit rides the result' (
+        @($luR.exclusions | Where-Object { $_.stage -eq 'usage' -and $_.name -eq 'locked-agentic' }).Count -eq 1)
+    # Config-shaped empty pool (tier cap, nobody usage-blocked) must NOT claim labor
+    # unavailability — the #127 stakes remedy stands.
+    $luSp2 = New-AgenticSpawner -Worktree (Join-Path $tmpRoot 'lu-wt-absent') -FleetPath $luFleet `
+        -ToolsPath (Join-Path $tmpRoot 'lu-tools-absent.yaml') -MaxCostTier 'free' -RunDir $luRun `
+        -UsagePath (Join-Path $tmpRoot 'no-usage.jsonl') -RatingsPath (Join-Path $tmpRoot 'lu-ratings.jsonl') `
+        -JournalPath (Join-Path $tmpRoot 'lu-journal.jsonl') `
+        -ProbeCachePath (Join-Path $tmpRoot 'lu-probe.jsonl') -FleetJournalPath (Join-Path $tmpRoot 'lu-fj.md')
+    $luR2 = & $luSp2 @{ id = 't1'; desc = 'edit thing'; command = 'edit'; capability = 'code-gen' }
+    Check 'LU4 tier-capped empty pool keeps labor flag empty + stakes message' (
+        $luR2.ok -eq $false -and [string]$luR2.labor -eq '' -and ($luR2.why -match 'stakes'))
+
     # ---- Eligibility agreement: Test-ProviderAgentic vs Test-PlannerProviderEditEligible ----
     # Drift guard for the intentional mirror pair (d078/d091 / #127 review).
     # Same case table intent as conductor suite if ever split; load planner mirror here.

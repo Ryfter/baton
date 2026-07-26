@@ -1176,6 +1176,43 @@ ERROR: You have hit your usage limit. Try again later.
     Check 'WHY4 finished event keeps desc' (@($finEv | Where-Object { $_ -match '"message":"edit"' }).Count -ge 1)
     Remove-Item $d -Recurse -Force
 
+    # LU1-5 (#124): a labor-availability halt (spawner labor='unavailable') gets its own
+    # worker-selection-failed event, terminal status 'labor-unavailable', and a '## Labor'
+    # report section — the run must never read as a verification/implementation defect.
+    $d = New-VfRun
+    $sp = { param($t) @{
+        ok = $false; spend = 0.0; chose = ''; alternatives = @()
+        why = 'capability code-gen: labor unavailable — every provider that could take this edit is out: worker-a: waiting_for_reset (reset_at 2030-01-01T00:00:00Z)'
+        labor = 'unavailable'
+        exclusions = @(
+            [ordered]@{ name = 'worker-a'; stage = 'usage'; reason = 'waiting_for_reset'; reset_at = '2030-01-01T00:00:00Z'; eta = $null }
+            [ordered]@{ name = 'worker-b'; stage = 'static'; reason = 'not edit-eligible'; reset_at = $null; eta = $null }
+        )
+    } }
+    $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp
+    Check 'LU1 status labor-unavailable' ($res.status -eq 'labor-unavailable')
+    $selEv = @(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match '"kind":"worker-selection-failed"' })
+    Check 'LU2 worker-selection-failed event carries the why' (
+        @($selEv | Where-Object { $_ -match 'labor unavailable' }).Count -ge 1)
+    Check 'LU3 terminal error event still carries the why (#135 contract holds)' (
+        @(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { ($_ -match '"kind":"error"') -and ($_ -match 'labor unavailable') }).Count -ge 1)
+    $luReport = Get-Content -Raw (Join-Path $d 'report.md')
+    Check 'LU4 report.md carries the Labor section + per-provider reasons' (
+        ($luReport -match '## Labor') -and ($luReport -match 'availability problem, not an implementation defect') -and
+        ($luReport -match 'worker-a') -and ($luReport -match 'waiting_for_reset') -and ($luReport -match '2030-01-01T00:00:00Z'))
+    Remove-Item $d -Recurse -Force
+
+    # LU5: an ordinary failure (no labor flag) is byte-for-byte the pre-#124 behavior —
+    # status 'failed', no worker-selection-failed event, no Labor section.
+    $d = New-VfRun
+    $sp = { param($t) @{ ok = $false; spend = 0.0; chose = 'w'; why = 'exit 1 (provider_error)'; alternatives = @() } }
+    $res = Invoke-Conductor -Goal 'g' -RunDir $d -Planner $vfPlan -Spawner $sp
+    Check 'LU5 plain failure unchanged: failed status, no selection event, no Labor section' (
+        ($res.status -eq 'failed') -and
+        (@(Get-Content (Join-Path $d 'events.jsonl') | Where-Object { $_ -match 'worker-selection-failed' }).Count -eq 0) -and
+        (-not ((Get-Content -Raw (Join-Path $d 'report.md')) -match '## Labor')))
+    Remove-Item $d -Recurse -Force
+
     # VF7: -Verify ABSENT -> byte-for-byte unchanged (no verification events even if $r carries them)
     $d = New-VfRun
     $sp = { param($t) @{ ok=$true; spend=0.0; chose='w'; why='ok'; alternatives=@(); verification=@{ verdict='pass'; grade='strong'; failure_category=''; proves='x'; retried=$false } } }
