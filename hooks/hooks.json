@@ -5,7 +5,12 @@
         "matcher": "startup",
         "hooks": [
           { "type": "command", "command": "pwsh -NoProfile -File \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/baton-init.ps1\"" },
-          { "type": "command", "command": "pwsh -NoProfile -File \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/baton-coach.ps1\"" },
+          { "type": "command", "command": "pwsh -NoProfile -File \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/baton-coach.ps1\"" }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
           { "type": "command", "command": "pwsh -NoProfile -File \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/baton-session-start.ps1\"" }
         ]
       }

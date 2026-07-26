@@ -79,6 +79,26 @@ try {
 
     $evt = $raw | ConvertFrom-Json -ErrorAction Stop
 
+    # Throttled session-marker refresh so long-running sessions stay "active"
+    # without rewriting on every tool call (#144). Fail-open; never blocks.
+    try {
+        $refreshSid = if ($evt.session_id) { [string]$evt.session_id } else { $null }
+        if ($refreshSid) {
+            $mkCandidates = @(
+                (Join-Path $PSScriptRoot '../session-markers-lib.ps1'),
+                (Join-Path $PSScriptRoot '../scripts/session-markers-lib.ps1')
+            )
+            $mkPath = $mkCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if ($mkPath) {
+                . $mkPath
+                $refreshCwd = if ($evt.cwd) { [string]$evt.cwd } else { (Get-Location).Path }
+                $null = Update-SessionMarkerLastSeen -SessionId $refreshSid -Cwd $refreshCwd -Kind 'refresh'
+            }
+        }
+    } catch {
+        # fail-open: a marker refresh must never break the routing journal
+    }
+
     $toolName = $evt.tool_name
     $exit     = if ($null -ne $evt.tool_response.exit_code) { $evt.tool_response.exit_code } else { 0 }
     $elapsed  = if ($null -ne $evt.tool_response.duration_ms) { [int]($evt.tool_response.duration_ms / 1000) } else { 0 }
