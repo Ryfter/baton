@@ -161,6 +161,31 @@ providers:
     $zcStatic = Format-ZeroCandidateWhy -Capability 'code-gen' -TierCap 'free' -Stakes 'low' -Floor 'paid' -Exclusions $exclFree
     Check 'ZC10 static-only exclusions keep the #127 stakes/tier message' (
         ($zcStatic -match 'stakes low caps tier') -and ($zcStatic -notmatch 'labor unavailable'))
+    # Mixed pool (Grok review): a usage-out cheap provider AND a tier-capped provider —
+    # the availability message must keep the stakes remedy alive, not suppress it.
+    $mixedExcl = @(
+        [ordered]@{ name = 'cheap-locked'; stage = 'usage'; reason = 'waiting_for_reset'; reset_at = '2030-01-01T00:00:00Z'; eta = $null }
+        [ordered]@{ name = 'paid-agentic'; stage = 'static'; reason = 'cost_tier paid above cap free'; reset_at = $null; eta = $null }
+    )
+    $zcMixed = Format-ZeroCandidateWhy -Capability 'code-gen' -TierCap 'free' -Stakes 'low' -Floor 'paid' -Exclusions $mixedExcl
+    Check 'ZC11 mixed pool keeps BOTH remedies: availability + tier note' (
+        ($zcMixed -match 'labor unavailable') -and ($zcMixed -match 'paid-agentic sat above the tier cap') -and
+        ($zcMixed -match 'est_cost_tier'))
+    # Route-around parity (Grok review): cooldown is a hard usage exclusion; 'limited'
+    # WITHOUT conserve mode is still a candidate, so the audit must not claim it.
+    $epUsage2 = Join-Path $tmpRoot 'ep-usage2.jsonl'
+    (@{ ts = '2026-01-01T00:00:00Z'; event = 'cooldown'; worker = 'paid-agentic'; until = '2030-01-01T00:00:00Z' } | ConvertTo-Json -Compress) |
+        Set-Content -LiteralPath $epUsage2 -Encoding utf8NoBOM
+    $exclCd = @(Get-EditPoolExclusions -Capability 'code-gen' -TierCap 'paid' -FleetPath $zcFloorFleet -UsagePath $epUsage2)
+    Check 'EP6 cooldown -> usage exclusion cooling_down' (
+        @($exclCd | Where-Object { $_.name -eq 'paid-agentic' -and $_.stage -eq 'usage' -and $_.reason -eq 'cooling_down' }).Count -eq 1)
+    $epUsage3 = Join-Path $tmpRoot 'ep-usage3.jsonl'
+    (@{ ts = '2026-01-01T00:00:00Z'; event = 'limited'; worker = 'paid-agentic'; reason = 'probe'; reset_at = '2030-01-01T00:00:00Z' } | ConvertTo-Json -Compress) |
+        Set-Content -LiteralPath $epUsage3 -Encoding utf8NoBOM
+    $exclLim = @(Get-EditPoolExclusions -Capability 'code-gen' -TierCap 'paid' -FleetPath $zcFloorFleet -UsagePath $epUsage3)
+    Check 'EP7 limited without conserve -> NOT a usage exclusion (still a candidate)' (
+        @($exclLim | Where-Object { $_.name -eq 'paid-agentic' -and $_.stage -eq 'usage' }).Count -eq 0 -and
+        @($exclLim | Where-Object { $_.name -eq 'paid-agentic' -and $_.reason -match 'eligible by this audit' }).Count -eq 1)
 
     # Spawner zero-candidate seam: an availability-emptied pool sets labor='unavailable'
     # and carries the exclusion audit on the result (#124).
@@ -708,6 +733,9 @@ providers:
         $qualityResult = & $qualitySpawner $failoverTask
         Check 'UF4 quality_first refuses downgrade' ($qualitySeen.calls -eq 1 -and $qualityResult.ok -eq $false)
         Check 'UF4 no peer available is loud' ($qualityResult.why -match 'no peer available.*quality_first')
+        Check 'UF4b quota-death no-peer flags labor unavailable + exclusion row (#124)' (
+            ([string]$qualityResult.labor -eq 'unavailable') -and
+            @($qualityResult.exclusions | Where-Object { $_.stage -eq 'usage' -and $_.reason -match 'no peer available' }).Count -ge 1)
 
         # High stakes re-resolves champion/high policy on the substitute too.
         $highFailoverUsage = Join-Path $env:BATON_HOME 'usage-high-failover.jsonl'
@@ -1005,6 +1033,9 @@ providers:
             Check 'PF3 hold is loud with exact no-peer context' ($holdResult.why -match 'no peer available \+ worker-primary over soft cap' -and $holdResult.why -notmatch "`r|`n")
             $holdRows = @(Get-Content -LiteralPath $holdUsage | ForEach-Object { $_ | ConvertFrom-Json })
             Check 'PF3 held outcome is journaled' (@($holdRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'held' }).Count -eq 1)
+            Check 'PF3b preflight hold flags labor unavailable + soft-cap exclusion (#124)' (
+                ([string]$holdResult.labor -eq 'unavailable') -and
+                @($holdResult.exclusions | Where-Object { $_.stage -eq 'usage' -and $_.reason -match 'soft cap' }).Count -ge 1)
 
             # Transport failures are fail-open and dispatch the primary normally.
             foreach ($probeFailure in @(
@@ -1233,6 +1264,10 @@ providers:
             Check 'PF11 both-over journals held not rerouted' (
                 @($bothOverRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'held' }).Count -eq 1 -and
                 @($bothOverRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'rerouted' }).Count -eq 0)
+            Check 'PF11b both-over-cap flags labor unavailable, names both providers (#124)' (
+                ([string]$bothOverResult.labor -eq 'unavailable') -and
+                @($bothOverResult.exclusions | Where-Object { $_.name -eq 'worker-primary' }).Count -eq 1 -and
+                @($bothOverResult.exclusions | Where-Object { $_.name -eq 'worker-peer' }).Count -eq 1)
 
             # FIX 4: multi-window over-cap loud line names every crossed window.
             $multiWinUsage = Join-Path $env:BATON_HOME 'usage-pf-multi-window.jsonl'

@@ -287,7 +287,15 @@ function Format-ZeroCandidateWhy {
             elseif ($_.reset_at) { $bit += " (reset_at $($_.reset_at))" }
             $bit
         }) -join '; '
-        return "capability ${Capability}: labor unavailable — every provider that could take this edit is out: ${detail}. Remedies: wait for the reset, clear a stale lockout (Add-UsageEvent -Kind clear), or enable another edit-eligible provider."
+        $msg = "capability ${Capability}: labor unavailable — every provider that could take this edit is out: ${detail}. Remedies: wait for the reset, clear a stale lockout (Add-UsageEvent -Kind clear), or enable another edit-eligible provider."
+        # Mixed pool (Grok review medium): when tier-capped providers ALSO exist, the
+        # #127 stakes remedy is still live — dropping it entirely would re-mislead.
+        $tierExcluded = @($Exclusions | Where-Object { [string]$_.stage -eq 'static' -and [string]$_.reason -match 'above cap' })
+        if ($tierExcluded.Count -gt 0) {
+            $names = ($tierExcluded | ForEach-Object { [string]$_.name }) -join ', '
+            $msg += " Note: ${names} sat above the tier cap (${TierCap}) — raising task est_cost_tier or re-running with higher --stakes could also widen the pool."
+        }
+        return $msg
     }
     return "capability ${Capability}: no eligible provider at tier <=${TierCap} (stakes ${Stakes} caps tier; cheapest eligible = ${Floor}). Remedies: raise task est_cost_tier, or re-run with --stakes standard|high."
 }

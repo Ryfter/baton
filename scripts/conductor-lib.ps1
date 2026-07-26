@@ -292,23 +292,30 @@ function Format-RunReport {
 
 function Format-LaborSection {
     <# '## Labor' report section for a labor-unavailable halt (#124): plain-language
-       cause + per-provider availability, so an empty labor pool never reads as a
-       verification/implementation defect in report.md. #>
+       cause + known per-provider availability, so an empty labor pool never reads
+       as a verification/implementation defect in report.md. Wording is seam-
+       neutral: the halt may be pre-dispatch (zero candidates, preflight hold) or
+       MID-dispatch (quota-death with no peer, possibly after partial labor) — no
+       'before dispatch' claims. Cell text is pipe/newline-escaped: provider names
+       and failure classifications are data, not markdown. #>
     param([Parameter(Mandatory)]$Result)
+    $esc = { param($v) (([string]$v) -replace '\|', '/') -replace "`r?`n", ' ' }
     $sb = [System.Text.StringBuilder]::new()
     [void]$sb.AppendLine('## Labor')
     [void]$sb.AppendLine('')
-    [void]$sb.AppendLine('No edit-eligible worker was available — the run halted before labor was dispatched. This is an availability problem, not an implementation defect.')
+    [void]$sb.AppendLine('No edit-eligible worker was available to finish this task — the run halted on labor availability. This is an availability problem, not an implementation defect.')
     [void]$sb.AppendLine('')
-    [void]$sb.AppendLine("Why: $($Result.why)")
+    [void]$sb.AppendLine("Why: $(& $esc $Result.why)")
     $excl = @($Result.exclusions)
     if ($excl.Count -gt 0) {
+        [void]$sb.AppendLine('')
+        [void]$sb.AppendLine('Known exclusions (may be partial on post-selection halts):')
         [void]$sb.AppendLine('')
         [void]$sb.AppendLine('| Provider | Stage | Reason | Reset |')
         [void]$sb.AppendLine('|---|---|---|---|')
         foreach ($e in $excl) {
             $reset = if ($e.eta) { [string]$e.eta } elseif ($e.reset_at) { [string]$e.reset_at } else { '' }
-            [void]$sb.AppendLine("| $($e.name) | $($e.stage) | $($e.reason) | $reset |")
+            [void]$sb.AppendLine("| $(& $esc $e.name) | $(& $esc $e.stage) | $(& $esc $e.reason) | $(& $esc $reset) |")
         }
     }
     return $sb.ToString().TrimEnd()
