@@ -433,9 +433,32 @@ function Invoke-TestExecDispatcher {
     $onbPlan = '{"run_id":"x","goal":"g","budget_cap":null,"tasks":[{"id":"t1","desc":"write feature","capability":"code-gen","depends_on":[],"est_cost_tier":"free","reversible":true,"verify_profile":"pytest-full","stakes":"standard","stakes_basis":"ordinary bounded feature"}]}'
     $env:BATON_GO_TEST_PLAN = $onbPlan
     $onbAfter = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $bare -Json 2>&1 | Out-String
-    Check 'ONB9 once committed the onboarding halt is gone (run proceeds past the check)' (
-        ($onbAfter -notmatch 'no \.baton/verification\.json') -and ($onbAfter -notmatch 'not committed'))
+    $onbAfterCode = $LASTEXITCODE
+    # Positive progress, not merely absence of the error: the run must get past the
+    # check far enough to allocate a run dir and create the labor worktree/branch.
+    Check 'ONB9 once committed the run proceeds past the check into a real run' (
+        ($onbAfter -notmatch 'no \.baton/verification\.json') -and ($onbAfter -notmatch 'not committed') -and
+        ($onbAfterCode -ne 2) -and
+        ((& git -C $bare branch --list 'baton/run-*' | Out-String) -match 'baton/run-'))
     $env:BATON_GO_TEST_PLAN = $profiledPlan
+
+    # Scaffolding an ALREADY-written-but-uncommitted config is not a scaffold problem:
+    # the operator must get the commit remedy, not a clobber error (Grok review).
+    $bare3 = Join-Path $tmpRoot 'bare-repo-3'
+    New-Item -ItemType Directory -Force -Path (Join-Path $bare3 'tests') | Out-Null
+    & git -C $bare3 init -q
+    & git -C $bare3 config user.email 'test@test.local'
+    & git -C $bare3 config user.name 'baton-test'
+    Set-Content -LiteralPath (Join-Path $bare3 'tests/test_thing.py') -Value 'def test_x(): assert True' -Encoding utf8NoBOM
+    & git -C $bare3 add -A 2>$null | Out-Null
+    & git -C $bare3 commit -q -m 'init' 2>$null | Out-Null
+    & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $bare3 -ScaffoldVerification 2>&1 | Out-Null
+    $reScaffold = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $bare3 -ScaffoldVerification 2>&1 | Out-String
+    Check 'ONB13 --scaffold-verification on an uncommitted config gives the commit remedy' (
+        ($LASTEXITCODE -eq 2) -and ($reScaffold -match 'not committed') -and
+        ($reScaffold -notmatch 'already exists'))
+    Check 'ONB14 every onboarding halt advertises the --no-verify escape' (
+        ($reScaffold -match '--no-verify') -and ($uncommittedErr -match '--no-verify'))
 
     # --no-verify keeps working on an un-onboarded repo (the escape hatch the
     # message advertises), and the scaffold flag is refused where it means nothing.
@@ -449,8 +472,10 @@ function Invoke-TestExecDispatcher {
     & git -C $bare2 commit -q -m 'init' 2>$null | Out-Null
     $env:BATON_GO_TEST_PLAN = $unprofiledPlan
     $noVerifyOut = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $bare2 -NoVerify -Json 2>&1 | Out-String
-    Check 'ONB10 --no-verify still runs on an un-onboarded repo' (
-        $noVerifyOut -notmatch 'no \.baton/verification\.json')
+    $noVerifyCode = $LASTEXITCODE
+    Check 'ONB10 --no-verify runs a real run on an un-onboarded repo' (
+        ($noVerifyOut -notmatch 'no \.baton/verification\.json') -and ($noVerifyCode -ne 2) -and
+        ((& git -C $bare2 branch --list 'baton/run-*' | Out-String) -match 'baton/run-'))
     & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -Execute -RepoPath $bare2 -NoVerify -ScaffoldVerification 2>$null | Out-Null
     Check 'ONB11 --scaffold-verification with --no-verify is refused' ($LASTEXITCODE -eq 2)
     & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" -Goal 'g' -ScaffoldVerification 2>$null | Out-Null

@@ -344,6 +344,41 @@ Start-Sleep -Seconds 120
     Assert "ONB-H2 undetectable repo gets the schema + preset list, no scaffold promise" (
         ($helpNone -match 'nothing safe to scaffold') -and ($helpNone -match '"schema": 1') -and
         ($helpNone -notmatch 'scaffold-verification'))
+    Assert "ONB-H3 every state advertises the --no-verify escape" (
+        ($helpMissing -match '--no-verify') -and ($helpNone -match '--no-verify') -and
+        ((Format-VerifyOnboardingHelp -Status $st2 -RepoPath $pyRepo) -match '--no-verify'))
+
+    # A relative -RepoPath must not corrupt the suggested suite path (Grok review).
+    $prevCwd = (Get-Location).Path
+    try {
+        Set-Location -LiteralPath $tmpRoot
+        $relSug = Get-VerifySuggestedProfile -RepoPath 'onb-ps'
+        Assert "ONB-D5 relative RepoPath still yields a repo-relative suite path" (
+            @($relSug.args)[0] -eq 'scripts/test-thing.ps1')
+    } finally { Set-Location -LiteralPath $prevCwd }
+
+    # Config committed but BLANK: it IS committed, so calling it 'uncommitted' would
+    # send the operator to run a commit that changes nothing.
+    $blankRepo = New-OnbRepo 'onb-blank'
+    New-Item -ItemType Directory -Force -Path (Join-Path $blankRepo '.baton') | Out-Null
+    Set-Content -LiteralPath (Join-Path $blankRepo '.baton/verification.json') -Value "   `n" -Encoding utf8NoBOM
+    & $onbCommit $blankRepo
+    $stBlank = Get-VerifyOnboardingStatus -RepoPath $blankRepo
+    Assert "ONB-S8 committed-but-blank is its own state, not 'uncommitted'" (
+        $stBlank.state -eq 'empty' -and -not $stBlank.ready)
+    Assert "ONB-S9 blank-config help says fill it in, never 'commit it'" (
+        ((Format-VerifyOnboardingHelp -Status $stBlank -RepoPath $blankRepo) -match 'blank') -and
+        ((Format-VerifyOnboardingHelp -Status $stBlank -RepoPath $blankRepo) -notmatch 'not committed'))
+
+    # Evidence must name the branch that actually fired.
+    $cfgOnlyRepo = New-OnbRepo 'onb-cfg-only'
+    New-Item -ItemType Directory -Force -Path (Join-Path $cfgOnlyRepo 'tests') | Out-Null
+    Set-Content -LiteralPath (Join-Path $cfgOnlyRepo 'pyproject.toml') -Value '[project]' -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $cfgOnlyRepo 'tests/.keep') -Value '' -Encoding utf8NoBOM
+    & $onbCommit $cfgOnlyRepo
+    $cfgSug = Get-VerifySuggestedProfile -RepoPath $cfgOnlyRepo
+    Assert "ONB-D6 config+empty-tests evidence does not claim python test files were found" (
+        $cfgSug.preset -eq 'pytest' -and ($cfgSug.evidence -match 'no python test files seen'))
 } finally {
     if ($null -eq $savedPresetsEnv) { Remove-Item env:BATON_VERIFY_PRESETS -ErrorAction SilentlyContinue }
     else { $env:BATON_VERIFY_PRESETS = $savedPresetsEnv }

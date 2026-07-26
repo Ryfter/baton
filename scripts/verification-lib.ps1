@@ -281,26 +281,34 @@ function Get-VerifySuggestedProfile {
        says so plainly rather than scaffolding a weak oracle behind the operator's
        back. #>
     param([Parameter(Mandatory)][string]$RepoPath)
-    $has = { param($rel) Test-Path -LiteralPath (Join-Path $RepoPath $rel) }
-    # pytest: an explicit config, or a tests/ dir holding python files.
+    # Normalize first: FullName below is absolute, so a relative -RepoPath ('.', a
+    # bare leaf) would slice the wrong prefix off and scaffold a dead path.
+    $root = $RepoPath
+    try { $root = (Resolve-Path -LiteralPath $RepoPath -ErrorAction Stop).Path } catch { }
+    $has = { param($rel) Test-Path -LiteralPath (Join-Path $root $rel) }
+    # pytest: a tests/ dir holding python files, or an explicit config beside tests/.
     $pyCfg = @('pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini') | Where-Object { & $has $_ }
     $pyTests = (& $has 'tests') -and
-        @(Get-ChildItem -Path (Join-Path $RepoPath 'tests') -Filter '*.py' -File -Recurse -Depth 1 -ErrorAction SilentlyContinue).Count -gt 0
+        @(Get-ChildItem -Path (Join-Path $root 'tests') -Filter '*.py' -File -Recurse -Depth 1 -ErrorAction SilentlyContinue).Count -gt 0
     if ($pyTests -or ($pyCfg.Count -gt 0 -and (& $has 'tests'))) {
+        # Evidence must match the branch that actually fired — a config + empty tests/
+        # is a weaker signal than real test files, and saying otherwise is a lie.
+        $pyEvidence = if ($pyTests) { 'found tests/ with python test files' }
+                      else { "found $($pyCfg -join ', ') and a tests/ directory (no python test files seen)" }
         return [ordered]@{
             profile_name = 'pytest-full'
             preset       = 'pytest'
             args         = @('tests')
-            evidence     = 'found tests/ with python test files'
+            evidence     = $pyEvidence
         }
     }
     # pwsh suites: this project's own shape (scripts/test-*.ps1) and the Pester shape.
-    $psSuites = @(Get-ChildItem -Path $RepoPath -Filter 'test-*.ps1' -File -Recurse -Depth 1 -ErrorAction SilentlyContinue)
+    $psSuites = @(Get-ChildItem -Path $root -Filter 'test-*.ps1' -File -Recurse -Depth 1 -ErrorAction SilentlyContinue)
     if ($psSuites.Count -eq 0) {
-        $psSuites = @(Get-ChildItem -Path $RepoPath -Filter '*.Tests.ps1' -File -Recurse -Depth 1 -ErrorAction SilentlyContinue)
+        $psSuites = @(Get-ChildItem -Path $root -Filter '*.Tests.ps1' -File -Recurse -Depth 1 -ErrorAction SilentlyContinue)
     }
     if ($psSuites.Count -gt 0) {
-        $rel = $psSuites[0].FullName.Substring($RepoPath.TrimEnd('\', '/').Length).TrimStart('\', '/').Replace('\', '/')
+        $rel = [System.IO.Path]::GetRelativePath($root, $psSuites[0].FullName).Replace('\', '/')
         return [ordered]@{
             profile_name = 'pwsh-suite'
             preset       = 'pwsh-suite'
@@ -325,7 +333,9 @@ function Get-VerifyOnboardingStatus {
        BASE REVISION (Get-FrozenVerificationContract uses `git show <sha>:...`),
        so a working-tree copy that was never committed does NOT count — that case
        gets its own state, because 'I already wrote that file' is exactly the
-       confusion it causes. States: 'ready' | 'uncommitted' | 'missing'. #>
+       confusion it causes. A blob that IS committed but blank gets its own state
+       too, rather than being reported as uncommitted (it is committed — it is
+       empty). States: 'ready' | 'uncommitted' | 'empty' | 'missing'. #>
     param(
         [Parameter(Mandatory)][string]$RepoPath,
         [string]$BaseRef = 'HEAD'
@@ -333,9 +343,15 @@ function Get-VerifyOnboardingStatus {
     $worktreeCopy = Join-Path $RepoPath '.baton/verification.json'
     $inTree = Test-Path -LiteralPath $worktreeCopy -PathType Leaf
     $committed = $false
+    $blankBlob = $false
     $raw = & git -C $RepoPath show "$($BaseRef):.baton/verification.json" 2>$null
-    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace((@($raw) -join ''))) { $committed = $true }
-    $state = if ($committed) { 'ready' } elseif ($inTree) { 'uncommitted' } else { 'missing' }
+    if ($LASTEXITCODE -eq 0) {
+        if ([string]::IsNullOrWhiteSpace((@($raw) -join ''))) { $blankBlob = $true } else { $committed = $true }
+    }
+    $state = if ($committed) { 'ready' }
+             elseif ($blankBlob) { 'empty' }
+             elseif ($inTree) { 'uncommitted' }
+             else { 'missing' }
     $suggestion = if ($state -eq 'ready') { $null } else { Get-VerifySuggestedProfile -RepoPath $RepoPath }
     return [ordered]@{
         state      = $state
@@ -383,11 +399,20 @@ function Format-VerifyOnboardingHelp {
         [Parameter(Mandatory)][string]$RepoPath
     )
     $lines = [System.Collections.Generic.List[string]]::new()
+    $escape = 'Or run without verification (no oracle, weaker proof): add --no-verify.'
     if ([string]$Status.state -eq 'uncommitted') {
         $lines.Add("go: $RepoPath has .baton/verification.json but it is not committed at $($Status.base_ref).")
         $lines.Add('The verification contract freezes from the base revision, so an uncommitted config cannot be used.')
         $lines.Add('Fix: commit it, then re-run.')
         $lines.Add('    git -C "' + $RepoPath + '" add .baton/verification.json && git -C "' + $RepoPath + '" commit -m "chore: add baton verification config"')
+        $lines.Add($escape)
+        return ($lines -join [Environment]::NewLine)
+    }
+    if ([string]$Status.state -eq 'empty') {
+        $lines.Add("go: $RepoPath has .baton/verification.json committed at $($Status.base_ref), but it is blank.")
+        $lines.Add('An empty config declares no profiles, so no oracle can freeze. Fill it in and commit, then re-run. Minimal shape:')
+        $lines.Add('    { "schema": 1, "profiles": { "<name>": { "preset": "pytest", "args": ["tests"] } } }')
+        $lines.Add($escape)
         return ($lines -join [Environment]::NewLine)
     }
     $lines.Add("go: $RepoPath has no .baton/verification.json — verified labor cannot freeze an oracle, so every plan would be rejected.")
@@ -402,7 +427,7 @@ function Format-VerifyOnboardingHelp {
         $lines.Add('    { "schema": 1, "profiles": { "<name>": { "preset": "pytest", "args": ["tests"] } } }')
         $lines.Add('Presets available: pytest, pwsh-suite, node-test, file-exists-nonempty.')
     }
-    $lines.Add('Or run without verification (no oracle, weaker proof): add --no-verify.')
+    $lines.Add($escape)
     return ($lines -join [Environment]::NewLine)
 }
 

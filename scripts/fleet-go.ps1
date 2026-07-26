@@ -159,11 +159,19 @@ if ($Execute) {
             else { (Get-Location).Path }
     # Onboarding affordance (#118): an un-onboarded repo can never pass verified
     # labor — every plan is rejected because no oracle can freeze. Detect it HERE,
-    # before the worktree exists and before a token is spent, and hand back a path
-    # forward instead of a correct-but-opaque rejection two gates later.
+    # before the worktree exists and before any model is dispatched, and hand back
+    # a path forward instead of a correct-but-opaque rejection two gates later.
+    # (The run dir is already allocated by this point; nothing else is.)
     if ($verifyEnabled) {
         $onboard = Get-VerifyOnboardingStatus -RepoPath $repo
         if (-not $onboard.ready) {
+            # A config that already exists (written but not committed, or committed
+            # blank) is NOT a scaffolding problem — writing it again fixes nothing.
+            # Route those to their own remedy rather than a clobber error.
+            if ($ScaffoldVerification -and ([string]$onboard.state -in @('uncommitted', 'empty'))) {
+                [Console]::Error.WriteLine((Format-VerifyOnboardingHelp -Status $onboard -RepoPath $repo))
+                exit 2
+            }
             if ($ScaffoldVerification) {
                 if (-not $onboard.suggestion) {
                     [Console]::Error.WriteLine((Format-VerifyOnboardingHelp -Status $onboard -RepoPath $repo))
