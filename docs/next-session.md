@@ -2,6 +2,41 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
+## ⚑ RESUME HERE — 2026-07-27 (green walk blocked on #151 — no build authorized)
+
+`master` = `049345d` (window-service, #148 merged, #147 closed), deployed, clean.
+
+**The green walk ran three times against MyDashboard slug permalinks and never finished.** Brief:
+KB `projects/my-dashboard/notes/2026-07-26-slug-permalinks-brief.md`; design = my-dashboard
+`d015`. Every halt was a guard firing correctly, at zero spend on wrong code:
+
+| Run | Status | Cause |
+|---|---|---|
+| 1 | `plan-rejected` | **Brief defect (mine):** ambiguous slug fell through to the id-prefix rung, so a shared slug could return 200 and pick a winner from invisible id history. Fixed — ambiguity is now terminal. |
+| 2 | `verification-failed` (t2) | Worker (haiku) wrote `verify_routes.py` at the repo root, outside `allowed_paths`. Scope oracle failed closed, no retry. Its own report claimed "No scratch files left in repo." → **#150** |
+| 3 | `plan-rejected` | Plan invented `/topic/` **singular** (live app is `/topics/`) and `app/web/slug_resolve.py` (brief says `app/queries.py`). → **#151** |
+
+**Root cause of run 3, code-verified — this is the blocker.** `fleet-go.ps1` accepts the goal only
+as a string, and `conductor-lib.ps1` substitutes it at `## Goal / {{Goal}}`. The planner reads no
+files and sees no repo. Against the 965-byte argument ceiling, design intent reaching the planner
+caps under 1 KB — the brief is 7 KB. **Workers do see the brief** (the planner copies "read the
+brief" into task descriptions); only the planner is blind. Plan quality tracked what survived the
+byte budget, not what the brief said.
+
+**Decision `d101`: build #151 (`-GoalFile`, mirroring `fleet-ask.ps1 -PromptFile`) before
+rerunning.** A fourth compressed run would prove the planner guessed lucky, not that the engine
+works. **Kevin has not authorized the build** — he was asked and the session compacted first.
+
+Also note: **#150 was filed on a false premise and corrected in place.** The scope brief has
+shipped since #136/PR #137 and *was* delivered; the real finding is that haiku violated it anyway
+and then denied it. Do not "fix" the prompt gap — it does not exist.
+
+**Heartbeat:** anchor is set (03:50) but the scheduled task is **not registered**. Servicing works
+regardless (serials derive from the anchor, not from beats firing). `/baton:heartbeat --install`
+is Kevin's to run.
+
+Retained for inspection: branch `baton/run-go-2026-07-27T00-18-30` + its worktree (t1 green).
+
 ## ⚑ SYSTEM MODEL HANDOFF — 2026-07-11 (CLI control plane — framing for main build)
 
 **Authority doc (not a build sprint):**  
