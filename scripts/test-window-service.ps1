@@ -293,6 +293,26 @@ try {
     $cliDoc = $cliOut | ConvertFrom-Json
     Check 'CLI1 --status --json reports project + serial' (
         $LASTEXITCODE -eq 0 -and $null -ne $cliDoc.serial -and $cliDoc.project_dir)
+
+    # --- candidate preamble stripping (from live smoke: a model preamble was glued
+    #     onto the first bullet, so a naive leading-line drop would eat a candidate) ---
+    $glued = "I'll pull the docs so the list is grounded in current project state.- **#123** first item`n- **#115** second item"
+    $stripped = Remove-CandidatePreamble -Text $glued
+    Check 'CP1 glued preamble removed' ($stripped -notmatch 'grounded in current project')
+    Check 'CP2 glued first candidate SURVIVES the strip' ($stripped -match '#123 first item|\*\*#123\*\* first item')
+    Check 'CP3 later candidates preserved' ($stripped -match '#115')
+    Check 'CP4 result starts at the list' ($stripped -match '^\s*-\s')
+
+    $ownLine = "Here is the list:`n- alpha`n- beta"
+    $strippedOwn = Remove-CandidatePreamble -Text $ownLine
+    Check 'CP5 own-line preamble dropped' ($strippedOwn -notmatch 'Here is the list')
+    Check 'CP6 own-line bullets intact' (($strippedOwn -split "`n").Count -eq 2 -and $strippedOwn -match 'alpha')
+
+    $noList = "No bullet list at all, just prose."
+    Check 'CP7 no list => text left alone (never guess it away)' (
+        (Remove-CandidatePreamble -Text $noList) -eq $noList)
+    Check 'CP8 already-clean list unchanged' (
+        (Remove-CandidatePreamble -Text "- a`n- b") -eq "- a`n- b")
 }
 catch {
     Write-Host "FAIL: suite threw — $($_.Exception.Message)"

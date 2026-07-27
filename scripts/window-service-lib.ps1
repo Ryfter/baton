@@ -340,6 +340,36 @@ function Get-ProjectLocalFacts {
     return ($bits -join "`n")
 }
 
+function Remove-CandidatePreamble {
+    <# Models ignore "no preamble" often enough that the briefing must not pay for it:
+       every wasted byte here is re-injected at every session start in every instance.
+       Live smoke produced "...grounded in current project state.- **#123** ...", i.e. the
+       preamble GLUED to the first bullet, so a plain leading-line drop would silently eat
+       a real candidate. Split that case apart first, then drop what precedes the list. #>
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $Text }
+    $bullet = '^\s*([-*+]|\d+[.)])\s+\S'
+    $lines = [System.Collections.ArrayList]@()
+    foreach ($line in @($Text -split "`r?`n")) {
+        $m = if ($line -notmatch $bullet) {
+            [regex]::Match([string]$line, '^(?<pre>.*?[.:])\s*(?<rest>[-*+]\s+\S.*)$')
+        } else { $null }
+        if ($m -and $m.Success) {
+            [void]$lines.Add($m.Groups['pre'].Value)
+            [void]$lines.Add($m.Groups['rest'].Value)
+        } else {
+            [void]$lines.Add([string]$line)
+        }
+    }
+    $first = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ([string]$lines[$i] -match $bullet) { $first = $i; break }
+    }
+    # No list at all -> leave the text alone rather than guess it away.
+    if ($first -lt 0) { return $Text.Trim() }
+    return (($lines.ToArray()[$first..($lines.Count - 1)]) -join "`n").Trim()
+}
+
 function Get-ProjectCandidates {
     <# Ask grok-cli for a short "what's next" list. Prompt goes in a FILE (965-byte
        shell-arg ceiling). Transport injects a fake for hermetic tests. Failure -> $null. #>
@@ -376,6 +406,7 @@ $facts
             # Drop the fleet-ask footer line ("-- provider | ...").
             $lines = @($raw -split "`r?`n" | Where-Object { $_ -notmatch '^--\s' })
             $body = ($lines -join "`n").Trim()
+            $body = Remove-CandidatePreamble -Text $body
             if ([string]::IsNullOrWhiteSpace($body)) { return $null }
             return $body
         } finally {
