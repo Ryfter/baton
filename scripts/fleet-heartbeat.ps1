@@ -102,6 +102,25 @@ try {
                 Write-Output ("heartbeat: cleared expired lockouts — {0}" -f (@($result.cleared_workers) -join ', '))
             }
             Write-Output ("heartbeat: {0} live session(s) stamped" -f $result.liveness.live_sessions)
+            if ($result.probe_refresh) {
+                if ($result.probe_refresh.ok) {
+                    Write-Output ("heartbeat: usage probe refreshed ({0} window(s))" -f $result.probe_refresh.observation_count)
+                } else {
+                    Write-Output ("heartbeat: usage probe refresh soft-failed — {0}" -f $result.probe_refresh.reason)
+                }
+            }
+            if ($null -ne $result.rotations) {
+                $rotN = @($result.rotations | Where-Object { $_.rotated }).Count
+                $rotFail = @($result.rotations | Where-Object {
+                    -not $_.rotated -and $_.reason -and $_.reason -notin @('missing', 'under_cap')
+                }).Count
+                if ($rotN -gt 0) {
+                    Write-Output ("heartbeat: rotated {0} journal(s)" -f $rotN)
+                }
+                if ($rotFail -gt 0) {
+                    Write-Output ("heartbeat: journal rotation soft-failed for {0} file(s)" -f $rotFail)
+                }
+            }
             if ($result.next) {
                 Write-Output ("heartbeat: next beat {0}" -f $result.next.boundary_at.ToString('yyyy-MM-dd HH:mm:ss'))
             }

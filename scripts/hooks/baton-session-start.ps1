@@ -59,6 +59,22 @@ try {
     if (-not $ok) {
         Write-SessionMarkerDiag "Write-SessionMarker failed for session_id=$sid kind=$kind cwd=$cwd"
     }
+
+    # Window-service briefing (#147): SessionStart stdout is injected into context.
+    # Silent when absent, disabled, or on any error — never throw.
+    try {
+        $wsLibCandidates = @(
+            (Join-Path $scriptDir '../window-service-lib.ps1'),
+            (Join-Path $scriptDir '../scripts/window-service-lib.ps1')
+        )
+        $wsLib = $wsLibCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if ($wsLib) {
+            . $wsLib
+            $briefing = Get-ProjectBriefing -ProjectDir $cwd
+            if ($briefing) { Write-Output $briefing }
+        }
+    } catch { }
+
     exit 0
 } catch {
     try { Write-SessionMarkerDiag "hook crashed: $($_.Exception.Message)" } catch { }

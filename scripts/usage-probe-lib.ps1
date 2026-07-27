@@ -244,24 +244,29 @@ function Get-FreshUsageProbeCache {
 
 function Get-CodexUsageProbe {
     <# Return a fresh cached or newly probed snapshot. The optional Transport seam
-       has contract (& transport <clientVersion> <timeoutSeconds>) -> id-2 response. #>
+       has contract (& transport <clientVersion> <timeoutSeconds>) -> id-2 response.
+       -Force skips a still-TTL'd cache row (window-boundary refresh must not keep
+       pre-reset five_hour remaining). #>
     param(
         [Parameter(Mandatory)][string]$Worker,
         [scriptblock]$Transport,
         [string]$CachePath = (Join-Path (Get-BatonHome) 'usage-probe-cache.jsonl'),
         [datetimeoffset]$Now = [datetimeoffset]::UtcNow,
         [int]$TimeoutSeconds = 20,
-        [int]$TtlSeconds = 600
+        [int]$TtlSeconds = 600,
+        [switch]$Force
     )
     if ($TimeoutSeconds -le 0 -or $TtlSeconds -le 0) { return $null }
-    $cached = Get-FreshUsageProbeCache -Worker $Worker -CachePath $CachePath -Now $Now
-    if ($null -ne $cached) {
-        return [ordered]@{
-            raw = $cached.raw
-            observations = @($cached.observations)
-            observed_at = [string]$cached.observed_at
-            ttl = [int]$cached.ttl
-            cached = $true
+    if (-not $Force) {
+        $cached = Get-FreshUsageProbeCache -Worker $Worker -CachePath $CachePath -Now $Now
+        if ($null -ne $cached) {
+            return [ordered]@{
+                raw = $cached.raw
+                observations = @($cached.observations)
+                observed_at = [string]$cached.observed_at
+                ttl = [int]$cached.ttl
+                cached = $true
+            }
         }
     }
 

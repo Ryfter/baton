@@ -99,6 +99,78 @@ try {
         # fail-open: a marker refresh must never break the routing journal
     }
 
+    # Lazy per-project window service (#147): on the first tool call after a window
+    # boundary, claim the (project, serial) mutex and spawn the real work detached.
+    # Sentinel short-circuit BEFORE any lib load — most tool calls must stay free.
+    try {
+        $wsProject = if ($evt.cwd) { [string]$evt.cwd } else { (Get-Location).Path }
+        $wsHome = if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }
+        # Inline key must match Get-ProjectPathKey byte-for-byte (no lib load here).
+        $wsFull = try { [System.IO.Path]::GetFullPath($wsProject) } catch { $wsProject }
+        $wsNorm = $wsFull.TrimEnd('\', '/').ToLowerInvariant()
+        $wsSha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $wsHash = $wsSha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($wsNorm))
+            $wsKey = ([System.BitConverter]::ToString($wsHash) -replace '-', '').ToLowerInvariant().Substring(0, 16)
+        } finally {
+            $wsSha.Dispose()
+        }
+        $wsSentinel = Join-Path $wsHome (Join-Path 'window-service' "$wsKey.sentinel")
+        $wsSkipFull = $false
+        if (Test-Path -LiteralPath $wsSentinel) {
+            try {
+                $wsBoundaryText = (Get-Content -LiteralPath $wsSentinel -Raw -ErrorAction Stop).Trim()
+                if (-not [string]::IsNullOrWhiteSpace($wsBoundaryText)) {
+                    $wsBoundary = [datetimeoffset]::Parse($wsBoundaryText).UtcDateTime
+                    if ([datetime]::UtcNow -lt $wsBoundary) {
+                        $wsSkipFull = $true
+                    }
+                }
+            } catch {
+                # Unreadable/corrupt sentinel => fall through (fail-open toward working).
+            }
+        }
+        if (-not $wsSkipFull) {
+            $wsLibCandidates = @(
+                (Join-Path $PSScriptRoot '../window-service-lib.ps1'),
+                (Join-Path $PSScriptRoot '../scripts/window-service-lib.ps1')
+            )
+            $wsLib = $wsLibCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if ($wsLib) {
+                . $wsLib
+                $wsCfg = Read-WindowServiceConfig
+                if ($wsCfg.enabled) {
+                    $hbState = Read-HeartbeatState
+                    if ($hbState.anchor) {
+                        $wsNow = [datetimeoffset]::Now
+                        $wsAnchor = Resolve-HeartbeatAnchor -Anchor ([string]$hbState.anchor) -Now $wsNow
+                        if ($wsAnchor) {
+                            $wsSerial = Get-WindowSerial -Anchor $wsAnchor -Now $wsNow
+                            if (Test-ProjectServiceDue -ProjectDir $wsProject -Serial $wsSerial) {
+                                if (Request-ProjectServiceClaim -ProjectDir $wsProject -Serial $wsSerial) {
+                                    $wsRunnerCandidates = @(
+                                        (Join-Path $PSScriptRoot '../fleet-window-service.ps1'),
+                                        (Join-Path $PSScriptRoot '../scripts/fleet-window-service.ps1')
+                                    )
+                                    $wsRunner = $wsRunnerCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+                                    if ($wsRunner) {
+                                        Start-Process -FilePath 'pwsh' -ArgumentList @(
+                                            '-NoProfile', '-WindowStyle', 'Hidden',
+                                            '-File', $wsRunner,
+                                            '-Now', '-Project', $wsProject
+                                        ) -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch {
+        # fail-open: window service must never break the routing journal
+    }
+
     $toolName = $evt.tool_name
     $exit     = if ($null -ne $evt.tool_response.exit_code) { $evt.tool_response.exit_code } else { 0 }
     $elapsed  = if ($null -ne $evt.tool_response.duration_ms) { [int]($evt.tool_response.duration_ms / 1000) } else { 0 }

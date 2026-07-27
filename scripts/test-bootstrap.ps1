@@ -39,6 +39,8 @@ Assert "would deploy fleet-ship-report.ps1" ($out -match 'fleet-ship-report\.ps1
 # ~/.claude/scripts), so a missing deploy entry silently breaks the schedule.
 Assert "would deploy heartbeat-lib.ps1" ($out -match 'heartbeat-lib\.ps1')
 Assert "would deploy fleet-heartbeat.ps1" ($out -match 'fleet-heartbeat\.ps1')
+Assert "would deploy window-service-lib.ps1" ($out -match 'window-service-lib\.ps1')
+Assert "would deploy fleet-window-service.ps1" ($out -match 'fleet-window-service\.ps1')
 Assert "would deploy routing-dispatch.ps1" ($out -match 'routing-dispatch\.ps1')
 Assert "would deploy routing-learn.ps1"   ($out -match 'routing-learn\.ps1')
 Assert "would deploy routing-calibrate.ps1" ($out -match 'routing-calibrate\.ps1')

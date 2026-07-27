@@ -210,6 +210,43 @@ try {
         $LASTEXITCODE -eq 0 -and $out6 -match 'schtasks' -and $out6 -match 'ONCE')
     & pwsh -NoProfile -File $cli -Install -PrintSchedule -BatonHome (Join-Path $tmp 'never-anchored') 2>$null | Out-Null
     Check 'CLI7 scheduling without an anchor refuses (exit 2)' ($LASTEXITCODE -eq 2)
+
+    # ---- machine-scoped journal rotation (free half of the beat; once per box, not per project) ----
+    $rotHome = Join-Path $tmp 'rot-home'
+    New-Item -ItemType Directory -Force -Path $rotHome | Out-Null
+    $overCap = Join-Path $rotHome 'usage-journal.jsonl'
+    $overPayload = ('y' * 600KB)
+    Set-Content -LiteralPath $overCap -Value $overPayload -Encoding utf8NoBOM
+    $overBefore = (Get-Item -LiteralPath $overCap).Length
+    Check 'JR0 over-cap journal starts above 512KB' ($overBefore -gt 512KB)
+
+    $underCap = Join-Path $rotHome 'model-routing-log.md'
+    Set-Content -LiteralPath $underCap -Value "# tiny`n" -Encoding utf8NoBOM
+    $missingName = 'routing-journal.jsonl'
+
+    $direct = Invoke-JournalRotation -Path $overCap -MaxBytes (512KB)
+    Check 'JR1 over-cap journal was rotated' ($direct.rotated -eq $true)
+    Check 'JR2 rotation copy preserves content' (
+        (Test-Path -LiteralPath "$overCap.1") -and ((Get-Item -LiteralPath "$overCap.1").Length -eq $overBefore))
+    Check 'JR3 live journal is fresh (empty or tiny) after rotation' (
+        (Get-Item -LiteralPath $overCap).Length -lt 64)
+
+    # Re-seed over-cap for the beat path (direct rotation already emptied it).
+    Set-Content -LiteralPath $overCap -Value $overPayload -Encoding utf8NoBOM
+    $fakeOkRot = { param($argv) (@{ usage = @{ input_tokens = 1; output_tokens = 1 }; total_cost_usd = 0; result = 'ok' } | ConvertTo-Json -Depth 5) }
+    $rotBeat = Invoke-UsageHeartbeat -Transport $fakeOkRot -BatonHome $rotHome `
+        -Now ([datetimeoffset]::Parse('2026-07-26T08:51:00-06:00'))
+    Check 'JR4 beat result includes rotations' ($null -ne $rotBeat.rotations -and @($rotBeat.rotations).Count -eq 3)
+    Check 'JR5 beat rotates over-cap usage-journal' (
+        @($rotBeat.rotations | Where-Object { $_.path -eq $overCap -and $_.rotated }).Count -eq 1)
+    Check 'JR6 beat leaves under-cap model-routing-log alone' (
+        @($rotBeat.rotations | Where-Object { $_.path -eq $underCap -and -not $_.rotated -and $_.reason -eq 'under_cap' }).Count -eq 1)
+    Check 'JR7 missing routing-journal is soft (reason=missing, not throw)' (
+        @($rotBeat.rotations | Where-Object {
+            $_.path -eq (Join-Path $rotHome $missingName) -and -not $_.rotated -and $_.reason -eq 'missing'
+        }).Count -eq 1)
+    Check 'JR8 under-cap file content unchanged after beat' (
+        (Get-Content -LiteralPath $underCap -Raw) -match 'tiny')
 }
 catch {
     Write-Host "FAIL: suite threw — $($_.Exception.Message)"
