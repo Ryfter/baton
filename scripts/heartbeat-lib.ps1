@@ -24,8 +24,11 @@
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/usage-lib.ps1"
 . "$PSScriptRoot/session-markers-lib.ps1"   # Get-ActiveSessions for the liveness half
+. "$PSScriptRoot/usage-probe-lib.ps1"       # Get-CodexUsageProbe for free probe refresh
 
 $script:HeartbeatWindowHours = 5
+# Machine-scoped journals live once under BATON_HOME (not per project); rotate before they bloat.
+$script:JournalRotateMaxBytes = 512KB
 
 function Get-HeartbeatStatePath {
     param([string]$BatonHome = (Get-BatonHome))
@@ -266,14 +269,110 @@ function Write-HeartbeatLiveness {
     return $rec
 }
 
+function Invoke-HeartbeatUsageProbeRefresh {
+    <# Free half of the beat: force-refresh the codex usage-probe cache so the new
+       window's routing decisions see post-reset remaining, not a still-TTL'd snapshot
+       from the prior window. Never throws. #>
+    param(
+        [string]$BatonHome = (Get-BatonHome),
+        [scriptblock]$ProbeTransport,
+        [datetimeoffset]$Now = [datetimeoffset]::UtcNow,
+        [string]$Worker = 'codex'
+    )
+    $cachePath = Join-Path $BatonHome 'usage-probe-cache.jsonl'
+    try {
+        $snapshot = Get-CodexUsageProbe -Worker $Worker -Transport $ProbeTransport `
+            -CachePath $cachePath -Now $Now -TimeoutSeconds 20 -TtlSeconds 600 -Force
+        if ($null -eq $snapshot) {
+            return [ordered]@{ ok = $false; reason = 'probe returned null'; worker = $Worker; cached = $false; observation_count = 0 }
+        }
+        return [ordered]@{
+            ok                 = $true
+            reason             = ''
+            worker             = $Worker
+            cached             = [bool]$snapshot.cached
+            observation_count  = @($snapshot.observations).Count
+            observed_at        = [string]$snapshot.observed_at
+        }
+    } catch {
+        return [ordered]@{ ok = $false; reason = $_.Exception.Message; worker = $Worker; cached = $false; observation_count = 0 }
+    }
+}
+
+function Invoke-JournalRotation {
+    <# Rename live journal to <name>.1 and start a fresh empty file. Keeps at most one
+       rotation (overwrites prior .1). Never deletes live content without a rotation
+       copy existing first. Machine-scoped: journals live once under BATON_HOME. #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [long]$MaxBytes = $script:JournalRotateMaxBytes
+    )
+    $result = [ordered]@{ path = $Path; rotated = $false; reason = '' }
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) {
+            $result.reason = 'missing'
+            return $result
+        }
+        $len = [long](Get-Item -LiteralPath $Path).Length
+        if ($len -le $MaxBytes) {
+            $result.reason = 'under_cap'
+            $result.bytes = $len
+            return $result
+        }
+        $rotatedPath = "$Path.1"
+        if (Test-Path -LiteralPath $rotatedPath) {
+            Remove-Item -LiteralPath $rotatedPath -Force -ErrorAction Stop
+        }
+        # Copy-then-truncate would risk losing the live file if copy fails mid-way;
+        # Move preserves content, then a new empty live file is created.
+        Move-Item -LiteralPath $Path -Destination $rotatedPath -Force -ErrorAction Stop
+        Set-Content -LiteralPath $Path -Value '' -Encoding utf8NoBOM
+        $result.rotated = $true
+        $result.reason = 'rotated'
+        $result.bytes = $len
+        $result.rotated_path = $rotatedPath
+        return $result
+    } catch {
+        $result.reason = $_.Exception.Message
+        return $result
+    }
+}
+
+function Invoke-HeartbeatJournalRotation {
+    <# Free half: rotate all three machine-scoped journals once per beat. Never throws —
+       a failed rotation is recorded so operators can see it without killing the beat. #>
+    param(
+        [string]$BatonHome = (Get-BatonHome),
+        [long]$MaxBytes = $script:JournalRotateMaxBytes
+    )
+    $journalNames = @(
+        'usage-journal.jsonl',
+        'model-routing-log.md',
+        'routing-journal.jsonl'
+    )
+    $rotations = [System.Collections.ArrayList]@()
+    foreach ($name in $journalNames) {
+        $jp = Join-Path $BatonHome $name
+        try {
+            $r = Invoke-JournalRotation -Path $jp -MaxBytes $MaxBytes
+        } catch {
+            $r = [ordered]@{ path = $jp; rotated = $false; reason = $_.Exception.Message }
+        }
+        [void]$rotations.Add($r)
+    }
+    return @($rotations.ToArray())
+}
+
 function Invoke-UsageHeartbeat {
-    <# One beat: anchor (paid) + clear (free) + liveness (free), then advance the state.
-       The free work runs even when the anchor fails — a login problem must not also
-       leave the journal and the dashboard stale. #>
+    <# One beat: anchor (paid) + clear (free) + liveness (free) + probe refresh (free)
+       + journal rotation (free), then advance the state. The free work runs even when
+       the anchor fails — a login problem must not also leave the journal and the
+       dashboard stale. #>
     param(
         [switch]$SkipAnchor,
         [string]$Model = 'haiku',
         [scriptblock]$Transport,
+        [scriptblock]$ProbeTransport,
         [string]$BatonHome = (Get-BatonHome),
         [datetimeoffset]$Now = [datetimeoffset]::Now
     )
@@ -286,6 +385,19 @@ function Invoke-UsageHeartbeat {
     }
     $cleared = @(Clear-ExpiredWorkerLockouts -UsagePath (Join-Path $BatonHome 'usage-journal.jsonl') -Now $Now.UtcDateTime)
     $liveness = Write-HeartbeatLiveness -BatonHome $BatonHome -Now $Now
+
+    # Anchor Transport and ProbeTransport have different contracts; a hermetic suite
+    # that injects only the anchor transport must not shell out to a real codex.
+    $effectiveProbeTransport = $ProbeTransport
+    if (-not $PSBoundParameters.ContainsKey('ProbeTransport') -and $Transport) {
+        $effectiveProbeTransport = { param($clientVersion, $timeoutSeconds) $null }
+    }
+    $probeRefresh = Invoke-HeartbeatUsageProbeRefresh -BatonHome $BatonHome `
+        -ProbeTransport $effectiveProbeTransport -Now $Now
+
+    # Journals are machine-scoped (one set under BATON_HOME). Rotate once per beat here —
+    # never from per-project hygiene, which races Move-Item when two projects service.
+    $rotations = @(Invoke-HeartbeatJournalRotation -BatonHome $BatonHome)
 
     # Re-anchor ONLY when this beat actually started a new window — i.e. it fired at a
     # boundary. A manual mid-window beat consumes quota but does NOT move the real
@@ -322,6 +434,8 @@ function Invoke-UsageHeartbeat {
         anchor          = $anchorResult
         cleared_workers = $cleared
         liveness        = $liveness
+        probe_refresh   = $probeRefresh
+        rotations       = $rotations
         next            = $next
         state_path      = $statePath
     }
