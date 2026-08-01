@@ -1,6 +1,6 @@
 ---
 description: Natural-language front door — describe an outcome and the Conductor plans it into a task DAG, then runs it under budget/destructive guards. Execute mode defaults Plan Gate, named-panel acceptance, and verified labor on and fails loud when required evidence is degraded. Run artifacts land under BATON_HOME/runs/<run-id>/.
-argument-hint: "<what you want done>" [--execute] [--repo <path>] [--budget <n>] [--max-tier local|free|paid] [--stakes low|standard|high] [--no-plan-gate] [--no-gate] [--no-verify] [--scaffold-verification] [--plan-reviewers a,b] [--plan-revise:$false] [--gate-artifact <text> | --gate-diff <range>]
+argument-hint: "<what you want done>" [--goal-file <path>] [--execute] [--repo <path>] [--budget <n>] [--max-tier local|free|paid] [--stakes low|standard|high] [--no-plan-gate] [--no-gate] [--no-verify] [--scaffold-verification] [--plan-reviewers a,b] [--plan-revise:$false] [--gate-artifact <text> | --gate-diff <range>]
 ---
 
 # /baton:go
@@ -23,6 +23,8 @@ completion. Stay thin — coordinate, narrate, and let the engine and the fleet 
    #   -PlanGate -PlanGateFailLoud
    #   -AcceptanceGate -AcceptancePanel -AcceptanceFailLoud
    #   verification with a required-profile preflight for edit tasks
+   # Map --goal-file / --brief <path> to -GoalFile (mutually exclusive with inline goal;
+   # inline is capped at ~965 bytes — use a file for longer briefs).
    # Map --stakes low|standard|high to -Stakes only when supplied.
    # Map --no-plan-gate / --no-gate / --no-verify to -NoPlanGate / -NoGate / -NoVerify.
    # Map --scaffold-verification to -ScaffoldVerification (execute-only onboarding; see step 4a).
