@@ -2,7 +2,54 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
-## ⚑ RESUME HERE — 2026-07-27 (green walk blocked on #151 — no build authorized)
+## ⚑ RESUME HERE — 2026-08-01 (#151 built; two PRs open, nothing merged)
+
+`master` unchanged and clean. **Two open PRs, neither merged — merging needs Kevin's word.**
+
+| PR | What | State |
+|---|---|---|
+| **#153** | `-GoalFile` for `fleet-go.ps1` — **closes #151** | built, tested, **not deployed** |
+| **#154** | Local resource governor **spec** (design only) | not authorized to build |
+
+**#151 is fixed and proven.** `-GoalFile <path>` mirrors `fleet-ask.ps1 -PromptFile`; mutually
+exclusive with `-Goal`/`-Text`; missing/empty files exit 2. Proof is stronger than the test
+suite: a 4,031-byte goal reaches `Build-PlannerPrompt` intact — end-of-file tail marker present,
+`{{Goal}}` fully substituted — so delivery to the *planner* is demonstrated, not just echo to
+stdout. 9 new checks in `test-fleet-go-goalfile.ps1`; retarget, execute, and conductor-lib suites
+still pass. **The live `~/.claude/scripts` copy is deliberately untouched** — deploy on merge.
+
+**The green walk is now unblocked** but has not been re-run. Next concrete step: merge #153,
+deploy, then re-run the MyDashboard slug-permalink walk with the full 7 KB brief via `-GoalFile`
+instead of a truncated goal string. That is the outstanding arc proof.
+
+**New requirement (Kevin, 2026-08-01) — local resource governor.** Concurrent runs must not
+overtax local hardware; he has already had 4+ local server instances cook the box. Verified:
+Baton has **no cross-process resource control at all** (saturation-lib is API quota, not
+hardware), so the one-server-per-box rule is convention only. Spec in PR #154: heartbeat leases
++ named mutex, contention on load profile per `(host, stack)`, weights as queue priority with
+no preemption, visible re-route on denial, declared capacity in v1, **fails closed for local**.
+This is a hard prerequisite for the concurrent-run supervisor.
+
+**Strategic review (2026-08-01).** grok and codex independently returned **NARROW**: keep the
+proof stack (plan gate, base-frozen contracts, scope oracle, provider-neutral routing,
+human-only merge) — those are rare as a package; do **not** build the cockpit, multiplexer, or
+resident shell; build only minimum supervisor plumbing. Both also disagreed with sequencing the
+supervisor next: fix finish-rate first. Caveat: N=2, and product claims are unverified model
+recall. Raw reviews are in the session scratchpad, summarized in memory
+(`project_baton_narrow_verdict`).
+
+**Also filed: #152** — fleet dispatch inherits the caller's cwd, so a provider that requires a
+trusted git dir fails and the fan-out still reports success. This silently reduced a
+three-model council to one. A correction comment withdraws the gemini row from that issue: its
+failure was tool-fit (Antigravity is an agentic IDE, not a long-form completion endpoint), not
+cwd and not size — 1/2/4/8 KB prompts all succeed.
+
+**Architecture decision d102** (recorded): the run supervisor is the durable core; the agentic
+coding CLI is a swappable shell (Claude default, must accept Cursor/Codex/Grok Build).
+
+---
+
+## Prior entry — 2026-07-27 (green walk blocked on #151 — no build authorized)
 
 `master` = `049345d` (window-service, #148 merged, #147 closed), deployed, clean.
 
