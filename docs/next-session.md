@@ -2,7 +2,46 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
-## ⚑ RESUME HERE — 2026-08-01 (#151 built; two PRs open, nothing merged)
+## ⚑ RESUME HERE — 2026-08-02 (#151 SHIPPED; walk reached t2; halted on quota, not on code)
+
+`#151` merged (`962c089`) and **deployed** — repo and `~/.claude/scripts` byte-identical, live
+smoke `exit=2` on both guard paths. `-GoalFile` works.
+
+**The green walk got further than ever.** Run 5 (`go-2026-08-01T19-30-33`) with the full 10 KB
+brief: **passed the Plan Gate for the first time**, completed `t1`
+(`app/queries.py` + `tests/test_queries.py`), then halted at `t2`.
+
+**It did not halt on engineering.** `t2`'s worker hit a Claude quota limit — its entire
+`output.md` is `You've hit your session limit · resets 11:20pm (America/Denver)`. The engine
+graded that empty diff as `no-change`, burned its one rework cycle re-dispatching a worker that
+could not run, and halted `verification-failed`. Filed as **#156**.
+
+| Run | How far | Cause |
+|---|---|---|
+| 3 | plan-rejected | planner invented paths — the 965-byte ceiling (**fixed, #151**) |
+| 4 | plan-rejected, 0 spend | **brief self-contradiction (mine):** told T1 to run the rule-2 slug-*column* ladder on `storylines`, which has no slug column. 3 reviewers caught it independently. Also a hollow T5 and an unpinned fall-through fixture. All three fixed in the brief. |
+| 5 | **plan passed, t1 green, t2 halted** | Claude worker quota — **not** an engine defect |
+
+**Next step is just to re-run** once quota resets (a one-shot continuation was scheduled for
+07:11 on 2026-08-02, session-only). Strongly consider swapping Claude worker rows for grok first
+so the walk does not die the same way — Kevin's standing preference is grok for capacity.
+
+**The lesson from run 4 is the durable one.** Before #151 the planner could not see the brief, so
+it invented things and *masked* brief defects. Now it implements the brief precisely, so author
+errors propagate straight into the plan. The quality bottleneck moved from the channel to the
+brief author. The Plan Gate has now caught a Claude-authored brief defect twice (runs 1 and 4).
+
+**Open PRs — nothing merged:** **#154** governor spec (revised: portable `CreateNew` file claim
+replaces the Windows named mutex, and closes the read-modify-write race a bare primitive swap
+would have left open) · **#155** decouple-from-Claude plan (Phase 1 = standalone `baton <verb>`
+CLI dispatcher).
+
+**Open issues:** #156 (quota misgrade), #152 (dispatch cwd), #150, #149, #123, #117, #115, #97,
+#96, #95, #91.
+
+---
+
+## Prior entry — 2026-08-01 (#151 built; two PRs open, nothing merged)
 
 `master` unchanged and clean. **Two open PRs, neither merged — merging needs Kevin's word.**
 
