@@ -321,7 +321,7 @@ Gauntlet still never routes. Baton still never embeds Gauntlet as a library — 
 
 ### 4.1 Why today's import is not enough
 
-`Import-GauntletScorecard` → `routing-ratings.jsonl` feeds **one quality per capability × candidate**. That is correct for "is phi-4 good at extract-json?" It is **wrong** for jagged edges: Haiku can be fine at `code-gen` mean and still lethal on `scope-semantic`.
+`Import-GauntletScorecard` → `routing-ratings.jsonl` feeds **one quality per capability × candidate**. That is correct for "is model-small good at extract-json?" It is **wrong** for jagged edges: Haiku can be fine at `code-gen` mean and still lethal on `scope-semantic`.
 
 Gauntlet already emits `quality_by_dimension` on cells. The flywheel requires the consumer to **keep the dimensions**.
 
