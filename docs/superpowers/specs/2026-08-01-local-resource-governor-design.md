@@ -6,10 +6,10 @@
 > `$BATON_HOME`, never in this repository.
 
 **Status:** design only — not authorized to build  
-**Date:** 2026-08-01  
+**Date:** 2026-08-01 (revised same day: portable file-claim serialization)  
 **Audience:** any agent or human implementing concurrent-run local admission control  
-**Related:** d043 (one model-serving process per box), Usage Governor (API quota, not hardware), `Select-Capability` routing chokepoint, infra inventory (`projects/baton/infra.md`)  
-**Problem class:** cross-process **hardware** admission for local model capacity when multiple orchestrator runs share one Windows workstation
+**Related:** d043 (one model-serving process per box), Usage Governor (API quota, not hardware), `Select-Capability` routing chokepoint, infra inventory (`projects/baton/infra.md`), `Request-ProjectServiceClaim` in `scripts/window-service-lib.ps1` (proven portable atomic claim)  
+**Problem class:** cross-process **hardware** admission for local model capacity when multiple orchestrator runs share one box (Windows, Linux, or macOS)
 
 ---
 
@@ -25,95 +25,221 @@ The existing **Usage Governor** models **API quota / worker availability**. It d
 
 **Hard constraint (d043, must be enforced at runtime):** exactly one model-serving process per box. Multiple *provider rows* may point at that one server (e.g. `lm-studio` + `lm-studio-small` on `localhost:1234`); two stacks (Ollama + LM Studio) must never both be live candidates on the same GPU host.
 
+**Portability constraint:** Baton must run on Windows, Linux, and macOS. The governor's serialization primitive and process-liveness checks must not bake in a Windows-only OS facility (no named mutexes, no `Global\` objects, no path shapes that only work on one OS). Implementation language is PowerShell 7, which already runs on all three.
+
 ---
 
 ## Assumptions (flagged)
 
 | # | Assumption | If wrong |
 |---|---|---|
-| A1 | One primary GPU box for concurrent runs is gpu-host-a (Windows, ~32 GB VRAM, LM Studio primary). gpu-host-b is a separate remote pool (own host key). | Scope becomes multi-host leases earlier; v1 still works per-host. |
+| A1 | One primary GPU box for concurrent runs is `gpu-host-a` (~32 GB VRAM, LM Studio primary). OS may be Windows, Linux, or macOS. `gpu-host-b` is a separate remote pool (own host key). | Scope becomes multi-host leases earlier; v1 still works per-host. |
 | A2 | Concurrent "runs" are separate OS processes (e.g. multiple `fleet-go` / conductor invocations), not only in-process fan-out. | In-process-only concurrency would still benefit from the same API, but the lease store could be simpler; design still holds. |
 | A3 | Local dispatch always funnels through `Select-Capability` → invoke (or can be made to). Direct `/baton:models` probes and manual curl are out of band. | Any path that bypasses the chokepoint can still stampede; doctor should warn. |
 | A4 | Operator is a single human; project weights are coarse and infrequent, not a multi-tenant fair-share problem. | Weighted fair queueing can wait; v1 priority is enough. |
 | A5 | Crash / kill of a run process is common (Ctrl+C, agent crash, reboot). Leases must not stick until manual clear. | Heartbeat TTL is non-negotiable. |
 | A6 | Declared load profiles (pinned model + approximate VRAM) are good enough for v1; live NVML sensing is optional later. | If declared footprints lie, operator corrects the registry — same honesty model as budgets. |
+| A7 | `$BATON_HOME` lives on a **local** filesystem of the box that owns the GPU (or the box running the governor for that host key). CreateNew atomicity is required only for local disks — not for NFS/SMB multi-writer mounts. | Cross-machine shared stores need a different primitive; out of v1. |
 
 ---
 
 ## 1. Core mechanism — admission primitive
 
-### Chosen primitive: **heartbeat lease file + atomic claim**, not a long-lived supervisor daemon
+### Chosen primitive: **heartbeat lease files + short-lived CreateNew admission lock**, not a long-lived supervisor daemon
 
-**What:** A small set of JSON lease records under box-private state (`$BATON_HOME/local-resource/`), protected by a short critical section implemented with a **Windows named mutex** (or equivalent exclusive create of a lock file with PID). The mutex is only held for milliseconds during claim/renew/release — it is **not** the lease itself.
+**What:** A small set of JSON lease records under box-private state (`$BATON_HOME/local-resource/`), protected by a short critical section implemented with the **same atomic file-create pattern** already shipped in `Request-ProjectServiceClaim` (`scripts/window-service-lib.ps1`): exclusive open with `[System.IO.FileMode]::CreateNew` — "CreateNew, not Test-Path-then-write." The admission lock is only held for milliseconds during claim/renew/release — it is **not** the lease itself.
+
+**Why reuse that pattern rather than invent another:**
+
+- Proven in production for window-service claims: exactly one winner per key; losers get a failed open, not a racy "exists then write."
+- Portable: .NET `File.Open(..., CreateNew, ...)` works on Windows, Linux, and macOS local filesystems.
+- Inspectable: a stuck lock is a file the operator (or doctor) can see, with PID + expiry in the payload — not an opaque kernel object.
+- No new dependency on named mutexes, privilege rights (`SeCreateGlobalPrivilege`), or OS-specific abandoned-object semantics.
 
 **Why not the alternatives:**
 
 | Alternative | Why rejected for v1 |
 |---|---|
 | Always-on supervisor process (daemon owns the GPU) | New always-on service to install/monitor; conflicts with "minimum supervisor"; another process that can die and leave ambiguity. |
-| Named mutex *as* the lease (hold for whole inference) | A crashed holder can leave the mutex abandoned; recovery semantics are OS-specific and hard to inspect; no room for "which model / which run" metadata. |
+| Named mutex *as* the lease (hold for whole inference) | Windows-only; abandoned recovery is OS-specific; hard to inspect; no payload. |
+| Named mutex *only* as the critical-section guard | Same portability problem — would bake Windows into the newest subsystem. |
+| Pure lease file without a critical section | CreateNew on one lease path does **not** make a multi-file capacity check atomic (see race below). |
 | Pure file lock without heartbeats | Stale lock after kill → permanent deadlock until human deletes the file. |
 | Kernel semaphore only | No payload (model id, run id, weight); cannot reclaim by TTL; poor observability. |
 
-**Hybrid that works on Windows across independent processes:**
+**Hybrid that works across independent processes on any OS:**
 
-1. **Named mutex** `Global\BatonLocalResource` (or per-host `Global\BatonLocalResource-gpu-host-a`) — serializes *mutations* of the lease store only.
-2. **Lease store** — one directory of claim files (or one `leases.json` rewritten under the mutex). Directory-of-files is preferred: a crash mid-write of a single blob is less likely to corrupt all state if each claim is its own file written via temp+rename.
-3. **Heartbeat TTL** — every live claim must be renewed periodically by the holding process. Expired claims are free to steal.
+1. **Admission lock (critical section)** — one short-lived lock file per resource key, won by CreateNew. Serializes *mutations* of the claim set only.
+2. **Lease store** — directory of per-claim files under that key. Each claim is its own file written via temp+rename after the capacity decision (crash mid-write of one claim does not corrupt others).
+3. **Heartbeat TTL** — every live claim must be renewed periodically by the holding process. Expired claims (or dead holder PIDs) are free to reclaim.
 
-This matches patterns Baton already trusts: box-private state under `$BATON_HOME`, append/journal for history, fold/derive for current truth — but leases need *mutable current ownership*, so the live table is separate from an optional audit journal.
+This matches patterns Baton already trusts: box-private state under `$BATON_HOME`, CreateNew atomic claims (`window-service-lib`), append/journal for history — but leases need *mutable current ownership*, so the live table is separate from an optional audit journal.
+
+### The race the lock closes
+
+Admission is a **read-modify-write** over a *set* of claim files, not a single exclusive create:
+
+```
+read live claims → decide whether new profile fits capacity → write new claim
+```
+
+**Race without serialization** (two runs, same instant, empty store, incompatible broad profiles A and B):
+
+| Time | Process 1 | Process 2 |
+|---|---|---|
+| t0 | reads claims → ∅ free | reads claims → ∅ free |
+| t1 | capacity OK for A | capacity OK for B |
+| t2 | writes claim A | writes claim B |
+| t3 | **both live → oversubscribed / dual broad load** | same |
+
+CreateNew on *each* claim file alone only ensures unique `claim_id` paths. It does **not** make the capacity decision atomic across the set.
+
+**How v1 closes it:** every read-modify-write of the claim set runs under an exclusive **admission lock file** for that `(host, stack)` resource key. Only one process holds the lock; the capacity check and the claim write both complete (or both abort) before the lock is released. The second process either waits for the lock or, after winning it later, re-reads the set and correctly denies.
+
+**Not chosen for v1 (still valid alternatives):**
+
+| Scheme | Why not v1 |
+|---|---|
+| Single atomic claim-set blob (`claims.json` rewritten via temp+rename) | Still needs a serialize-or-CAS step to avoid lost updates; one corrupt rewrite loses all claims; harder partial-failure story. |
+| Generation counter CAS | Needs a portable atomic compare-and-swap of file contents; more code, same semantics as a short lock, less inspectable mid-transaction. |
+
+A short CreateNew lock + multi-file claims is the smallest reuse of the shipped pattern that keeps claim files inspectable and the RMW race closed.
 
 ### Lease lifecycle
 
 ```
-  [want local] → Acquire(mutex) → recompute live set (drop expired) →
-      if compatible slot free → write claim file → Release(mutex) → RENEW loop → Release on done
-      else → Release(mutex) → DENIED (see §4)
+  [want local] → TryAcquireAdmissionLock (CreateNew) → recompute live set (drop expired/dead) →
+      if compatible slot free → write claim file → ReleaseAdmissionLock → RENEW loop → Release on done
+      else → ReleaseAdmissionLock → DENIED (see §4)
 ```
 
-#### Acquire
+#### Admission lock (critical section)
 
-1. Enter named mutex (timeout e.g. 2s; if cannot enter → treat as governor unavailable, §6).
-2. Load all claim files; discard any with `expires_at < now` (reclaim).
+**Path (illustrative):** `$BATON_HOME/local-resource/locks/<host>__<stack>.lock`  
+Use `Join-Path` only (no hard-coded `\` or `/`). Host/stack segments must be filesystem-safe (sanitize the same way window-service project keys are sanitized if needed).
+
+**Win the lock** (same shape as `Request-ProjectServiceClaim`):
+
+```powershell
+# Conceptual — implement in local-resource-lib.ps1
+$stream = [System.IO.File]::Open(
+    $lockPath,
+    [System.IO.FileMode]::CreateNew,
+    [System.IO.FileAccess]::Write,
+    [System.IO.FileShare]::None
+)
+# write JSON: holder_pid, holder_started_at, acquired_at, expires_at (short TTL)
+```
+
+**Payload of the lock file** (not the lease):
+
+```json
+{
+  "holder_pid": 18432,
+  "holder_started_at": "2026-08-01T11:59:50Z",
+  "acquired_at": "2026-08-01T12:00:00Z",
+  "expires_at": "2026-08-01T12:00:05Z",
+  "ttl_sec": 5,
+  "purpose": "admit"
+}
+```
+
+**Lock TTL** is short (default **5s**) — enough for read claims + write one claim + release; not a substitute for the lease TTL.
+
+**If CreateNew fails** (another holder exists):
+
+1. Read the existing lock if possible.
+2. If lock is **stale** (see reclaim rules below) → delete it and retry CreateNew once.
+3. Else → brief backoff retry (e.g. 20–50 ms, total budget **2s**).
+4. If still not acquired within budget → treat as **governor unavailable**, fail closed for local (§6). Do **not** proceed without the lock.
+
+**Release the lock:** dispose the stream if still open; delete the lock file. Always best-effort in `finally`. Prefer delete-after-write-complete so a crash mid-critical-section leaves a reclaimable stale lock rather than a silent free path.
+
+#### Acquire (under admission lock)
+
+1. Enter admission lock (above).
+2. Load all claim files for the resource key; discard any expired or dead-holder claims (reclaim = delete file).
 3. Apply admission rules against remaining live claims + request (§2).
-4. On grant: write claim file atomically (`claim-<id>.json.tmp` → rename).
-5. Leave mutex.
+4. On grant: write claim file atomically (`claim-<id>.json.tmp` → rename into `claims/`).
+5. Leave admission lock.
 6. Return `{ granted: true, claim_id, expires_at, resource_key, load_profile }`.
 
 #### Renew
 
-- Holding process renews every `ttl/3` (e.g. TTL 30s → renew every 10s).
-- Renew path: mutex → if claim still owned by this `holder_pid` + `claim_id` → extend `expires_at` → leave mutex.
+- Holding process renews every `ttl/3` (e.g. lease TTL 60s → renew every 20s).
+- Renew path: admission lock → if claim still owned by this `holder_pid` + `claim_id` → extend `expires_at` → leave lock.
 - If claim missing or stolen after expiry → renew fails → holder must stop using local and re-acquire or re-route.
 
 #### Release (normal)
 
-- Mutex → delete claim file if `claim_id` + `holder_pid` match → leave mutex.
-- Always best-effort on process exit (finally block / `Register-EngineEvent` PowerShell exit).
+- Admission lock → delete claim file if `claim_id` + `holder_pid` match → leave lock.
+- Always best-effort on process exit (finally block / PowerShell `Register-EngineEvent` PowerShell.Exiting where available).
+
+#### Two runs attempting admission in the same instant
+
+1. Both call CreateNew on the same lock path.
+2. **Exactly one** succeeds; the other gets an exclusive-create failure (IOException / equivalent).
+3. Winner: reclaims stale claims, evaluates capacity, writes its claim (or denies itself if capacity full), deletes lock.
+4. Loser: retries; when it wins, it **re-reads** the claim set. If the winner took the last compatible slot / exclusive stack / broad profile, loser is correctly **denied** (or queues per §4).
+5. Weight does **not** reorder a pure lock race in v1 (first successful CreateNew wins the critical section). Weight matters for optional wait-queue ordering later and for display; simultaneous incompatible acquirers are "whoever entered the critical section first gets the capacity check first" — good enough for one operator.
 
 #### Reclaim after abnormal exit
 
 | Failure | Recovery |
 |---|---|
-| Holder killed (Task Manager, crash) | Heartbeats stop; after `expires_at`, next acquire reclaims. **No human step.** |
-| Holder hung but alive (deadlock inside model call) | Same: TTL expiry. Optional later: OS check that `holder_pid` still exists — if PID gone, reclaim immediately even before TTL. **v1 should do both:** expire on TTL **or** dead PID. |
-| Machine reboot | All claims invalid (PID check fails); cold start is empty store. |
+| Holder killed (task manager / `kill` / crash) | Heartbeats stop; after lease `expires_at`, next acquire reclaims. **No human step.** Optional immediate reclaim if PID dead (below). |
+| Holder hung but alive (deadlock inside model call) | Same: lease TTL expiry. |
+| Machine reboot | All claims and locks invalid (PID check fails or create times mismatch); cold start is empty store. |
 | Partial write of claim file | Reader skips unreadable/malformed files (same skip-malformed discipline as JSONL journals). |
-| Mutex abandoned (holder died mid-critical-section) | Windows abandons named mutex; next waiter gets it with abandoned flag — treat as success and continue. Do not panic. |
+| **Stale admission lock** (holder died mid-transaction) | Next waiter sees CreateNew fail, reads lock payload: if `expires_at < now` **or** holder PID dead / start-time mismatch → **delete lock and retry CreateNew**. No human file delete. Replaces Windows "abandoned mutex" handling. |
+| Stale lease claim (same checks) | Same TTL + PID/start-time rules on claim files. |
 
-**PID liveness check (Windows):** `Get-Process -Id $holder_pid -ErrorAction SilentlyContinue`. False positive risk: PID reuse. Mitigate by storing `holder_started_at` (process create time) alongside PID; reclaim if create time mismatches. Cheap and reliable enough for v1.
+### Process liveness (portable)
+
+**Goal:** detect "holder is gone" so reclaim does not always wait a full lease TTL, and so PID reuse does not steal a live holder's claim.
+
+**Store on every claim and every admission lock:**
+
+- `holder_pid` — integer OS process id  
+- `holder_started_at` — process start time as UTC ISO-8601 when obtainable  
+
+**Read liveness via PowerShell 7** (all three platforms):
+
+```powershell
+$p = Get-Process -Id $holder_pid -ErrorAction SilentlyContinue
+# alive if $p is non-null AND start-time matches (when both sides have a start time)
+```
+
+**Start-time source and platform notes:**
+
+| Platform | How start time is read | Caveats |
+|---|---|---|
+| **Windows** | `$p.StartTime` (via .NET `Process.StartTime`) | Convert to UTC before compare. Generally reliable for same-user processes. |
+| **Linux** | same `$p.StartTime` (.NET reads `/proc/<pid>`) | May throw or be unavailable under restricted `/proc` visibility; treat as "start time unknown." |
+| **macOS** | same `$p.StartTime` | Same "unknown" fallback if the API fails. |
+
+**Compare rules:**
+
+1. If process id does not exist → **dead** → reclaim immediately.  
+2. If process exists and both stored and live start times are available and **differ** → PID was reused → **dead for our purpose** → reclaim.  
+3. If process exists and start times match → **alive**.  
+4. If process exists but start time is **unavailable** on either side → **do not reclaim early**; rely on **lease/lock TTL only**. Fail closed on early steal, fail open only on time. Document this in doctor: "PID start-time unavailable; TTL-only reclaim active."
+
+**Never** require a human to delete files under `$BATON_HOME/local-resource/` for recovery after a crash.
 
 ### Where state lives
 
 ```
 $BATON_HOME/local-resource/
-  config.json          # optional overrides (TTL, fail policy); else defaults in code
+  config.json              # optional overrides (TTL, fail policy); else defaults in code
+  locks/
+    <host>__<stack>.lock   # short-lived admission critical section (CreateNew)
   claims/
-    <claim_id>.json    # live leases only
-  journal.jsonl        # optional v1: append grant/deny/release/expire for doctor
+    <claim_id>.json        # live leases only
+  journal.jsonl            # optional v1: append grant/deny/release/expire for doctor
 ```
 
-Box-private only — never the knowledge repo (same rule as usage-journal).
+All paths via `Join-Path` / .NET path APIs. Box-private only — never the knowledge repo (same rule as usage-journal).
 
 ---
 
@@ -130,7 +256,7 @@ Not "per provider row," not "per GPU process count alone," not fine-grained VRAM
 | **Resource host** | A physical (or remote) machine that owns a GPU pool. Key: `gpu-host-a`, `gpu-host-b`. Derived from fleet row (`host:` field or inferred from `base_url` / localhost). |
 | **Serving stack** | One process family on that host: `lm-studio` *or* `ollama`, never both live as candidates (d043). |
 | **Load profile** | A pinned model + declared VRAM budget + concurrency class. Example: `model-large@17g` vs `model-small@11g`. Multiple fleet rows may share one profile if they use the same loaded weights. |
-| **Resource key** | `(host, stack)` — e.g. `gpu-host-a/lm-studio`. One stack per host is the d043 invariant. |
+| **Resource key** | `(host, stack)` — e.g. `gpu-host-a/lm-studio`. One stack per host is the d043 invariant. Admission lock path is one-to-one with this key. |
 
 ### Why load profile (not the other options)
 
@@ -152,7 +278,7 @@ On host `H` with declared capacity `vram_gb` (from config / infra inventory, def
    - If that would require **evicting** an existing different broad profile → **deny** for v1 (no forced unload). Alternating big models is the pathological case; denying the second model protects throughput.
 3. **Default posture when unsure:** deny local, do not guess.
 
-Concrete gpu-host-a example (from infra.md):
+Concrete capacity example (illustrative placeholders only):
 
 | Profiles live | OK? |
 |---|---|
@@ -179,7 +305,7 @@ This directly stops: two concurrent runs both firing local dispatches that would
 
 | Design | Use in v1? |
 |---|---|
-| Priority when granting the next free slot | **yes** |
+| Priority when granting the next free slot | **yes** (when a wait queue is enabled) |
 | Weighted fair share of GPU-seconds over a window | no (later) |
 | Concurrent slot quotas proportional to weight | no (later; needs multi-slot host) |
 | Preempt / cancel in-flight local inference | **no** |
@@ -197,7 +323,7 @@ This directly stops: two concurrent runs both firing local dispatches that would
 ### What weight does instead
 
 1. **Wait queue order:** if acquire would deny and the caller chooses to wait (§4), waiters are ordered by weight desc, then enqueue time asc (stable).
-2. **Admission preference among simultaneous claims:** if two processes call acquire in the same second for incompatible profiles, higher weight wins the mutex race's grant; lower gets deny/queue. (No perfect fairness under mutex races — good enough for one human.)
+2. **Admission preference among simultaneous claims:** if two processes call acquire in the same second for incompatible profiles, **whoever wins the CreateNew admission lock first** runs the capacity check first; the other re-reads and typically denies. Weight does not reorder that race in v1 (no perfect fairness under lock races — good enough for one human). Weight still rides on the claim for status/doctor.
 3. **Tie-break display:** status/doctor shows weight so the operator sees who is preferred.
 
 ### Weight source
@@ -285,18 +411,18 @@ When local is the *preferred* economy choice but the LRG denies:
 | Declared VRAM per load profile | **yes** | refine numbers |
 | Declared host VRAM | **yes** | — |
 | Live claim count / profiles | **yes** (from lease store) | — |
-| GPU util % / temp (NVML) | no | optional advisory |
+| GPU util % / temp (vendor tools) | no | optional advisory |
 | Process list of servers | doctor-only check | enforce |
 | Power/thermal throttling | no | optional |
 
-### Why not live sensors first (Windows)
+### Why not live sensors first
 
-| Mechanism | Reliability on this box | Failure modes |
+| Mechanism | Reliability | Failure modes |
 |---|---|---|
-| **NVIDIA NVML** (`nvidia-smi` parse) | Works when driver + GPU present | Parse fragility; multi-GPU ambiguity; not installed on pure AMD; slow if called every acquire; can fail open/closed wrongly under driver hang |
-| **Performance counters** | Inconsistent for GPU | Often zero or stale for discrete GPU |
+| **Vendor GPU tools** (`nvidia-smi`, ROCm, etc.) | Works when driver + GPU present | Parse fragility; multi-GPU ambiguity; vendor-specific; not on every laptop GPU; slow if called every acquire; can fail open/closed wrongly under driver hang |
+| **OS performance counters** | Inconsistent for GPU across platforms | Often zero or stale for discrete GPU |
 | **LM Studio / Ollama APIs** | Good for "what is loaded" | Different APIs; race with JIT load; doesn't see the *other* stack you forgot was running |
-| **Declared registry** | Always available, deterministic | Lies if operator mislabels footprint |
+| **Declared registry** | Always available, deterministic, OS-agnostic | Lies if operator mislabels footprint |
 
 **Honesty of declared numbers:**
 
@@ -327,10 +453,10 @@ profiles:
 ```
 
 2. Fleet rows that are `cost_tier: local` **must** reference a `load_profile` (or inherit from `model_default` map). Missing profile → not eligible for local dispatch when governor is enabled (fail closed for that row).
-3. `/baton:local-resource doctor` compares declared primary stack to "are both ollama and lm-studio listening?" best-effort — advisory in v1, not the admission brain.
+3. `/baton:local-resource doctor` compares declared primary stack to "are both ollama and lm-studio listening?" best-effort — advisory in v1, not the admission brain. Listening checks should use portable localhost probes (HTTP to configured ports), not Windows-only service names.
 4. When a dispatch OOMs or returns VRAM errors, journal `capacity_lie` and optionally cool that profile — **later**.
 
-**Later sensing (not v1):** optional `nvidia-smi --query-gpu=memory.used,temperature.gpu --format=csv` as a **soft** gate ("if temp > 85°C, deny new broad loads") that can only make the governor *more* conservative, never override stack exclusivity.
+**Later sensing (not v1):** optional vendor query (e.g. `nvidia-smi` where present) as a **soft** gate ("if temp > 85°C, deny new broad loads") that can only make the governor *more* conservative, never override stack exclusivity. Feature-detect the binary; absence means "no soft gate," not "fail open local."
 
 ---
 
@@ -340,11 +466,12 @@ profiles:
 
 | Situation | Behavior |
 |---|---|
-| Lease store unreadable / mutex timeout | Treat as **cannot grant local**. Re-route or fail per §4. **Never** "assume free and dispatch local." |
+| Lease store unreadable / cannot win admission lock within budget | Treat as **cannot grant local**. Re-route or fail per §4. **Never** "assume free and dispatch local." |
 | Config missing | Use code defaults + if no profiles mapped, **no local row is admittable**. |
-| Stale claims | Reclaimed by TTL + dead PID (§1) — not "stuck forever." |
+| Stale claims or stale admission locks | Reclaimed by TTL + dead PID (§1) — not "stuck forever." |
 | Governor library not loaded (old deploy) | Same as today = ungoverned; **mitigation:** once shipped, dispatch path that sees `cost_tier: local` **requires** the acquire call (hard dependency), so partial deploys fail loud in doctor/tests. |
-| Clock skew | Use UTC; TTL 30s tolerates small skew on one machine. |
+| Clock skew | Use UTC; lease TTL 60s / lock TTL 5s tolerate small skew on one machine. |
+| Start-time unavailable on this OS | TTL-only reclaim for that holder; never treat unknown as "steal now." |
 
 **Fail open = the stampede this exists to prevent.** Usage Governor can fail open (missing journal = all workers available) because the downside is overspend on APIs. Here the downside is melting the shared GPU for every concurrent run. Asymmetry is intentional:
 
@@ -362,20 +489,32 @@ Three rules, enforced at the single chokepoint before any local invoke:
 
 1. **At most one serving stack per host** among live claims.  
 2. **No two incompatible broad load profiles** on the same host at once (capacity / exclusivity).  
-3. **Dead holders cannot pin the card forever** (TTL + PID).
+3. **Dead holders cannot pin the card forever** (TTL + PID; stale admission locks reclaim the same way).
 
 Everything else is ergonomics.
+
+### Portability cost vs scope
+
+Reusing CreateNew (already shipped) is **cheaper** than a Windows named mutex with privilege fallout. Incremental portability work that *does* cost a little:
+
+| Cost | Offset (keep v1 at 1–2 days) |
+|---|---|
+| Admission lock file + stale reclaim | Same size as mutex enter/leave; reuse claim payload shape |
+| PID + start-time helper with "unknown → TTL only" | Small pure function; hermetic tests inject a fake process table |
+| Path hygiene via `Join-Path` | Free if we never hard-code separators |
+
+**Cut rather than grow:** no wait-queue fairness beyond optional later work; no NVML; no daemon; no multi-host RPC; no sticky run-level leases; no weight-based lock reordering; seed profiles only for the primary host key.
 
 ### v1 (1–2 days of focused build)
 
 | Deliverable | Notes |
 |---|---|
-| `scripts/local-resource-lib.ps1` | Acquire / Renew / Release / Get-Status; mutex + claims dir; PID+TTL reclaim |
-| Profile + host config | Tiny YAML under `$BATON_HOME` or section in fleet; seed for gpu-host-a |
+| `scripts/local-resource-lib.ps1` | Acquire / Renew / Release / Get-Status; CreateNew admission lock + claims dir; PID+TTL reclaim |
+| Profile + host config | Tiny YAML under `$BATON_HOME` or section in fleet; seed for `gpu-host-a` |
 | Wire into local dispatch | Before `Invoke-Fleet` / hatch when selected worker is local: acquire; on deny → re-route once via `Select-Capability` excluding denied profile/stack; journal |
-| CLI | `pwsh fleet-local-resource.ps1 status|doctor|release-stale` (mirror `/baton:usage` thinness) |
-| Hermetic tests | Fake clock, fake PID table, temp BATON_HOME; grant/deny/expire/steal/mutex |
-| Defaults | fail closed local; on_deny=reroute; no preemption; no NVML; no daemon |
+| CLI | `pwsh fleet-local-resource.ps1 status|doctor|release-stale` (mirror `/baton:usage` thinness); works under pwsh on all three OSes |
+| Hermetic tests | Fake clock, fake PID/start-time table, temp BATON_HOME; grant/deny/expire/steal/lock-contention/stale-lock-reclaim |
+| Defaults | fail closed local; on_deny=reroute; no preemption; no live GPU sensors; no daemon |
 
 **Not required for stampede-proof:** dashboard panels, weights beyond a field on the claim, queue wait, sticky run-level leases, remote multi-host coordination beyond separate host keys, thermal sensors.
 
@@ -383,7 +522,7 @@ Everything else is ergonomics.
 
 - Project/run weights + wait queue  
 - Sticky per-run profile lease (warm model across tasks)  
-- Soft NVML temperature / VRAM used as conservative gates  
+- Soft GPU temperature / VRAM used as conservative gates (feature-detected)  
 - Doctor enforcement of "only primary stack listening"  
 - Integration with owner-priority / idle saturation policy from infra.md  
 - Multi-GPU host maps  
@@ -495,15 +634,15 @@ Does **not** replace d043 config discipline; it **enforces** it when two runs ig
 
 Exact first ship:
 
-1. Lease store + named mutex + TTL/PID reclaim  
+1. Lease store + CreateNew admission lock + TTL/PID reclaim (claims **and** locks)  
 2. Host/stack/profile admission rules (exclusive stack, capacity sum, same-profile inflight cap)  
 3. Acquire/Release helpers used by local dispatch path  
 4. Default **reroute** with journaled `local_denied`  
 5. `status` + `doctor` + `release-stale` CLI  
-6. Hermetic test suite  
-7. Seed profiles for gpu-host-a matching live pins (`model-large`, `model-small`); map `lm-studio` / `lm-studio-small` rows  
+6. Hermetic test suite (including concurrent lock contention and stale-lock reclaim)  
+7. Seed profiles for `gpu-host-a` matching live pins (`model-large`, `model-small`); map `lm-studio` / `lm-studio-small` rows  
 
-Success criterion: two concurrent runs cannot both hold incompatible local profiles; killing a holder frees the slot within one TTL; governor down ⇒ local denied, paid/free still work.
+Success criterion: two concurrent runs cannot both hold incompatible local profiles; killing a holder frees the slot within one TTL (or sooner if PID dead); governor down ⇒ local denied, paid/free still work; same code path on Windows, Linux, and macOS under PowerShell 7.
 
 ---
 
@@ -511,8 +650,9 @@ Success criterion: two concurrent runs cannot both hold incompatible local profi
 
 | Excluded | Why |
 |---|---|
-| Always-on GPU supervisor daemon | Operational weight; mutex+files suffice |
-| Live NVML / thermal control loop | Unreliable day-1; advisory later |
+| Always-on GPU supervisor daemon | Operational weight; CreateNew lock + claim files suffice |
+| Windows named mutex / `Global\` objects | Non-portable; superseded by CreateNew admission lock |
+| Live NVML / thermal control loop | Unreliable day-1; advisory later; vendor-specific |
 | Preemption of in-flight local work | Surprising; not needed for one operator |
 | Weighted fair GPU-second scheduling | Overkill; priority queue later if needed |
 | Transparent silent re-route without journal | Hides cost/quality shift |
@@ -520,9 +660,11 @@ Success criterion: two concurrent runs cannot both hold incompatible local profi
 | Per-provider-row locks only | Misses multi-row same-server thrash |
 | Dashboard / cockpit UI | Commodity; CLI status is enough |
 | Auto start/stop of LM Studio / Ollama | Ceremony; d043 stays registry-level |
-| Cross-machine distributed lock for gpu-host-b | Separate host key; each box owns its store (remote dispatch acquires against remote host's policy only if we add RPC later — not v1) |
+| Cross-machine distributed lock for `gpu-host-b` | Separate host key; each box owns its store on a **local** disk (remote dispatch acquires against remote host's policy only if we add RPC later — not v1) |
+| Shared-network filesystem as the lock store | CreateNew semantics not trustworthy on all NFS/SMB setups; A7 |
 | Sticky multi-task model residency | Optimization, not safety |
 | Integration with usage conserve_mode | Different resource; optional later bias |
+| Generation-counter CAS claim-set | Valid alternative; more novel code than reusing CreateNew lock |
 
 ---
 
@@ -530,27 +672,31 @@ Success criterion: two concurrent runs cannot both hold incompatible local profi
 
 | Choice | Gain | Cost |
 |---|---|---|
-| Mutex + heartbeat files | Crash-safe, inspectable, no daemon | ~30–120s worst-case wait after hard kill before reclaim |
+| CreateNew admission lock + heartbeat claim files | Crash-safe, inspectable, portable, reuses shipped pattern | ~5s worst-case wait on stale lock; ~30–120s worst-case wait after hard kill before lease reclaim if PID check unavailable |
 | Load profile unit | Stops model thrash + dual-stack | Requires declared footprints |
 | Fail closed local | Prevents stampede | Local work may re-route to paid when governor glitches |
 | No preemption | Predictable | High-priority run may wait one inference |
-| Declared not sensed | Deterministic, fast | Operator must keep VRAM numbers honest |
+| Declared not sensed | Deterministic, fast, OS-agnostic | Operator must keep VRAM numbers honest |
 | Re-route default | Runs make progress | Cost/quality change — mitigated by mandatory visibility |
+| TTL-only when start-time unknown | Never steals a live holder's claim on restricted OS | Reclaim may wait full lease TTL after kill on those hosts |
 
 ---
 
 ## Open points for implementer (non-blocking)
 
-1. Exact mutex name scope (`Global\` needs SeCreateGlobalPrivilege in some locked-down setups) — fall back to `Local\BatonLocalResource` if Global fails; document.  
+1. Whether to extract a tiny shared helper (e.g. `Request-AtomicFileClaim`) from `window-service-lib` vs copy the CreateNew open/write/dispose shape into `local-resource-lib` — either is fine; do not drag window-service semantics into LRG.  
 2. Whether ensemble fan-out of N local providers is N acquires or one multi-profile acquire — v1: **N serial acquires**; ensemble of many locals on one GPU is inherently limited.  
-3. TTL default: start **60s**, renew every 20s if a renew loop is trivial; tune after measuring p99 local latency on gpu-host-a.
+3. Lease TTL default: start **60s**, renew every 20s if a renew loop is trivial; lock TTL default **5s**; tune lease after measuring p99 local latency on the primary GPU box.  
+4. Exact filesystem-safe encoding of host/stack in lock filenames (replace non-alnum with `_`, cap length) — mirror project-key sanitization if one already exists.
 
 ---
 
 ## Success definition (for a later build PR)
 
 - Concurrent process A holds `model-large`; process B requesting a conflicting broad profile is denied and re-routes or waits — **never** double-loads.  
-- Process A killed → claim free within TTL without manual file delete.  
+- Process A killed → claim free within TTL without manual file delete (sooner if PID dead and start-time match available).  
+- Stale admission lock left mid-transaction is reclaimed by the next waiter via lock TTL and/or dead PID — no human delete.  
 - `ollama-local` cannot acquire while `lm-studio` claims exist on `gpu-host-a`.  
 - Governor store deleted → local denied; codex/claude still dispatch.  
+- Same library behavior under PowerShell 7 on Windows, Linux, and macOS (hermetic tests inject process table; no named mutex).  
 - No new dashboard; one CLI status page is enough for the operator.
