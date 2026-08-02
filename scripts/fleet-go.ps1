@@ -10,6 +10,7 @@
 param(
     [string]$Goal,
     [string]$Text,
+    [string]$GoalFile,
     [double]$Budget,
     [switch]$Json,
     [string]$GateArtifact,
@@ -50,8 +51,29 @@ if (-not [string]::IsNullOrWhiteSpace($Project)) {
     }
 }
 
-$theGoal = @($Goal, $Text | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) | Select-Object -First 1
-if ([string]::IsNullOrWhiteSpace($theGoal)) { [Console]::Error.WriteLine('Provide a goal via -Goal "<text>" (or -Text).'); exit 2 }
+$hasGoalFile = -not [string]::IsNullOrWhiteSpace($GoalFile)
+$hasInlineGoal = (-not [string]::IsNullOrWhiteSpace($Goal)) -or (-not [string]::IsNullOrWhiteSpace($Text))
+if ($hasGoalFile -and $hasInlineGoal) {
+    [Console]::Error.WriteLine('Cannot combine -GoalFile with -Goal or -Text.')
+    exit 2
+}
+if ($hasGoalFile) {
+    if (-not (Test-Path -LiteralPath $GoalFile)) {
+        [Console]::Error.WriteLine("Goal file not found: $GoalFile")
+        exit 2
+    }
+    $theGoal = Get-Content -LiteralPath $GoalFile -Raw
+    if ([string]::IsNullOrWhiteSpace($theGoal)) {
+        [Console]::Error.WriteLine("Goal file is empty: $GoalFile")
+        exit 2
+    }
+} else {
+    $theGoal = @($Goal, $Text | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($theGoal)) {
+        [Console]::Error.WriteLine('Provide a goal via -Goal "<text>", -Text, or -GoalFile <path>.')
+        exit 2
+    }
+}
 if ($PlanGate -and $NoPlanGate) { [Console]::Error.WriteLine('Cannot combine -PlanGate with -NoPlanGate.'); exit 2 }
 if ($Verify -and $NoVerify) { [Console]::Error.WriteLine('Cannot combine -Verify with -NoVerify.'); exit 2 }
 if ($ScaffoldVerification -and -not $Execute) {
