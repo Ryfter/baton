@@ -1603,6 +1603,221 @@ providers:
         Check 'DA11 text-transport without opt-in names the missing diff_apply opt-in' (
             @($daExcl | Where-Object { $_.name -eq 'local-host-b' -and $_.stage -eq 'static' -and
                 $_.reason -eq 'not edit-eligible (no diff_apply opt-in)' }).Count -eq 1)
+
+        # ---- E-series (d103 Task 6): the diff-apply dispatch branch, end to end ----
+        # Its own repo/worktree/fleet/run dir so it cannot disturb the fixtures above.
+        # Placeholder provider names only — never a real model id, endpoint, or host.
+        $daRepo = New-TempRepo -Root (New-Item -ItemType Directory -Force -Path (Join-Path $tmpRoot 'da-sp')).FullName
+        $daWt = (New-RunWorktree -RepoPath $daRepo -RunId 'go-da1').worktree
+        $daRunDir = Join-Path $tmpRoot 'run-da1'
+        New-Item -ItemType Directory -Force -Path $daRunDir | Out-Null
+        New-Item -ItemType Directory -Force -Path (Join-Path $daWt 'src') | Out-Null
+        $daGreet = Join-Path $daWt 'src/greet.txt'
+        $daOther = Join-Path $daWt 'src/other.txt'
+        Set-Content -LiteralPath $daGreet -Value 'Hello' -Encoding utf8NoBOM
+        # Over the 24000-byte default context envelope, so E7 can never dispatch.
+        Set-Content -LiteralPath (Join-Path $daWt 'src/big.txt') -Value ('x' * 30000) -Encoding utf8NoBOM
+
+        $daDispatchFleet = Join-Path $env:BATON_HOME 'fleet-diff-apply-dispatch.yaml'
+        Set-Content -LiteralPath $daDispatchFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: local-host-a
+    kind: http
+    enabled: true
+    cost_tier: local
+    platform: local
+    quality: 0.2
+    diff_apply: true
+    base_url: 'http://127.0.0.1:1'
+    model_default: model-small
+    capabilities: [code-gen]
+  - name: cli-host-a
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+'@
+        $daObsPath = Join-Path $env:BATON_HOME 'diff-apply-observations.jsonl'
+        $daScope = @('src/greet.txt')
+
+        $daGoodBlocks = @'
+Here is the change.
+
+FILE: src/greet.txt
+<<<<<<< SEARCH
+Hello
+=======
+Goodbye
+>>>>>>> REPLACE
+'@
+        $daSeen = @{ calls = 0; prompt = '' }
+        $daGoodDisp = {
+            param($pick, $prompt, $depthTier)
+            $daSeen.calls++
+            $daSeen.prompt = [string]$prompt
+            return @{ stdout = $daGoodBlocks; stderr = ''; exit_code = 0; duration_s = 0 }
+        }.GetNewClosure()
+
+        # One usage journal per case: a failed attempt writes a cooldown, and a shared
+        # journal would route-around the provider for every case after the first
+        # failure. Same per-case isolation the UF/PF fixtures above use.
+        $daNewSpawner = {
+            param($DispatcherBlock, $Cap, $Tag)
+            New-AgenticSpawner -Worktree $daWt -FleetPath $daDispatchFleet -ToolsPath $toolsPath `
+                -MaxCostTier $Cap -RunDir $daRunDir -Dispatcher $DispatcherBlock `
+                -UsagePath (Join-Path $env:BATON_HOME "usage-diff-apply-$Tag.jsonl")
+        }.GetNewClosure()
+
+        $daTask = { param($Id, $Paths) [pscustomobject]@{
+            id = $Id; desc = 'replace the greeting'; capability = 'code-gen'
+            stakes = 'standard'; stakes_basis = 'ordinary bounded feature'; allowed_paths = $Paths } }
+
+        # E1/E2/E3 — a text-only provider actually implements the task.
+        $daR1 = & (& $daNewSpawner $daGoodDisp 'local' 'e1') (& $daTask 'da-e1' $daScope)
+        Check 'E1 diff-apply dispatch succeeds and routes to the text-only provider' (
+            $daR1.ok -eq $true -and $daR1.chose -eq 'local-host-a')
+        Check 'E1b the model edit landed on disk' (
+            (Get-Content -Raw -LiteralPath $daGreet) -match 'Goodbye')
+        Check 'E1c the model was handed the file contents, not the agentic prompt' (
+            $daSeen.prompt -match 'SEARCH' -and $daSeen.prompt -match 'Hello')
+        Check 'E2 why records the diff grew' ($daR1.why -match 'diff grew')
+        Check 'E3 per-task diff written under RunDir' (
+            Test-Path (Join-Path $daRunDir 'tasks/da-e1.diff'))
+
+        # E4 — prose with no blocks is a FAILURE, not a no-change pass.
+        $daBefore = [System.IO.File]::ReadAllBytes($daGreet)
+        $daProseDisp = { param($pick, $prompt, $depthTier)
+            @{ stdout = 'I would edit the greeting, but here is prose instead.'; stderr = ''; exit_code = 0; duration_s = 0 } }
+        $daR4 = & (& $daNewSpawner $daProseDisp 'local' 'e4') (& $daTask 'da-e4' $daScope)
+        Check 'E4 prose-only output fails the task' ($daR4.ok -eq $false)
+        Check 'E4b worktree byte-identical after a prose-only reply' (
+            [System.Linq.Enumerable]::SequenceEqual([byte[]]$daBefore, [byte[]][System.IO.File]::ReadAllBytes($daGreet)))
+
+        # E5 — a SEARCH that does not match changes nothing.
+        $daNoMatchDisp = { param($pick, $prompt, $depthTier)
+            @{ stdout = @'
+FILE: src/greet.txt
+<<<<<<< SEARCH
+this text is not in the file
+=======
+something else
+>>>>>>> REPLACE
+'@; stderr = ''; exit_code = 0; duration_s = 0 } }
+        $daR5 = & (& $daNewSpawner $daNoMatchDisp 'local' 'e5') (& $daTask 'da-e5' $daScope)
+        Check 'E5 unmatched SEARCH fails the task' ($daR5.ok -eq $false)
+        Check 'E5b worktree byte-identical after an unmatched SEARCH' (
+            [System.Linq.Enumerable]::SequenceEqual([byte[]]$daBefore, [byte[]][System.IO.File]::ReadAllBytes($daGreet)))
+
+        # E6 — a write outside allowed_paths is rejected by the scope oracle.
+        $daOutOfScopeDisp = { param($pick, $prompt, $depthTier)
+            @{ stdout = @'
+FILE: src/other.txt
+<<<<<<< SEARCH
+=======
+sneaky new file
+>>>>>>> REPLACE
+'@; stderr = ''; exit_code = 0; duration_s = 0 } }
+        $daR6 = & (& $daNewSpawner $daOutOfScopeDisp 'local' 'e6') (& $daTask 'da-e6' $daScope)
+        Check 'E6 out-of-scope write fails the task' ($daR6.ok -eq $false)
+        Check 'E6b the out-of-scope file was never created' (-not (Test-Path -LiteralPath $daOther))
+        Check 'E6c worktree byte-identical after an out-of-scope block' (
+            [System.Linq.Enumerable]::SequenceEqual([byte[]]$daBefore, [byte[]][System.IO.File]::ReadAllBytes($daGreet)))
+
+        # E7 — over the size envelope: refused BEFORE any dispatch.
+        $daEnvSeen = @{ calls = 0 }
+        $daEnvDisp = { param($pick, $prompt, $depthTier)
+            $daEnvSeen.calls++
+            @{ stdout = ''; stderr = ''; exit_code = 0; duration_s = 0 } }.GetNewClosure()
+        $daR7 = & (& $daNewSpawner $daEnvDisp 'local' 'e7') (& $daTask 'da-e7' @('src/big.txt'))
+        Check 'E7 over-envelope task fails' ($daR7.ok -eq $false)
+        Check 'E7b failure names the diff-apply envelope' ($daR7.why -match 'diff-apply envelope')
+        Check 'E7c the model was never dispatched for an over-envelope task' ($daEnvSeen.calls -eq 0)
+
+        # E8 — telemetry: the size-vs-outcome record the envelope will be tuned from.
+        $daObsRows = @()
+        if (Test-Path -LiteralPath $daObsPath) {
+            $daObsRows = @(Get-Content -LiteralPath $daObsPath |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                ForEach-Object { $_ | ConvertFrom-Json })
+        }
+        Check 'E8 success row carries provider, context_bytes and file_count' (
+            @($daObsRows | Where-Object {
+                $_.provider -eq 'local-host-a' -and $_.task_id -eq 'da-e1' -and
+                [int]$_.file_count -eq 1 -and [long]$_.context_bytes -gt 0 -and
+                $_.parse_result -eq 'ok' -and $_.apply_result -eq 'ok' -and [int]$_.blocks_applied -eq 1
+            }).Count -eq 1)
+        Check 'E8b failure rows record how the attempt died' (
+            @($daObsRows | Where-Object { $_.task_id -eq 'da-e4' -and $_.parse_result -eq 'empty' }).Count -eq 1 -and
+            @($daObsRows | Where-Object { $_.task_id -eq 'da-e5' -and $_.apply_result -eq 'search-not-found' }).Count -eq 1 -and
+            @($daObsRows | Where-Object { $_.task_id -eq 'da-e6' -and $_.apply_result -eq 'scope-rejected' }).Count -eq 1)
+        Check 'E8c envelope row carries the size evidence that refused it' (
+            @($daObsRows | Where-Object {
+                $_.task_id -eq 'da-e7' -and $_.apply_result -eq 'envelope-exceeded' -and
+                [long]$_.context_bytes -gt 24000
+            }).Count -eq 1)
+        Check 'E8d rows carry run_id and model_version provenance' (
+            @($daObsRows | Where-Object { $_.task_id -eq 'da-e1' -and $_.run_id -eq 'run-da1' -and
+                $_.model_version -eq 'model-small' }).Count -eq 1)
+
+        # E9 — regression guard: an agentic cli provider in the SAME fleet is untouched
+        # by this task. Its dispatcher returns prose (which the diff-apply path rejects)
+        # and edits its cwd (which only the agentic path provides).
+        $daCliDisp = { param($pick, $prompt, $depthTier)
+            Set-Content -LiteralPath (Join-Path (Get-Location).Path 'made-by-agentic.txt') -Value 'work' -Encoding utf8NoBOM
+            @{ stdout = 'prose only, no blocks'; stderr = ''; exit_code = 0; duration_s = 0 } }
+        $daHighTask = [pscustomobject]@{ id = 'da-e9'; desc = 'ship it'; capability = 'code-gen'
+            stakes = 'high'; stakes_basis = 'authentication boundary'; allowed_paths = $daScope }
+        $daR9 = & (& $daNewSpawner $daCliDisp 'paid' 'e9') $daHighTask
+        Check 'E9 agentic provider still takes the old path' (
+            $daR9.ok -eq $true -and $daR9.chose -eq 'cli-host-a')
+        Check 'E9b agentic dispatch still runs with cwd = the worktree' (
+            Test-Path (Join-Path $daWt 'made-by-agentic.txt'))
+
+        # E10 — return shape parity with Invoke-AgenticDispatchAttempt, plus prompt_sent.
+        $daShape = Invoke-DiffApplyAttempt -Candidate ([pscustomobject]@{ name = 'local-host-a'; kind = 'http' }) `
+            -TaskDesc 'replace the greeting' -InputBlock '' -AllowedPaths $daScope -DepthTier 'med' `
+            -Worktree $daWt -FleetPath $daDispatchFleet -UsagePath (Join-Path $env:BATON_HOME 'usage-diff-apply-e10.jsonl') `
+            -RunDir $daRunDir -TaskId 'da-e10' -Dispatcher $daNoMatchDisp
+        $daShapeKeys = @($daShape.Keys | Sort-Object) -join ','
+        Check 'E10 result shape is result + dispatch_error + prompt_sent' (
+            $daShapeKeys -eq 'dispatch_error,prompt_sent,result')
+        Check 'E10b result carries stdout/stderr/exit_code/duration_s' (
+            $daShape.result.Contains('stdout') -and $daShape.result.Contains('stderr') -and
+            $daShape.result.Contains('exit_code') -and $daShape.result.Contains('duration_s'))
+        Check 'E10c prompt_sent is the diff-apply prompt that was dispatched' (
+            [string]$daShape.prompt_sent -match 'SEARCH')
+
+        # E11 — the prompt-crossing defect: the spawner must measure the prompt it
+        # ACTUALLY sent, never the agentic prompt that was built but never dispatched.
+        Set-Content -LiteralPath $daGreet -Value 'Hello' -Encoding utf8NoBOM
+        $daPbSeen = @{ bytes = $null }
+        $savedObsFn = (Get-Item -LiteralPath 'Function:Get-AgenticUsageObservation').ScriptBlock
+        function Get-AgenticUsageObservation {
+            param(
+                $Result,
+                [Parameter(Mandatory)][string]$Worker,
+                [Parameter(Mandatory)][string]$UsagePath,
+                [Nullable[long]]$PromptBytes = $null
+            )
+            $daPbSeen.bytes = $PromptBytes
+            return @{ classification = 'ok'; hard_failover = $false; prompt_bytes = $PromptBytes }
+        }
+        try {
+            $daR11 = & (& $daNewSpawner $daGoodDisp 'local' 'e11') (& $daTask 'da-e11' $daScope)
+        } finally {
+            Set-Item -Path 'Function:Get-AgenticUsageObservation' -Value $savedObsFn
+        }
+        $daAgenticPrompt = Build-AgenticWorkerPrompt -TaskDesc 'replace the greeting' -InputBlock '' -AllowedPaths $daScope
+        Check 'E11 diff-apply run still succeeds under the observation probe' ($daR11.ok -eq $true)
+        Check 'E11b observed prompt_bytes is the diff-apply prompt' (
+            $null -ne $daPbSeen.bytes -and
+            [long]$daPbSeen.bytes -eq (Get-Utf8ByteCount -Text $daSeen.prompt))
+        Check 'E11c observed prompt_bytes is NOT the agentic prompt that was never sent' (
+            [long]$daPbSeen.bytes -ne (Get-Utf8ByteCount -Text $daAgenticPrompt))
     } finally {
         if ($null -eq $savedBatonHome) { Remove-Item env:BATON_HOME -ErrorAction SilentlyContinue }
         else { $env:BATON_HOME = $savedBatonHome }
