@@ -109,9 +109,21 @@ eee
 EEE
 >>>>>>> REPLACE
 '@
-$t5crlf = $t5lf -replace "`n", "`r`n"
-$r5lf = ConvertFrom-EditBlocks -Text $t5lf
+# A here-string PRESERVES the line endings of the file it is written in, and git
+# checks this repo out with CRLF on Windows (.gitattributes leaves .ps1 to the
+# platform default). So $t5lf is only LF when the working copy happens to be LF.
+# Building the CRLF variant with a bare "`n" -> "`r`n" replace on a CRLF source
+# DOUBLES the CR (0D-0D-0A), the parser then yields an extra blank line, and this
+# check fails — on a fresh Windows clone, but not for whoever wrote the file with
+# LF. Normalize to LF first so both variants are constructed, not inherited.
+$t5lfNorm = ($t5lf -replace "`r`n", "`n") -replace "`r", "`n"
+$t5crlf = $t5lfNorm -replace "`n", "`r`n"
+$r5lf = ConvertFrom-EditBlocks -Text $t5lfNorm
 $r5crlf = ConvertFrom-EditBlocks -Text $t5crlf
+# Guard the fixture itself: if these ever stop holding, the parity checks below
+# are comparing something other than what they claim to.
+Assert 'P5 fixture: LF variant contains no CR' (-not $t5lfNorm.Contains("`r"))
+Assert 'P5 fixture: CRLF variant has no doubled CR' (-not $t5crlf.Contains("`r`r"))
 Assert 'P5 CRLF result=ok' ($r5crlf.result -eq 'ok')
 Assert 'P5 CRLF matches LF block count' (@($r5crlf.blocks).Count -eq @($r5lf.blocks).Count)
 Assert 'P5 CRLF path matches LF' ($r5crlf.blocks[0].path -eq $r5lf.blocks[0].path)
