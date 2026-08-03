@@ -65,8 +65,8 @@ You want a block shaped like this (values will differ):
 ```json
 { "provider": "codex", "source": "oauth",
   "usage": {
-    "primary":   { "window_minutes": 300,   "used_percent": 0.0,  "resets_at": "..." },
-    "secondary": { "window_minutes": 10080, "used_percent": 22.0, "resets_at": "..." } } }
+    "primary":   { "window_minutes": 300,   "used_percent": 12.5, "resets_at": "..." },
+    "secondary": { "window_minutes": 10080, "used_percent": 40.0, "resets_at": "..." } } }
 ```
 
 `primary` is the 5-hour window, `secondary` the weekly one. `source` tells you how
