@@ -720,6 +720,21 @@ One short paragraph in the appropriate existing section: text-transport provider
 take edit tasks when opted in; the oracle and frozen contract are unchanged and remain the
 sole authorities.
 
+There is no formal fleet-schema document in this repo — the `agentic` field is documented
+only at `docs/agent-handoffs.md:66`. Document `diff_apply` in the same place, so the two
+edit-eligibility fields are described together rather than one being discoverable and the
+other folklore.
+
+Two specifics that must appear (both surfaced by Task 5's implementer):
+
+- **The opt-in is strictly `diff_apply: true` (boolean).** The check uses `-ne $true`, the
+  same shape as `enabled`, so a *quoted* `'true'` in YAML does **not** opt in. That is
+  fail-closed and therefore safe, but it is a sharp edge and silent — say so explicitly.
+- **Do not set `diff_apply` on a provider row until Task 6 has shipped.** Between Task 5
+  and Task 6 the provider is eligible but there is no dispatch branch, so it would be
+  routed down the agentic path and fail proof-by-diff. Once Task 6 is merged this note can
+  be dropped; while the branch is unmerged it matters.
+
 - [ ] **Step 5: Commit**
 
 ```
