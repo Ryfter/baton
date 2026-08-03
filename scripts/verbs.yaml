@@ -102,3 +102,12 @@ verbs:
     class: engine
     runner: fleet-window-service.ps1
     json: true
+  - name: budget
+    summary: Window token consumption (5h grid + 7d rolling) and optional headroom.
+    class: engine
+    runner: fleet-window-budget.ps1
+    json: true
+    flag_aliases:
+      --window: -Window
+      --project: -Project
+      --json: -Json
