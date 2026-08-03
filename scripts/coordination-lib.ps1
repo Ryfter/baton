@@ -604,8 +604,26 @@ function Remove-StaleResourceClaims {
 # ---------------------------------------------------------------------------
 
 function New-CoordDenial {
-    param([Parameter(Mandatory)][string]$Reason)
-    return [ordered]@{ granted = $false; reason = $Reason; claim = $null }
+    <# `reason` stays a bare machine code (existing callers and tests match on it
+       exactly). `remedy` is optional operator-facing text: a denial that does not
+       say what to DO about it reads as a malfunction, and the most common denial
+       here — capacity_unknown — is not a malfunction at all but an unconfigured
+       box. Empty when there is nothing actionable to say. #>
+    param(
+        [Parameter(Mandatory)][string]$Reason,
+        [string]$Remedy = ''
+    )
+    return [ordered]@{ granted = $false; reason = $Reason; claim = $null; remedy = $Remedy }
+}
+
+function Get-CoordCapacityRemedy {
+    <# Exact, copy-pasteable instructions for the capacity_unknown denial. Names the
+       real file path on THIS box so the operator does not have to derive it. #>
+    param([string]$BatonHome = (Get-BatonHome), [string]$HostName = '')
+    $path = Get-CoordinationConfigPath -BatonHome $BatonHome
+    $h = if ([string]::IsNullOrWhiteSpace($HostName)) { '<host>' } else { $HostName }
+    return ("declare this host's capacity in {0} — e.g. {{ `"hosts`": {{ `"{1}`": {{ `"vram_gb`": 24 }} }} }}. " +
+            "Capacity is never guessed: 0 or absent means unknown, and unknown denies.") -f $path, $h
 }
 
 function Request-ResourceClaim {
@@ -651,7 +669,7 @@ function Request-ResourceClaim {
             [void](Write-CoordJournalEntry -BatonHome $BatonHome -Entry ([ordered]@{
                 event = 'deny'; reason = 'capacity_unknown'; host = $HostName; stack = $Stack; load_profile = $LoadProfile
             }))
-            return (New-CoordDenial 'capacity_unknown')
+            return (New-CoordDenial 'capacity_unknown' (Get-CoordCapacityRemedy -BatonHome $BatonHome -HostName $HostName))
         }
 
         # Requested footprint: explicit wins, else the declared profile, else unknown -> deny.

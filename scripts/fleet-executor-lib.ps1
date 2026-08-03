@@ -770,11 +770,16 @@ function New-LocalDispatchDenial {
         [string]$HostName = '',
         [string]$Stack = '',
         [string]$LoadProfile = '',
-        [int]$TtlSec = 0
+        [int]$TtlSec = 0,
+        [string]$Remedy = ''
     )
     return [ordered]@{
         gated = $true; granted = $false; reason = $Reason; claim_id = ''
         ttl_sec = $TtlSec; host = $HostName; stack = $Stack; load_profile = $LoadProfile
+        # Operator-facing next step, when there is one. The overwhelmingly common
+        # denial on a fresh box is capacity_unknown — an UNCONFIGURED box, not a
+        # fault — and a bare code there reads as a broken feature.
+        remedy = $Remedy
     }
 }
 
@@ -844,7 +849,11 @@ function Request-LocalDispatchClaim {
             return (New-LocalDispatchDenial -Reason 'error: empty decision' -HostName $HostName -Stack $stack -LoadProfile $loadProfile -TtlSec $ttl)
         }
         if (-not $outcome.granted) {
-            return (New-LocalDispatchDenial -Reason ([string]$outcome.reason) -HostName $HostName -Stack $stack -LoadProfile $loadProfile -TtlSec $ttl)
+            # Carry coordination-lib's remedy through verbatim when it supplied one.
+            $remedy = ''
+            if ($null -ne $outcome.PSObject.Properties['remedy']) { $remedy = [string]$outcome.remedy }
+            elseif ($outcome -is [System.Collections.IDictionary] -and $outcome.Contains('remedy')) { $remedy = [string]$outcome['remedy'] }
+            return (New-LocalDispatchDenial -Reason ([string]$outcome.reason) -HostName $HostName -Stack $stack -LoadProfile $loadProfile -TtlSec $ttl -Remedy $remedy)
         }
         return [ordered]@{
             gated = $true; granted = $true; reason = [string]$outcome.reason
@@ -916,6 +925,18 @@ function Format-CoordinationDenialWhy {
         $where = " (host $([string]$Gate.host)"
         if (-not [string]::IsNullOrWhiteSpace([string]$Gate.stack)) { $where += ", stack $([string]$Gate.stack)" }
         $where += ')'
+    }
+    # Prefer the specific remedy the denial carried (it names the real path on THIS
+    # box and the exact JSON to write) over the generic menu. capacity_unknown on a
+    # fresh box is by far the most common denial and is not a fault at all — it is an
+    # unconfigured host — so a bare code there reads as a broken feature.
+    $specific = ''
+    if ($null -ne $Gate) {
+        if ($null -ne $Gate.PSObject.Properties['remedy']) { $specific = [string]$Gate.remedy }
+        elseif ($Gate -is [System.Collections.IDictionary] -and $Gate.Contains('remedy')) { $specific = [string]$Gate['remedy'] }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($specific)) {
+        return "coordination: local dispatch denied for ${Provider}: ${reason}${where}. Fix: ${specific}"
     }
     return "coordination: local dispatch denied for ${Provider}: ${reason}${where}. Remedies: wait for the in-flight local claim to finish, declare the host's capacity in <BATON_HOME>/coordination/config.json, or re-run at a tier that does not need the local box."
 }
