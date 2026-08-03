@@ -239,6 +239,264 @@ Assert 'P14 one block' (@($r14.blocks).Count -eq 1)
 Assert 'P14 replace is empty' ($r14.blocks[0].replace -eq '')
 Assert 'P14 is_create false' ($r14.blocks[0].is_create -eq $false)
 
+# =====================================================================
+# Applier checks (A*, d103 Task 2) — Test-DiffApplyPathSafe /
+# Invoke-EditBlockApply. Hermetic: fixtures live in a temp worktree that
+# is removed in the finally block. No git init required.
+# =====================================================================
+
+$applyTmp = Join-Path ([System.IO.Path]::GetTempPath()) ("baton-diffapply-" + ([guid]::NewGuid().ToString('N').Substring(0, 8)))
+New-Item -ItemType Directory -Force -Path $applyTmp | Out-Null
+$script:wtSeq = 0
+
+function New-FixtureWorktree {
+    $script:wtSeq++
+    $p = Join-Path $applyTmp ("wt{0}" -f $script:wtSeq)
+    New-Item -ItemType Directory -Force -Path $p | Out-Null
+    return $p
+}
+function Set-FixtureFile {
+    param([string]$Root, [string]$Rel, [string]$Text, [bool]$Bom = $false)
+    $full = Join-Path $Root $Rel
+    $dir = Split-Path -Parent $full
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    [System.IO.File]::WriteAllText($full, $Text, [System.Text.UTF8Encoding]::new($Bom))
+    return $full
+}
+function Get-FixtureText {
+    param([string]$Root, [string]$Rel)
+    $bytes = [System.IO.File]::ReadAllBytes((Join-Path $Root $Rel))
+    $start = 0
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { $start = 3 }
+    return [System.Text.Encoding]::UTF8.GetString($bytes, $start, $bytes.Length - $start)
+}
+function Test-FixtureBom {
+    param([string]$Root, [string]$Rel)
+    $bytes = [System.IO.File]::ReadAllBytes((Join-Path $Root $Rel))
+    return ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+}
+function New-Blk {
+    param([string]$Path, [string]$Search, [string]$Replace)
+    return [ordered]@{ path = $Path; search = $Search; replace = $Replace; is_create = ($Search -eq '') }
+}
+function Get-Sha {
+    param([string]$P)
+    return (Get-FileHash -LiteralPath $P -Algorithm SHA256).Hash
+}
+
+try {
+    # ---------- A1: single exact match ----------
+    $wt = New-FixtureWorktree
+    Set-FixtureFile $wt 'src/a.txt' "alpha`nbeta`ngamma`n" | Out-Null
+    $a1 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'src/a.txt' 'beta' 'BETA')) -AllowedPaths @()
+    Assert 'A1 ok=true' ($a1.ok -eq $true)
+    Assert 'A1 result=ok' ($a1.result -eq 'ok')
+    Assert 'A1 blocks_applied=1' ($a1.blocks_applied -eq 1)
+    Assert 'A1 files_written lists the path' (@($a1.files_written) -contains 'src/a.txt')
+    Assert 'A1 content updated' ((Get-FixtureText $wt 'src/a.txt') -eq "alpha`nBETA`ngamma`n")
+
+    # ---------- A2: search text absent ----------
+    $wt = New-FixtureWorktree
+    $f2 = Set-FixtureFile $wt 'a.txt' "alpha`nbeta`n"
+    $h2 = Get-Sha $f2
+    $a2 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'a.txt' 'zeta' 'ZETA')) -AllowedPaths @()
+    Assert 'A2 ok=false' ($a2.ok -eq $false)
+    Assert 'A2 result=search-not-found' ($a2.result -eq 'search-not-found')
+    Assert 'A2 error names the path' ($a2.error -match 'a\.txt')
+    Assert 'A2 file byte-identical' ((Get-Sha $f2) -eq $h2)
+
+    # ---------- A3: search text appears twice ----------
+    $wt = New-FixtureWorktree
+    $f3 = Set-FixtureFile $wt 'a.txt' "dup`nmid`ndup`n"
+    $h3 = Get-Sha $f3
+    $a3 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'a.txt' 'dup' 'DUP')) -AllowedPaths @()
+    Assert 'A3 ok=false' ($a3.ok -eq $false)
+    Assert 'A3 result=search-ambiguous' ($a3.result -eq 'search-ambiguous')
+    Assert 'A3 file byte-identical' ((Get-Sha $f3) -eq $h3)
+
+    # ---------- A4: two blocks, second matches what the first wrote ----------
+    $wt = New-FixtureWorktree
+    Set-FixtureFile $wt 'a.txt' "one`n" | Out-Null
+    $a4 = Invoke-EditBlockApply -Worktree $wt -Blocks @(
+        (New-Blk 'a.txt' 'one' 'two'),
+        (New-Blk 'a.txt' 'two' 'three')
+    ) -AllowedPaths @()
+    Assert 'A4 ok=true' ($a4.ok -eq $true)
+    Assert 'A4 blocks_applied=2' ($a4.blocks_applied -eq 2)
+    Assert 'A4 content is three' ((Get-FixtureText $wt 'a.txt') -eq "three`n")
+    Assert 'A4 one written file' (@($a4.files_written).Count -eq 1)
+
+    # ---------- A5: good block + later bad block => nothing written at all ----------
+    $wt = New-FixtureWorktree
+    $f5a = Set-FixtureFile $wt 'x.txt' "good`n"
+    $f5b = Set-FixtureFile $wt 'y.txt' "yyy`n"
+    $h5a = Get-Sha $f5a
+    $h5b = Get-Sha $f5b
+    $a5 = Invoke-EditBlockApply -Worktree $wt -Blocks @(
+        (New-Blk 'x.txt' 'good' 'GOOD'),
+        (New-Blk 'y.txt' 'absent' 'NOPE')
+    ) -AllowedPaths @()
+    Assert 'A5 ok=false' ($a5.ok -eq $false)
+    Assert 'A5 result=search-not-found' ($a5.result -eq 'search-not-found')
+    Assert 'A5 first file SHA256 unchanged' ((Get-Sha $f5a) -eq $h5a)
+    Assert 'A5 second file SHA256 unchanged' ((Get-Sha $f5b) -eq $h5b)
+    Assert 'A5 nothing reported written' (@($a5.files_written).Count -eq 0)
+
+    # ---------- A6: create a new file (empty SEARCH) ----------
+    $wt = New-FixtureWorktree
+    $a6 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'newdir/new.txt' '' 'created content')) -AllowedPaths @()
+    Assert 'A6 ok=true' ($a6.ok -eq $true)
+    Assert 'A6 file exists' (Test-Path -LiteralPath (Join-Path $wt 'newdir/new.txt'))
+    Assert 'A6 exact content' ((Get-FixtureText $wt 'newdir/new.txt') -eq "created content`n")
+    Assert 'A6 no BOM on created file' (-not (Test-FixtureBom $wt 'newdir/new.txt'))
+
+    # ---------- A7: create where the file already exists ----------
+    $wt = New-FixtureWorktree
+    $f7 = Set-FixtureFile $wt 'exists.txt' "orig`n"
+    $h7 = Get-Sha $f7
+    $a7 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'exists.txt' '' 'clobbered')) -AllowedPaths @()
+    Assert 'A7 ok=false' ($a7.ok -eq $false)
+    Assert 'A7 result=create-exists' ($a7.result -eq 'create-exists')
+    Assert 'A7 existing file unchanged' ((Get-Sha $f7) -eq $h7)
+
+    # ---------- A8: CRLF file, LF blocks => stays CRLF ----------
+    $wt = New-FixtureWorktree
+    Set-FixtureFile $wt 'crlf.txt' "a`r`nb`r`nc`r`n" | Out-Null
+    $a8 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'crlf.txt' 'b' "B`nB2")) -AllowedPaths @()
+    $t8 = Get-FixtureText $wt 'crlf.txt'
+    Assert 'A8 ok=true' ($a8.ok -eq $true)
+    Assert 'A8 exact CRLF content' ($t8 -eq "a`r`nB`r`nB2`r`nc`r`n")
+    Assert 'A8 no lone LF remains' (-not ($t8.Replace("`r`n", '').Contains("`n")))
+
+    # ---------- A9: LF file stays LF ----------
+    $wt = New-FixtureWorktree
+    Set-FixtureFile $wt 'lf.txt' "x`ny`n" | Out-Null
+    $a9 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'lf.txt' 'y' "Y`nZ")) -AllowedPaths @()
+    $t9 = Get-FixtureText $wt 'lf.txt'
+    Assert 'A9 ok=true' ($a9.ok -eq $true)
+    Assert 'A9 exact LF content' ($t9 -eq "x`nY`nZ`n")
+    Assert 'A9 no CR introduced' (-not $t9.Contains("`r"))
+
+    # ---------- A10: file with a BOM keeps its BOM ----------
+    $wt = New-FixtureWorktree
+    Set-FixtureFile $wt 'bom.txt' "alpha`nbeta`n" $true | Out-Null
+    Assert 'A10 fixture starts with BOM' (Test-FixtureBom $wt 'bom.txt')
+    $a10 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'bom.txt' 'beta' 'BETA')) -AllowedPaths @()
+    Assert 'A10 ok=true' ($a10.ok -eq $true)
+    Assert 'A10 BOM preserved' (Test-FixtureBom $wt 'bom.txt')
+    Assert 'A10 content updated' ((Get-FixtureText $wt 'bom.txt') -eq "alpha`nBETA`n")
+
+    # ---------- A11: file with no trailing newline keeps none ----------
+    $wt = New-FixtureWorktree
+    Set-FixtureFile $wt 'nonl.txt' 'no-newline-here' | Out-Null
+    $a11 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'nonl.txt' 'newline' 'NEWLINE')) -AllowedPaths @()
+    $t11 = Get-FixtureText $wt 'nonl.txt'
+    Assert 'A11 ok=true' ($a11.ok -eq $true)
+    Assert 'A11 exact content' ($t11 -eq 'no-NEWLINE-here')
+    Assert 'A11 still no trailing newline' (-not $t11.EndsWith("`n"))
+
+    # ---------- A12: search text full of regex metacharacters ----------
+    $wt = New-FixtureWorktree
+    $meta = '$x = @(1); a.b[0]'
+    Set-FixtureFile $wt 'meta.txt' ("before`n" + $meta + "`nafter`n") | Out-Null
+    $a12 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'meta.txt' $meta 'REPLACED')) -AllowedPaths @()
+    Assert 'A12 ok=true' ($a12.ok -eq $true)
+    Assert 'A12 literal (non-regex) replacement' ((Get-FixtureText $wt 'meta.txt') -eq "before`nREPLACED`nafter`n")
+
+    # ---------- A13: parent escape ----------
+    $wt = New-FixtureWorktree
+    $a13 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk '../escape.txt' 'x' 'y')) -AllowedPaths @()
+    $s13 = Test-DiffApplyPathSafe -Worktree $wt -RelPath '../escape.txt'
+    Assert 'A13 result=path-rejected' ($a13.result -eq 'path-rejected')
+    Assert 'A13 ok=false' ($a13.ok -eq $false)
+    Assert 'A13 reason=parent-escape' ($s13.reason -eq 'parent-escape')
+    Assert 'A13 nothing written outside worktree' (-not (Test-Path -LiteralPath (Join-Path $applyTmp 'escape.txt')))
+
+    # ---------- A14: absolute path ----------
+    $wt = New-FixtureWorktree
+    $abs14 = Join-Path $applyTmp 'abs.txt'
+    $a14 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk $abs14 'x' 'y')) -AllowedPaths @()
+    $s14 = Test-DiffApplyPathSafe -Worktree $wt -RelPath $abs14
+    Assert 'A14 result=path-rejected' ($a14.result -eq 'path-rejected')
+    Assert 'A14 reason=absolute-path' ($s14.reason -eq 'absolute-path')
+    Assert 'A14 nothing written' (-not (Test-Path -LiteralPath $abs14))
+
+    # ---------- A15: .git path ----------
+    $wt = New-FixtureWorktree
+    $a15 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk '.git/config' 'x' 'y')) -AllowedPaths @()
+    $s15 = Test-DiffApplyPathSafe -Worktree $wt -RelPath '.git/config'
+    $s15b = Test-DiffApplyPathSafe -Worktree $wt -RelPath '.GIT/config'
+    Assert 'A15 result=path-rejected' ($a15.result -eq 'path-rejected')
+    Assert 'A15 reason=git-path' ($s15.reason -eq 'git-path')
+    Assert 'A15 .git match is case-insensitive' ($s15b.reason -eq 'git-path')
+    Assert 'A15 nothing written' (-not (Test-Path -LiteralPath (Join-Path $wt '.git/config')))
+
+    # ---------- A16: path outside AllowedPaths ----------
+    $wt = New-FixtureWorktree
+    $f16 = Set-FixtureFile $wt 'src/a.txt' "alpha`n"
+    $h16 = Get-Sha $f16
+    $a16 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'src/a.txt' 'alpha' 'ALPHA')) -AllowedPaths @('other/')
+    Assert 'A16 ok=false' ($a16.ok -eq $false)
+    Assert 'A16 result=scope-rejected' ($a16.result -eq 'scope-rejected')
+    Assert 'A16 file unchanged' ((Get-Sha $f16) -eq $h16)
+
+    # ---------- A17: empty AllowedPaths => unrestricted (oracle's unenforced case) ----------
+    $wt = New-FixtureWorktree
+    Set-FixtureFile $wt 'src/a.txt' "alpha`n" | Out-Null
+    $a17 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'src/a.txt' 'alpha' 'ALPHA')) -AllowedPaths @()
+    Assert 'A17 ok=true (unenforced scope)' ($a17.ok -eq $true)
+    Assert 'A17 content applied' ((Get-FixtureText $wt 'src/a.txt') -eq "ALPHA`n")
+
+    # ---------- A18: deletion (empty replace) ----------
+    $wt = New-FixtureWorktree
+    Set-FixtureFile $wt 'del.txt' "keep1`ndelete me`nkeep2`n" | Out-Null
+    $a18 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'del.txt' "delete me`n" '')) -AllowedPaths @()
+    Assert 'A18 ok=true' ($a18.ok -eq $true)
+    Assert 'A18 text removed, rest intact' ((Get-FixtureText $wt 'del.txt') -eq "keep1`nkeep2`n")
+
+    # ---------- A19: symlinked ancestor directory is an escape ----------
+    $wt = New-FixtureWorktree
+    $linkTarget = Join-Path $applyTmp 'outside-target'
+    New-Item -ItemType Directory -Force -Path $linkTarget | Out-Null
+    # Symlink creation needs privileges we may not have; a directory junction is
+    # the same ReparsePoint escape and needs none. Try both before skipping.
+    $linkKind = ''
+    foreach ($kind in @('SymbolicLink', 'Junction')) {
+        try {
+            New-Item -ItemType $kind -Path (Join-Path $wt 'link') -Target $linkTarget -ErrorAction Stop | Out-Null
+            $linkKind = $kind
+            break
+        } catch { }
+    }
+    if ($linkKind) {
+        $s19 = Test-DiffApplyPathSafe -Worktree $wt -RelPath 'link/x.txt'
+        Assert "A19 reparse-point ancestor rejected ($linkKind)" ($s19.ok -eq $false -and $s19.reason -eq 'symlink-target')
+        $a19 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'link/x.txt' '' 'sneaky')) -AllowedPaths @()
+        Assert 'A19 apply rejects reparse-point path' ($a19.result -eq 'path-rejected')
+        Assert 'A19 nothing written through the link' (-not (Test-Path -LiteralPath (Join-Path $linkTarget 'x.txt')))
+    } else {
+        Write-Host "SKIP  A19 reparse-point check (this environment cannot create symlinks or junctions)" -ForegroundColor Yellow
+    }
+
+    # ---------- A20: assorted Test-DiffApplyPathSafe rejections + the happy path ----------
+    $wt = New-FixtureWorktree
+    Assert 'A20 empty path' ((Test-DiffApplyPathSafe -Worktree $wt -RelPath '   ').reason -eq 'empty-path')
+    Assert 'A20 UNC path' ((Test-DiffApplyPathSafe -Worktree $wt -RelPath '\\server\share\x.txt').reason -eq 'absolute-path')
+    Assert 'A20 control char' ((Test-DiffApplyPathSafe -Worktree $wt -RelPath "a$([char]1)b.txt").reason -eq 'control-char')
+    Assert 'A20 empty interior segment' ((Test-DiffApplyPathSafe -Worktree $wt -RelPath 'a//b.txt').reason -eq 'git-path')
+    $s20 = Test-DiffApplyPathSafe -Worktree $wt -RelPath 'src/deep/ok.txt'
+    Assert 'A20 good path ok=true' ($s20.ok -eq $true)
+    Assert 'A20 good path reason empty' ($s20.reason -eq '')
+    Assert 'A20 good path resolves under worktree' ($s20.full.StartsWith([System.IO.Path]::GetFullPath($wt), [System.StringComparison]::OrdinalIgnoreCase))
+} catch {
+    Write-Host "FAIL  A-section threw: $_" -ForegroundColor Red
+    $script:failures++
+} finally {
+    if (Test-Path -LiteralPath $applyTmp) {
+        Remove-Item -LiteralPath $applyTmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 if ($failures -gt 0) {
     Write-Host "`nFAILED: $failures assertion(s)" -ForegroundColor Red
 } else {
