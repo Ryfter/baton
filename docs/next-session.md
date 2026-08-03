@@ -2,7 +2,60 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
-## ⚑ RESUME HERE — 2026-08-03 (CLI + budget + learning loop SHIPPED; next = d103 diff-apply)
+## ⚑ RESUME HERE — 2026-08-03 (d103 diff-apply BUILT — PR #169 open, HELD for merge)
+
+**PR #169 is open and NOT merged.** 16 commits, +3771/-22 across 14 files. Merge needs
+Kevin's word. Everything below is done and verified.
+
+**What it does.** Baton now has hands for models that have none. A `kind: http` /
+`stdio-json` provider returns SEARCH/REPLACE blocks as text; Baton reads the files and
+applies the blocks. Downstream is untouched — proof-by-diff, frozen contract, scope oracle,
+rework loop all judge the worktree, not the worker. `Test-ProviderAgentic` is **unchanged**
+and the d091 transport veto stays (guarded by `test-instrument-abi`). Eligibility is a new
+`Test-ProviderDiffApply`, gated on explicit per-provider `diff_apply: true`.
+
+**This closes #168 at the root:** `Get-CapabilityCostTierFloor` now sees a `local` floor for
+`code-gen`, so a `stakes=low` edit task is dispatchable.
+
+**LIVE-PROVEN, not just green.** Against the real local model, in throwaway temp worktrees:
+happy path routed at `local` tier and applied in **4s**, only the target file touched; a
+16 KB file with **400 near-identical functions** got exactly the right one edited; a
+36794-byte task was refused in **0.9s with the model never contacted**; envelope-exceeded
+writes **no** capability rating (size is not quality).
+
+**The prompt finding worth keeping:** *"keep each SEARCH section as small as possible while
+still matching only once"* is load-bearing and measured — without it the model bulk-quoted a
+whole file, with it, minimal 3-line edits. Do not let that sentence get dropped.
+
+**Task size is the real variable** (Kevin's field input: a practitioner uses Haiku for *all*
+coding, atomized). Envelope defaults 24000 B / 4 files / 8 blocks are **provisional**; every
+attempt writes a row to `~/.baton/diff-apply-observations.jsonl` with size next to outcome,
+so the right level gets discovered. Corollary worth acting on: haiku's 0.462 `code-gen`
+rating came from 3 large-chunk scope violations and may be measuring **chunk size, not the
+model**.
+
+**Adversarial review earned its keep.** grok found 5 real defects *after* the suite was
+green, 2 of them `ok=true`-with-a-wrong-tree (overlapping matches undercounted; path
+spellings aliasing into a silently-lost edit). Controller review found 2 more in the flush
+path. A sweep also found 7 assertions using case-insensitive `-eq` that would have passed
+with the edit never applied. All fixed; all suites green
+(diff-apply 227, executor 287, conductor 258, routing-lib 54, cli 49, observe 44, abi 36).
+
+**TO TURN IT ON** (Kevin — the harness blocks me from editing `~/.baton/fleet.yaml`): add
+`diff_apply: true` to the `lm-studio` row. **Strict boolean** — a quoted `'true'` silently
+does not opt in. See `docs/diff-apply.md`.
+
+**⚠ Deployed state:** `bootstrap.ps1` ran during Task 7 verification, so `~/.claude/scripts`
+currently holds this **unmerged** branch (re-deployed at the final tip; all six d103 files
+byte-identical). It is **inert** — no fleet row has `diff_apply`, so every provider takes the
+exact same path as before. To revert: `git checkout master` then re-run `bootstrap.ps1`.
+
+**Open issues:** #168 (closed by #169 on merge), #166, #157, #156, #152, #150, #149, #123,
+#117, #115, #97, #96, #95, #91.
+
+---
+
+## Prior entry — 2026-08-03 (CLI + budget + learning loop SHIPPED; next = d103 diff-apply)
 
 **Everything merged and deployed. No open PRs.**
 

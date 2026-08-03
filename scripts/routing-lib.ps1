@@ -164,6 +164,10 @@ function Select-Capability {
                 quality_detail = $detail
                 role = $p.role; platform = $p.platform
                 agentic = $p.agentic   # Slice 2 (d078) edit-eligibility passthrough (null when absent)
+                diff_apply = $p.diff_apply   # d103 edit-eligibility passthrough: without it the
+                                             # spawner's edit-pool filter drops every diff-apply
+                                             # provider before dispatch, and the executor has to
+                                             # re-read fleet.yaml per candidate to recover it.
                 probe = $p.probe; max_prompt_bytes = $p.max_prompt_bytes
                 budget = $p.budget; saturate = $p.saturate; saturation_target = $p.saturation_target
                 sat_util = $null

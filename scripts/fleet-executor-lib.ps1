@@ -12,6 +12,7 @@
 . "$PSScriptRoot/usage-probe-lib.ps1"   # d090 proactive preflight + cache/advisories
 . "$PSScriptRoot/verification-lib.ps1"   # Invoke-VerificationContract etc. (d082 V2)
 . "$PSScriptRoot/routing-observe-lib.ps1"   # #159 write-on-observe outcome ratings
+. "$PSScriptRoot/diff-apply-lib.ps1"   # d103 parse/apply/context for the diff-apply dispatch branch
 
 function New-RunWorktree {
     <# Throwaway worktree at <repo-parent>/.baton-worktrees/<run-id> on a new branch
@@ -133,10 +134,71 @@ function Test-ProviderAgentic {
     return (([string]$Provider.platform) -in @('claude', 'codex', 'gemini'))
 }
 
+function Test-ProviderDiffApply {
+    <# Diff-apply eligibility (d103, closes #168): a provider reachable only over a
+       text transport (kind http / stdio-json) has no filesystem harness, but it can
+       still take an edit task when Baton does the hands — read the files in, take
+       SEARCH/REPLACE blocks back, apply them to the worktree. The opt-in is explicit
+       and required: `diff_apply: true` on the fleet row. Absent or false -> $false.
+       A `kind: cli` provider is never a diff-apply worker — it already has hands.
+       Pure predicate over a provider object: deliberately depends on nothing in
+       diff-apply-lib.ps1, so eligibility can be asked long before any edit is applied.
+       Accepts a fleet provider hashtable or a Select-Capability candidate object. #>
+    param([Parameter(Mandatory)]$Provider)
+    if ($Provider.diff_apply -ne $true) { return $false }
+    return ([string]$Provider.kind -in @('http', 'stdio-json'))
+}
+
+function Test-ProviderEditCapable {
+    <# The question every edit call site actually asks: may this provider take an edit
+       task at all? True when it brings its own filesystem harness
+       (Test-ProviderAgentic) OR when Baton can apply its diffs for it
+       (Test-ProviderDiffApply). Test-ProviderAgentic keeps the d091 transport veto
+       exactly as it was — diff-apply is a SEPARATE capability, not a relaxation of
+       that veto: an `agentic: true` marker still cannot grant edit powers to a text
+       transport, only an explicit `diff_apply: true` can. #>
+    param([Parameter(Mandatory)]$Provider)
+    return ((Test-ProviderAgentic -Provider $Provider) -or (Test-ProviderDiffApply -Provider $Provider))
+}
+
+function Resolve-CandidateEditMode {
+    <# How — if at all — a ROUTED CANDIDATE may take an edit task:
+       'agentic'    it brings its own filesystem harness (d078),
+       'diff-apply' Baton reads the files and applies its SEARCH/REPLACE blocks (d103),
+       'none'       it may not take edit work.
+
+       Why this exists instead of calling Test-ProviderEditCapable on the candidate:
+       Select-Capability's candidate projection carries `agentic` but NOT
+       `diff_apply`, so a pure predicate over the candidate alone would filter every
+       diff-apply provider out of the pool before it could ever be dispatched. Prefer
+       what the candidate carries; fall back to a fleet.yaml re-read for the missing
+       opt-in — the same prefer-candidate-then-reread shape
+       Sort-ContextOverflowCandidates uses for max_prompt_bytes.
+
+       The d091 transport veto is untouched: 'agentic' is still decided solely by
+       Test-ProviderAgentic, so an `agentic: true` marker on a text transport still
+       grants nothing. Only an explicit `diff_apply: true` reaches 'diff-apply'. #>
+    param(
+        [Parameter(Mandatory)]$Candidate,
+        [string]$FleetPath = ''
+    )
+    if (Test-ProviderAgentic -Provider $Candidate) { return 'agentic' }
+    if (Test-ProviderDiffApply -Provider $Candidate) { return 'diff-apply' }
+    if (-not [string]::IsNullOrWhiteSpace($FleetPath)) {
+        $row = $null
+        try { $row = Get-FleetProvider -Name ([string]$Candidate.name) -Path $FleetPath } catch { $row = $null }
+        if ($null -ne $row -and (Test-ProviderDiffApply -Provider $row)) { return 'diff-apply' }
+    }
+    return 'none'
+}
+
 function Get-CapabilityCostTierFloor {
     <# Cheapest cost_tier among enabled fleet providers that claim $Capability.
        For code-gen/code-transform, only edit-eligible providers count
-       (Test-ProviderAgentic). Also applies Select-Capability context floors
+       (Test-ProviderEditCapable — agentic harness OR diff-apply opt-in; d103/#168
+       is what lets a local diff-apply provider put a real floor under code-gen
+       instead of the whole capability reading UNAVAILABLE below the paid tier).
+       Also applies Select-Capability context floors
        (Get-CapabilityFloors + known-too-small context). Returns
        'local'|'free'|'paid'|'UNAVAILABLE'. Fail-soft: missing/unparseable
        fleet => 'UNAVAILABLE', never throws. #>
@@ -165,7 +227,7 @@ function Get-CapabilityCostTierFloor {
                          else { $generalCaps -contains $Capability }
             if (-not $claimsCap) { continue }
             if ($Capability -in @('code-gen', 'code-transform')) {
-                if (-not (Test-ProviderAgentic -Provider $prov)) { continue }
+                if (-not (Test-ProviderEditCapable -Provider $prov)) { continue }
             }
             # Same as Select-Capability: known-too-small context disqualifies;
             # unknown/missing context never does.
@@ -232,8 +294,14 @@ function Get-EditPoolExclusions {
                 [void]$rows.Add([ordered]@{ name = $name; stage = 'static'; reason = "does not claim $Capability"; reset_at = $null; eta = $null })
                 continue
             }
-            if (-not (Test-ProviderAgentic -Provider $prov)) {
-                [void]$rows.Add([ordered]@{ name = $name; stage = 'static'; reason = 'not edit-eligible'; reset_at = $null; eta = $null })
+            if (-not (Test-ProviderEditCapable -Provider $prov)) {
+                # Name the actionable remedy: a text-transport provider is one config
+                # line (diff_apply: true) away from eligible, so say so instead of the
+                # generic verdict an operator can do nothing about.
+                $editReason = if ([string]$prov.kind -in @('http', 'stdio-json')) {
+                    'not edit-eligible (no diff_apply opt-in)'
+                } else { 'not edit-eligible' }
+                [void]$rows.Add([ordered]@{ name = $name; stage = 'static'; reason = $editReason; reset_at = $null; eta = $null })
                 continue
             }
             if ($capFloors.ContainsKey($Capability) -and $prov.context -and
@@ -417,6 +485,192 @@ function Invoke-AgenticDispatchAttempt {
     }
 }
 
+function Invoke-DiffApplyAttempt {
+    <# One dispatch to a provider that has no filesystem harness (d103, closes #168):
+       Baton reads the in-scope files, hands them to the model as text, takes
+       SEARCH/REPLACE blocks back, and applies them to the worktree itself.
+
+       Same return shape as Invoke-AgenticDispatchAttempt —
+       @{ result = @{ stdout; stderr; exit_code; duration_s }; dispatch_error } — plus
+       `prompt_sent`, the prompt that was ACTUALLY dispatched. The caller must measure
+       that one: the agentic prompt it also built was never sent, and feeding its size
+       into context-overflow detection would mis-decide the failover to a
+       larger-context peer.
+
+       This function produces a diff; it never judges one. The scope oracle and the
+       frozen verification contract downstream remain the sole authorities on whether
+       the resulting work is acceptable. #>
+    param(
+        [Parameter(Mandatory)]$Candidate,
+        [AllowEmptyString()][AllowNull()][string]$TaskDesc = '',
+        [AllowEmptyString()][AllowNull()][string]$InputBlock = '',
+        [AllowNull()][string[]]$AllowedPaths = @(),
+        [Parameter(Mandatory)][string]$DepthTier,
+        [Parameter(Mandatory)][string]$Worktree,
+        [Parameter(Mandatory)][string]$FleetPath,
+        [Parameter(Mandatory)][string]$UsagePath,
+        [AllowEmptyString()][AllowNull()][string]$RunDir = '',
+        [AllowEmptyString()][AllowNull()][string]$TaskId = '',
+        [string]$ObservationPath = '',
+        [scriptblock]$Dispatcher
+    )
+    $name = [string]$Candidate.name
+    $providerRow = $null
+    try { $providerRow = Get-FleetProvider -Name $name -Path $FleetPath } catch { $providerRow = $null }
+    $limitsSource = if ($null -ne $providerRow) { $providerRow } else { $Candidate }
+    $limits = Get-DiffApplyLimits -Provider $limitsSource
+
+    # Telemetry row (d103 Task 4). Every field is filled in as it becomes known and
+    # written exactly once, on whichever path this attempt exits by. Fail-soft:
+    # Write-DiffApplyObservation swallows its own faults and can never fail a task.
+    $obs = [ordered]@{
+        run_id         = $(if ($RunDir) { Split-Path -Leaf $RunDir } else { '' })
+        task_id        = [string]$TaskId
+        provider       = $name
+        model_version  = $(if ($null -ne $providerRow) { [string]$providerRow.model_default } else { '' })
+        context_bytes  = 0
+        file_count     = 0
+        blocks_emitted = 0
+        blocks_applied = 0
+        parse_result   = ''
+        apply_result   = ''
+        verdict        = ''
+    }
+
+    $ctx = Get-DiffApplyContext -Worktree $Worktree -AllowedPaths $AllowedPaths -Limits $limits
+    $obs.context_bytes = [long]$ctx.context_bytes
+    $obs.file_count = [int]$ctx.file_count
+    if (-not $ctx.ok) {
+        # Too big to send: the model never sees this task. The reason string carries
+        # the literal 'diff-apply envelope', which Resolve-OutcomeRatingValue matches
+        # to skip the capability rating — size is not evidence about model quality.
+        $obs.apply_result = 'envelope-exceeded'
+        $obs.verdict = 'fail'
+        [void](Write-DiffApplyObservation -Row $obs -Path $ObservationPath)
+        return @{
+            result = @{ stdout = ''; stderr = [string]$ctx.reason; exit_code = -1; duration_s = 0 }
+            dispatch_error = [string]$ctx.reason
+            prompt_sent = ''
+        }
+    }
+
+    $prompt = Build-DiffApplyPrompt -TaskDesc $TaskDesc -InputBlock $InputBlock `
+        -Context $ctx -AllowedPaths $AllowedPaths -Limits $limits
+
+    # Deliberately NO Push-Location, unlike the agentic path: this worker never
+    # touches the filesystem — it is handed file text and returns text, and Baton
+    # does the writing below. Setting cwd to the worktree would imply a filesystem
+    # relationship this transport does not have. The asymmetry is intentional.
+    $attemptResult = $null
+    try {
+        $attemptResult = if ($Dispatcher) { & $Dispatcher $Candidate $prompt $DepthTier }
+                         else { Invoke-Fleet -Name $name -Prompt $prompt -Path $FleetPath -Tier $DepthTier -UsagePath $UsagePath -NoJournal }
+    } catch {
+        $msg = $_.Exception.Message
+        $obs.apply_result = 'dispatch-error'
+        $obs.verdict = 'fail'
+        [void](Write-DiffApplyObservation -Row $obs -Path $ObservationPath)
+        return @{
+            result = @{ stdout = ''; stderr = $msg; exit_code = -1; duration_s = 0 }
+            dispatch_error = $msg; prompt_sent = $prompt
+        }
+    }
+    if ($null -eq $attemptResult) {
+        $obs.apply_result = 'dispatch-error'
+        $obs.verdict = 'fail'
+        [void](Write-DiffApplyObservation -Row $obs -Path $ObservationPath)
+        return @{
+            result = @{ stdout = ''; stderr = 'dispatch returned no result'; exit_code = -1; duration_s = 0 }
+            dispatch_error = 'dispatch returned no result'; prompt_sent = $prompt
+        }
+    }
+    if ([int]$attemptResult.exit_code -ne 0) {
+        # The provider itself failed; hand the result through untouched so the
+        # caller's existing usage classification and failover logic see it verbatim.
+        $obs.apply_result = 'dispatch-failed'
+        $obs.verdict = 'fail'
+        [void](Write-DiffApplyObservation -Row $obs -Path $ObservationPath)
+        return @{ result = $attemptResult; dispatch_error = ''; prompt_sent = $prompt }
+    }
+
+    $stdout = [string]$attemptResult.stdout
+    $duration = if ($null -ne $attemptResult.duration_s) { $attemptResult.duration_s } else { 0 }
+    # Carry the dispatch's own usage observation onto a rebuilt failure result when
+    # there is one: the DISPATCH succeeded (no quota/overflow event), only the work
+    # product was unusable. Dropping it would make the caller reclassify a healthy
+    # provider from a synthetic exit 1 and cool it down for a bad answer.
+    $carriedUsage = $null
+    if ($attemptResult -is [System.Collections.IDictionary]) {
+        if ($attemptResult.Contains('usage_observation')) { $carriedUsage = $attemptResult['usage_observation'] }
+    } elseif ($null -ne $attemptResult.PSObject.Properties['usage_observation']) {
+        $carriedUsage = $attemptResult.usage_observation
+    }
+    $newFailure = {
+        param([string]$Stderr)
+        $r = [ordered]@{ stdout = $stdout; stderr = $Stderr; exit_code = 1; duration_s = $duration }
+        if ($null -ne $carriedUsage) { $r['usage_observation'] = $carriedUsage }
+        return @{ result = $r; dispatch_error = ''; prompt_sent = $prompt }
+    }.GetNewClosure()
+
+    $parsed = ConvertFrom-EditBlocks -Text $stdout
+    $obs.parse_result = [string]$parsed.result
+    $obs.blocks_emitted = @($parsed.blocks).Count
+    if ([string]$parsed.result -ne 'ok') {
+        # 'empty' — prose with no blocks — is a real FAILURE, not a no-change pass.
+        # It has to be rejected here, at the parse layer: Invoke-EditBlockApply
+        # returns ok=$true for an empty block list, so the applier will not catch it.
+        $obs.verdict = 'fail'
+        [void](Write-DiffApplyObservation -Row $obs -Path $ObservationPath)
+        $detail = if ($parsed.error) { [string]$parsed.error } else { 'no SEARCH/REPLACE blocks in the model output' }
+        return & $newFailure "diff-apply: parse $($parsed.result): $detail"
+    }
+
+    # The block cap is part of the SIZE ENVELOPE, and the envelope is how Baton
+    # discovers how small a task has to be for a cheap model to succeed. An
+    # advertised-but-unenforced cap makes that data meaningless: a model told
+    # "emit at most 8 blocks" that emits 50 would have all 50 applied and the
+    # observation would record a success at a size the envelope says is out of
+    # bounds. Enforced here, after parsing and BEFORE applying, so the worktree is
+    # left byte-identical. Same failure shape as the over-context path above,
+    # including the literal 'diff-apply envelope' that Resolve-OutcomeRatingValue
+    # matches to skip the capability rating — an oversized task is not evidence
+    # about model quality.
+    $maxBlocks = 8
+    $maxBlocksVal = Get-DiffApplyField -Obj $limits -Name 'max_blocks'
+    if ($null -ne $maxBlocksVal) {
+        $mb = 0
+        if ([int]::TryParse([string]$maxBlocksVal, [ref]$mb)) { $maxBlocks = $mb }
+    }
+    if ([int]$obs.blocks_emitted -gt $maxBlocks) {
+        $capReason = "task exceeds diff-apply envelope: $($obs.blocks_emitted) blocks > limit $maxBlocks"
+        $obs.apply_result = 'envelope-exceeded'
+        $obs.verdict = 'fail'
+        [void](Write-DiffApplyObservation -Row $obs -Path $ObservationPath)
+        return @{
+            result = @{ stdout = ''; stderr = $capReason; exit_code = -1; duration_s = 0 }
+            dispatch_error = $capReason
+            # Unlike the over-context refusal, this prompt WAS dispatched — report it
+            # so the caller measures what was actually sent (the same invariant that
+            # makes this function return prompt_sent at all).
+            prompt_sent = $prompt
+        }
+    }
+
+    $applied = Invoke-EditBlockApply -Worktree $Worktree -Blocks @($parsed.blocks) -AllowedPaths $AllowedPaths
+    $obs.apply_result = [string]$applied.result
+    $obs.blocks_applied = [int]$applied.blocks_applied
+    if (-not $applied.ok) {
+        # All-or-nothing: the worktree is byte-identical to before this attempt.
+        $obs.verdict = 'fail'
+        [void](Write-DiffApplyObservation -Row $obs -Path $ObservationPath)
+        return & $newFailure "diff-apply: $($applied.result): $($applied.error)"
+    }
+
+    $obs.verdict = 'pass'
+    [void](Write-DiffApplyObservation -Row $obs -Path $ObservationPath)
+    return @{ result = $attemptResult; dispatch_error = ''; prompt_sent = $prompt }
+}
+
 function Resolve-AgenticSubstituteCandidates {
     <# Shared quality-first re-resolution for proactive and reactive usage hops. #>
     param(
@@ -436,7 +690,7 @@ function Resolve-AgenticSubstituteCandidates {
         -UsagePath $UsagePath -RatingsPath $RatingsPath -JournalPath $JournalPath
     $eligible = @($retryRaw | Where-Object {
         ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and
-        (Test-ProviderAgentic -Provider $_) -and
+        ((Resolve-CandidateEditMode -Candidate $_ -FleetPath $FleetPath) -ne 'none') -and
         (-not $AttemptedProviders.Contains([string]$_.name)) -and
         ([double]$_.quality -ge [double]$OriginalCandidate.quality)
     })
@@ -822,8 +1076,9 @@ function New-AgenticSpawner {
             -UsagePath $UsagePath -RatingsPath $RatingsPath -JournalPath $JournalPath
         # Edit dispatch is fleet-only (Invoke-Fleet resolves names against fleet.yaml);
         # tools.yaml candidates cannot take edit dispatch even if they infer agentic
-        # via a platform field, so require source='fleet' before the agentic test.
-        $cands = @($raw | Where-Object { ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and (Test-ProviderAgentic -Provider $_) })
+        # via a platform field, so require source='fleet' before the eligibility test.
+        $cands = @($raw | Where-Object { ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and
+            ((Resolve-CandidateEditMode -Candidate $_ -FleetPath $FleetPath) -ne 'none') })
         if ($cands.Count -lt 1) {
             # Message-only remedy (#127): name the stakes/tier collision; do NOT auto-escalate.
             # #124: audit per-provider exclusions to tell 'the roster cannot do this'
@@ -971,13 +1226,30 @@ function New-AgenticSpawner {
         }
 
         $preTree = Get-WorktreeTreeSha -Worktree $Worktree
-        $firstAttempt = Invoke-AgenticDispatchAttempt -Candidate $pick -Prompt $prompt -DepthTier $policy.depth_tier `
-            -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
+        # d103: a text-transport provider with the diff_apply opt-in takes the same
+        # task through a different door — Baton reads the files in and applies the
+        # blocks it gets back. Everything after this branch (proof-by-diff, per-task
+        # diff, usage observation, verification) is identical for both doors.
+        $isDiffApply = (Resolve-CandidateEditMode -Candidate $pick -FleetPath $FleetPath) -eq 'diff-apply'
+        $firstAttempt = if ($isDiffApply) {
+            Invoke-DiffApplyAttempt -Candidate $pick -TaskDesc ([string]$task.desc) -InputBlock $busInputs `
+                -AllowedPaths $scopePaths -DepthTier $policy.depth_tier -Worktree $Worktree `
+                -FleetPath $FleetPath -UsagePath $UsagePath -RunDir $RunDir -TaskId ([string]$task.id) `
+                -Dispatcher $Dispatcher
+        } else {
+            Invoke-AgenticDispatchAttempt -Candidate $pick -Prompt $prompt -DepthTier $policy.depth_tier `
+                -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
+        }
         $res = $firstAttempt.result
+        # Measure the prompt that was ACTUALLY dispatched. On a diff-apply dispatch
+        # $prompt (the agentic prompt) was built but never sent; reporting its size
+        # would feed a wrong prompt_bytes into context-overflow detection, which is
+        # what decides whether to fail over to a larger-context peer.
+        $dispatchedPrompt = if ($isDiffApply) { [string]$firstAttempt.prompt_sent } else { $prompt }
         # Capture on success AND failure — a failed attempt's residue is what rework needs.
         Write-TaskBusOutput -RunDir $RunDir -TaskId ([string]$task.id) -Stdout $(if ($null -ne $res) { [string]$res.stdout } else { '' })
         $observation = Get-AgenticUsageObservation -Result $res -Worker ([string]$pick.name) -UsagePath $UsagePath `
-            -PromptBytes (Get-Utf8ByteCount -Text $prompt)
+            -PromptBytes (Get-Utf8ByteCount -Text $dispatchedPrompt)
         $firstPostTree = Get-WorktreeTreeSha -Worktree $Worktree
         $hadPartialDiff = ($null -ne $preTree) -and ($null -ne $firstPostTree) -and ($preTree -ne $firstPostTree)
 
@@ -1041,12 +1313,23 @@ function New-AgenticSpawner {
                 $hopLine = "usage failover: $($pick.name) -> $($substitute.name) ($($observation.classification); $resetText)"
             }
 
-            $retryAttempt = Invoke-AgenticDispatchAttempt -Candidate $substitute -Prompt $prompt -DepthTier $retryPolicy.depth_tier `
-                -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
+            # A failover target may be a diff-apply provider too — same branch, and the
+            # same "measure what was actually sent" rule.
+            $subIsDiffApply = (Resolve-CandidateEditMode -Candidate $substitute -FleetPath $FleetPath) -eq 'diff-apply'
+            $retryAttempt = if ($subIsDiffApply) {
+                Invoke-DiffApplyAttempt -Candidate $substitute -TaskDesc ([string]$task.desc) -InputBlock $busInputs `
+                    -AllowedPaths $scopePaths -DepthTier $retryPolicy.depth_tier -Worktree $Worktree `
+                    -FleetPath $FleetPath -UsagePath $UsagePath -RunDir $RunDir -TaskId ([string]$task.id) `
+                    -Dispatcher $Dispatcher
+            } else {
+                Invoke-AgenticDispatchAttempt -Candidate $substitute -Prompt $prompt -DepthTier $retryPolicy.depth_tier `
+                    -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
+            }
             $res = $retryAttempt.result
+            $retryPrompt = if ($subIsDiffApply) { [string]$retryAttempt.prompt_sent } else { $prompt }
             Write-TaskBusOutput -RunDir $RunDir -TaskId ([string]$task.id) -Stdout $(if ($null -ne $res) { [string]$res.stdout } else { '' })
             [void](Get-AgenticUsageObservation -Result $res -Worker ([string]$substitute.name) -UsagePath $UsagePath `
-                -PromptBytes (Get-Utf8ByteCount -Text $prompt))
+                -PromptBytes (Get-Utf8ByteCount -Text $retryPrompt))
             $pick = $substitute
             $alts = $retryAlts
             $policy = $retryPolicy

@@ -371,4 +371,39 @@ providers:
     Remove-Item -LiteralPath $tmpReactive -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# ---- d103: the candidate projection must carry diff_apply ----
+# Without this passthrough the spawner's edit-pool filter drops every diff-apply
+# provider before dispatch, and the executor is forced to re-read fleet.yaml per
+# candidate to recover the field. Placeholder names only — no real model ids.
+$tmpDA = Join-Path ([System.IO.Path]::GetTempPath()) ("routing-diffapply-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $tmpDA | Out-Null
+try {
+    $daFleet = Join-Path $tmpDA 'fleet.yaml'
+    Set-Content -LiteralPath $daFleet -Encoding utf8NoBOM -Value @'
+providers:
+  - name: local-host-a
+    kind: http
+    enabled: true
+    cost_tier: local
+    diff_apply: true
+    capabilities: [code]
+  - name: cli-host-b
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    capabilities: [code]
+    command_template: 'echo "{{prompt}}"'
+'@
+    $daCands = Select-Capability -Capability code -FleetPath $daFleet `
+        -ToolsPath (Join-Path $tmpDA 'none.yaml') -UsagePath (Join-Path $tmpDA 'usage.jsonl') `
+        -RatingsPath (Join-Path $tmpDA 'ratings.jsonl') -JournalPath (Join-Path $tmpDA 'routing.jsonl')
+    $daRow = @($daCands | Where-Object { $_.name -eq 'local-host-a' })
+    Check 'd103 diff-apply provider is projected' ($daRow.Count -eq 1)
+    Check 'd103 projection carries diff_apply = true' ($daRow.Count -eq 1 -and $daRow[0].diff_apply -eq $true)
+    $cliRow = @($daCands | Where-Object { $_.name -eq 'cli-host-b' })
+    Check 'd103 absent diff_apply projects as null, not false' ($cliRow.Count -eq 1 -and $null -eq $cliRow[0].diff_apply)
+} finally {
+    Remove-Item -LiteralPath $tmpDA -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 if ($fail -gt 0) { Write-Host "`n$fail FAILED"; exit 1 } else { Write-Host "`nALL PASS"; exit 0 }
