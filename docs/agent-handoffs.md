@@ -67,6 +67,16 @@ it — re-copying is how drift starts.
   (platform `grok` is outside d078's auto-infer set). Grimdex pointer stanza is
   maintained by `grimdex wire-project` alongside CLAUDE/AGENTS/GEMINI.
 
+  `agentic` is one of two edit-eligibility fields on a fleet row; the other is
+  `diff_apply` (decision d103, `feat/diff-apply-worker-path`). Where `agentic: true`
+  claims a provider has its own filesystem harness (a CLI that opens and saves files
+  itself), `diff_apply: true` opts a text-only transport (`kind: http` /
+  `kind: stdio-json`) into a different mechanism entirely: Baton reads the files,
+  the model returns SEARCH/REPLACE edit blocks as text, and Baton applies them. The
+  scope oracle and the frozen verification contract are unchanged and remain the
+  sole authorities either way — diff-apply only changes who holds the pen, not who
+  judges the result. See `docs/diff-apply.md` for the full opt-in and grammar.
+
 ## Drift policy
 - Change a **shared** rule → change it **here** only; the model files don't repeat
   it, so they can't drift.

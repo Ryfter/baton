@@ -426,12 +426,18 @@ planning work that already exists.
 '@
 
 function Test-PlannerProviderEditEligible {
-    <# Mirror of Test-ProviderAgentic (fleet-executor-lib.ps1 / d078+d091) for the
-       planner evidence path only — keeps conductor-lib free of the executor import.
-       Explicit agentic flag wins; else platform ∈ {claude,codex,gemini}; http /
-       stdio-json kinds are never edit-eligible. #>
+    <# Mirror of Test-ProviderEditCapable (fleet-executor-lib.ps1 / d078+d091+d103)
+       for the planner evidence path only — keeps conductor-lib free of the executor
+       import. Two independent ways to be edit-eligible, matching the executor pair:
+        - Test-ProviderAgentic — the provider brings its own filesystem harness:
+          explicit agentic flag wins, else platform ∈ {claude,codex,gemini}. The d091
+          veto stands: http / stdio-json kinds are never agentic, marker or not.
+        - Test-ProviderDiffApply — a http / stdio-json provider that explicitly opts
+          in with `diff_apply: true`, so Baton applies its edits for it (d103/#168).
+       Kept in sync by hand; the agreement drift guard lives in
+       test-fleet-executor-lib.ps1 (the EA case table). #>
     param([Parameter(Mandatory)]$Provider)
-    if ([string]$Provider.kind -in @('http', 'stdio-json')) { return $false }
+    if ([string]$Provider.kind -in @('http', 'stdio-json')) { return ($Provider.diff_apply -eq $true) }
     if ($null -ne $Provider.agentic) { return [bool]$Provider.agentic }
     return (([string]$Provider.platform) -in @('claude', 'codex', 'gemini'))
 }

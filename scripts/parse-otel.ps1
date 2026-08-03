@@ -218,7 +218,14 @@ for ($i = $skipCount; $i -lt $allBlocks.Count; $i++) {
     }
     $costStr = "{0:F4}" -f $costValue
 
-    $newJournalLines += "$ts | otel | $model | in:$inTok out:$outTok | `$$costStr | api_request$($script:JobTag)"
+    # #171: emit tok:N(exact) as well as in:/out:. The window-budget fold
+    # (Parse-ModelRoutingLine) treats a line WITHOUT a tok: field as "not
+    # consumption" and silently skips it, so without this every Claude Code
+    # request was written to the journal and then dropped by the budget — the
+    # one provider the budget exists to protect was the one it could not see.
+    # in:/out: stay for detail; tok: is the total the fold reads.
+    $totalTok = [int]$inTok + [int]$outTok
+    $newJournalLines += "$ts | otel | $model | in:$inTok out:$outTok | `$$costStr | api_request$($script:JobTag) | tok:$totalTok(exact)"
 }
 
 if ($newJournalLines.Count -gt 0) {

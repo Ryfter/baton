@@ -296,6 +296,23 @@ providers:
         -RatingsPath $ratings -FleetPath $fleetPath -Timestamp '2026-08-03T00:00:12Z'
     Assert 'X1 check-failed after rework → bad' ($rCheck.written -eq $true -and $rCheck.rating -eq 'bad')
 
+    # ---------- 11. d103: an over-envelope diff-apply task produces NO rating ----------
+    # The task was refused for SIZE before the model ever saw it — that is not
+    # evidence about model quality (the #156 principle, applied to size).
+    $envelopeWhy = 'local-host-a: dispatch error: task exceeds diff-apply envelope: 30002 bytes > limit 24000 (ambiguous)'
+    Assert '11a diff-apply envelope failure yields no rating' (
+        $null -eq (Resolve-OutcomeRatingValue -Verdict 'fail' -FailureCategory 'dispatch-error' -Why $envelopeWhy))
+    Assert '11b ordinary fail verdict still rates bad' (
+        (Resolve-OutcomeRatingValue -Verdict 'fail' -FailureCategory 'check-failed' `
+            -Why 'verification fail: check-failed') -eq 'bad')
+    $rEnvelope = Add-OutcomeRating `
+        -RunId 'run-envelope-1' -TaskId 'te' -Capability 'code-gen' -Candidate 'local-host-a' `
+        -Verification @{ verdict = 'fail'; failure_category = 'dispatch-error'; grade = 'invalid' } `
+        -Why $envelopeWhy `
+        -RatingsPath $ratings -FleetPath $fleetPath -Timestamp '2026-08-03T00:00:13Z'
+    Assert '11c envelope failure writes nothing through Add-OutcomeRating' (
+        $rEnvelope.written -eq $false -and $rEnvelope.skipped -eq 'availability-or-unmapped')
+
 } finally {
     if ($null -ne $savedHome) { $env:BATON_HOME = $savedHome }
     else { Remove-Item Env:BATON_HOME -ErrorAction SilentlyContinue }

@@ -88,6 +88,13 @@ function Resolve-OutcomeRatingValue {
         [string]$Why = '',
         [string]$Labor = ''
     )
+    # d103: an over-envelope diff-apply task was refused for SIZE before the model
+    # ever saw it — size is not evidence about model quality. Same principle as #156
+    # (availability is not quality), applied to a different non-quality cause.
+    # Deliberately NOT folded into Test-AvailabilityOutcome: an oversized task is not
+    # an availability event, and overloading that function would make its name a lie.
+    if ($Why -match 'diff-apply\s+envelope') { return $null }
+
     if (Test-AvailabilityOutcome -FailureCategory $FailureCategory -Why $Why -Labor $Labor -Verdict $Verdict) {
         return $null
     }
