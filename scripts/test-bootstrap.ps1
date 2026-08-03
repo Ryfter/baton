@@ -106,4 +106,44 @@ Assert "bootstrap retires all three obsolete HTTP hatches" (
 Assert "planner prompt seeded via Copy-IfMissing (never clobbers a tuned live prompt)" `
     ($bootstrapContent -match 'Copy-IfMissing\s+\$promptSrc\s+\$promptDst')
 
+# ---- #166: deploy by exclusion + closure guard ----
+# The old hand-maintained include list omitted new scripts three releases running
+# and shipped a `memory ingest` that died dot-sourcing a lib that was never
+# deployed. These lock in the inversion and the guard.
+
+Assert "deploys by exclusion, not a hand-maintained include list" (
+    $bootstrapContent -match '\$deployExcludePatterns\s*=' -and
+    $bootstrapContent -match "Get-ChildItem[^\n]*'scripts'[^\n]*-Filter\s+'\*\.ps1'")
+Assert "excludes test-* and smoke-* by PATTERN so new ones are excluded automatically" (
+    $bootstrapContent -match "'test-\*\.ps1'" -and $bootstrapContent -match "'smoke-\*\.ps1'")
+Assert "self-excludes bootstrap.ps1" ($bootstrapContent -match "'bootstrap\.ps1'\s*#")
+Assert "still ships the non-.ps1 verbs.yaml asset" ($bootstrapContent -match '\$deployAssets\s*=\s*@\(\s*''verbs\.yaml''')
+Assert "asserts dot-source closure" ($bootstrapContent -match 'deploy closure')
+Assert "asserts verbs.yaml runners resolve" ($bootstrapContent -match 'verbs\.yaml runners')
+
+# The closure regex must survive PowerShell string expansion. Written in a
+# double-quoted string WITHOUT a backtick, `$PSScriptRoot` expands to this
+# script's own path and the pattern silently matches nothing — which is exactly
+# what happened on this guard's first run. Assert the escape is present AND that
+# the pattern the file builds actually matches the real dot-source shape.
+Assert "closure regex escapes `$PSScriptRoot (else it expands and matches nothing)" (
+    $bootstrapContent -match 'Join-Path\\s\+`\\`\$PSScriptRoot')
+
+$joinPathPattern = "Join-Path\s+`\`$PSScriptRoot\s+'([A-Za-z0-9._-]+\.ps1)'"
+$dotSourceSample = ". (Join-Path `$PSScriptRoot 'memory-ingest-lib.ps1')"
+Assert "closure regex matches the Join-Path dot-source shape" (
+    [regex]::Matches($dotSourceSample, $joinPathPattern).Count -eq 1)
+$quotedSample = '. "$PSScriptRoot/fleet-lib.ps1"'
+Assert "closure regex matches the quoted dot-source shape" (
+    [regex]::Matches($quotedSample, '\$PSScriptRoot[/\\]([A-Za-z0-9._-]+\.ps1)').Count -eq 1)
+
+# The specific file whose absence broke `memory ingest`: it must now be shipped,
+# i.e. NOT excluded. Guards against someone "tidying" it back onto the deny list.
+Assert "memory-ingest-lib.ps1 is not excluded (its absence broke memory ingest)" (
+    $bootstrapContent -notmatch "'memory-ingest-lib\.ps1'")
+
+# Live: a dry-run must report closure verified, not broken.
+Assert "dry-run reports deploy closure verified" ($out -match 'deploy closure verified')
+Assert "dry-run reports verbs.yaml runners resolve" ($out -match 'verbs\.yaml runners all resolve')
+
 if ($failures -gt 0) { exit 1 } else { exit 0 }
