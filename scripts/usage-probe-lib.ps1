@@ -190,26 +190,309 @@ function ConvertFrom-CodexRateLimitResponse {
     return ,([object[]]$rows.ToArray())
 }
 
+function Get-ProbeObjectField {
+    <# Read one field off either a hashtable or a PSCustomObject without throwing.
+       Probe payloads arrive as hashtables in-process and as PSCustomObjects after
+       a JSON round-trip through the cache; both must read the same. #>
+    param($InputObject, [Parameter(Mandatory)][string]$Field)
+    if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        if ($InputObject.Contains($Field)) { return $InputObject[$Field] }
+        return $null
+    }
+    $property = $InputObject.PSObject.Properties[$Field]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Resolve-CodexBarBinaryPath {
+    <# Binary resolution order: an explicit usage_policy.probe_command, then
+       codexbar-cli on PATH, then the default Windows install location built from
+       LOCALAPPDATA. No absolute user path is ever hardcoded in the repo. Returns
+       $null when nothing resolves — the caller then probes nothing. #>
+    param([string]$ProbeCommand)
+    if (-not [string]::IsNullOrWhiteSpace($ProbeCommand)) { return $ProbeCommand.Trim() }
+    try {
+        $onPath = @(Get-Command 'codexbar-cli' -CommandType Application -ErrorAction SilentlyContinue) |
+            Select-Object -First 1
+        if ($null -ne $onPath -and -not [string]::IsNullOrWhiteSpace([string]$onPath.Source)) {
+            return [string]$onPath.Source
+        }
+    } catch { }
+    if (-not [string]::IsNullOrWhiteSpace([string]$env:LOCALAPPDATA)) {
+        $installed = Join-Path ([string]$env:LOCALAPPDATA) 'Programs/CodexBar/codexbar-cli.exe'
+        if (Test-Path -LiteralPath $installed) { return $installed }
+    }
+    return $null
+}
+
+function Invoke-CodexBarUsageProcess {
+    <# Run one child process to completion under a deadline, capturing stdout,
+       stderr, exit code and duration. Both pipes are drained asynchronously so a
+       chatty child cannot deadlock on a full OS buffer. Any failure -> $null. #>
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$ArgumentList,
+        [int]$TimeoutSeconds = 20
+    )
+    if ($TimeoutSeconds -le 0) { return $null }
+    $process = $null
+    try {
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $FilePath
+        foreach ($exeArg in $ArgumentList) { [void]$startInfo.ArgumentList.Add([string]$exeArg) }
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        $startInfo.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        $startedAt = [datetime]::UtcNow
+        if (-not $process.Start()) { return $null }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill($true) } catch { }
+            return $null
+        }
+        [void]$stdoutTask.Wait(2000)
+        [void]$stderrTask.Wait(2000)
+        return [ordered]@{
+            exit_code = [int]$process.ExitCode
+            stdout = if ($stdoutTask.IsCompletedSuccessfully) { [string]$stdoutTask.Result } else { '' }
+            stderr = if ($stderrTask.IsCompletedSuccessfully) { [string]$stderrTask.Result } else { '' }
+            duration_ms = [int]([datetime]::UtcNow - $startedAt).TotalMilliseconds
+        }
+    } catch {
+        return $null
+    } finally {
+        if ($null -ne $process) {
+            try { if (-not $process.HasExited) { $process.Kill($true) } } catch { }
+            try { $process.Dispose() } catch { }
+        }
+    }
+}
+
+function Invoke-CodexBarUsageTransport {
+    <# Adapter #2: shell out to the local codexbar-cli and read what it reports.
+       Fail-soft on OBSERVATION — a missing binary, a non-zero exit, or unparseable
+       stdout all return $null and the caller dispatches unprobed; nothing throws.
+       Fail-closed on IDENTITY — with no -ProbeProvider nothing is launched at all,
+       because guessing which account is being queried is worse than not knowing.
+       -Runner is the hermetic test seam: (& $Runner <file> <args[]> <timeout>) ->
+       @{ exit_code; stdout; stderr; duration_ms }. Tests never touch the binary. #>
+    param(
+        [string]$ProbeProvider,
+        [int]$TimeoutSeconds = 20,
+        [string]$ProbeCommand,
+        [scriptblock]$Runner
+    )
+    if ($TimeoutSeconds -le 0) { return $null }
+    if ([string]::IsNullOrWhiteSpace($ProbeProvider)) { return $null }
+    $probeProviderName = $ProbeProvider.Trim()
+    # Shape guard only — the set of provider names belongs to the tool, not to us,
+    # so nothing here enumerates them. Arguments go through ArgumentList, never a shell.
+    if ($probeProviderName -notmatch '^[A-Za-z0-9._-]{1,64}$') { return $null }
+    try {
+        $binary = Resolve-CodexBarBinaryPath -ProbeCommand $ProbeCommand
+        if ($null -eq $Runner -and [string]::IsNullOrWhiteSpace($binary)) { return $null }
+        $exeArgs = [string[]]@('usage', '--provider', $probeProviderName, '--json')
+        $run = if ($null -ne $Runner) { & $Runner $binary $exeArgs $TimeoutSeconds }
+               else { Invoke-CodexBarUsageProcess -FilePath $binary -ArgumentList $exeArgs -TimeoutSeconds $TimeoutSeconds }
+        if ($null -eq $run) { return $null }
+
+        $exitCode = 0
+        if (-not [int]::TryParse([string](Get-ProbeObjectField -InputObject $run -Field 'exit_code'), [ref]$exitCode)) { return $null }
+        if ($exitCode -ne 0) { return $null }
+        $stdout = [string](Get-ProbeObjectField -InputObject $run -Field 'stdout')
+        if ([string]::IsNullOrWhiteSpace($stdout)) { return $null }
+        $payload = $null
+        try { $payload = $stdout | ConvertFrom-Json -ErrorAction Stop } catch { return $null }
+        if ($null -eq $payload) { return $null }
+        $entries = @($payload)
+        if ($entries.Count -eq 0) { return $null }
+
+        $durationMs = 0
+        [void][int]::TryParse([string](Get-ProbeObjectField -InputObject $run -Field 'duration_ms'), [ref]$durationMs)
+        return [ordered]@{
+            transport = 'codexbar-cli'
+            provider = $probeProviderName
+            exit_code = $exitCode
+            duration_ms = $durationMs
+            entries = $entries
+        }
+    } catch {
+        return $null
+    }
+}
+
+function ConvertTo-CodexBarObservation {
+    <# One codexbar window object -> one observation row in Baton's existing shape.
+       Unknown durations and malformed values are dropped (return $null), never
+       coerced. $ScopeId is $null for a plan-wide window and the window's own id
+       for a model-scoped sub-quota. #>
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        $Window,
+        [Parameter(Mandatory)][string]$SourceLabel,
+        [Parameter(Mandatory)][datetimeoffset]$ObservedAt,
+        [Parameter(Mandatory)][int]$TtlSeconds,
+        [string]$ScopeId
+    )
+    if ($null -eq $Window) { return $null }
+    $minutes = 0
+    if (-not [int]::TryParse([string](Get-ProbeObjectField -InputObject $Window -Field 'window_minutes'), [ref]$minutes)) { return $null }
+    $scope = if ($minutes -eq 300) { 'five_hour' } elseif ($minutes -eq 10080) { 'weekly' } else { $null }
+    if (-not $scope) { return $null }
+
+    $used = [double]0
+    if (-not [double]::TryParse(
+            [string](Get-ProbeObjectField -InputObject $Window -Field 'used_percent'),
+            [System.Globalization.NumberStyles]::Float,
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [ref]$used) -or
+        -not [double]::IsFinite($used) -or $used -lt 0 -or $used -gt 100) { return $null }
+
+    # ISO-8601 here, NOT an epoch like the codex-rate-limit transport. Normalize to
+    # a round-trip UTC string so every observation compares the same way downstream.
+    # ConvertFrom-Json turns an ISO timestamp into a real [datetime], so the typed
+    # value must be taken as-is; re-stringifying it would run it through the current
+    # culture and silently shift the instant.
+    $resetValue = Get-ProbeObjectField -InputObject $Window -Field 'resets_at'
+    $resetInstant = [datetimeoffset]::MinValue
+    if ($resetValue -is [datetimeoffset]) {
+        $resetInstant = [datetimeoffset]$resetValue
+    } elseif ($resetValue -is [datetime]) {
+        $resetDate = [datetime]$resetValue
+        if ($resetDate.Kind -eq [System.DateTimeKind]::Unspecified) {
+            $resetDate = [datetime]::SpecifyKind($resetDate, [System.DateTimeKind]::Utc)
+        }
+        $resetInstant = [datetimeoffset]$resetDate
+    } else {
+        $resetText = [string]$resetValue
+        if ([string]::IsNullOrWhiteSpace($resetText)) { return $null }
+        if (-not [datetimeoffset]::TryParse(
+                $resetText,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                ([System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal),
+                [ref]$resetInstant)) { return $null }
+    }
+
+    $row = [ordered]@{
+        worker = $Worker
+        scope = $scope
+        scope_id = if ([string]::IsNullOrWhiteSpace($ScopeId)) { $null } else { $ScopeId.Trim() }
+        used_pct = $used
+        reset_at = $resetInstant.ToUniversalTime().ToString('o')
+        source = $SourceLabel
+        observed_at = $ObservedAt.ToString('o')
+        ttl = $TtlSeconds
+        confidence = [double]0.9
+    }
+    return $row
+}
+
+function ConvertFrom-CodexBarUsageResponse {
+    <# Normalize a codexbar usage payload to the observation contract.
+
+       extra_rate_windows are REAL model-scoped quotas, not decoration: each one is
+       emitted as its own observation carrying its window id in scope_id, with the
+       same scope shape as the plan-wide windows so the existing cap knobs apply.
+       A plan-wide window sat at a comfortable number while a model-scoped window
+       was fully exhausted is a live, observed case — reading only primary/secondary
+       would route work to a model with nothing left. An absent or empty
+       extra_rate_windows is normal, not an error. #>
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        $Response,
+        [datetimeoffset]$ObservedAt = [datetimeoffset]::UtcNow,
+        [int]$TtlSeconds = 600
+    )
+    if ($TtlSeconds -le 0 -or $null -eq $Response -or $Response -is [string]) { return $null }
+    $entries = Get-ProbeObjectField -InputObject $Response -Field 'entries'
+    if ($null -eq $entries) { $entries = $Response }
+    $entryList = @($entries | Where-Object { $null -ne $_ })
+    if ($entryList.Count -eq 0) { return $null }
+
+    $rows = [System.Collections.ArrayList]@()
+    foreach ($entry in $entryList) {
+        if ($entry -is [string]) { continue }
+        # `source` records HOW the figure was obtained (oauth, a browser session, ...).
+        # Keep it prefixed so provenance survives into the journal and the cache.
+        $entrySource = [string](Get-ProbeObjectField -InputObject $entry -Field 'source')
+        if ([string]::IsNullOrWhiteSpace($entrySource)) { $entrySource = 'unknown' }
+        $sourceLabel = "codexbar:$($entrySource.Trim())"
+
+        $usage = Get-ProbeObjectField -InputObject $entry -Field 'usage'
+        foreach ($windowName in @('primary', 'secondary')) {
+            $observation = ConvertTo-CodexBarObservation -Worker $Worker `
+                -Window (Get-ProbeObjectField -InputObject $usage -Field $windowName) `
+                -SourceLabel $sourceLabel -ObservedAt $ObservedAt -TtlSeconds $TtlSeconds
+            if ($null -ne $observation) { [void]$rows.Add($observation) }
+        }
+
+        $extraWindows = Get-ProbeObjectField -InputObject $entry -Field 'extra_rate_windows'
+        if ($null -eq $extraWindows) { continue }
+        foreach ($extra in @($extraWindows | Where-Object { $null -ne $_ })) {
+            # An id-less scoped window cannot be bound to a row, and emitting it
+            # without one would make it read as plan-wide. Drop it instead.
+            $scopeId = [string](Get-ProbeObjectField -InputObject $extra -Field 'id')
+            if ([string]::IsNullOrWhiteSpace($scopeId)) { continue }
+            $observation = ConvertTo-CodexBarObservation -Worker $Worker `
+                -Window (Get-ProbeObjectField -InputObject $extra -Field 'window') `
+                -SourceLabel $sourceLabel -ObservedAt $ObservedAt -TtlSeconds $TtlSeconds -ScopeId $scopeId
+            if ($null -ne $observation) { [void]$rows.Add($observation) }
+        }
+    }
+    if ($rows.Count -eq 0) { return $null }
+    return ,([object[]]$rows.ToArray())
+}
+
 # ---------------------------------------------------------------------------
 # Usage-probe transport registry (#173)
 #
 # One entry per observable provider surface, keyed by transport NAME. Each entry
 # pairs the fetch half with the parse half so a caller never has to know which
 # platform it is talking to:
-#   invoke <clientVersion> <timeoutSeconds>            -> raw response (or $null)
-#   parse  <worker> <response> <observedAt> <ttlSecs>  -> observation rows (or $null)
+#   invoke <clientVersion> <timeoutSeconds> <providerRow>  -> raw response (or $null)
+#   parse  <worker> <response> <observedAt> <ttlSecs>      -> observation rows (or $null)
+# An entry may also declare `requires_policy`: usage_policy fields that MUST be
+# present before the transport is allowed to resolve. That is the fail-closed
+# identity gate — a transport that cannot tell which account it would query does
+# not run at all, rather than guessing.
 # Adding a provider means registering a pair here; nothing downstream changes.
 # ---------------------------------------------------------------------------
 $script:UsageProbeTransports = [ordered]@{
     'codex-rate-limit' = [ordered]@{
         name = 'codex-rate-limit'
+        requires_policy = [string[]]@()
         invoke = {
-            param($clientVersion, $timeoutSeconds)
+            param($clientVersion, $timeoutSeconds, $providerRow)
             Invoke-CodexRateLimitTransport -ClientVersion $clientVersion -TimeoutSeconds $timeoutSeconds
         }
         parse = {
             param($worker, $response, $observedAt, $ttlSeconds)
             ConvertFrom-CodexRateLimitResponse -Worker $worker -Response $response `
+                -ObservedAt $observedAt -TtlSeconds $ttlSeconds
+        }
+    }
+    'codexbar-cli' = [ordered]@{
+        name = 'codexbar-cli'
+        # Identity is fail-closed: no probe_provider, no probe.
+        requires_policy = [string[]]@('probe_provider')
+        invoke = {
+            param($clientVersion, $timeoutSeconds, $providerRow)
+            $rowPolicy = if ($null -ne $providerRow) { $providerRow.usage_policy } else { $null }
+            Invoke-CodexBarUsageTransport `
+                -ProbeProvider ([string](Get-UsagePolicyField -Policy $rowPolicy -Field 'probe_provider')) `
+                -TimeoutSeconds $timeoutSeconds `
+                -ProbeCommand ([string](Get-UsagePolicyField -Policy $rowPolicy -Field 'probe_command'))
+        }
+        parse = {
+            param($worker, $response, $observedAt, $ttlSeconds)
+            ConvertFrom-CodexBarUsageResponse -Worker $worker -Response $response `
                 -ObservedAt $observedAt -TtlSeconds $ttlSeconds
         }
     }
@@ -236,14 +519,21 @@ function Get-UsagePolicyField {
     <# usage_policy is a hashtable off Read-Fleet but a PSCustomObject when it
        comes back through JSON; read either without throwing. #>
     param($Policy, [Parameter(Mandatory)][string]$Field)
-    if ($null -eq $Policy) { return $null }
-    if ($Policy -is [System.Collections.IDictionary]) {
-        if ($Policy.Contains($Field)) { return $Policy[$Field] }
-        return $null
+    return (Get-ProbeObjectField -InputObject $Policy -Field $Field)
+}
+
+function Test-UsageProbeTransportRequirement {
+    <# Does this row carry every usage_policy field the transport needs to know
+       WHO it is querying? Missing identity => the transport must not resolve. #>
+    param($TransportPair, $Policy)
+    if ($null -eq $TransportPair) { return $false }
+    $required = @(Get-ProbeObjectField -InputObject $TransportPair -Field 'requires_policy')
+    foreach ($field in $required) {
+        if ([string]::IsNullOrWhiteSpace([string]$field)) { continue }
+        $value = Get-UsagePolicyField -Policy $Policy -Field ([string]$field)
+        if ([string]::IsNullOrWhiteSpace([string]$value)) { return $false }
     }
-    $property = $Policy.PSObject.Properties[$Field]
-    if ($null -eq $property) { return $null }
-    return $property.Value
+    return $true
 }
 
 function Resolve-UsageProbeTransportName {
@@ -261,8 +551,12 @@ function Resolve-UsageProbeTransportName {
 
     $declared = [string](Get-UsagePolicyField -Policy $policy -Field 'probe_transport')
     if (-not [string]::IsNullOrWhiteSpace($declared)) {
-        if ($null -ne (Get-UsageProbeTransport -Name $declared)) { return $declared.Trim() }
-        return $null
+        $declaredPair = Get-UsageProbeTransport -Name $declared
+        if ($null -eq $declaredPair) { return $null }
+        # Fail closed on identity: a transport whose required usage_policy fields
+        # are missing resolves to nothing rather than querying an unknown account.
+        if (-not (Test-UsageProbeTransportRequirement -TransportPair $declaredPair -Policy $policy)) { return $null }
+        return $declared.Trim()
     }
 
     # BACK-COMPAT INFERENCE (temporary). The operator's live fleet.yaml predates
@@ -386,8 +680,11 @@ function Get-ProviderUsageProbe {
 
     try {
         $version = Get-BatonPluginVersion
-        $response = if ($Transport) { & $Transport $version $TimeoutSeconds }
-                    else { & $transportPair.invoke $version $TimeoutSeconds }
+        # The provider row rides along as a third argument so a transport can read
+        # its own usage_policy (which account to query, which binary to run).
+        # Two-parameter transports simply ignore it.
+        $response = if ($Transport) { & $Transport $version $TimeoutSeconds $Provider }
+                    else { & $transportPair.invoke $version $TimeoutSeconds $Provider }
         $observations = & $transportPair.parse $Worker $response $Now $TtlSeconds
         if ($null -eq $observations -or @($observations).Count -eq 0) { return $null }
         Add-UsageProbeCacheRow -Worker $Worker -Raw $response -Observations @($observations) `
@@ -430,6 +727,21 @@ function Get-CodexUsageProbe {
 }
 
 function Get-UsageProbeCapDecision {
+    <# Cap decision over a set of observations.
+
+       SCOPE BINDING (#173). Some providers report per-model sub-quotas alongside
+       the plan-wide windows; those arrive as observations carrying a scope_id.
+       - A row with no usage_policy.scope_id is judged on the plan-wide windows
+         ONLY — another model's exhausted sub-quota is not its problem.
+       - A row bound to a scope_id is judged on the plan-wide windows AND the
+         matching scoped window, so an exhausted sub-quota holds the row even when
+         the plan-wide window still has room.
+       - A row bound to a scope_id that is ABSENT from the response falls back to
+         the plan-wide windows. This is deliberate and load-bearing: the set of
+         windows is plan-dependent and changes when the account's tier changes.
+         Losing a scoped window means losing INFORMATION, never gaining headroom —
+         treating the absence as "unlimited" would silently uncap the row at the
+         exact moment the plan was downgraded. Nothing here keys off a known id. #>
     param(
         [Parameter(Mandatory)][hashtable]$Provider,
         [Parameter(Mandatory)][object[]]$Observations
@@ -438,7 +750,14 @@ function Get-UsageProbeCapDecision {
     $crossings = [System.Collections.ArrayList]@()
     $policy = $Provider.usage_policy
     if ($null -eq $policy) { return [ordered]@{ over_cap = $false; checked = @(); windows = @() } }
+    $boundScopeId = [string](Get-UsagePolicyField -Policy $policy -Field 'scope_id')
     foreach ($observation in @($Observations)) {
+        $observationScopeId = [string](Get-ProbeObjectField -InputObject $observation -Field 'scope_id')
+        if (-not [string]::IsNullOrWhiteSpace($observationScopeId)) {
+            # A scoped window counts only for the row bound to exactly that scope.
+            if ([string]::IsNullOrWhiteSpace($boundScopeId)) { continue }
+            if ($observationScopeId.Trim() -ne $boundScopeId.Trim()) { continue }
+        }
         $knob = if ([string]$observation.scope -eq 'five_hour') { 'soft_cap_5h' }
                 elseif ([string]$observation.scope -eq 'weekly') { 'soft_cap_weekly' }
                 else { $null }
@@ -447,6 +766,7 @@ function Get-UsageProbeCapDecision {
         $cap = [double]$policy[$knob]
         $windowDecision = [ordered]@{
             window = [string]$observation.scope
+            scope_id = if ([string]::IsNullOrWhiteSpace($observationScopeId)) { $null } else { $observationScopeId.Trim() }
             used_pct = $used
             cap = $cap
             policy_knob = $knob
@@ -613,17 +933,22 @@ function Add-UsageProbeLimitedRows {
         [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl')
     )
     foreach ($window in @($Decision.windows)) {
+        # Provenance comes from the observation that crossed, so a codexbar-sourced
+        # row is never journaled as if the app-server had reported it.
+        $windowSource = [string]$window.source
+        if ([string]::IsNullOrWhiteSpace($windowSource)) { $windowSource = 'app_server_probe' }
         $row = [ordered]@{
             ts = [string]$window.observed_at
             event = 'limited'
             worker = $Worker
             scope = [string]$window.window
+            scope_id = [string]$window.scope_id
             window = [string]$window.window
             used_pct = [double]$window.used_pct
             cap = [double]$window.cap
             policy_knob = [string]$window.policy_knob
             reset_at = [string]$window.reset_at
-            source = 'app_server_probe'
+            source = $windowSource
             observed_at = [string]$window.observed_at
             ttl = [int]$window.ttl
             confidence = [double]$window.confidence
@@ -680,6 +1005,8 @@ function Add-UsagePreflightEvent {
             (([string[]]@($windowList | ForEach-Object { [string]$_.policy_knob })) -join ',')
         }
         $row.reset_at = [string]$primary.reset_at
+        if (-not [string]::IsNullOrWhiteSpace([string]$primary.scope_id)) { $row.scope_id = [string]$primary.scope_id }
+        if (-not [string]::IsNullOrWhiteSpace([string]$primary.source)) { $row.source = [string]$primary.source }
     }
     if ($Substitute) { $row.substitute = $Substitute }
     if ($Reason) { $row.reason = $Reason }
@@ -698,7 +1025,10 @@ function Format-UsagePreflightLine {
     $evidenceParts = foreach ($wd in $windowList) {
         $used = [math]::Round([double]$wd.used_pct, 1)
         $cap = [math]::Round([double]$wd.cap, 1)
-        "at $used% of $($wd.window) (resets $($wd.reset_at)), reached $($wd.policy_knob)=$cap"
+        # Name the sub-quota when one crossed, so a scoped hold is never read as a
+        # plan-wide one (the two can appear together with the same window shape).
+        $scopeText = if ([string]::IsNullOrWhiteSpace([string]$wd.scope_id)) { '' } else { " scope $($wd.scope_id)" }
+        "at $used% of $($wd.window)$scopeText (resets $($wd.reset_at)), reached $($wd.policy_knob)=$cap"
     }
     $evidence = ($evidenceParts -join '; ')
     $line = "usage preflight: $Worker is $evidence"

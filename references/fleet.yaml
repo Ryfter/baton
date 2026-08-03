@@ -80,6 +80,8 @@
 #                     soft_cap_weekly 85. monthly_allowance is user-entered; find it
 #                     at GitHub -> avatar (top-right) -> Copilot Settings -> usage,
 #                     shown as consumed / allowance. Never commit real values here.
+#                     probe_transport/probe_provider/probe_command/scope_id select
+#                     and address the probe adapter. See docs/usage-probes.md.
 #
 # VRAM rule (d043): run ONE model-serving process per box — e.g. never enable
 # ollama AND lm-studio on the same machine; they cannot see each other's VRAM
@@ -144,6 +146,10 @@ providers:
     #   soft_cap_5h: 75
     #   soft_cap_weekly: 85
     #   monthly_allowance: <enter allowance>
+    #   probe_transport: <transport name, see docs/usage-probes.md>
+    #   probe_provider: <the probe tool's own name for this account>
+    #   probe_command: <optional explicit path to the probe binary>
+    #   scope_id: <optional model-scoped window id to bind this row to>
     # Named tiers: --tier <name> substitutes the fragment at {{tier_args}}; --tier all
     # runs every tier (boundary tester). Real model IDs are BOX-PRIVATE — add
     # `tier_<name>: '-m <model-id> ...'` rows in your live ~/.baton/fleet.yaml.

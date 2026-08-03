@@ -77,6 +77,17 @@ it — re-copying is how drift starts.
   sole authorities either way — diff-apply only changes who holds the pen, not who
   judges the result. See `docs/diff-apply.md` for the full opt-in and grammar.
 
+- **Usage probes** (`usage_policy.probe_transport`, #173) decide whether a row's
+  soft caps are enforceable or decorative. A probe is resolved by transport NAME,
+  observes only, and fails soft — except identity, which fails closed: without
+  `usage_policy.probe_provider` the transport does not run rather than guess which
+  account it is querying. Rows can bind to a model-scoped sub-quota via
+  `usage_policy.scope_id`; a bound id absent from a response falls back to the
+  plan-wide window, never to "unlimited," because the set of windows is
+  plan-dependent and shrinks when a plan is downgraded. On Windows, `codexbar-cli`
+  is the recommended (and for some providers the only) way to read remaining plan
+  allowance. See `docs/usage-probes.md`.
+
 ## Drift policy
 - Change a **shared** rule → change it **here** only; the model files don't repeat
   it, so they can't drift.

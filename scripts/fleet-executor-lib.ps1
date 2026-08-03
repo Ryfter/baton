@@ -1134,7 +1134,7 @@ function New-AgenticSpawner {
         $canProbe = Test-UsageProbeEligible -Provider $providerRow
         if ($canProbe) {
             $snapshot = Get-ProviderUsageProbe -Worker ([string]$pick.name) -TransportName $probeTransportName `
-                -Transport $ProbeTransport `
+                -Provider $providerRow -Transport $ProbeTransport `
                 -CachePath $ProbeCachePath -Now $preflightNow -TimeoutSeconds 20 -TtlSeconds 600
             if ($null -ne $snapshot) {
                 $capDecision = Get-UsageProbeCapDecision -Provider $providerRow -Observations @($snapshot.observations)
@@ -1186,7 +1186,7 @@ function New-AgenticSpawner {
                     $subCanProbe = Test-UsageProbeEligible -Provider $subProvider
                     if ($subCanProbe) {
                         $subSnapshot = Get-ProviderUsageProbe -Worker ([string]$pick.name) -TransportName $subTransportName `
-                            -Transport $ProbeTransport `
+                            -Provider $subProvider -Transport $ProbeTransport `
                             -CachePath $ProbeCachePath -Now $preflightNow -TimeoutSeconds 20 -TtlSeconds 600
                         if ($null -ne $subSnapshot) {
                             $subCapDecision = Get-UsageProbeCapDecision -Provider $subProvider `

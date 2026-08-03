@@ -21,6 +21,13 @@ $requiredFunctions = @(
     'Get-BatonPluginVersion',
     'Invoke-CodexRateLimitTransport',
     'ConvertFrom-CodexRateLimitResponse',
+    'Get-ProbeObjectField',
+    'Resolve-CodexBarBinaryPath',
+    'Invoke-CodexBarUsageProcess',
+    'Invoke-CodexBarUsageTransport',
+    'ConvertTo-CodexBarObservation',
+    'ConvertFrom-CodexBarUsageResponse',
+    'Test-UsageProbeTransportRequirement',
     'Add-UsageProbeCacheRow',
     'Get-FreshUsageProbeCache',
     'Get-CodexUsageProbe',
@@ -457,6 +464,305 @@ Start-Sleep -Seconds 120
         $childAlive = $null -ne (Get-Process -Id $childPidValue -ErrorAction SilentlyContinue)
     }
     Check 'X1 timed-out transport child is killed' (-not $childAlive -and $childPidValue -gt 0)
+
+    # =======================================================================
+    # codexbar-cli transport (#173, step 2)
+    # Every case below is driven by an INJECTED FAKE returning canned JSON.
+    # The real binary is never invoked, on any path, in any of these checks.
+    # All values are placeholders: no real account, model id, or percentage.
+    # =======================================================================
+    # Literal JSON text, so a fixture can express values ConvertTo-Json cannot
+    # (a "NaN" percent, a non-timestamp resets_at) exactly as the tool would emit.
+    function New-SyntheticCodexBarJson {
+        param(
+            [string]$FiveHourUsed = '11',
+            [string]$WeeklyUsed = '42',
+            [string]$FiveHourMinutes = '300',
+            [string]$WeeklyMinutes = '10080',
+            [string]$SourceLabel = 'source-a',
+            [string]$FiveHourReset,
+            [string]$ExtraWindowsJson
+        )
+        if ([string]::IsNullOrWhiteSpace($FiveHourReset)) { $FiveHourReset = $T0.AddHours(3).ToUniversalTime().ToString('o') }
+        $weeklyReset = $T0.AddDays(3).ToUniversalTime().ToString('o')
+        $extraLine = if ([string]::IsNullOrEmpty($ExtraWindowsJson)) { '' } else { ", ""extra_rate_windows"": $ExtraWindowsJson" }
+        return (@(
+            '[ {',
+            "  ""provider"": ""provider-a"", ""source"": ""$SourceLabel"",",
+            '  "usage": {',
+            "    ""primary"":   { ""window_minutes"": $FiveHourMinutes, ""used_percent"": $FiveHourUsed, ""resets_at"": ""$FiveHourReset"" },",
+            "    ""secondary"": { ""window_minutes"": $WeeklyMinutes, ""used_percent"": $WeeklyUsed, ""resets_at"": ""$weeklyReset"" },",
+            "    ""updated_at"": ""$($T0.ToUniversalTime().ToString('o'))"" }$extraLine",
+            '} ]'
+        ) -join "`n")
+    }
+    function New-SyntheticScopedWindowJson {
+        param([string]$Id, [string]$Used, [string]$Minutes = '10080')
+        $scopedReset = $T0.AddDays(3).ToUniversalTime().ToString('o')
+        return (@(
+            "[ { ""id"": ""$Id"", ""title"": ""placeholder scoped window"",",
+            "    ""window"": { ""window_minutes"": $Minutes, ""used_percent"": $Used, ""resets_at"": ""$scopedReset"" } } ]"
+        ) -join "`n")
+    }
+    function New-CodexBarFakeRunner {
+        param([string]$Stdout, [int]$ExitCode = 0, [hashtable]$State)
+        return {
+            param($runnerFile, $runnerArguments, $runnerTimeout)
+            if ($null -ne $State) {
+                $State.calls++
+                $State.file = [string]$runnerFile
+                $State.arguments = [string[]]@($runnerArguments)
+                $State.timeout = [int]$runnerTimeout
+            }
+            return @{ exit_code = $ExitCode; stdout = $Stdout; stderr = ''; duration_ms = 7 }
+        }.GetNewClosure()
+    }
+    function Get-CodexBarFakeObservation {
+        param([string]$Json, [int]$ExitCode = 0, [hashtable]$State, [string]$ProbeProvider = 'provider-a')
+        $raw = Invoke-CodexBarUsageTransport -ProbeProvider $ProbeProvider -TimeoutSeconds 20 `
+            -Runner (New-CodexBarFakeRunner -Stdout $Json -ExitCode $ExitCode -State $State)
+        if ($null -eq $raw) { return $null }
+        $parsed = ConvertFrom-CodexBarUsageResponse -Worker 'worker-bar' -Response $raw -ObservedAt $T0 -TtlSeconds 600
+        if ($null -eq $parsed) { return $null }
+        # Keep a one-row result an ARRAY across the function boundary.
+        return ,([object[]]@($parsed))
+    }
+
+    $barPair = Get-UsageProbeTransport -Name 'codexbar-cli'
+    Check 'B0 registry exposes codexbar-cli as an invoke+parse pair' (
+        (Get-UsageProbeTransportName) -contains 'codexbar-cli' -and
+        $null -ne $barPair -and $barPair.invoke -is [scriptblock] -and $barPair.parse -is [scriptblock])
+
+    $plainState = @{ calls = 0 }
+    $plainObs = Get-CodexBarFakeObservation -Json (New-SyntheticCodexBarJson) -State $plainState
+    Check 'B1 plan-wide JSON normalizes to five_hour + weekly' (
+        @($plainObs).Count -eq 2 -and
+        (@($plainObs | ForEach-Object { [string]$_.scope } | Sort-Object) -join ',') -eq 'five_hour,weekly')
+    $barFiveHour = @($plainObs | Where-Object { [string]$_.scope -eq 'five_hour' })[0]
+    $barWeekly = @($plainObs | Where-Object { [string]$_.scope -eq 'weekly' })[0]
+    Check 'B2 used_percent, source provenance, ttl and confidence are normalized' (
+        [string]$barFiveHour.worker -eq 'worker-bar' -and
+        [double]$barFiveHour.used_pct -eq 11 -and [double]$barWeekly.used_pct -eq 42 -and
+        [string]$barFiveHour.source -eq 'codexbar:source-a' -and
+        [int]$barFiveHour.ttl -eq 600 -and [double]$barFiveHour.confidence -eq 0.9)
+    Check 'B3 ISO-8601 resets_at round-trips as UTC (not reinterpreted as an epoch)' (
+        [datetimeoffset]::Parse([string]$barFiveHour.reset_at).ToUnixTimeSeconds() -eq $T0.AddHours(3).ToUnixTimeSeconds() -and
+        [string]$barFiveHour.reset_at -match '(Z|\+00:00)$')
+    Check 'B4 plan-wide observations carry no scope_id' (
+        $null -eq $barFiveHour.scope_id -and $null -eq $barWeekly.scope_id)
+    Check 'B5 the transport asks the tool for exactly one named provider as JSON' (
+        $plainState.calls -eq 1 -and
+        (($plainState.arguments -join ' ') -eq 'usage --provider provider-a --json') -and
+        $plainState.timeout -eq 20)
+
+    # ---- extra_rate_windows: model-scoped sub-quotas are accounted for ----
+    $exhaustedScopeJson = New-SyntheticScopedWindowJson -Id 'scope-window-a' -Used '100'
+    $scopedJson = New-SyntheticCodexBarJson -WeeklyUsed '42' -ExtraWindowsJson $exhaustedScopeJson
+    $scopedObs = Get-CodexBarFakeObservation -Json $scopedJson
+    $scopedRows = @($scopedObs | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.scope_id) })
+    $planWideWeekly = @($scopedObs | Where-Object { [string]$_.scope -eq 'weekly' -and [string]::IsNullOrWhiteSpace([string]$_.scope_id) })
+    Check 'B6 a scoped window is emitted as its own third observation' (
+        @($scopedObs).Count -eq 3 -and $scopedRows.Count -eq 1 -and
+        [string]$scopedRows[0].scope_id -eq 'scope-window-a' -and
+        [string]$scopedRows[0].scope -eq 'weekly' -and [double]$scopedRows[0].used_pct -eq 100)
+    Check 'B7 an exhausted scoped window does not move the plan-wide weekly figure' (
+        $planWideWeekly.Count -eq 1 -and [double]$planWideWeekly[0].used_pct -eq 42)
+    $noExtraObs = Get-CodexBarFakeObservation -Json (New-SyntheticCodexBarJson)
+    Check 'B8 absent extra_rate_windows behaves exactly as before (two plan-wide rows)' (
+        @($noExtraObs).Count -eq 2 -and
+        @($noExtraObs | Where-Object { $null -ne $_.scope_id }).Count -eq 0)
+    $emptyExtraObs = Get-CodexBarFakeObservation -Json (New-SyntheticCodexBarJson -ExtraWindowsJson '[]')
+    Check 'B9 an empty extra_rate_windows array is normal, not an error' (@($emptyExtraObs).Count -eq 2)
+    $idlessObs = Get-CodexBarFakeObservation -Json (
+        New-SyntheticCodexBarJson -ExtraWindowsJson (New-SyntheticScopedWindowJson -Id '' -Used '100'))
+    Check 'B10 an id-less scoped window is dropped, never mistaken for plan-wide' (
+        @($idlessObs).Count -eq 2 -and
+        @($idlessObs | Where-Object { [string]$_.scope -eq 'weekly' }).Count -eq 1)
+
+    # ---- malformed input is dropped per window, never coerced ----
+    $mixedObs = Get-CodexBarFakeObservation -Json (New-SyntheticCodexBarJson -FiveHourMinutes '4321')
+    Check 'B11 an unknown window_minutes skips that window and keeps the others' (
+        @($mixedObs).Count -eq 1 -and [string]$mixedObs[0].scope -eq 'weekly')
+    foreach ($badPercent in @('101', '-1', '"NaN"')) {
+        $badObs = Get-CodexBarFakeObservation -Json (New-SyntheticCodexBarJson -FiveHourUsed $badPercent)
+        Check ("B12 used_percent {0} is rejected, other windows survive" -f $badPercent) (
+            @($badObs).Count -eq 1 -and [string]$badObs[0].scope -eq 'weekly')
+    }
+    $badResetObs = Get-CodexBarFakeObservation -Json (New-SyntheticCodexBarJson -FiveHourReset 'not-a-timestamp')
+    Check 'B13 an unparseable resets_at rejects the window rather than guessing' (
+        @($badResetObs).Count -eq 1 -and [string]$badResetObs[0].scope -eq 'weekly')
+
+    # ---- fail-soft on observation: never throw, always $null ----
+    Check 'B14 malformed JSON returns null without throwing' (
+        $null -eq (Get-CodexBarFakeObservation -Json '{ not json'))
+    $nonZeroState = @{ calls = 0 }
+    Check 'B15 a non-zero exit returns null without throwing' (
+        ($null -eq (Get-CodexBarFakeObservation -Json (New-SyntheticCodexBarJson) -ExitCode 3 -State $nonZeroState)) -and
+        $nonZeroState.calls -eq 1)
+    Check 'B16 an empty array returns null without throwing' (
+        $null -eq (Get-CodexBarFakeObservation -Json '[]'))
+    Check 'B17 empty stdout returns null without throwing' (
+        $null -eq (Get-CodexBarFakeObservation -Json '   '))
+
+    # ---- fail-closed on identity: no probe_provider, nothing runs ----
+    $identityState = @{ calls = 0 }
+    $identityResult = Invoke-CodexBarUsageTransport -ProbeProvider '' -TimeoutSeconds 20 `
+        -Runner (New-CodexBarFakeRunner -Stdout (New-SyntheticCodexBarJson) -State $identityState)
+    Check 'B18 FAIL CLOSED: a missing probe_provider launches nothing at all' (
+        $null -eq $identityResult -and $identityState.calls -eq 0)
+    $badTokenState = @{ calls = 0 }
+    $badTokenResult = Invoke-CodexBarUsageTransport -ProbeProvider 'provider a; rm -rf' -TimeoutSeconds 20 `
+        -Runner (New-CodexBarFakeRunner -Stdout (New-SyntheticCodexBarJson) -State $badTokenState)
+    Check 'B19 a non-token probe_provider is refused before anything is launched' (
+        $null -eq $badTokenResult -and $badTokenState.calls -eq 0)
+
+    $noProviderRow = @{
+        name = 'worker-bar'; kind = 'cli'; platform = 'platform-b'
+        usage_policy = @{ probe = $true; probe_transport = 'codexbar-cli'; soft_cap_weekly = [double]85 }
+    }
+    Check 'B20 FAIL CLOSED: a codexbar row without probe_provider resolves no transport' (
+        ($null -eq (Resolve-UsageProbeTransportName -Provider $noProviderRow)) -and
+        (-not (Test-UsageProbeEligible -Provider $noProviderRow)))
+    $barRow = @{
+        name = 'worker-bar'; kind = 'cli'; platform = 'platform-b'
+        usage_policy = @{ probe = $true; probe_transport = 'codexbar-cli'; probe_provider = 'provider-a'
+                          soft_cap_5h = [double]75; soft_cap_weekly = [double]85 }
+    }
+    Check 'B21 a codexbar row WITH probe_provider resolves and is eligible' (
+        (Resolve-UsageProbeTransportName -Provider $barRow) -eq 'codexbar-cli' -and
+        (Test-UsageProbeEligible -Provider $barRow))
+
+    # ---- binary resolution, still without ever launching one ----
+    $savedPath = $env:PATH
+    $savedLocalAppData = $env:LOCALAPPDATA
+    try {
+        $env:PATH = $tmp
+        $env:LOCALAPPDATA = $tmp
+        Check 'B22 no probe_command, nothing on PATH, nothing installed -> no binary' (
+            $null -eq (Resolve-CodexBarBinaryPath))
+        Check 'B22 an unresolvable binary returns null without throwing' (
+            $null -eq (Invoke-CodexBarUsageTransport -ProbeProvider 'provider-a' -TimeoutSeconds 5))
+    } finally {
+        $env:PATH = $savedPath
+        $env:LOCALAPPDATA = $savedLocalAppData
+    }
+    $missingBinary = Join-Path $tmp 'no-such-probe-binary.exe'
+    Check 'B23 an explicit probe_command that does not exist returns null without throwing' (
+        ($missingBinary -eq (Resolve-CodexBarBinaryPath -ProbeCommand $missingBinary)) -and
+        ($null -eq (Invoke-CodexBarUsageTransport -ProbeProvider 'provider-a' -TimeoutSeconds 5 -ProbeCommand $missingBinary)))
+
+    # ---- end to end through the generic probe entry ----
+    $e2eState = @{ calls = 0 }
+    $e2eRunner = New-CodexBarFakeRunner -Stdout $scopedJson -State $e2eState
+    $e2eTransport = {
+        param($clientVersion, $timeoutSeconds, $providerRow)
+        # Proves the provider ROW reaches the transport: the account queried comes
+        # from usage_policy.probe_provider, never from a guess.
+        Invoke-CodexBarUsageTransport -TimeoutSeconds $timeoutSeconds -Runner $e2eRunner `
+            -ProbeProvider ([string](Get-UsagePolicyField -Policy $providerRow.usage_policy -Field 'probe_provider'))
+    }.GetNewClosure()
+    $e2eCache = Join-Path $tmp 'codexbar-e2e.jsonl'
+    $e2eSnapshot = Get-ProviderUsageProbe -Worker 'worker-bar' -Provider $barRow -Transport $e2eTransport `
+        -CachePath $e2eCache -Now $T0 -TimeoutSeconds 20 -TtlSeconds 600
+    Check 'B24 generic probe entry returns the standard snapshot shape for codexbar' (
+        $null -ne $e2eSnapshot -and @($e2eSnapshot.observations).Count -eq 3 -and
+        $e2eSnapshot.cached -eq $false -and [int]$e2eSnapshot.ttl -eq 600 -and
+        $e2eState.calls -eq 1 -and (Test-Path -LiteralPath $e2eCache))
+    $e2eCached = Get-FreshUsageProbeCache -Worker 'worker-bar' -CachePath $e2eCache -Now $T0.AddMinutes(5)
+    Check 'B25 codexbar observations survive the JSON cache round-trip with scope_id intact' (
+        $null -ne $e2eCached -and
+        (@($e2eCached.observations | Where-Object { [string]$_.scope_id -eq 'scope-window-a' }).Count -eq 1))
+
+    # =======================================================================
+    # SCOPE BINDING — the plan-dependent-window contract
+    # =======================================================================
+    $unboundRow = @{
+        name = 'worker-unbound'; kind = 'cli'; platform = 'platform-b'
+        usage_policy = @{ probe = $true; probe_transport = 'codexbar-cli'; probe_provider = 'provider-a'
+                          soft_cap_5h = [double]75; soft_cap_weekly = [double]85 }
+    }
+    $boundRow = @{
+        name = 'worker-bound'; kind = 'cli'; platform = 'platform-b'
+        usage_policy = @{ probe = $true; probe_transport = 'codexbar-cli'; probe_provider = 'provider-a'
+                          scope_id = 'scope-window-a'
+                          soft_cap_5h = [double]75; soft_cap_weekly = [double]85 }
+    }
+    # Plan-wide weekly comfortably UNDER cap; the scoped sub-quota fully exhausted.
+    $roomyPlanScopedFullObs = Get-CodexBarFakeObservation -Json (
+        New-SyntheticCodexBarJson -WeeklyUsed '42' `
+            -ExtraWindowsJson (New-SyntheticScopedWindowJson -Id 'scope-window-a' -Used '100'))
+    $boundDecision = Get-UsageProbeCapDecision -Provider $boundRow -Observations @($roomyPlanScopedFullObs)
+    Check 'SB1 a BOUND row is over cap on its exhausted sub-quota while plan-wide has room' (
+        $boundDecision.over_cap -and @($boundDecision.windows).Count -eq 1 -and
+        [string]$boundDecision.windows[0].scope_id -eq 'scope-window-a' -and
+        [double]$boundDecision.windows[0].used_pct -eq 100 -and
+        [string]$boundDecision.windows[0].policy_knob -eq 'soft_cap_weekly')
+    $unboundDecision = Get-UsageProbeCapDecision -Provider $unboundRow -Observations @($roomyPlanScopedFullObs)
+    Check 'SB2 an UNBOUND row ignores another scope sub-quota and stays under cap' (
+        (-not $unboundDecision.over_cap) -and
+        (@($unboundDecision.checked | Where-Object { $null -ne $_.scope_id }).Count -eq 0) -and
+        @($unboundDecision.checked).Count -eq 2)
+
+    # -----------------------------------------------------------------------
+    # SB3/SB4 — THE FALLBACK CHECK.
+    # The set of windows is plan-dependent: a tier change REMOVES a scoped window
+    # from the response entirely. A row still bound to that now-missing scope_id
+    # must fall back to the PLAN-WIDE weekly window — never to "unlimited".
+    # Inverting this would silently uncap the row at the exact moment the plan
+    # was downgraded, which is the failure this pair of checks exists to prevent.
+    # -----------------------------------------------------------------------
+    $planOnlyOverObs = Get-CodexBarFakeObservation -Json (New-SyntheticCodexBarJson -WeeklyUsed '91.5')
+    Check 'SB3 FALLBACK: bound row, scope_id ABSENT from the response, plan-wide over cap -> HELD (not uncapped)' (
+        (@($planOnlyOverObs | Where-Object { $null -ne $_.scope_id }).Count -eq 0) -and
+        (($boundDecision = Get-UsageProbeCapDecision -Provider $boundRow -Observations @($planOnlyOverObs)).over_cap) -and
+        (@($boundDecision.windows | Where-Object { [string]$_.window -eq 'weekly' }).Count -eq 1) -and
+        ([double]@($boundDecision.windows | Where-Object { [string]$_.window -eq 'weekly' })[0].used_pct -eq 91.5) -and
+        ($null -eq @($boundDecision.windows | Where-Object { [string]$_.window -eq 'weekly' })[0].scope_id))
+    $planOnlyUnderObs = Get-CodexBarFakeObservation -Json (New-SyntheticCodexBarJson -WeeklyUsed '42')
+    $missingScopeUnder = Get-UsageProbeCapDecision -Provider $boundRow -Observations @($planOnlyUnderObs)
+    Check 'SB4 FALLBACK: a missing scope_id still EVALUATES both plan-wide windows (loses info, not caps)' (
+        (-not $missingScopeUnder.over_cap) -and @($missingScopeUnder.checked).Count -eq 2 -and
+        ((@($missingScopeUnder.checked | ForEach-Object { [string]$_.window } | Sort-Object) -join ',') -eq 'five_hour,weekly'))
+    # And the same row bound to an id nothing will ever emit behaves identically —
+    # nothing keys off a known window id.
+    $strangerRow = @{
+        name = 'worker-stranger'; kind = 'cli'; platform = 'platform-b'
+        usage_policy = @{ probe = $true; probe_transport = 'codexbar-cli'; probe_provider = 'provider-a'
+                          scope_id = 'scope-window-never-emitted'
+                          soft_cap_5h = [double]75; soft_cap_weekly = [double]85 }
+    }
+    $strangerDecision = Get-UsageProbeCapDecision -Provider $strangerRow -Observations @($roomyPlanScopedFullObs)
+    Check 'SB5 a row bound to an unknown scope id is judged plan-wide, and ignores foreign sub-quotas' (
+        (-not $strangerDecision.over_cap) -and @($strangerDecision.checked).Count -eq 2)
+
+    # Plan-wide over cap AND the bound sub-quota exhausted: both crossings survive.
+    $bothOverObs = Get-CodexBarFakeObservation -Json (
+        New-SyntheticCodexBarJson -WeeklyUsed '91.5' `
+            -ExtraWindowsJson (New-SyntheticScopedWindowJson -Id 'scope-window-a' -Used '100'))
+    $bothOverDecision = Get-UsageProbeCapDecision -Provider $boundRow -Observations @($bothOverObs)
+    Check 'SB6 plan-wide and bound-scope crossings are both reported' (
+        $bothOverDecision.over_cap -and @($bothOverDecision.windows).Count -eq 2)
+    $scopedHoldLine = Format-UsagePreflightLine -Worker 'worker-bound' -WindowDecision $bothOverDecision.windows -Outcome held
+    Check 'SB7 the hold line names the crossed sub-quota so it reads as scoped, not plan-wide' (
+        $scopedHoldLine -match 'scope scope-window-a' -and $scopedHoldLine -match 'soft_cap_weekly')
+    $scopedJournal = Join-Path $tmp 'codexbar-limited.jsonl'
+    Add-UsageProbeLimitedRows -Worker 'worker-bound' -Decision $bothOverDecision -UsagePath $scopedJournal
+    $scopedLimitedRows = @(Get-Content -LiteralPath $scopedJournal | ForEach-Object { $_ | ConvertFrom-Json })
+    Check 'SB8 limited rows keep codexbar provenance and the scope id' (
+        $scopedLimitedRows.Count -eq 2 -and
+        (@($scopedLimitedRows | Where-Object { [string]$_.source -eq 'codexbar:source-a' }).Count -eq 2) -and
+        (@($scopedLimitedRows | Where-Object { [string]$_.scope_id -eq 'scope-window-a' }).Count -eq 1))
+
+    # Unchanged contract: codexbar observations feed the existing cap decision.
+    $overCapRow = @{
+        name = 'worker-bar'; kind = 'cli'; platform = 'platform-b'
+        usage_policy = @{ probe = $true; probe_transport = 'codexbar-cli'; probe_provider = 'provider-a'
+                          soft_cap_5h = [double]75; soft_cap_weekly = [double]85 }
+    }
+    $overCapDecision = Get-UsageProbeCapDecision -Provider $overCapRow -Observations @($planOnlyOverObs)
+    Check 'SB9 a weekly figure past soft_cap_weekly is over cap through the unchanged decision path' (
+        $overCapDecision.over_cap -and [string]$overCapDecision.windows[0].window -eq 'weekly' -and
+        [string]$overCapDecision.windows[0].policy_knob -eq 'soft_cap_weekly')
 } finally {
     $env:BATON_HOME = $savedBatonHome
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
