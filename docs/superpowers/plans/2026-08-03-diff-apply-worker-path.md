@@ -288,6 +288,10 @@ git commit -m "feat(diff-apply): safe all-or-nothing applier (d103)"
   files beneath it recursively, skipping anything under `.git/`. An entry naming a concrete
   file is taken as-is. A path that does not exist yet is a file the task will *create* and
   is simply not read (it must still appear in the prompt's scope list).
+- **Do not follow reparse points while recursing.** On Windows a junction or symlinked
+  directory inside the tree can send `Get-ChildItem -Recurse` into an unbounded loop, which
+  would hang a dispatch rather than fail it. Skip any directory whose attributes include
+  `ReparsePoint`. Enumeration must also never escape the worktree root.
 - Sort deterministically by relative path (ordinal) so the same task yields the same
   prompt — non-determinism here would poison the observation data.
 - Read each file as text; measure with `Get-Utf8ByteCount` (already in the codebase — find
@@ -309,11 +313,39 @@ git commit -m "feat(diff-apply): safe all-or-nothing applier (d103)"
 4. each file as `FILE: <path>` followed by a fenced block of its exact current content
 5. the edit-format instruction block: the grammar from the spec, one worked example,
    and these rules stated plainly — quote the existing text **exactly**, include enough
-   surrounding lines to be unique, emit **at most `max_blocks` blocks**, use an empty
+   surrounding lines to be unique, **keep each SEARCH section as small as possible while
+   still matching only once**, emit **at most `max_blocks` blocks**, use an empty
    SEARCH section to create a new file, and **do not** output a unified diff, prose
    explanation of the change instead of blocks, or the whole file.
 
 Keep the instruction block short and imperative. It is being read by a small model.
+
+**Observed behavior to design against (real probe, 2026-08-03 02:58).** A live local model
+was given a 3-function file and asked to make two unrelated one-line changes. It returned a
+correctly-formed block on the first attempt — but quoted the **entire file** as a single
+SEARCH section rather than two surgical blocks. That is harmless on a small file and
+expensive-to-dangerous on a large one: it burns context, and every quoted line is a line
+the model can silently mistranscribe.
+
+Hence the "keep each SEARCH section as small as possible" rule above, and hence
+`blocks_emitted` in the observation record is worth reading closely — a task with N
+independent changes that comes back as 1 block means the model is bulk-quoting, not
+editing. That is a size signal, and it is exactly the kind of thing the envelope data
+should surface.
+
+**The minimality rule is load-bearing, and that is measured, not assumed.** Two follow-up
+probes added the "keep each SEARCH section as small as possible" line and gave the same
+model a synthetic module of 20 and then 60 near-identical functions (2.8 KB and 7.0 KB),
+asking for one surgical change deep inside. Both returned a **minimal 3-line block**
+targeting exactly the right function, unique match, in 3 seconds. Same model, same task
+shape, one added sentence — bulk-quote became surgical edit. Do not drop that rule from the
+instruction block.
+
+Honest limit on that evidence: those files were synthetic and uniform, which is the *easy*
+case for uniqueness because each function carried a distinguishing docstring. Real code has
+genuinely repeated fragments, where a minimal SEARCH section is more likely to match twice
+and hit `search-ambiguous`. Expect the ambiguity path to fire in practice; it is a
+correct-by-design refusal, not a bug, and the model should be given the rework signal.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -533,8 +565,21 @@ finished prompt string.
 
 **Rating interaction:** when `apply_result` is `envelope-exceeded`, the failure is about
 size, not model quality — per the #156 precedent (availability is not quality), it must not
-produce a capability rating. Check how `routing-observe-lib.ps1` decides to skip quota
-refusals and follow the same mechanism.
+produce a capability rating.
+
+Mechanism (verified — implement exactly this, do not invent an alternative):
+`Resolve-OutcomeRatingValue` in `scripts/routing-observe-lib.ps1:83` already takes a
+`-Why` parameter and returns `$null` to skip a rating. Add an explicit early check there
+for the envelope case, returning `$null`, and make the spawner's `why` string for an
+over-envelope task contain the stable literal `diff-apply envelope` so the check can match
+it. Put the check in `Resolve-OutcomeRatingValue` itself, **not** in
+`Test-AvailabilityOutcome` — an oversized task is not an availability event, and
+overloading that function would make its name a lie. Comment it as: size is not evidence
+about model quality.
+
+Add a covering check to `scripts/test-routing-observe.ps1`: a `why` containing
+`diff-apply envelope` yields `$null` (no rating), while an ordinary `fail` verdict still
+yields `bad`.
 
 **Spawner wiring** in `New-AgenticSpawner`, at the dispatch site (~line 974):
 
@@ -556,6 +601,21 @@ diff-apply provider too. Everything after the branch (tree sha, per-task diff, u
 observation, verification) stays exactly as it is.
 
 `$prompt` is still built unconditionally for the agentic path; leave that alone.
+
+**Do not let the two prompts get crossed — this is a real defect, not a hypothetical.**
+After the dispatch, the spawner calls
+
+    Get-AgenticUsageObservation -Result $res -Worker ... -PromptBytes (Get-Utf8ByteCount -Text $prompt)
+
+On a diff-apply dispatch, `$prompt` is the *agentic* prompt, which was never sent. Reporting
+its size would mis-measure the dispatch and feed a wrong `prompt_bytes` into
+context-overflow detection — which decides whether to fail over to a larger-context peer.
+
+Fix: have `Invoke-DiffApplyAttempt` return the prompt it actually sent (add a
+`prompt_sent` key alongside `result` and `dispatch_error`), and have the spawner measure
+**the prompt that was actually dispatched** on both branches. Apply this at the substitute
+dispatch site too. Add a check asserting that a diff-apply dispatch's observed
+`prompt_bytes` matches the diff-apply prompt's byte count and not the agentic prompt's.
 
 - [ ] **Step 1: Write the failing tests** (append to `test-fleet-executor-lib.ps1`)
 
