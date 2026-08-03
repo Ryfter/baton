@@ -35,6 +35,23 @@ is untouched because it judges the worktree, not the worker.
 - Test suites are run individually; there is no central registry and no CI. A new suite is
   a new `scripts/test-<name>.ps1`.
 
+## Dependency facts (verified 2026-08-03 — do not re-derive or guess)
+
+- `Get-Utf8ByteCount` lives in **`scripts/fleet-lib.ps1:310`**, not in the executor.
+  `diff-apply-lib.ps1` must dot-source `fleet-lib.ps1` to use it.
+- `Test-DiffFilesInAllowedPaths` lives in **`scripts/verification-lib.ps1:573`** and returns
+  `@{ ok; enforced; scope_exact; first_offender }`. Entries ending in `/` are segment-safe
+  directory prefixes (`app/` matches `app/x.py`, not `apple/x.py`); all other entries are
+  exact matches. Matching is case-insensitive. It rejects any `..` segment itself.
+  **Empty `AllowedPaths` means not enforced and returns `ok = $true`** — which is why plan
+  check A17 expects an unrestricted task to apply.
+- The dot-sourcing convention is a block of `. "$PSScriptRoot/<lib>.ps1"` lines at the top
+  of the file, each with a trailing comment naming what it is needed for. See
+  `fleet-executor-lib.ps1:9-14`. Match that style.
+- Baseline before this work: `test-fleet-executor-lib`, `test-conductor-lib`,
+  `test-instrument-abi`, and `test-routing-observe` all exit 0 with `ALL PASS`. Any
+  failure you see in them is yours.
+
 ---
 
 ### Task 1: Edit-block parser
