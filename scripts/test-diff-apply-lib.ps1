@@ -293,7 +293,7 @@ try {
     Assert 'A1 result=ok' ($a1.result -eq 'ok')
     Assert 'A1 blocks_applied=1' ($a1.blocks_applied -eq 1)
     Assert 'A1 files_written lists the path' (@($a1.files_written) -contains 'src/a.txt')
-    Assert 'A1 content updated' ((Get-FixtureText $wt 'src/a.txt') -eq "alpha`nBETA`ngamma`n")
+    Assert 'A1 content updated' ((Get-FixtureText $wt 'src/a.txt') -ceq "alpha`nBETA`ngamma`n")
 
     # ---------- A2: search text absent ----------
     $wt = New-FixtureWorktree
@@ -323,7 +323,7 @@ try {
     ) -AllowedPaths @()
     Assert 'A4 ok=true' ($a4.ok -eq $true)
     Assert 'A4 blocks_applied=2' ($a4.blocks_applied -eq 2)
-    Assert 'A4 content is three' ((Get-FixtureText $wt 'a.txt') -eq "three`n")
+    Assert 'A4 content is three' ((Get-FixtureText $wt 'a.txt') -ceq "three`n")
     Assert 'A4 one written file' (@($a4.files_written).Count -eq 1)
 
     # ---------- A5: good block + later bad block => nothing written at all ----------
@@ -347,7 +347,7 @@ try {
     $a6 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'newdir/new.txt' '' 'created content')) -AllowedPaths @()
     Assert 'A6 ok=true' ($a6.ok -eq $true)
     Assert 'A6 file exists' (Test-Path -LiteralPath (Join-Path $wt 'newdir/new.txt'))
-    Assert 'A6 exact content' ((Get-FixtureText $wt 'newdir/new.txt') -eq "created content`n")
+    Assert 'A6 exact content' ((Get-FixtureText $wt 'newdir/new.txt') -ceq "created content`n")
     Assert 'A6 no BOM on created file' (-not (Test-FixtureBom $wt 'newdir/new.txt'))
 
     # ---------- A7: create where the file already exists ----------
@@ -384,7 +384,7 @@ try {
     $a10 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'bom.txt' 'beta' 'BETA')) -AllowedPaths @()
     Assert 'A10 ok=true' ($a10.ok -eq $true)
     Assert 'A10 BOM preserved' (Test-FixtureBom $wt 'bom.txt')
-    Assert 'A10 content updated' ((Get-FixtureText $wt 'bom.txt') -eq "alpha`nBETA`n")
+    Assert 'A10 content updated' ((Get-FixtureText $wt 'bom.txt') -ceq "alpha`nBETA`n")
 
     # ---------- A11: file with no trailing newline keeps none ----------
     $wt = New-FixtureWorktree
@@ -401,7 +401,7 @@ try {
     Set-FixtureFile $wt 'meta.txt' ("before`n" + $meta + "`nafter`n") | Out-Null
     $a12 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'meta.txt' $meta 'REPLACED')) -AllowedPaths @()
     Assert 'A12 ok=true' ($a12.ok -eq $true)
-    Assert 'A12 literal (non-regex) replacement' ((Get-FixtureText $wt 'meta.txt') -eq "before`nREPLACED`nafter`n")
+    Assert 'A12 literal (non-regex) replacement' ((Get-FixtureText $wt 'meta.txt') -ceq "before`nREPLACED`nafter`n")
 
     # ---------- A13: parent escape ----------
     $wt = New-FixtureWorktree
@@ -445,14 +445,14 @@ try {
     Set-FixtureFile $wt 'src/a.txt' "alpha`n" | Out-Null
     $a17 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'src/a.txt' 'alpha' 'ALPHA')) -AllowedPaths @()
     Assert 'A17 ok=true (unenforced scope)' ($a17.ok -eq $true)
-    Assert 'A17 content applied' ((Get-FixtureText $wt 'src/a.txt') -eq "ALPHA`n")
+    Assert 'A17 content applied' ((Get-FixtureText $wt 'src/a.txt') -ceq "ALPHA`n")
 
     # ---------- A18: deletion (empty replace) ----------
     $wt = New-FixtureWorktree
     Set-FixtureFile $wt 'del.txt' "keep1`ndelete me`nkeep2`n" | Out-Null
     $a18 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'del.txt' "delete me`n" '')) -AllowedPaths @()
     Assert 'A18 ok=true' ($a18.ok -eq $true)
-    Assert 'A18 text removed, rest intact' ((Get-FixtureText $wt 'del.txt') -eq "keep1`nkeep2`n")
+    Assert 'A18 text removed, rest intact' ((Get-FixtureText $wt 'del.txt') -ceq "keep1`nkeep2`n")
 
     # ---------- A19: symlinked ancestor directory is an escape ----------
     $wt = New-FixtureWorktree
