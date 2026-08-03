@@ -18,6 +18,7 @@
    assembler and dispatch wiring. #>
 
 . "$PSScriptRoot/verification-lib.ps1"   # Test-DiffFilesInAllowedPaths for the scope pre-check
+. "$PSScriptRoot/fleet-lib.ps1"          # Get-Utf8ByteCount for the diff-apply size envelope
 
 function ConvertFrom-EditBlocks {
     <# .SYNOPSIS
@@ -442,4 +443,291 @@ function Invoke-EditBlockApply {
     $out.files_written = @($written)
     $out.blocks_applied = $applied
     return $out
+}
+
+function Get-DiffApplyField {
+    <# Read a named field off a fleet-row-shaped value that may be an
+       IDictionary (ordered hashtable, as the hand-rolled YAML parser
+       produces) or a PSCustomObject. Returns $null when absent. #>
+    param(
+        [object]$Obj,
+        [Parameter(Mandatory)][string]$Name
+    )
+    if ($null -eq $Obj) { return $null }
+    if ($Obj -is [System.Collections.IDictionary]) {
+        if ($Obj.Contains($Name)) { return $Obj[$Name] }
+        return $null
+    }
+    $prop = $Obj.PSObject.Properties[$Name]
+    if ($null -ne $prop) { return $prop.Value }
+    return $null
+}
+
+function Get-DiffApplyLimits {
+    <# .SYNOPSIS
+       Resolve the diff-apply size envelope for a provider (d103, Task 3).
+       Returns [ordered]@{ max_context_bytes; max_files; max_blocks }.
+       Defaults: 24000 / 4 / 8. A provider-declared max_prompt_bytes clamps
+       max_context_bytes to min(current, max_prompt_bytes - 4000) — the
+       reserve covers the instruction block plus the model's response. #>
+    param(
+        [Parameter(Mandatory)][object]$Provider
+    )
+    $out = [ordered]@{
+        max_context_bytes = 24000
+        max_files          = 4
+        max_blocks         = 8
+    }
+
+    $declared = Get-DiffApplyField -Obj $Provider -Name 'diff_apply_limits'
+    if ($null -ne $declared) {
+        foreach ($key in @('max_context_bytes', 'max_files', 'max_blocks')) {
+            $val = Get-DiffApplyField -Obj $declared -Name $key
+            if ($null -ne $val -and [string]$val -ne '') {
+                $n = 0
+                if ([int]::TryParse([string]$val, [ref]$n)) { $out[$key] = $n }
+            }
+        }
+    }
+
+    $maxPromptBytes = Get-DiffApplyField -Obj $Provider -Name 'max_prompt_bytes'
+    if ($null -ne $maxPromptBytes -and [string]$maxPromptBytes -ne '') {
+        $mp = [long]0
+        if ([long]::TryParse([string]$maxPromptBytes, [ref]$mp)) {
+            $clamped = $mp - 4000
+            if ($out.max_context_bytes -gt $clamped) { $out.max_context_bytes = $clamped }
+        }
+    }
+
+    return $out
+}
+
+function Get-DiffApplyFilesUnder {
+    <# Iterative (non-recursive-call) enumeration of files beneath $Dir,
+       never crossing outside $WorktreeRootFull and never following a
+       reparse-point directory (junction/symlink) — the Windows trap that
+       can send Get-ChildItem -Recurse into an unbounded loop. Any
+       directory literally named '.git', at any depth, is skipped. #>
+    param(
+        [Parameter(Mandatory)][string]$Dir,
+        [Parameter(Mandatory)][string]$WorktreeRootFull
+    )
+    $result = @()
+    $reparse = [System.IO.FileAttributes]::ReparsePoint
+    $sep = [System.IO.Path]::DirectorySeparatorChar
+    $stack = [System.Collections.Generic.Stack[string]]::new()
+    $stack.Push($Dir)
+
+    while ($stack.Count -gt 0) {
+        $curFull = [System.IO.Path]::GetFullPath($stack.Pop())
+        if (-not ($curFull -eq $WorktreeRootFull -or
+                   $curFull.StartsWith(($WorktreeRootFull + $sep), [System.StringComparison]::OrdinalIgnoreCase))) {
+            continue   # never escape the worktree root
+        }
+        $items = Get-ChildItem -LiteralPath $curFull -Force -ErrorAction SilentlyContinue
+        foreach ($item in $items) {
+            if ($item.PSIsContainer) {
+                if ($item.Name -ieq '.git') { continue }
+                if ($item.Attributes -band $reparse) { continue }   # do not follow reparse points
+                $stack.Push($item.FullName)
+            } else {
+                $result += $item.FullName
+            }
+        }
+    }
+    return $result
+}
+
+function Get-DiffApplyContext {
+    <# .SYNOPSIS
+       Assemble the file set a diff-apply provider will see for a task,
+       under a conservative size envelope (d103, Task 3).
+       Returns [ordered]@{ ok; reason; files = @([ordered]@{ path; text }); context_bytes; file_count }.
+
+       AllowedPaths entries ending in '/' (or '\') are directory prefixes,
+       enumerated recursively (skipping .git/ and never following reparse
+       points). Other entries are concrete files, taken as-is. A path that
+       does not exist yet is a file the task will CREATE — it is silently
+       not read here (the caller's raw AllowedPaths still carries it into
+       the prompt's scope list). Empty AllowedPaths means nothing to
+       enumerate: ok=$true, zero files — never a whole-worktree scan.
+
+       Never truncates a file. Over-budget returns ok=$false with a
+       specific reason; a model shown half a file produces SEARCH blocks
+       that cannot match, or that match the wrong region. #>
+    param(
+        [Parameter(Mandatory)][string]$Worktree,
+        [string[]]$AllowedPaths = @(),
+        [Parameter(Mandatory)][object]$Limits
+    )
+
+    $out = [ordered]@{
+        ok            = $true
+        reason        = ''
+        files         = @()
+        context_bytes = 0
+        file_count    = 0
+    }
+
+    $entries = @($AllowedPaths | Where-Object { $_ })
+    if ($entries.Count -eq 0) { return $out }   # nothing to enumerate — d103 ambiguity resolution 5
+
+    $maxFiles = 4
+    $maxFilesVal = Get-DiffApplyField -Obj $Limits -Name 'max_files'
+    if ($null -ne $maxFilesVal) {
+        $n = 0
+        if ([int]::TryParse([string]$maxFilesVal, [ref]$n)) { $maxFiles = $n }
+    }
+    $maxContextBytes = [long]24000
+    $maxContextBytesVal = Get-DiffApplyField -Obj $Limits -Name 'max_context_bytes'
+    if ($null -ne $maxContextBytesVal) {
+        $n = [long]0
+        if ([long]::TryParse([string]$maxContextBytesVal, [ref]$n)) { $maxContextBytes = $n }
+    }
+
+    $rootFull = [System.IO.Path]::GetFullPath($Worktree).TrimEnd('\', '/')
+    $sep = [System.IO.Path]::DirectorySeparatorChar
+
+    $collected = [ordered]@{}   # rel path (forward-slash) -> absolute path
+
+    foreach ($entry in $entries) {
+        $e = [string]$entry
+        if ($e.EndsWith('/') -or $e.EndsWith('\')) {
+            $dirRel = $e.TrimEnd('\', '/')
+            $dirFull = [System.IO.Path]::GetFullPath((Join-Path $Worktree $dirRel))
+            if (-not ($dirFull -eq $rootFull -or $dirFull.StartsWith(($rootFull + $sep), [System.StringComparison]::OrdinalIgnoreCase))) {
+                continue   # a directory prefix that resolves outside the worktree — skip, never escape
+            }
+            if (-not (Test-Path -LiteralPath $dirFull -PathType Container)) { continue }
+            foreach ($full in (Get-DiffApplyFilesUnder -Dir $dirFull -WorktreeRootFull $rootFull)) {
+                $rel = $full.Substring($rootFull.Length).TrimStart('\', '/').Replace('\', '/')
+                if (-not $collected.Contains($rel)) { $collected[$rel] = $full }
+            }
+        } else {
+            $rel = $e.Replace('\', '/')
+            $full = [System.IO.Path]::GetFullPath((Join-Path $Worktree $e))
+            if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }   # not-yet-created file: not read
+            if (-not $collected.Contains($rel)) { $collected[$rel] = $full }
+        }
+    }
+
+    $relList = [System.Collections.Generic.List[string]]::new()
+    foreach ($k in $collected.Keys) { $relList.Add([string]$k) }
+    $relList.Sort([System.StringComparer]::Ordinal)   # deterministic ordering — same task, same prompt
+
+    if ($relList.Count -gt $maxFiles) {
+        $out.ok = $false
+        $out.reason = "task exceeds diff-apply envelope: $($relList.Count) files > limit $maxFiles"
+        $out.file_count = $relList.Count
+        return $out
+    }
+
+    $files = @()
+    $bytesTotal = [long]0
+    foreach ($rel in $relList) {
+        $full = $collected[$rel]
+        $bytes = [System.IO.File]::ReadAllBytes($full)
+        $bom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+        $offset = if ($bom) { 3 } else { 0 }
+        $text = [System.Text.Encoding]::UTF8.GetString($bytes, $offset, $bytes.Length - $offset)
+
+        $bytesTotal += (Get-Utf8ByteCount -Text $text)
+        if ($bytesTotal -gt $maxContextBytes) {
+            $out.ok = $false
+            $out.reason = "task exceeds diff-apply envelope: $bytesTotal bytes > limit $maxContextBytes"
+            $out.file_count = $files.Count
+            $out.context_bytes = $bytesTotal
+            return $out
+        }
+
+        $files += [ordered]@{ path = $rel; text = $text }
+    }
+
+    $out.files = $files
+    $out.file_count = $files.Count
+    $out.context_bytes = $bytesTotal
+    return $out
+}
+
+function Build-DiffApplyPrompt {
+    <# .SYNOPSIS
+       Compose the full prompt a diff-apply provider sees (d103, Task 3):
+       optional bus context, task description, scope brief, exact file
+       contents, then a short imperative edit-format instruction block
+       with one worked example. Read by a small model — kept terse.
+
+       The "keep each SEARCH section as small as possible while still
+       matching only once" rule is load-bearing: measured 2026-08-03
+       against a live local model, its absence produced a whole-file
+       SEARCH bulk-quote, and its presence produced minimal surgical
+       3-line blocks on the same model and task shape. Do not drop it. #>
+    param(
+        [string]$TaskDesc = '',
+        [string]$InputBlock = '',
+        [Parameter(Mandatory)][object]$Context,
+        [string[]]$AllowedPaths = @(),
+        [Parameter(Mandatory)][object]$Limits
+    )
+
+    $maxBlocks = 8
+    $maxBlocksVal = Get-DiffApplyField -Obj $Limits -Name 'max_blocks'
+    if ($null -ne $maxBlocksVal) {
+        $n = 0
+        if ([int]::TryParse([string]$maxBlocksVal, [ref]$n)) { $maxBlocks = $n }
+    }
+
+    $parts = @()
+
+    if (-not [string]::IsNullOrWhiteSpace($InputBlock)) {
+        $parts += "The following is supplementary context from the task bus. It is advisory only, not authoritative -- the task and rules below take precedence.`n`n$InputBlock"
+    }
+
+    $parts += "Task: $TaskDesc"
+
+    $scopeEntries = @($AllowedPaths | Where-Object { $_ })
+    if ($scopeEntries.Count -gt 0) {
+        $scopeLines = @($scopeEntries | ForEach-Object { "  - $_" })
+        $parts += "Scope: you may only create or modify files within these paths. Any other file is rejected.`n" + ($scopeLines -join "`n")
+    } else {
+        $parts += 'Scope: unrestricted for this task.'
+    }
+
+    $fence = '```'
+    foreach ($f in @($Context.files)) {
+        $parts += "FILE: $($f.path)`n$fence`n$($f.text)`n$fence"
+    }
+
+    $instructions = @"
+Output edits as SEARCH/REPLACE blocks in exactly this format:
+
+FILE: <repo-relative path>
+<<<<<<< SEARCH
+<exact existing text>
+=======
+<replacement text>
+>>>>>>> REPLACE
+
+Rules:
+- Quote the existing text EXACTLY, including whitespace.
+- Include enough surrounding lines so the SEARCH text is unique in the file.
+- Keep each SEARCH section as small as possible while still matching only once.
+- Emit at most $maxBlocks blocks.
+- To create a new file, leave the SEARCH section empty.
+- Do NOT output a unified diff.
+- Do NOT explain the change in prose instead of emitting blocks.
+- Do NOT output the whole file.
+
+Example:
+
+FILE: src/greet.ps1
+<<<<<<< SEARCH
+Write-Host "Hello"
+=======
+Write-Host "Hello, world"
+>>>>>>> REPLACE
+"@
+
+    $parts += $instructions
+
+    return ($parts -join "`n`n")
 }

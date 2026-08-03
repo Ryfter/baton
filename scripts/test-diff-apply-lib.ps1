@@ -534,6 +534,127 @@ try {
     }
 }
 
+# =====================================================================
+# Context assembly + size envelope checks (C*, d103 Task 3) —
+# Get-DiffApplyLimits / Get-DiffApplyContext / Build-DiffApplyPrompt.
+# Hermetic: fresh temp worktree per fixture. Placeholder provider names
+# only (never a real model id, endpoint, or host).
+# =====================================================================
+
+$applyTmp = Join-Path ([System.IO.Path]::GetTempPath()) ("baton-diffapply-ctx-" + ([guid]::NewGuid().ToString('N').Substring(0, 8)))
+New-Item -ItemType Directory -Force -Path $applyTmp | Out-Null
+$script:wtSeq = 0
+
+try {
+    # ---------- C1: limits default when provider declares none ----------
+    $c1 = Get-DiffApplyLimits -Provider ([ordered]@{ id = 'local-host-a' })
+    Assert 'C1 default max_context_bytes' ($c1.max_context_bytes -eq 24000)
+    Assert 'C1 default max_files' ($c1.max_files -eq 4)
+    Assert 'C1 default max_blocks' ($c1.max_blocks -eq 8)
+
+    # ---------- C2: provider overrides are honored ----------
+    $c2Provider = [ordered]@{
+        id                = 'local-host-a'
+        diff_apply_limits = [ordered]@{ max_context_bytes = 12000; max_files = 2; max_blocks = 3 }
+    }
+    $c2 = Get-DiffApplyLimits -Provider $c2Provider
+    Assert 'C2 override max_context_bytes' ($c2.max_context_bytes -eq 12000)
+    Assert 'C2 override max_files' ($c2.max_files -eq 2)
+    Assert 'C2 override max_blocks' ($c2.max_blocks -eq 3)
+
+    # ---------- C3: max_prompt_bytes clamps max_context_bytes ----------
+    $c3Provider = [ordered]@{
+        id               = 'local-host-a'
+        max_prompt_bytes = 10000
+    }
+    $c3 = Get-DiffApplyLimits -Provider $c3Provider
+    Assert 'C3 clamped to max_prompt_bytes - 4000' ($c3.max_context_bytes -eq 6000)
+
+    # ---------- C4: two small files under a dir/ prefix ----------
+    $wt4 = New-FixtureWorktree
+    Set-FixtureFile $wt4 'dir/one.txt' "one`n" | Out-Null
+    Set-FixtureFile $wt4 'dir/two.txt' "two`n" | Out-Null
+    $limits4 = Get-DiffApplyLimits -Provider ([ordered]@{})
+    $c4 = Get-DiffApplyContext -Worktree $wt4 -AllowedPaths @('dir/') -Limits $limits4
+    Assert 'C4 ok=true' ($c4.ok -eq $true)
+    Assert 'C4 file_count=2' ($c4.file_count -eq 2)
+    Assert 'C4 both files present' (
+        (@($c4.files | Where-Object { $_.path -eq 'dir/one.txt' }).Count -eq 1) -and
+        (@($c4.files | Where-Object { $_.path -eq 'dir/two.txt' }).Count -eq 1)
+    )
+    Assert 'C4 text exact' ((@($c4.files | Where-Object { $_.path -eq 'dir/one.txt' }))[0].text -eq "one`n")
+
+    # ---------- C5: file count over limit ----------
+    $wt5 = New-FixtureWorktree
+    Set-FixtureFile $wt5 'dir/a.txt' "a`n" | Out-Null
+    Set-FixtureFile $wt5 'dir/b.txt' "b`n" | Out-Null
+    Set-FixtureFile $wt5 'dir/c.txt' "c`n" | Out-Null
+    $limits5 = Get-DiffApplyLimits -Provider ([ordered]@{ diff_apply_limits = [ordered]@{ max_files = 2 } })
+    $c5 = Get-DiffApplyContext -Worktree $wt5 -AllowedPaths @('dir/') -Limits $limits5
+    Assert 'C5 ok=false' ($c5.ok -eq $false)
+    Assert 'C5 reason names files and limit' ($c5.reason -match 'files' -and $c5.reason -match '2')
+
+    # ---------- C6: byte total over limit ----------
+    $wt6 = New-FixtureWorktree
+    Set-FixtureFile $wt6 'dir/big.txt' ('x' * 100) | Out-Null
+    $limits6 = Get-DiffApplyLimits -Provider ([ordered]@{ diff_apply_limits = [ordered]@{ max_context_bytes = 50 } })
+    $c6 = Get-DiffApplyContext -Worktree $wt6 -AllowedPaths @('dir/') -Limits $limits6
+    Assert 'C6 ok=false' ($c6.ok -eq $false)
+    Assert 'C6 reason names bytes and limit' ($c6.reason -match 'bytes' -and $c6.reason -match '50')
+
+    # ---------- C7: .git/ contents never included ----------
+    $wt7 = New-FixtureWorktree
+    Set-FixtureFile $wt7 'dir/keep.txt' "keep`n" | Out-Null
+    Set-FixtureFile $wt7 'dir/.git/config' "fake-git-config`n" | Out-Null
+    $limits7 = Get-DiffApplyLimits -Provider ([ordered]@{})
+    $c7 = Get-DiffApplyContext -Worktree $wt7 -AllowedPaths @('dir/') -Limits $limits7
+    Assert 'C7 ok=true' ($c7.ok -eq $true)
+    Assert 'C7 only keep.txt present' (@($c7.files).Count -eq 1 -and $c7.files[0].path -eq 'dir/keep.txt')
+
+    # ---------- C8: non-existent path in AllowedPaths ----------
+    $wt8 = New-FixtureWorktree
+    Set-FixtureFile $wt8 'dir/real.txt' "real`n" | Out-Null
+    $limits8 = Get-DiffApplyLimits -Provider ([ordered]@{})
+    $c8 = Get-DiffApplyContext -Worktree $wt8 -AllowedPaths @('dir/real.txt', 'dir/new-file.txt') -Limits $limits8
+    Assert 'C8 ok=true' ($c8.ok -eq $true)
+    Assert 'C8 only existing file read' (@($c8.files).Count -eq 1 -and $c8.files[0].path -eq 'dir/real.txt')
+
+    # ---------- C9: deterministic ordering ----------
+    $wt9 = New-FixtureWorktree
+    Set-FixtureFile $wt9 'dir/zzz.txt' "z`n" | Out-Null
+    Set-FixtureFile $wt9 'dir/aaa.txt' "a`n" | Out-Null
+    Set-FixtureFile $wt9 'dir/mmm.txt' "m`n" | Out-Null
+    $limits9 = Get-DiffApplyLimits -Provider ([ordered]@{})
+    $c9a = Get-DiffApplyContext -Worktree $wt9 -AllowedPaths @('dir/') -Limits $limits9
+    $c9b = Get-DiffApplyContext -Worktree $wt9 -AllowedPaths @('dir/') -Limits $limits9
+    $order9a = @($c9a.files | ForEach-Object { $_.path })
+    $order9b = @($c9b.files | ForEach-Object { $_.path })
+    Assert 'C9 sorted ordinal' (($order9a -join ',') -eq 'dir/aaa.txt,dir/mmm.txt,dir/zzz.txt')
+    Assert 'C9 repeat call identical order' (($order9a -join ',') -eq ($order9b -join ','))
+
+    # ---------- C10/C11: prompt content ----------
+    $wt10 = New-FixtureWorktree
+    Set-FixtureFile $wt10 'dir/one.txt' "hello`n" | Out-Null
+    $limits10 = Get-DiffApplyLimits -Provider ([ordered]@{ diff_apply_limits = [ordered]@{ max_blocks = 5 } })
+    $ctx10 = Get-DiffApplyContext -Worktree $wt10 -AllowedPaths @('dir/') -Limits $limits10
+    $prompt10 = Build-DiffApplyPrompt -TaskDesc 'rename the greeting' -InputBlock '' -Context $ctx10 -AllowedPaths @('dir/') -Limits $limits10
+    Assert 'C10 contains task desc' ($prompt10 -match [regex]::Escape('rename the greeting'))
+    Assert 'C10 contains scope list entry' ($prompt10 -match [regex]::Escape('dir/'))
+    Assert 'C10 contains file contents' ($prompt10 -match [regex]::Escape('hello'))
+    Assert 'C10 contains SEARCH marker' ($prompt10 -match [regex]::Escape('<<<<<<< SEARCH'))
+    Assert 'C10 contains separator marker' ($prompt10 -match '(?m)^=======\s*$')
+    Assert 'C10 contains REPLACE marker' ($prompt10 -match [regex]::Escape('>>>>>>> REPLACE'))
+    Assert 'C11 states block cap from Limits' ($prompt10 -match [regex]::Escape('5 blocks'))
+    Assert 'C11 states the minimality rule verbatim' ($prompt10 -match [regex]::Escape('keep each SEARCH section as small as possible while still matching only once'))
+} catch {
+    Write-Host "FAIL  C-section threw: $_" -ForegroundColor Red
+    $script:failures++
+} finally {
+    if (Test-Path -LiteralPath $applyTmp) {
+        Remove-Item -LiteralPath $applyTmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 if ($failures -gt 0) {
     Write-Host "`nFAILED: $failures assertion(s)" -ForegroundColor Red
 } else {
