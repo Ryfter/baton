@@ -9,6 +9,148 @@ Probes are **observe-only**. Nothing here spends money, changes an account, or
 touches credentials. A probe that fails is a probe that returns nothing, and a
 row with no usable observation dispatches exactly as it did before.
 
+---
+
+# Setup walkthrough
+
+Follow these in order. **Every command marked ✅ was actually run on a Windows box
+against a real install.** Anything marked ⚠️ is untested and says so — do not treat
+it as verified.
+
+Nothing here is required. Baton runs fine without any probe; you just get no cap
+enforcement, and `usage_policy` caps silently never engage. That silence is the
+reason this page exists.
+
+## Step 1 — install CodexBar (platform decides which one)
+
+There are two separate projects. They are **not** interchangeable, and even the
+binary name differs.
+
+| your OS | project | binary |
+| --- | --- | --- |
+| Windows | [`nesszer/Win-CodexBar`](https://github.com/nesszer/Win-CodexBar) | `codexbar-cli.exe` |
+| macOS / Linux | [`steipete/CodexBar`](https://github.com/steipete/CodexBar) | `codexbar` |
+
+**Windows** — install from the Win-CodexBar releases. It lands at
+`%LOCALAPPDATA%\Programs\CodexBar\codexbar-cli.exe`, which Baton checks
+automatically, so it does not need to be on `PATH`.
+
+**macOS** ⚠️ *untested here* — `brew install steipete/tap/codexbar`
+
+**Linux** ⚠️ *untested here* — release tarball from `steipete/CodexBar`.
+
+> ⚠️ **Only the Windows path is verified.** The transport parses the JSON shape
+> emitted by Win-CodexBar. `steipete/CodexBar` documents JSON output and a far
+> wider provider set, but its exact field names could not be checked from Windows.
+> On macOS/Linux, run Step 2 and confirm the shape before relying on it — a parse
+> that guesses wrong yields a confident wrong percentage, which is worse than no
+> reading at all.
+
+## Step 2 — confirm CodexBar works on its own, before involving Baton
+
+✅ Check it runs:
+
+```
+codexbar-cli --version
+```
+
+✅ Ask it for usage as JSON:
+
+```
+codexbar-cli usage --provider codex --json --pretty
+```
+
+You want a block shaped like this (values will differ):
+
+```json
+{ "provider": "codex", "source": "oauth",
+  "usage": {
+    "primary":   { "window_minutes": 300,   "used_percent": 0.0,  "resets_at": "..." },
+    "secondary": { "window_minutes": 10080, "used_percent": 22.0, "resets_at": "..." } } }
+```
+
+`primary` is the 5-hour window, `secondary` the weekly one. `source` tells you how
+the figure was obtained — `oauth`, a browser session, and so on.
+
+**If this step fails, stop here.** Baton cannot fix an unauthenticated CodexBar,
+and a broken probe from Baton's side looks identical to a working one that reports
+nothing.
+
+## Step 3 — tell the fleet row to use it
+
+Add to the provider's `usage_policy` in your **box-private** `fleet.yaml`
+(`$BATON_HOME/fleet.yaml` — never the repo):
+
+```yaml
+    usage_policy:
+      probe: true
+      probe_transport: codexbar-cli
+      probe_provider: claude      # what CodexBar calls it, not what Baton calls it
+      soft_cap_weekly: 85
+      soft_cap_5h: 75
+```
+
+Two of these trip people up:
+
+- **`probe_provider` is required and is not inferred.** Baton's row may be
+  `claude-sonnet` while CodexBar calls it `claude`. Baton will not guess which
+  account you meant — with this absent, the probe simply does not run.
+- **`probe: true` alone does nothing** without a transport. Both are needed.
+
+Caps are yours. Baton ships **no** default caps: a row with no `soft_cap_*` is
+unmetered, exactly as before.
+
+## Step 4 — confirm Baton sees it
+
+✅ Ask Baton, not CodexBar:
+
+```
+baton usage
+```
+
+The row should now report a percentage rather than nothing. If it reports nothing
+while Step 2 works, the cause is almost always a missing `probe_provider` or a
+`probe_transport` that does not match a registered transport name.
+
+## Step 5 — know what a trip looks like
+
+Over cap, Baton reroutes to a peer or holds, and says so in the run's `why`. It
+does not stop silently. A held dispatch names the provider and the window that
+tripped.
+
+## Optional — a cached local endpoint
+
+Spawning the binary per check is fine at Baton's rate. For frequent polling,
+CodexBar can serve cached JSON on loopback ✅:
+
+```
+codexbar-cli serve --port 8080
+```
+
+## Optional — a quick manual gate
+
+✅ Useful in shell scripts and for eyeballing before a big run:
+
+```
+codexbar-cli guard --provider codex --window weekly --min-remaining 15 --json
+```
+
+Returns a decision plus an exit code (`0` = ok). Baton deliberately does **not**
+route through `guard`: that would move cap policy out of Baton and into CodexBar.
+Baton reads raw numbers and applies its own policy.
+
+## Troubleshooting
+
+| symptom | cause |
+| --- | --- |
+| Baton reports no usage, CodexBar works | missing `probe_provider`, or `probe_transport` name typo |
+| probe never runs | `probe: true` missing, or transport name not registered |
+| binary not found | not on `PATH` and not at the platform default location — set `probe_command` |
+| a browser-sourced provider fails to read cookies | some browsers encrypt the cookie store (Chromium App-Bound Encryption); prefer an OAuth/CLI source for that provider |
+| a percentage looks wrong on macOS/Linux | the untested shape above — verify Step 2's field names before trusting it |
+
+---
+
 ## Transports
 
 Which probe a row uses is resolved by **transport name**, never by guessing from
