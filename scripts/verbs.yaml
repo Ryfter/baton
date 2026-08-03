@@ -7,6 +7,21 @@ verbs:
     class: hybrid
     runner: fleet-go.ps1
     json: true
+    flag_aliases:
+      --project: -Project
+      --repo: -RepoPath
+      --goal-file: -GoalFile
+      --brief: -GoalFile
+      --execute: -Execute
+      --budget: -Budget
+      --json: -Json
+      --stakes: -Stakes
+      --max-tier: -MaxCostTier
+      --plan-reviewers: -PlanReviewers
+      --no-plan-gate: -NoPlanGate
+      --no-gate: -NoGate
+      --no-verify: -NoVerify
+      --scaffold-verification: -ScaffoldVerification
   - name: fleet
     summary: Manage and invoke the LLM fleet (list, doctor, test).
     class: engine

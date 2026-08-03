@@ -214,10 +214,104 @@ exit 3
     $null = & pwsh -NoProfile -File $baton go 2>&1
     Assert 'E1 runner exit 3 propagates' ($LASTEXITCODE -eq 3)
 
-    # --version discovers something
+    # --version discovers something from the real source checkout
     $verOut = & pwsh -NoProfile -File $baton --version 2>&1 | Out-String
     Assert 'Z1 --version exit 0' ($LASTEXITCODE -eq 0)
     Assert 'Z2 --version non-empty' (-not [string]::IsNullOrWhiteSpace($verOut.Trim()))
+    Assert 'Z3 --version not unknown (source checkout)' ($verOut.Trim() -ne 'unknown')
+
+    # ------------------------------------------------------------------
+    # 9. Version resolution: BATON_REPO_ROOT / marker / unknown
+    # ------------------------------------------------------------------
+    # Isolated dispatcher copy so walk-up from $PSScriptRoot cannot reach the
+    # real repo's .claude-plugin/plugin.json.
+    $isoScripts = Join-Path $root 'iso-scripts'
+    New-Item -ItemType Directory -Force -Path $isoScripts | Out-Null
+    Copy-Item -LiteralPath $baton -Destination (Join-Path $isoScripts 'baton.ps1')
+    Copy-Item -LiteralPath $resolveLib -Destination (Join-Path $isoScripts 'baton-resolve.ps1')
+    Copy-Item -LiteralPath $verbsYaml -Destination (Join-Path $isoScripts 'verbs.yaml')
+    $isoBaton = Join-Path $isoScripts 'baton.ps1'
+
+    # V-REPO: BATON_REPO_ROOT points at a tree with plugin.json only.
+    $verRepo = Join-Path $root 'ver-repo'
+    $verPluginDir = Join-Path $verRepo '.claude-plugin'
+    New-Item -ItemType Directory -Force -Path $verPluginDir | Out-Null
+    Set-Content -LiteralPath (Join-Path $verPluginDir 'plugin.json') `
+        -Value '{"name":"baton","version":"9.8.7-test"}' -Encoding utf8NoBOM
+    $env:BATON_REPO_ROOT = $verRepo
+    $verRepoOut = & pwsh -NoProfile -File $isoBaton --version 2>&1 | Out-String
+    Assert 'VR1 --version via BATON_REPO_ROOT exit 0' ($LASTEXITCODE -eq 0)
+    Assert 'VR2 --version via BATON_REPO_ROOT is non-unknown' (
+        ($verRepoOut.Trim() -ne 'unknown') -and (-not [string]::IsNullOrWhiteSpace($verRepoOut.Trim()))
+    )
+    Assert 'VR3 --version reads plugin.json version' ($verRepoOut.Trim() -eq '9.8.7-test')
+    Remove-Item Env:BATON_REPO_ROOT -ErrorAction SilentlyContinue
+
+    # V-MARK: deployed layout — version marker present, no plugin.json, no env.
+    Set-Content -LiteralPath (Join-Path $isoScripts 'baton-version.txt') `
+        -Value '4.5.6-deploy' -Encoding utf8NoBOM
+    $verMarkOut = & pwsh -NoProfile -File $isoBaton --version 2>&1 | Out-String
+    Assert 'VM1 --version via marker exit 0' ($LASTEXITCODE -eq 0)
+    Assert 'VM2 --version via marker is non-unknown' (
+        ($verMarkOut.Trim() -ne 'unknown') -and (-not [string]::IsNullOrWhiteSpace($verMarkOut.Trim()))
+    )
+    Assert 'VM3 --version reads baton-version.txt' ($verMarkOut.Trim() -eq '4.5.6-deploy')
+
+    # V-UNK: neither plugin.json nor marker available → exactly "unknown".
+    Remove-Item -LiteralPath (Join-Path $isoScripts 'baton-version.txt') -Force
+    Remove-Item Env:BATON_REPO_ROOT -ErrorAction SilentlyContinue
+    $verUnkOut = & pwsh -NoProfile -File $isoBaton --version 2>&1 | Out-String
+    Assert 'VU1 --version with nothing exit 0' ($LASTEXITCODE -eq 0)
+    Assert 'VU2 --version is exactly unknown' ($verUnkOut.Trim() -eq 'unknown')
+
+    # ------------------------------------------------------------------
+    # 10. Per-verb flag_aliases (go) + raw passthrough (no-map verbs)
+    # ------------------------------------------------------------------
+    # Fresh stub runner that echoes argv (re-use stub-repo layout).
+    $echoRunner = @'
+$i = 0
+foreach ($a in $args) {
+    Write-Output ("ARG{0}={1}" -f $i, $a)
+    $i++
+}
+exit 0
+'@
+    New-Item -ItemType Directory -Force -Path (Join-Path $stubRepo 'scripts') | Out-Null
+    Set-Content -LiteralPath (Join-Path $stubRepo 'scripts' 'fleet-go.ps1') -Value $echoRunner -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $stubRepo 'scripts' 'fleet-doctor.ps1') -Value $echoRunner -Encoding utf8NoBOM
+    $env:BATON_REPO_ROOT = $stubRepo
+
+    # F1: baton go --project X --execute → -Project X -Execute
+    $aliasOut = & pwsh -NoProfile -File $baton go --project X --execute 2>&1 | Out-String
+    Assert 'F1 go alias translation exit 0' ($LASTEXITCODE -eq 0)
+    Assert 'F2 --project → -Project' ($aliasOut -match 'ARG0=-Project')
+    Assert 'F3 project value preserved' ($aliasOut -match 'ARG1=X')
+    Assert 'F4 --execute → -Execute' ($aliasOut -match 'ARG2=-Execute')
+
+    # F5: verb without flag_aliases (fleet) passes --project through unchanged.
+    $fleetOut = & pwsh -NoProfile -File $baton fleet --project X 2>&1 | Out-String
+    Assert 'F5 no-map verb exit 0' ($LASTEXITCODE -eq 0)
+    Assert 'F6 no-map --project unchanged' ($fleetOut -match 'ARG0=--project')
+    Assert 'F7 no-map value preserved' ($fleetOut -match 'ARG1=X')
+
+    # F8/F9: value with space + value beginning with '-' survive byte-for-byte.
+    $spaceVal = 'my project'
+    $dashVal = '-weird'
+    $valOut = & pwsh -NoProfile -File $baton go --project $spaceVal --budget $dashVal 2>&1 | Out-String
+    Assert 'F8 space value byte-for-byte' ($valOut -match [regex]::Escape('ARG1=my project'))
+    Assert 'F9 leading-dash value byte-for-byte' ($valOut -match [regex]::Escape('ARG3=-weird'))
+    Assert 'F10 --budget → -Budget (flag only)' ($valOut -match 'ARG2=-Budget')
+
+    # F11: bare "--" stops translation; following tokens are verbatim.
+    $ddOut = & pwsh -NoProfile -File $baton go --project X -- --execute --project 2>&1 | Out-String
+    Assert 'F11 pre-- --project translated' ($ddOut -match 'ARG0=-Project')
+    Assert 'F12 bare -- preserved' ($ddOut -match 'ARG2=--')
+    Assert 'F13 post-- --execute untranslated' ($ddOut -match 'ARG3=--execute')
+    Assert 'F14 post-- --project untranslated' ($ddOut -match 'ARG4=--project')
+
+    # F15: undeclared --flag on go passes through unchanged.
+    $unkFlagOut = & pwsh -NoProfile -File $baton go --not-a-real-flag 2>&1 | Out-String
+    Assert 'F15 undeclared --flag passthrough' ($unkFlagOut -match 'ARG0=--not-a-real-flag')
 }
 finally {
     if ($null -eq $oldHome) { Remove-Item Env:BATON_HOME -EA SilentlyContinue } else { $env:BATON_HOME = $oldHome }

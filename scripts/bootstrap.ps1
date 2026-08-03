@@ -262,6 +262,28 @@ foreach ($script in @('baton-home.ps1', 'job-lib.ps1', 'consolidate-lessons.ps1'
     Copy-WithPrompt $src $dst "lib script: $script" -Force
 }
 
+# Version marker for the deployed baton CLI. plugin.json is not copied into
+# ~/.claude/scripts, so baton --version would otherwise print "unknown".
+# Read the live plugin version — never invent or hardcode a number.
+$pluginJsonForVersion = Join-Path $repoRoot '.claude-plugin\plugin.json'
+$batonVersionMarker = Join-Path $scriptsDst 'baton-version.txt'
+if (Test-Path -LiteralPath $pluginJsonForVersion) {
+    $pluginRawForVersion = Get-Content -LiteralPath $pluginJsonForVersion -Raw
+    if ($pluginRawForVersion -match '"version"\s*:\s*"([^"]+)"') {
+        $batonDeployVersion = [string]$matches[1]
+        if ($DryRun) {
+            Write-Ok "[dry-run] would write baton-version.txt ($batonDeployVersion)"
+        } else {
+            Set-Content -LiteralPath $batonVersionMarker -Value $batonDeployVersion -Encoding utf8NoBOM
+            Write-Ok "wrote baton-version.txt ($batonDeployVersion)"
+        }
+    } else {
+        Write-Warn "plugin.json has no version field; skipped baton-version.txt"
+    }
+} else {
+    Write-Warn "plugin.json missing at $pluginJsonForVersion; skipped baton-version.txt"
+}
+
 # --- Step 5b2: Retire genericized fleet escape-hatch scripts ---
 Write-Step "Reconciling fleet escape-hatch scripts"
 $fleetScriptsDst = Join-Path $claudeDir 'scripts/fleet'
