@@ -2,7 +2,45 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
-## ⚑ RESUME HERE — 2026-08-02 (#151 SHIPPED; walk reached t2; halted on quota, not on code)
+## ⚑ RESUME HERE — 2026-08-03 (CLI + budget + learning loop SHIPPED; next = d103 diff-apply)
+
+**Everything merged and deployed. No open PRs.**
+
+**Shipped since the last entry:**
+- **`baton` CLI** — vendor-neutral front door, 17 verbs, `verbs --json` for agent discovery,
+  POSIX/cmd/ps1 shims, on PATH, resolution no longer requires `~/.claude/scripts`. Runs with no
+  Claude installed.
+- **Window budgeting** — 5h (anchor grid) + **7d (new horizon)** token/time folds per model,
+  `baton budget status|doctor`. Routing pressure built but **OFF** behind
+  `BATON_WINDOW_PRESSURE`; no `window-budgets.json` exists, so headroom is advisory. Kevin must
+  supply real 5h/7d ceilings — caps are never invented.
+- **#159 routing loop CLOSED** — outcomes now auto-write ratings. The read path
+  (`Get-CapabilityQualityDetail`) was always live but the ratings file never existed, so every
+  model scored a flat 0.5 forever. Seeded from real history: `(code-gen, claude-haiku)` is now
+  **0.462 and ranks last** among paid candidates, from 3 real scope violations. Quota refusals
+  deliberately write **no** rating (availability ≠ quality — the #156 trap).
+
+**NEXT BUILD — decision d103, Path B: the diff-apply worker path.**
+`Test-ProviderAgentic` returns `$false` for `kind: http`/`stdio-json` unconditionally, so
+`lm-studio` is filtered out of every edit task **despite ranking first** for `code-gen` on cost
+(local) *and* quality (0.625). It is refused for having no hands, not for being bad. d103 builds
+the "Slice 3" its own comment names: Baton does the file I/O, model returns a patch, existing
+verification runs unchanged. Safety is unaffected — the scope oracle and frozen contract judge
+the diff, not its author (run 8: a *paid frontier* model rewrote a schema and was caught).
+
+**Green walk: 9 runs, still zero finishes.** Run 9 rejected at plan gate, zero spend. The critical
+was **Baton's own policy**, not the brief: `stakes=low` caps to the free tier, but every agentic
+`code-gen` provider is paid → undispatchable task. Filed as **#168**; d103 fixes it at the root.
+Two brief gaps also raised: storyline interest scoping in t2 (real, unfixed), and template
+locations (**verified unfounded** — `app/web/templates` and `app/web/app.py` are both inside the
+allowed path).
+
+**Open issues:** #168 (no free implementer), #166 (bootstrap deploy list — omitted new scripts
+3× running), #157, #156, #152, #150, #149, #123, #117, #115, #97, #96, #95, #91.
+
+---
+
+## Prior entry — 2026-08-02 (#151 SHIPPED; walk reached t2; halted on quota, not on code)
 
 `#151` merged (`962c089`) and **deployed** — repo and `~/.claude/scripts` byte-identical, live
 smoke `exit=2` on both guard paths. `-GoalFile` works.
