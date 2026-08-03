@@ -42,7 +42,10 @@ function Get-CapabilityRatings {
 
 function Add-CapabilityRating {
     <# Append one rating row to the GitHub-backed ratings store. Creates the dir/file.
-       A write fault warns and returns; never crashes. -Timestamp injectable for tests. #>
+       A write fault warns and returns; never crashes. -Timestamp injectable for tests.
+       Optional additive fields (model_version, failure_category, run_id, task_id) are
+       omitted when empty so existing callers keep the classic 6-key row shape. Readers
+       ignore unknown fields — additive only; meanings of existing fields are unchanged. #>
     param(
         [Parameter(Mandatory)][string]$Capability,
         [Parameter(Mandatory)][string]$Candidate,
@@ -50,13 +53,21 @@ function Add-CapabilityRating {
         [Parameter(Mandatory)][ValidateSet('good','bad')][string]$Rating,
         [string]$Note = '',
         [string]$RatingsPath = $script:DefaultRatingsPath,
-        [string]$Timestamp
+        [string]$Timestamp,
+        [string]$ModelVersion = '',
+        [string]$FailureCategory = '',
+        [string]$RunId = '',
+        [string]$TaskId = ''
     )
     if (-not $Timestamp) { $Timestamp = (Get-Date).ToString('o') }
     $row = [ordered]@{
         ts = $Timestamp; capability = $Capability; candidate = $Candidate
         source = $Source; rating = $Rating; note = $Note
     }
+    if ($ModelVersion)     { $row['model_version']    = $ModelVersion }
+    if ($FailureCategory)  { $row['failure_category'] = $FailureCategory }
+    if ($RunId)            { $row['run_id']           = $RunId }
+    if ($TaskId)           { $row['task_id']          = $TaskId }
     try {
         $dir = Split-Path -Parent $RatingsPath
         if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
@@ -120,10 +131,16 @@ function Get-RoutingStats {
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'),
         [string]$RatingsPath = $script:DefaultRatingsPath
     )
-    # User ratings (exclude scorecard rows — they carry score, not good/bad; without
-    # this filter gauntlet rows would silently DRAG DOWN the user rate).
+    # User/operator ratings (exclude scorecard rows — they carry score, not good/bad;
+    # without this filter gauntlet rows would silently DRAG DOWN the user rate).
+    # Machine-observed outcome ratings (source=heuristic, from routing-observe) are
+    # excluded here and folded into the heuristic channel below so they land at
+    # Wh=0.25 rather than Wu=1.0. Blend weights themselves are unchanged.
     $rtAll = Get-CapabilityRatings -Capability $Capability -Candidate $Candidate -RatingsPath $RatingsPath
-    $rt = @($rtAll | Where-Object { $_.rating -eq 'good' -or $_.rating -eq 'bad' })
+    $rt = @($rtAll | Where-Object {
+        ($_.rating -eq 'good' -or $_.rating -eq 'bad') -and
+        [string]$_.source -ne 'heuristic'
+    })
     $nu = @($rt).Count
     $gu = @($rt | Where-Object { $_.rating -eq 'good' }).Count
     $ru = if ($nu -gt 0) { [double]$gu / $nu } else { 0.0 }
@@ -143,8 +160,14 @@ function Get-RoutingStats {
     $judge = @($rows | Where-Object { $_.grader -eq 'llm-judge' })
     $nj = $judge.Count
     $rj = if ($nj -gt 0) { [double](($judge | Measure-Object -Property score -Average).Average) } else { 0.0 }
-    $nh = $rows.Count
-    $ph = @($rows | Where-Object { $_.passed -eq $true }).Count
+
+    # Heuristic channel: pass-history journal + machine-observed outcome ratings.
+    $heurRt = @($rtAll | Where-Object {
+        [string]$_.source -eq 'heuristic' -and ($_.rating -eq 'good' -or $_.rating -eq 'bad')
+    })
+    $nh = $rows.Count + $heurRt.Count
+    $ph = @($rows | Where-Object { $_.passed -eq $true }).Count +
+          @($heurRt | Where-Object { $_.rating -eq 'good' }).Count
     $rh = if ($nh -gt 0) { [double]$ph / $nh } else { 0.0 }
 
     return @{

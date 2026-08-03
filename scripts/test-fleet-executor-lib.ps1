@@ -20,7 +20,10 @@ function New-TempRepo {
 
 $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) "exec-lib-test-$([System.IO.Path]::GetRandomFileName())"
 New-Item -ItemType Directory -Force -Path $tmpRoot | Out-Null
+$savedObserve = $env:BATON_ROUTING_OBSERVE
 try {
+    # #159: isolating — never write outcome ratings into the real knowledge store.
+    $env:BATON_ROUTING_OBSERVE = 'off'
     $repo = New-TempRepo -Root $tmpRoot
 
     # ---- New-RunWorktree ----
@@ -1523,6 +1526,8 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
         else { $env:BATON_HOME = $savedBatonHome }
     }
 } finally {
+    if ($null -eq $savedObserve) { Remove-Item env:BATON_ROUTING_OBSERVE -ErrorAction SilentlyContinue }
+    else { $env:BATON_ROUTING_OBSERVE = $savedObserve }
     Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
 }
 

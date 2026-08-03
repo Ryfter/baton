@@ -63,10 +63,13 @@ $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) "engine-rework-$([System.
 New-Item -ItemType Directory -Force -Path $tmpRoot | Out-Null
 $savedBatonHome = $env:BATON_HOME
 $savedMaxRework = $env:BATON_MAX_REWORK
+$savedObserve = $env:BATON_ROUTING_OBSERVE
 try {
     $env:BATON_HOME = Join-Path $tmpRoot 'baton-home'
     New-Item -ItemType Directory -Force -Path $env:BATON_HOME | Out-Null
     Remove-Item env:BATON_MAX_REWORK -ErrorAction SilentlyContinue
+    # #159: isolating — never write outcome ratings into the real knowledge store.
+    $env:BATON_ROUTING_OBSERVE = 'off'
 
     $fleetPath = Join-Path $env:BATON_HOME 'fleet.yaml'
     Set-Content -LiteralPath $fleetPath -Encoding utf8NoBOM -Value @'
@@ -670,6 +673,8 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     else { $env:BATON_HOME = $savedBatonHome }
     if ($null -eq $savedMaxRework) { Remove-Item env:BATON_MAX_REWORK -ErrorAction SilentlyContinue }
     else { $env:BATON_MAX_REWORK = $savedMaxRework }
+    if ($null -eq $savedObserve) { Remove-Item env:BATON_ROUTING_OBSERVE -ErrorAction SilentlyContinue }
+    else { $env:BATON_ROUTING_OBSERVE = $savedObserve }
     Remove-Item env:BATON_VERIFY_TEST_HOOK -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
 }
