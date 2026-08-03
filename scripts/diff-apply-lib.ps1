@@ -226,7 +226,11 @@ function Invoke-EditBlockApply {
 
        Returns [ordered]@{ ok; result; error; files_written; blocks_applied } where
        result is 'ok' | 'search-not-found' | 'search-ambiguous' | 'path-rejected' |
-       'scope-rejected' | 'create-exists'. #>
+       'scope-rejected' | 'create-exists' | 'flush-failed'. 'flush-failed' means the
+       flush loop itself threw (disk full, locked file, permission denied, path too
+       long) after validation passed; every file already written in the batch is
+       rolled back byte-exact (or deleted, if it was a create) before returning, so
+       the all-or-nothing guarantee holds on disk too. #>
     param(
         [Parameter(Mandatory)][string]$Worktree,
         [object[]]$Blocks = @(),
@@ -310,6 +314,8 @@ function Invoke-EditBlockApply {
             eol              = $eol
             bom              = $bom
             trailing_newline = $content.EndsWith("`n")
+            existed          = $true
+            original_bytes   = $bytes
         }
     }
 
@@ -334,6 +340,8 @@ function Invoke-EditBlockApply {
                 eol              = "`n"
                 bom              = $false
                 trailing_newline = $true
+                existed          = $false
+                original_bytes   = $null
             }
         } else {
             if (-not $files.Contains($norm)) {
@@ -376,24 +384,57 @@ function Invoke-EditBlockApply {
         $applied++
     }
 
-    # --- 5. Flush. Reached only when every block succeeded. ---
+    # --- 5. Flush. Reached only when every block succeeded. Wrapped so a
+    #        mid-batch disk failure (full disk, locked file, permission
+    #        denied, path too long) rolls back every file already written
+    #        in this batch instead of leaving the tree half-changed, and
+    #        never lets the exception escape this function. ---
     $written = @()
-    foreach ($norm in $writeOrder) {
-        $f = $files[$norm]
-        $text = $f.content
-        if ($f.trailing_newline) {
-            if (-not $text.EndsWith("`n")) { $text += $f.eol }
-        } elseif ($text.EndsWith("`r`n")) {
-            $text = $text.Substring(0, $text.Length - 2)
-        } elseif ($text.EndsWith("`n")) {
-            $text = $text.Substring(0, $text.Length - 1)
+    try {
+        foreach ($norm in $writeOrder) {
+            $f = $files[$norm]
+            $text = $f.content
+            if ($f.trailing_newline) {
+                if (-not $text.EndsWith("`n")) { $text += $f.eol }
+            } elseif ($text.EndsWith("`r`n")) {
+                $text = $text.Substring(0, $text.Length - 2)
+            } elseif ($text.EndsWith("`n")) {
+                $text = $text.Substring(0, $text.Length - 1)
+            }
+            $dir = Split-Path -Parent $f.full
+            if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+                New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            }
+            [System.IO.File]::WriteAllText($f.full, $text, [System.Text.UTF8Encoding]::new([bool]$f.bom))
+            $written += $norm
         }
-        $dir = Split-Path -Parent $f.full
-        if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    } catch {
+        $flushErrorMsg = $_.Exception.Message
+        $rollbackErrors = @()
+        # Reverse write order. Rollback is itself exception-safe: a failure
+        # restoring/removing one file must not stop the rest.
+        for ($ri = $written.Count - 1; $ri -ge 0; $ri--) {
+            $norm = $written[$ri]
+            $f = $files[$norm]
+            try {
+                if ($f.existed) {
+                    [System.IO.File]::WriteAllBytes($f.full, $f.original_bytes)
+                } else {
+                    Remove-Item -LiteralPath $f.full -Force -ErrorAction SilentlyContinue
+                }
+            } catch {
+                $rollbackErrors += "rollback failed for ${norm}: $($_.Exception.Message)"
+            }
         }
-        [System.IO.File]::WriteAllText($f.full, $text, [System.Text.UTF8Encoding]::new([bool]$f.bom))
-        $written += $norm
+
+        $out.ok = $false
+        $out.result = 'flush-failed'
+        $out.error = if ($rollbackErrors.Count -gt 0) {
+            "flush failed: $flushErrorMsg | rollback errors: $($rollbackErrors -join '; ')"
+        } else {
+            "flush failed: $flushErrorMsg"
+        }
+        return $out
     }
 
     $out.ok = $true

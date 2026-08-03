@@ -488,6 +488,43 @@ try {
     Assert 'A20 good path ok=true' ($s20.ok -eq $true)
     Assert 'A20 good path reason empty' ($s20.reason -eq '')
     Assert 'A20 good path resolves under worktree' ($s20.full.StartsWith([System.IO.Path]::GetFullPath($wt), [System.StringComparison]::OrdinalIgnoreCase))
+    # ---------- A21: flush failure mid-batch rolls back every already-written
+    #                 file byte-exact and deletes any newly-created file,
+    #                 returning ok=false/result=flush-failed with no thrown
+    #                 exception escaping the function (d103 Task 2 hardening).
+    #
+    #                 Deterministic forcing mechanism: hold a read-share-only
+    #                 handle (FileAccess.Read, FileShare.Read) on the third
+    #                 file. File.ReadAllBytes (load step) also opens with
+    #                 FileShare.Read, so the load succeeds -- but
+    #                 File.WriteAllText (flush step) needs write access,
+    #                 which our handle denies, so the flush throws a sharing
+    #                 violation exactly where the defect lives (step 5), not
+    #                 at load (step 3) or validation. ----------
+    $wt = New-FixtureWorktree
+    $f21a = Set-FixtureFile $wt 'first.txt' "one`n"
+    $h21a = Get-Sha $f21a
+    $f21c = Set-FixtureFile $wt 'locked.txt' "locked`n"
+    $h21c = Get-Sha $f21c
+    $newPath21 = Join-Path $wt 'created/new.txt'
+
+    $fsLock21 = [System.IO.File]::Open($f21c, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    try {
+        $a21 = Invoke-EditBlockApply -Worktree $wt -Blocks @(
+            (New-Blk 'first.txt' 'one' 'ONE'),
+            (New-Blk 'created/new.txt' '' 'brand new'),
+            (New-Blk 'locked.txt' 'locked' 'LOCKED')
+        ) -AllowedPaths @()
+    } finally {
+        $fsLock21.Dispose()
+    }
+
+    Assert 'A21 ok=false' ($a21.ok -eq $false)
+    Assert 'A21 result=flush-failed' ($a21.result -eq 'flush-failed')
+    Assert 'A21 error non-empty' (-not [string]::IsNullOrWhiteSpace($a21.error))
+    Assert 'A21 already-written file rolled back byte-identical' ((Get-Sha $f21a) -eq $h21a)
+    Assert 'A21 locked file left untouched' ((Get-Sha $f21c) -eq $h21c)
+    Assert 'A21 newly-created file does not exist after rollback' (-not (Test-Path -LiteralPath $newPath21))
 } catch {
     Write-Host "FAIL  A-section threw: $_" -ForegroundColor Red
     $script:failures++
