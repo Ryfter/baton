@@ -256,10 +256,91 @@ if (-not (Test-Path $scriptsDst)) {
     if ($DryRun) { Write-Ok "[dry-run] would create $scriptsDst" }
     else { New-Item -ItemType Directory -Force -Path $scriptsDst | Out-Null; Write-Ok "created $scriptsDst" }
 }
-foreach ($script in @('baton-home.ps1', 'job-lib.ps1', 'consolidate-lessons.ps1', 'parse-otel.ps1', 'fleet-lib.ps1', 'fleet-ask.ps1', 'fleet-doctor.ps1', 'fleet-ensemble.ps1', 'routing-lib.ps1', 'saturation-lib.ps1', 'effective-cost-lib.ps1', 'routing-dispatch.ps1', 'routing-learn.ps1', 'routing-calibrate.ps1', 'routing-cascade.ps1', 'prime-hours.ps1', 'six-hats-lib.ps1', 'council-lib.ps1', 'code-lib.ps1', 'kb-lib.ps1', 'decisions-lib.ps1', 'consolidate-decisions.ps1', 'cost-lib.ps1', 'runs-lib.ps1', 'statusline-feed.ps1', 'fleet-runs-bridge.ps1', 'fleet-orchestrate.ps1', 'fleet-backlog.ps1', 'run-backlog.ps1', 'fleet-models.ps1', 'triage-lib.ps1', 'fleet-triage.ps1', 'usage-lib.ps1', 'usage-classify-lib.ps1', 'usage-probe-lib.ps1', 'fleet-usage.ps1', 'copilot-credit-lib.ps1', 'projects-lib.ps1', 'fleet-projects.ps1', 'research-gate-lib.ps1', 'fleet-research-gate.ps1', 'conductor-lib.ps1', 'fleet-go.ps1', 'cost-resolver-lib.ps1', 'prompt-pool-lib.ps1', 'optimize-prompt-lib.ps1', 'fleet-optimize-prompt.ps1', 'memory-lib.ps1', 'fleet-memory.ps1', 'worker-lib.ps1', 'fleet-worker.ps1', 'gate-lib.ps1', 'fleet-gate.ps1', 'fleet-effective-cost.ps1', 'ship-report-lib.ps1', 'fleet-ship-report.ps1', 'idea-lib.ps1', 'start-lib.ps1', 'coach-lib.ps1', 'session-markers-lib.ps1', 'registry-lib.ps1', 'fleet-project.ps1', 'fleet-probe-lib.ps1', 'fleet-executor-lib.ps1', 'plan-gate-lib.ps1', 'fleet-plan-gate.ps1', 'verification-lib.ps1', 'verify-noop.ps1', 'heartbeat-lib.ps1', 'fleet-heartbeat.ps1', 'window-service-lib.ps1', 'fleet-window-service.ps1', 'baton-resolve.ps1', 'baton.ps1', 'verbs.yaml', 'window-budget-lib.ps1', 'fleet-window-budget.ps1', 'routing-observe-lib.ps1', 'fleet-routing-observe.ps1', 'diff-apply-lib.ps1')) {
+# --- #166: deploy by EXCLUSION, never by a hand-maintained include list ---
+# An include list fails SILENTLY and in the safe-looking direction: a forgotten
+# entry produces no deploy error, and no test error either (suites run from the
+# repo, where every file is present), so the break exists only in the deployed
+# copy. It omitted new scripts three releases running and shipped a broken
+# `memory ingest`, which died dot-sourcing a memory-ingest-lib.ps1 that was never
+# deployed. Forgetting to EXCLUDE something ships a harmless extra file;
+# forgetting to INCLUDE something breaks a command. Only one of those is safe.
+$deployExcludeNames = @(
+    'bootstrap.ps1'   # the deployer itself is repo-only
+    'otel-env.ps1'    # already deployed to $claudeDir by the OTel step above
+)
+# PATTERNS, not names: a new test or smoke script is excluded automatically,
+# which is the whole point of inverting the list.
+$deployExcludePatterns = @('test-*.ps1', 'smoke-*.ps1')
+$deployAssets = @('verbs.yaml')   # non-.ps1 assets that must ship
+
+$deployNames = @(
+    Get-ChildItem -LiteralPath (Join-Path $repoRoot 'scripts') -Filter '*.ps1' -File |
+        Where-Object {
+            $n = $_.Name
+            if ($deployExcludeNames -contains $n) { return $false }
+            foreach ($pat in $deployExcludePatterns) { if ($n -like $pat) { return $false } }
+            return $true
+        } |
+        ForEach-Object { $_.Name } |
+        Sort-Object
+) + $deployAssets
+
+foreach ($script in $deployNames) {
     $src = Join-Path $repoRoot "scripts\$script"
     $dst = Join-Path $scriptsDst $script
     Copy-WithPrompt $src $dst "lib script: $script" -Force
+}
+
+# --- #166 guard: assert closure over dot-sources ---
+# Every `. "$PSScriptRoot/x.ps1"` or `. (Join-Path $PSScriptRoot 'x.ps1')` inside a
+# deployed script must resolve to a script that is ALSO deployed. This is the check
+# that catches the bug class above. A verbs.yaml-runner check would NOT have caught
+# it: `memory` resolves to fleet-memory.ps1, which was present -- the missing file
+# was one level deeper. Sibling-name references only; subdirectory references
+# (e.g. $PSScriptRoot/fleet/x.ps1) ship via their own step and do not match.
+$deployedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($n in $deployNames) { [void]$deployedSet.Add($n) }
+$closureGaps = [System.Collections.ArrayList]@()
+foreach ($n in $deployNames) {
+    if ($n -notlike '*.ps1') { continue }
+    $srcPath = Join-Path $repoRoot "scripts\$n"
+    if (-not (Test-Path -LiteralPath $srcPath)) { continue }
+    $text = Get-Content -LiteralPath $srcPath -Raw
+    $refs = @()
+    $refs += [regex]::Matches($text, '\$PSScriptRoot[/\\]([A-Za-z0-9._-]+\.ps1)') | ForEach-Object { $_.Groups[1].Value }
+    # NOTE the backtick: in a double-quoted PowerShell string `$PSScriptRoot would
+    # EXPAND to this script's own path and silently destroy the pattern. That exact
+    # slip made this guard match nothing on its first run, which is a fitting way to
+    # learn that a guard nobody has seen fail is not yet a guard.
+    $refs += [regex]::Matches($text, "Join-Path\s+`\`$PSScriptRoot\s+'([A-Za-z0-9._-]+\.ps1)'") | ForEach-Object { $_.Groups[1].Value }
+    foreach ($r in ($refs | Sort-Object -Unique)) {
+        if (-not $deployedSet.Contains($r)) { [void]$closureGaps.Add("$n -> $r") }
+    }
+}
+if ($closureGaps.Count -gt 0) {
+    Write-Warn "deploy closure BROKEN - deployed scripts dot-source files that are NOT deployed:"
+    foreach ($gap in $closureGaps) { Write-Warn "    $gap" }
+    Write-Warn "  fix: drop it from the exclusion list, or guard the dot-source."
+} else {
+    Write-Ok "deploy closure verified ($($deployNames.Count) files; every dot-sourced sibling ships)"
+}
+
+# --- #166 guard: assert every verbs.yaml runner resolves ---
+# Complements the closure check: catches a verb whose runner is missing entirely,
+# which closure cannot see (nothing dot-sources it).
+$verbsSrc = Join-Path $repoRoot 'scripts\verbs.yaml'
+if (Test-Path -LiteralPath $verbsSrc) {
+    $runnerGaps = [System.Collections.ArrayList]@()
+    foreach ($vline in (Get-Content -LiteralPath $verbsSrc)) {
+        if ($vline -match '^\s*(?:script|runner):\s*([A-Za-z0-9._-]+\.ps1)\s*$') {
+            if (-not $deployedSet.Contains($matches[1])) { [void]$runnerGaps.Add($matches[1]) }
+        }
+    }
+    if ($runnerGaps.Count -gt 0) {
+        Write-Warn "verbs.yaml runners NOT deployed: $(($runnerGaps | Sort-Object -Unique) -join ', ')"
+    } else {
+        Write-Ok "verbs.yaml runners all resolve to deployed scripts"
+    }
 }
 
 # Version marker for the deployed baton CLI. plugin.json is not copied into
@@ -535,3 +616,4 @@ Write-Host "  7. State now lives at $batonHome (default ~/.baton). Set BATON_HOM
 Write-Host "  8. Over time: /baton:consolidate-routing, /baton:consolidate-lessons, /baton:consolidate-decisions"
 Write-Host "       to tune the catalog and let the system self-improve."
 Write-Host ""
+
