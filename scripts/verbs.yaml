@@ -111,3 +111,14 @@ verbs:
       --window: -Window
       --project: -Project
       --json: -Json
+  - name: learn
+    summary: Close the routing-learning loop — backfill outcome ratings from run evidence; status of learned quality.
+    class: engine
+    runner: fleet-routing-observe.ps1
+    json: true
+    flag_aliases:
+      --dry-run: -DryRun
+      --write: -Write
+      --json: -Json
+      --runs-root: -RunsRoot
+      --ratings: -RatingsPath

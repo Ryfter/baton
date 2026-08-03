@@ -11,6 +11,7 @@
 . "$PSScriptRoot/routing-lib.ps1"   # Select-Capability for the spawner routing
 . "$PSScriptRoot/usage-probe-lib.ps1"   # d090 proactive preflight + cache/advisories
 . "$PSScriptRoot/verification-lib.ps1"   # Invoke-VerificationContract etc. (d082 V2)
+. "$PSScriptRoot/routing-observe-lib.ps1"   # #159 write-on-observe outcome ratings
 
 function New-RunWorktree {
     <# Throwaway worktree at <repo-parent>/.baton-worktrees/<run-id> on a new branch
@@ -1363,16 +1364,21 @@ function New-VerifyingSpawner {
        this SUBSUMES the old single evidence-informed retry (one loop, one counter, one
        journal vocabulary). Scope/oracle violations stay fail-closed with NO rework.
        Identical normalized failure evidence across consecutive cycles halts without
-       re-sending. Writes attempts.jsonl + verification.json (+ rework-evidence-N.md). #>
+       re-sending. Writes attempts.jsonl + verification.json (+ rework-evidence-N.md).
+       -RatingsPath: where write-on-observe (#159) appends outcome ratings. Defaults to
+       the knowledge-backed routing-ratings.jsonl. Hermetic tests should pass a temp
+       path or set BATON_ROUTING_OBSERVE=off. #>
     param(
         [Parameter(Mandatory)][scriptblock]$InnerSpawner,
         [Parameter(Mandatory)][string]$Worktree,
         [Parameter(Mandatory)][string]$BaseSha,
         [Parameter(Mandatory)][string]$RunDir,
         [Parameter(Mandatory)][hashtable]$FrozenContracts,
-        $MaxRework = $null
+        $MaxRework = $null,
+        [string]$RatingsPath = ''
     )
     $maxReworkOverride = $MaxRework
+    $observeRatingsPath = if ($RatingsPath) { $RatingsPath } else { $script:DefaultRatingsPath }
     return {
         param($task)
         $prof = [string]$task.verify_profile
@@ -1532,6 +1538,46 @@ function New-VerifyingSpawner {
             }
             if ($hasField) { $result[$field] = $final.inner.$field }
         }
+
+        # #159 write-on-observe: terminal verification → at most one heuristic rating.
+        # Never let a ratings write fail the labor run (try/catch + Add-CapabilityRating
+        # already warns rather than throws). Gated by BATON_ROUTING_OBSERVE (default on).
+        try {
+            $runId = Split-Path -Leaf $RunDir
+            $cap = if ($task.capability) { [string]$task.capability } else { 'code-gen' }
+            $laborFlag = ''
+            if ($final.inner -is [System.Collections.IDictionary]) {
+                if ($final.inner.Contains('labor')) { $laborFlag = [string]$final.inner.labor }
+            } elseif ($null -ne $final.inner.PSObject.Properties['labor']) {
+                $laborFlag = [string]$final.inner.labor
+            }
+            $modelVer = ''
+            if ($final.inner -is [System.Collections.IDictionary]) {
+                if ($final.inner.Contains('model_version')) { $modelVer = [string]$final.inner.model_version }
+                elseif ($final.inner.Contains('model')) { $modelVer = [string]$final.inner.model }
+            } else {
+                if ($null -ne $final.inner.PSObject.Properties['model_version']) {
+                    $modelVer = [string]$final.inner.model_version
+                } elseif ($null -ne $final.inner.PSObject.Properties['model']) {
+                    $modelVer = [string]$final.inner.model
+                }
+            }
+            $observeArgs = @{
+                RunId        = $runId
+                TaskId       = [string]$task.id
+                Capability   = $cap
+                Candidate    = [string]$final.inner.chose
+                Verification = $verObj
+                Why          = $why
+                Labor        = $laborFlag
+                ModelVersion = $modelVer
+            }
+            if ($observeRatingsPath) { $observeArgs.RatingsPath = $observeRatingsPath }
+            [void](Add-OutcomeRating @observeArgs)
+        } catch {
+            Write-Warning "routing observe (executor): $($_.Exception.Message)"
+        }
+
         return $result
     }.GetNewClosure()
 }
