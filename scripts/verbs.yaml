@@ -1,0 +1,89 @@
+# baton CLI verb registry — single source of truth for the Phase-1 dispatcher.
+# Engine/hybrid verbs only (interactive skins like start/init are out of scope).
+# Each runner must exist under scripts/ (or a resolved script root).
+verbs:
+  - name: go
+    summary: Natural-language front door — plan an outcome into a task DAG and run it.
+    class: hybrid
+    runner: fleet-go.ps1
+    json: true
+  - name: fleet
+    summary: Manage and invoke the LLM fleet (list, doctor, test).
+    class: engine
+    runner: fleet-doctor.ps1
+    json: true
+  - name: gate
+    summary: Competitive acceptance review of a work artifact (accept/polish/reject).
+    class: engine
+    runner: fleet-gate.ps1
+    json: true
+  - name: plan-gate
+    summary: Competitive review of a plan (task DAG) before any labor runs.
+    class: engine
+    runner: fleet-plan-gate.ps1
+    json: true
+  - name: usage
+    summary: Usage Governor journal — worker availability, lockouts, conserve posture.
+    class: engine
+    runner: fleet-usage.ps1
+    json: true
+  - name: cost
+    summary: Fold per-run effective-cost records into learned per-worker costs.
+    class: engine
+    runner: fleet-effective-cost.ps1
+    json: true
+  - name: models
+    summary: Model inventory — probe local providers and join with registry pins.
+    class: engine
+    runner: fleet-models.ps1
+    json: true
+  - name: projects
+    summary: Sync triage classification to GitHub labels and Project v2 fields.
+    class: engine
+    runner: fleet-projects.ps1
+    json: true
+  - name: project
+    summary: Project registry command center (list, archive, hide, set-blurb).
+    class: engine
+    runner: fleet-project.ps1
+    json: true
+  - name: heartbeat
+    summary: Pin the usage window and fold free housekeeping into the same tick.
+    class: engine
+    runner: fleet-heartbeat.ps1
+    json: true
+  - name: worker
+    summary: Dispatch a metered worker and report budget/utilization.
+    class: engine
+    runner: fleet-worker.ps1
+    json: true
+  - name: triage
+    summary: Resolve a task and invoke the Triage Agent through the fleet.
+    class: engine
+    runner: fleet-triage.ps1
+    json: true
+  - name: ensemble
+    summary: Concurrent fan-out of one prompt to a roster of fleet members.
+    class: engine
+    runner: fleet-ensemble.ps1
+    json: true
+  - name: ask
+    summary: Dispatch one fleet model, journaled and metered; print answer + token footer.
+    class: engine
+    runner: fleet-ask.ps1
+    json: true
+  - name: backlog
+    summary: Autonomous backlog driver — DAG-ordered, worktree-isolated, gated dispatch.
+    class: engine
+    runner: fleet-backlog.ps1
+    json: true
+  - name: ship-report
+    summary: Per-PR pipeline cost/quality card from existing journals.
+    class: engine
+    runner: fleet-ship-report.ps1
+    json: true
+  - name: window-service
+    summary: Lazy per-project hygiene, candidates, and briefing on the usage-window grid.
+    class: engine
+    runner: fleet-window-service.ps1
+    json: true
