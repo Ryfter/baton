@@ -35,14 +35,27 @@ function ConvertFrom-BatonYamlValue {
     return $v
 }
 
+function New-BatonFlagAliasMap {
+    <# Case-sensitive map: exact token match only (no case folding). #>
+    return [System.Collections.Generic.Dictionary[string, string]]::new(
+        [StringComparer]::Ordinal
+    )
+}
+
 function Read-BatonVerbs {
-    <# Hand-rolled shallow YAML parser for verbs.yaml (same style as Read-Fleet). #>
+    <# Hand-rolled shallow YAML parser for verbs.yaml (same style as Read-Fleet).
+       Also supports an optional nested flag_aliases map under each verb:
+         flag_aliases:
+           --project: -Project
+       Nested keys use Ordinal (case-sensitive) matching at apply time. #>
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "verbs.yaml not found at $Path"
     }
     $verbs = [System.Collections.ArrayList]@()
     $current = $null
+    $inFlagAliases = $false
+    $flagAliasIndent = 0
     foreach ($rawLine in (Get-Content -LiteralPath $Path)) {
         if ($rawLine -match '^\s*#') { continue }
         if ([string]::IsNullOrWhiteSpace($rawLine)) { continue }
@@ -51,16 +64,47 @@ function Read-BatonVerbs {
         if ($rawLine -match '^\s*-\s+name:\s*(.+?)\s*$') {
             if ($current) { [void]$verbs.Add($current) }
             $current = @{
-                name    = [string](ConvertFrom-BatonYamlValue $matches[1])
-                summary = ''
-                class   = ''
-                runner  = ''
-                json    = $false
+                name         = [string](ConvertFrom-BatonYamlValue $matches[1])
+                summary      = ''
+                class        = ''
+                runner       = ''
+                json         = $false
+                flag_aliases = $null
             }
+            $inFlagAliases = $false
+            $flagAliasIndent = 0
             continue
         }
         if (-not $current) { continue }
+
+        # Nested flag_aliases map: enter on bare "flag_aliases:" key.
+        if ($rawLine -match '^(?<indent>\s+)flag_aliases:\s*$') {
+            $current.flag_aliases = New-BatonFlagAliasMap
+            $inFlagAliases = $true
+            $flagAliasIndent = $matches['indent'].Length
+            continue
+        }
+        # While inside flag_aliases, only accept *more-indented* "key: value"
+        # lines as map entries (keys may start with dashes, e.g. --project).
+        # Same-or-less indent falls through to normal verb-key handling.
+        if ($inFlagAliases -and $rawLine -match '^(?<indent>\s+)(?<key>\S+):\s*(?<val>.+?)\s*$') {
+            if ($matches['indent'].Length -gt $flagAliasIndent) {
+                $aliasKey = [string]$matches['key']
+                $aliasVal = [string](ConvertFrom-BatonYamlValue $matches['val'])
+                if (-not [string]::IsNullOrWhiteSpace($aliasKey) -and
+                    -not [string]::IsNullOrWhiteSpace($aliasVal)) {
+                    $current.flag_aliases[$aliasKey] = $aliasVal
+                }
+                continue
+            }
+            $inFlagAliases = $false
+            $flagAliasIndent = 0
+            # fall through — this line is a sibling verb key
+        }
+
         if ($rawLine -match '^\s+([\w.-]+):\s*(.*?)\s*$') {
+            $inFlagAliases = $false
+            $flagAliasIndent = 0
             $key = $matches[1]
             $val = ConvertFrom-BatonYamlValue $matches[2]
             switch ($key) {
@@ -76,25 +120,86 @@ function Read-BatonVerbs {
     return @($verbs.ToArray())
 }
 
+function Read-BatonVersionFromPluginJson {
+    param([Parameter(Mandatory)][string]$PluginJsonPath)
+    if (-not (Test-Path -LiteralPath $PluginJsonPath)) { return $null }
+    $raw = Get-Content -LiteralPath $PluginJsonPath -Raw
+    if ($raw -match '"version"\s*:\s*"([^"]+)"') {
+        $ver = [string]$matches[1]
+        if (-not [string]::IsNullOrWhiteSpace($ver)) { return $ver.Trim() }
+    }
+    return $null
+}
+
 function Get-BatonVersion {
-    # Prefer plugin manifest, then git describe, else unknown.
-    $repoRoot = Split-Path -Parent $PSScriptRoot
-    $pluginJson = Join-Path $repoRoot '.claude-plugin' 'plugin.json'
-    if (Test-Path -LiteralPath $pluginJson) {
-        $raw = Get-Content -LiteralPath $pluginJson -Raw
-        if ($raw -match '"version"\s*:\s*"([^"]+)"') {
-            return $matches[1]
-        }
+    <# Resolve version without inventing a number.
+       Order:
+         1. .claude-plugin/plugin.json walking up from this script's location
+         2. $env:BATON_REPO_ROOT/.claude-plugin/plugin.json
+         3. baton-version.txt next to this script (bootstrap deploy marker)
+         4. unknown
+    #>
+    # 1. Walk up from the dispatcher (source checkout: scripts/ → repo root).
+    $dir = $PSScriptRoot
+    while ($dir) {
+        $candidate = Join-Path $dir '.claude-plugin' 'plugin.json'
+        $found = Read-BatonVersionFromPluginJson -PluginJsonPath $candidate
+        if ($found) { return $found }
+        $parent = Split-Path -Parent $dir
+        if (-not $parent -or $parent -eq $dir) { break }
+        $dir = $parent
     }
-    if (Get-Command git -ErrorAction SilentlyContinue) {
-        $desc = & git -C $repoRoot describe --tags --match 'v*' --always 2>$null |
-            Select-Object -First 1
-        if ($desc) {
-            $t = [string]$desc
-            if (-not [string]::IsNullOrWhiteSpace($t)) { return $t.Trim() }
-        }
+
+    # 2. Explicit repo root override (deployed copy + BATON_REPO_ROOT set).
+    if (-not [string]::IsNullOrWhiteSpace($env:BATON_REPO_ROOT)) {
+        $candidate = Join-Path $env:BATON_REPO_ROOT '.claude-plugin' 'plugin.json'
+        $found = Read-BatonVersionFromPluginJson -PluginJsonPath $candidate
+        if ($found) { return $found }
     }
+
+    # 3. Deployed marker written by bootstrap next to baton.ps1.
+    $marker = Join-Path $PSScriptRoot 'baton-version.txt'
+    if (Test-Path -LiteralPath $marker) {
+        $text = (Get-Content -LiteralPath $marker -Raw).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($text)) { return $text }
+    }
+
     return 'unknown'
+}
+
+function Convert-BatonFlagAliases {
+    <# Apply per-verb flag_aliases: exact key match only; values untouched.
+       Stops translating after a bare "--" (everything after is verbatim).
+       Unrecognised --flags pass through unchanged. #>
+    param(
+        [AllowEmptyCollection()]
+        [object[]]$Tokens,
+        $Aliases
+    )
+    if (-not $Aliases -or $Aliases.Count -eq 0) {
+        return @($Tokens)
+    }
+    $out = [System.Collections.ArrayList]@()
+    $rawPass = $false
+    foreach ($tok in $Tokens) {
+        $s = [string]$tok
+        if ($rawPass) {
+            [void]$out.Add($s)
+            continue
+        }
+        if ($s -eq '--') {
+            $rawPass = $true
+            [void]$out.Add($s)
+            continue
+        }
+        # Exact match only (Dictionary uses Ordinal comparer).
+        if ($Aliases.ContainsKey($s)) {
+            [void]$out.Add([string]$Aliases[$s])
+            continue
+        }
+        [void]$out.Add($s)
+    }
+    return @($out.ToArray())
 }
 
 function Get-BatonEditDistance {
@@ -245,7 +350,13 @@ try {
     exit 1
 }
 
-# Full passthrough — runners own their parameter parsing.
-# Avoid re-ordering or validating flags here.
+# Optional per-verb CLI flag aliases (exact-key only). Verbs without a map
+# keep raw passthrough so runners that already take --flags are undisturbed.
+if ($verb.flag_aliases -and $verb.flag_aliases.Count -gt 0) {
+    $tail = @(Convert-BatonFlagAliases -Tokens $tail -Aliases $verb.flag_aliases)
+}
+
+# Full passthrough of (possibly alias-translated) tokens — runners own validation.
+# Avoid re-ordering flags here. Exit code is the runner's exit code.
 & pwsh -NoProfile -File $runnerPath @tail
 exit $LASTEXITCODE
