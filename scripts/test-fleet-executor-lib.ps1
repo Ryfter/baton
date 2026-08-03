@@ -1310,6 +1310,88 @@ providers:
                 $null -ne $multiWinPreflight -and
                 [string]$multiWinPreflight.window -match 'five_hour' -and
                 [string]$multiWinPreflight.window -match 'weekly')
+
+            # ---- #173: probe eligibility resolves by transport NAME, not platform ----
+            # PF13: an explicit probe_transport on a NON-codex row reaches preflight. The
+            # back-compat inference cannot fire here (platform is not codex), so a probe
+            # happening at all proves the registered NAME is what opened the seam.
+            $namedFleet = Join-Path $env:BATON_HOME 'fleet-pf-named-transport.yaml'
+            Set-Content -LiteralPath $namedFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: worker-named
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+    usage_policy:
+      probe: true
+      probe_transport: codex-rate-limit
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+'@
+            $namedUsage = Join-Path $env:BATON_HOME 'usage-pf-named.jsonl'
+            $namedSeen = @{ calls = 0; probes = 0; names = @() }
+            $namedSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $namedFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath $namedUsage `
+                -Dispatcher { param($pick,$prompt,$depthTier) $namedSeen.calls++; $namedSeen.names += [string]$pick.name; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) $namedSeen.probes++; New-ExecutorProbeResponse -FiveHourUsed 40 -WeeklyUsed 50 -At $probeNow }.GetNewClosure() `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-named.jsonl') -ProbeClock $probeClock
+            $namedResult = & $namedSpawner $preflightTask
+            Check 'PF13 explicit probe_transport reaches preflight on a non-codex row' (
+                $namedResult.ok -and $namedSeen.probes -eq 1 -and $namedSeen.calls -eq 1 -and
+                $namedSeen.names[0] -eq 'worker-named')
+            $namedRows = @(Get-Content -LiteralPath $namedUsage | ForEach-Object { $_ | ConvertFrom-Json })
+            Check 'PF13 explicit-transport preflight journals a dispatched decision' (
+                @($namedRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'dispatched' }).Count -eq 1)
+
+            # PF14 REGRESSION GUARD: no resolvable transport must never make a provider
+            # un-dispatchable. probe: true with nothing to probe with => skip preflight
+            # and dispatch normally. The transport seam throws if it is ever reached.
+            foreach ($noProbeCase in @(
+                @{ name='no-transport'; extra='' },
+                @{ name='unknown-transport'; extra='      probe_transport: transport-not-registered' }
+            )) {
+                $guardFleet = Join-Path $env:BATON_HOME "fleet-pf-guard-$($noProbeCase.name).yaml"
+                $guardYaml = @(
+                    'general_capabilities: []'
+                    'providers:'
+                    '  - name: worker-unprobed'
+                    '    kind: cli'
+                    '    enabled: true'
+                    '    cost_tier: free'
+                    '    platform: claude'
+                    '    quality: 0.9'
+                    '    capabilities: [code-gen]'
+                    "    command_template: 'echo `"{{prompt}}`"'"
+                    '    usage_policy:'
+                    '      probe: true'
+                    '      soft_cap_5h: 75'
+                    '      soft_cap_weekly: 85'
+                )
+                if ($noProbeCase.extra) { $guardYaml += $noProbeCase.extra }
+                Set-Content -LiteralPath $guardFleet -Encoding utf8NoBOM -Value $guardYaml
+                $guardUsage = Join-Path $env:BATON_HOME "usage-pf-guard-$($noProbeCase.name).jsonl"
+                $guardSeen = @{ calls = 0; probes = 0; names = @() }
+                $guardSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $guardFleet -ToolsPath $toolsPath `
+                    -MaxCostTier free -UsagePath $guardUsage `
+                    -Dispatcher { param($pick,$prompt,$depthTier) $guardSeen.calls++; $guardSeen.names += [string]$pick.name; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure() `
+                    -ProbeTransport { param($clientVersion,$timeoutSeconds) $guardSeen.probes++; throw 'no transport resolves: the probe must not be attempted' }.GetNewClosure() `
+                    -ProbeCachePath (Join-Path $env:BATON_HOME "cache-pf-guard-$($noProbeCase.name).jsonl") -ProbeClock $probeClock
+                $guardResult = & $guardSpawner $preflightTask
+                Check "PF14 $($noProbeCase.name): provider with no probe still dispatches normally" (
+                    $guardResult.ok -and $guardSeen.probes -eq 0 -and $guardSeen.calls -eq 1 -and
+                    $guardSeen.names[0] -eq 'worker-unprobed')
+                $guardRows = if (Test-Path -LiteralPath $guardUsage) {
+                    @(Get-Content -LiteralPath $guardUsage | ForEach-Object { $_ | ConvertFrom-Json })
+                } else { @() }
+                Check "PF14 $($noProbeCase.name): preflight is skipped entirely, never held" (
+                    @($guardRows | Where-Object { $_.event -eq 'preflight' }).Count -eq 0 -and
+                    @($guardRows | Where-Object { $_.event -eq 'limited' }).Count -eq 0)
+            }
         }
 
         # ================= New-VerifyingSpawner (VS-series, d082 V2) =================

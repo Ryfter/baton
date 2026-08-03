@@ -6,6 +6,10 @@
   Codex app-server is adapter #1. Every failure is fail-open: callers receive
   $null and dispatch policy remains unchanged. Successful raw responses are
   cached under BATON_HOME and normalized to the usage observation contract.
+
+  #173: which adapter runs is resolved by TRANSPORT NAME through the registry
+  below, never by hardcoded platform. A provider whose transport does not
+  resolve is simply not probed (fail closed) and still dispatches normally.
 #>
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/usage-classify-lib.ps1"
@@ -186,6 +190,103 @@ function ConvertFrom-CodexRateLimitResponse {
     return ,([object[]]$rows.ToArray())
 }
 
+# ---------------------------------------------------------------------------
+# Usage-probe transport registry (#173)
+#
+# One entry per observable provider surface, keyed by transport NAME. Each entry
+# pairs the fetch half with the parse half so a caller never has to know which
+# platform it is talking to:
+#   invoke <clientVersion> <timeoutSeconds>            -> raw response (or $null)
+#   parse  <worker> <response> <observedAt> <ttlSecs>  -> observation rows (or $null)
+# Adding a provider means registering a pair here; nothing downstream changes.
+# ---------------------------------------------------------------------------
+$script:UsageProbeTransports = [ordered]@{
+    'codex-rate-limit' = [ordered]@{
+        name = 'codex-rate-limit'
+        invoke = {
+            param($clientVersion, $timeoutSeconds)
+            Invoke-CodexRateLimitTransport -ClientVersion $clientVersion -TimeoutSeconds $timeoutSeconds
+        }
+        parse = {
+            param($worker, $response, $observedAt, $ttlSeconds)
+            ConvertFrom-CodexRateLimitResponse -Worker $worker -Response $response `
+                -ObservedAt $observedAt -TtlSeconds $ttlSeconds
+        }
+    }
+}
+
+function Get-UsageProbeTransport {
+    <# Look one transport up by name. An unknown or blank name returns $null —
+       callers must treat that as "do not probe", never as "try something". #>
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $null }
+    if ($null -eq $script:UsageProbeTransports) { return $null }
+    $key = $Name.Trim()
+    if (-not $script:UsageProbeTransports.Contains($key)) { return $null }
+    return $script:UsageProbeTransports[$key]
+}
+
+function Get-UsageProbeTransportName {
+    <# Registered transport names, for doctor output and tests. #>
+    if ($null -eq $script:UsageProbeTransports) { return ,[string[]]@() }
+    return ,[string[]]@($script:UsageProbeTransports.Keys)
+}
+
+function Get-UsagePolicyField {
+    <# usage_policy is a hashtable off Read-Fleet but a PSCustomObject when it
+       comes back through JSON; read either without throwing. #>
+    param($Policy, [Parameter(Mandatory)][string]$Field)
+    if ($null -eq $Policy) { return $null }
+    if ($Policy -is [System.Collections.IDictionary]) {
+        if ($Policy.Contains($Field)) { return $Policy[$Field] }
+        return $null
+    }
+    $property = $Policy.PSObject.Properties[$Field]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Resolve-UsageProbeTransportName {
+    <# Decide WHICH transport a provider row gets, by name. Precedence:
+         1. explicit usage_policy.probe_transport, else
+         2. the back-compat inference below, else
+         3. nothing.
+       Returns a REGISTERED name or $null. An unrecognized name resolves to
+       $null rather than throwing, so a typo or a not-yet-shipped transport
+       means "no probe" — never a speculative attempt against the wrong API. #>
+    param($Provider)
+    if ($null -eq $Provider) { return $null }
+    $policy = $Provider.usage_policy
+    if ($null -eq $policy) { return $null }
+
+    $declared = [string](Get-UsagePolicyField -Policy $policy -Field 'probe_transport')
+    if (-not [string]::IsNullOrWhiteSpace($declared)) {
+        if ($null -ne (Get-UsageProbeTransport -Name $declared)) { return $declared.Trim() }
+        return $null
+    }
+
+    # BACK-COMPAT INFERENCE (temporary). The operator's live fleet.yaml predates
+    # probe_transport, so a cli/codex row with no declared transport keeps the
+    # adapter it has always used. This exists ONLY so that config keeps working
+    # untouched; drop this branch once every probing row declares its transport.
+    if (([string]$Provider.kind -eq 'cli') -and ([string]$Provider.platform -eq 'codex')) {
+        return 'codex-rate-limit'
+    }
+    return $null
+}
+
+function Test-UsageProbeEligible {
+    <# The single probe-eligibility predicate: the policy opts in AND a transport
+       resolves. Everything else (cache TTL, timeouts, cap decision) is unchanged
+       and downstream. No transport never blocks dispatch — it only skips the probe. #>
+    param($Provider)
+    if ($null -eq $Provider) { return $false }
+    $policy = $Provider.usage_policy
+    if ($null -eq $policy) { return $false }
+    if ((Get-UsagePolicyField -Policy $policy -Field 'probe') -ne $true) { return $false }
+    return ($null -ne (Resolve-UsageProbeTransportName -Provider $Provider))
+}
+
 function Add-UsageProbeCacheRow {
     param(
         [Parameter(Mandatory)][string]$Worker,
@@ -242,13 +343,21 @@ function Get-FreshUsageProbeCache {
     return $latest
 }
 
-function Get-CodexUsageProbe {
-    <# Return a fresh cached or newly probed snapshot. The optional Transport seam
-       has contract (& transport <clientVersion> <timeoutSeconds>) -> id-2 response.
+function Get-ProviderUsageProbe {
+    <# Provider-generic probe entry (#173). Resolve the transport by name — from
+       -TransportName, else from the -Provider row — then run the registered
+       invoke+parse pair. Returns the same snapshot shape for every transport, so
+       the cache and cap-decision code downstream is untouched.
+
+       No resolvable transport => $null and NOTHING attempted (fail closed).
+       The optional -Transport seam overrides only the fetch half; its contract is
+       unchanged: (& transport <clientVersion> <timeoutSeconds>) -> raw response.
        -Force skips a still-TTL'd cache row (window-boundary refresh must not keep
        pre-reset five_hour remaining). #>
     param(
         [Parameter(Mandatory)][string]$Worker,
+        $Provider,
+        [string]$TransportName,
         [scriptblock]$Transport,
         [string]$CachePath = (Join-Path (Get-BatonHome) 'usage-probe-cache.jsonl'),
         [datetimeoffset]$Now = [datetimeoffset]::UtcNow,
@@ -257,6 +366,11 @@ function Get-CodexUsageProbe {
         [switch]$Force
     )
     if ($TimeoutSeconds -le 0 -or $TtlSeconds -le 0) { return $null }
+    $resolvedName = if (-not [string]::IsNullOrWhiteSpace($TransportName)) { $TransportName }
+                    else { Resolve-UsageProbeTransportName -Provider $Provider }
+    $transportPair = Get-UsageProbeTransport -Name $resolvedName
+    if ($null -eq $transportPair) { return $null }
+
     if (-not $Force) {
         $cached = Get-FreshUsageProbeCache -Worker $Worker -CachePath $CachePath -Now $Now
         if ($null -ne $cached) {
@@ -273,9 +387,8 @@ function Get-CodexUsageProbe {
     try {
         $version = Get-BatonPluginVersion
         $response = if ($Transport) { & $Transport $version $TimeoutSeconds }
-                    else { Invoke-CodexRateLimitTransport -ClientVersion $version -TimeoutSeconds $TimeoutSeconds }
-        $observations = ConvertFrom-CodexRateLimitResponse -Worker $Worker -Response $response `
-            -ObservedAt $Now -TtlSeconds $TtlSeconds
+                    else { & $transportPair.invoke $version $TimeoutSeconds }
+        $observations = & $transportPair.parse $Worker $response $Now $TtlSeconds
         if ($null -eq $observations -or @($observations).Count -eq 0) { return $null }
         Add-UsageProbeCacheRow -Worker $Worker -Raw $response -Observations @($observations) `
             -CachePath $CachePath -ObservedAt $Now -TtlSeconds $TtlSeconds
@@ -289,6 +402,31 @@ function Get-CodexUsageProbe {
     } catch {
         return $null
     }
+}
+
+function Get-CodexUsageProbe {
+    <# Named entry for the codex-rate-limit transport, kept for existing callers
+       (heartbeat window refresh, tests). Thin wrapper over Get-ProviderUsageProbe. #>
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        [scriptblock]$Transport,
+        [string]$CachePath = (Join-Path (Get-BatonHome) 'usage-probe-cache.jsonl'),
+        [datetimeoffset]$Now = [datetimeoffset]::UtcNow,
+        [int]$TimeoutSeconds = 20,
+        [int]$TtlSeconds = 600,
+        [switch]$Force
+    )
+    $probeParams = @{
+        Worker = $Worker
+        TransportName = 'codex-rate-limit'
+        CachePath = $CachePath
+        Now = $Now
+        TimeoutSeconds = $TimeoutSeconds
+        TtlSeconds = $TtlSeconds
+    }
+    if ($Transport) { $probeParams.Transport = $Transport }
+    if ($Force) { $probeParams.Force = $true }
+    return Get-ProviderUsageProbe @probeParams
 }
 
 function Get-UsageProbeCapDecision {

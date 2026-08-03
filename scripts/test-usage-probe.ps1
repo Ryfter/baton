@@ -24,6 +24,11 @@ $requiredFunctions = @(
     'Add-UsageProbeCacheRow',
     'Get-FreshUsageProbeCache',
     'Get-CodexUsageProbe',
+    'Get-UsageProbeTransport',
+    'Get-UsageProbeTransportName',
+    'Resolve-UsageProbeTransportName',
+    'Test-UsageProbeEligible',
+    'Get-ProviderUsageProbe',
     'Get-UsageProbeCapDecision',
     'Get-FleetMedianDispatchTokens',
     'Get-UsageFitAdvisory',
@@ -187,6 +192,106 @@ try {
         Check ("G fail-open: {0} returns null" -f $failureCase.name) ($null -eq $failureResult)
         Check ("G fail-open: {0} does not create a cache row" -f $failureCase.name) (-not (Test-Path -LiteralPath $failureCache))
     }
+
+    # ---- transport registry: eligibility resolves BY NAME, not by platform (#173) ----
+    $codexPair = Get-UsageProbeTransport -Name 'codex-rate-limit'
+    Check 'R0 registry exposes codex-rate-limit as an invoke+parse pair' (
+        (Get-UsageProbeTransportName) -contains 'codex-rate-limit' -and
+        $null -ne $codexPair -and $codexPair.invoke -is [scriptblock] -and $codexPair.parse -is [scriptblock])
+    Check 'R0 an unregistered name looks up to nothing' (
+        ($null -eq (Get-UsageProbeTransport -Name 'transport-not-registered')) -and
+        ($null -eq (Get-UsageProbeTransport -Name '')))
+
+    $explicitRow = @{
+        name = 'worker-explicit'; kind = 'cli'; platform = 'platform-a'
+        usage_policy = @{ probe = $true; probe_transport = 'codex-rate-limit'
+                          soft_cap_5h = [double]75; soft_cap_weekly = [double]85 }
+    }
+    Check 'R1 explicit probe_transport resolves by name, whatever the platform is' (
+        (Resolve-UsageProbeTransportName -Provider $explicitRow) -eq 'codex-rate-limit' -and
+        (Test-UsageProbeEligible -Provider $explicitRow))
+
+    # BACK-COMPAT: this is the shape of the operator's live fleet.yaml row — it
+    # declares no transport, and it must keep probing without any config edit.
+    $legacyRow = @{
+        name = 'worker-legacy'; kind = 'cli'; platform = 'codex'
+        usage_policy = @{ probe = $true; soft_cap_5h = [double]75; soft_cap_weekly = [double]85 }
+    }
+    Check 'R2 back-compat: cli+codex with NO probe_transport still resolves codex-rate-limit' (
+        (Resolve-UsageProbeTransportName -Provider $legacyRow) -eq 'codex-rate-limit' -and
+        (Test-UsageProbeEligible -Provider $legacyRow))
+
+    # Fail closed: an unrecognized transport is "no probe", never a speculative attempt.
+    $unknownRow = @{
+        name = 'worker-unknown'; kind = 'cli'; platform = 'platform-a'
+        usage_policy = @{ probe = $true; probe_transport = 'transport-not-registered' }
+    }
+    $unknownState = @{ calls = 0 }
+    $unknownCache = Join-Path $tmp 'registry-unknown.jsonl'
+    $unknownProbe = Get-ProviderUsageProbe -Worker 'worker-unknown' -Provider $unknownRow -Transport {
+        param($clientVersion, $timeoutSeconds)
+        $unknownState.calls++
+        return (New-SyntheticRateLimitResponse)
+    }.GetNewClosure() -CachePath $unknownCache -Now $T0 -TtlSeconds 600
+    Check 'R3 unknown probe_transport resolves to nothing, probes nothing, throws nothing' (
+        ($null -eq (Resolve-UsageProbeTransportName -Provider $unknownRow)) -and
+        (-not (Test-UsageProbeEligible -Provider $unknownRow)) -and
+        ($null -eq $unknownProbe) -and $unknownState.calls -eq 0 -and
+        (-not (Test-Path -LiteralPath $unknownCache)))
+
+    $nonCodexRow = @{
+        name = 'worker-other'; kind = 'cli'; platform = 'platform-a'
+        usage_policy = @{ probe = $true; soft_cap_5h = [double]75 }
+    }
+    $nonCodexState = @{ calls = 0 }
+    $nonCodexCache = Join-Path $tmp 'registry-non-codex.jsonl'
+    $nonCodexProbe = Get-ProviderUsageProbe -Worker 'worker-other' -Provider $nonCodexRow -Transport {
+        param($clientVersion, $timeoutSeconds)
+        $nonCodexState.calls++
+        return (New-SyntheticRateLimitResponse)
+    }.GetNewClosure() -CachePath $nonCodexCache -Now $T0 -TtlSeconds 600
+    Check 'R4 absent probe_transport on a non-codex row means no transport and no probe' (
+        ($null -eq (Resolve-UsageProbeTransportName -Provider $nonCodexRow)) -and
+        ($null -eq $nonCodexProbe) -and $nonCodexState.calls -eq 0 -and
+        (-not (Test-Path -LiteralPath $nonCodexCache)))
+
+    $probeOffRow = @{
+        name = 'worker-off'; kind = 'cli'; platform = 'codex'
+        usage_policy = @{ probe = $false; soft_cap_5h = [double]75 }
+    }
+    Check 'R5 probe false is ineligible even though a transport resolves' (
+        (Resolve-UsageProbeTransportName -Provider $probeOffRow) -eq 'codex-rate-limit' -and
+        (-not (Test-UsageProbeEligible -Provider $probeOffRow)))
+    $noPolicyRow = @{ name = 'worker-nopolicy'; kind = 'cli'; platform = 'codex' }
+    Check 'R5 a row with no usage_policy resolves nothing and is ineligible' (
+        ($null -eq (Resolve-UsageProbeTransportName -Provider $noPolicyRow)) -and
+        (-not (Test-UsageProbeEligible -Provider $noPolicyRow)) -and
+        (-not (Test-UsageProbeEligible -Provider $null)))
+
+    $shapeTransport = { param($clientVersion, $timeoutSeconds) return (New-SyntheticRateLimitResponse) }
+    $codexShape = Get-CodexUsageProbe -Worker 'worker-shape' -Transport $shapeTransport `
+        -CachePath (Join-Path $tmp 'shape-codex.jsonl') -Now $T0 -TimeoutSeconds 20 -TtlSeconds 600
+    $genericShape = Get-ProviderUsageProbe -Worker 'worker-shape' -Provider $legacyRow -Transport $shapeTransport `
+        -CachePath (Join-Path $tmp 'shape-generic.jsonl') -Now $T0 -TimeoutSeconds 20 -TtlSeconds 600
+    Check 'R6 generic entry returns the same snapshot shape as Get-CodexUsageProbe' (
+        $null -ne $codexShape -and $null -ne $genericShape -and
+        ((@($genericShape.Keys) -join ',') -eq (@($codexShape.Keys) -join ',')) -and
+        (@($genericShape.observations).Count -eq @($codexShape.observations).Count) -and
+        ([string]$genericShape.observed_at -eq [string]$codexShape.observed_at) -and
+        ([int]$genericShape.ttl -eq [int]$codexShape.ttl) -and
+        ($genericShape.cached -eq $codexShape.cached) -and
+        ([double](($genericShape.observations | Where-Object { $_.scope -eq 'five_hour' }).used_pct) -eq
+         [double](($codexShape.observations | Where-Object { $_.scope -eq 'five_hour' }).used_pct)))
+
+    $badNameState = @{ calls = 0 }
+    $badNameCache = Join-Path $tmp 'registry-bad-name.jsonl'
+    $badNameProbe = Get-ProviderUsageProbe -Worker 'worker-legacy' -TransportName 'transport-not-registered' -Transport {
+        param($clientVersion, $timeoutSeconds)
+        $badNameState.calls++
+        return (New-SyntheticRateLimitResponse)
+    }.GetNewClosure() -CachePath $badNameCache -Now $T0 -TtlSeconds 600
+    Check 'R7 an explicit unregistered TransportName probes nothing' (
+        ($null -eq $badNameProbe) -and $badNameState.calls -eq 0 -and (-not (Test-Path -LiteralPath $badNameCache)))
 
     # ---- policy caps + structured advisory rows ----
     $policyProvider = @{

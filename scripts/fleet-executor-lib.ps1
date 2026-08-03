@@ -1127,11 +1127,14 @@ function New-AgenticSpawner {
         $advisoryLines = [System.Collections.Generic.List[string]]::new()
 
         $providerRow = Get-FleetProvider -Name ([string]$pick.name) -Path $FleetPath
-        $canProbe = ($null -ne $providerRow) -and ($null -ne $providerRow.usage_policy) -and
-            ($providerRow.usage_policy.probe -eq $true) -and ([string]$providerRow.kind -eq 'cli') -and
-            ([string]$providerRow.platform -eq 'codex')
+        # #173: probe eligibility = the policy opts in AND a transport resolves BY NAME.
+        # Fail closed — a provider with no resolvable transport is simply not probed and
+        # dispatches normally; it must never become un-dispatchable for lacking a probe.
+        $probeTransportName = Resolve-UsageProbeTransportName -Provider $providerRow
+        $canProbe = Test-UsageProbeEligible -Provider $providerRow
         if ($canProbe) {
-            $snapshot = Get-CodexUsageProbe -Worker ([string]$pick.name) -Transport $ProbeTransport `
+            $snapshot = Get-ProviderUsageProbe -Worker ([string]$pick.name) -TransportName $probeTransportName `
+                -Transport $ProbeTransport `
                 -CachePath $ProbeCachePath -Now $preflightNow -TimeoutSeconds 20 -TtlSeconds 600
             if ($null -ne $snapshot) {
                 $capDecision = Get-UsageProbeCapDecision -Provider $providerRow -Observations @($snapshot.observations)
@@ -1178,11 +1181,12 @@ function New-AgenticSpawner {
                     # One-hop only: re-run the same probe+cap preflight on the substitute
                     # before dispatch. If the hop target is also over cap, hold (no chain).
                     $subProvider = Get-FleetProvider -Name ([string]$pick.name) -Path $FleetPath
-                    $subCanProbe = ($null -ne $subProvider) -and ($null -ne $subProvider.usage_policy) -and
-                        ($subProvider.usage_policy.probe -eq $true) -and ([string]$subProvider.kind -eq 'cli') -and
-                        ([string]$subProvider.platform -eq 'codex')
+                    # Same name-resolved eligibility as the primary (#173).
+                    $subTransportName = Resolve-UsageProbeTransportName -Provider $subProvider
+                    $subCanProbe = Test-UsageProbeEligible -Provider $subProvider
                     if ($subCanProbe) {
-                        $subSnapshot = Get-CodexUsageProbe -Worker ([string]$pick.name) -Transport $ProbeTransport `
+                        $subSnapshot = Get-ProviderUsageProbe -Worker ([string]$pick.name) -TransportName $subTransportName `
+                            -Transport $ProbeTransport `
                             -CachePath $ProbeCachePath -Now $preflightNow -TimeoutSeconds 20 -TtlSeconds 600
                         if ($null -ne $subSnapshot) {
                             $subCapDecision = Get-UsageProbeCapDecision -Provider $subProvider `
