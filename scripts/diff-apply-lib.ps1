@@ -19,6 +19,7 @@
 
 . "$PSScriptRoot/verification-lib.ps1"   # Test-DiffFilesInAllowedPaths for the scope pre-check
 . "$PSScriptRoot/fleet-lib.ps1"          # Get-Utf8ByteCount for the diff-apply size envelope
+. "$PSScriptRoot/baton-home.ps1"         # Get-BatonHome for the default observation path
 
 function ConvertFrom-EditBlocks {
     <# .SYNOPSIS
@@ -760,4 +761,81 @@ Write-Host "Hello, world"
     $parts += $instructions
 
     return ($parts -join "`n`n")
+}
+
+function Write-DiffApplyObservation {
+    <# .SYNOPSIS
+       Append one diff-apply telemetry row (d103, Task 4): a JSONL observation
+       of context size vs. outcome, so the size envelope at which cheap/local
+       models start reliably succeeding gets DISCOVERED from data instead of
+       declared. That is why context_bytes, file_count, and blocks_emitted
+       matter as much as the pass/fail fields.
+
+       Fields, always present in this exact order (empty string or $null
+       when unknown -- NEVER omitted, so a consumer doing columnar analysis
+       can distinguish "absent" from "not applicable"):
+
+         ts, run_id, task_id, provider, model_version, context_bytes,
+         file_count, blocks_emitted, blocks_applied, parse_result,
+         apply_result, verdict
+
+       model_version is required in the schema even when empty -- a
+       capability observation about a model is worthless without knowing
+       which version produced it.
+
+       ts is [datetimeoffset]::UtcNow.ToString('o') unless the caller
+       supplies -Timestamp, which lets tests be deterministic.
+
+       Fail-soft is mandatory: the whole body is wrapped in try/catch and
+       any failure returns $false. Telemetry is a bystander, never a gate --
+       an unwritable observation file must NEVER fail a coding task.
+
+       Returns [bool] -- $true if the row was written. #>
+    param(
+        [Parameter(Mandatory)][object]$Row,
+        [string]$Path = '',
+        [string]$Timestamp = ''
+    )
+    try {
+        $targetPath = if ([string]::IsNullOrWhiteSpace($Path)) {
+            Join-Path (Get-BatonHome) 'diff-apply-observations.jsonl'
+        } else {
+            $Path
+        }
+
+        $ts = if ([string]::IsNullOrWhiteSpace($Timestamp)) {
+            [datetimeoffset]::UtcNow.ToString('o')
+        } else {
+            $Timestamp
+        }
+
+        # Field order is the schema contract -- every field present, even when
+        # its value is $null, so no consumer sees "absent" where it means
+        # "unknown".
+        $record = [ordered]@{
+            ts             = $ts
+            run_id         = Get-DiffApplyField -Obj $Row -Name 'run_id'
+            task_id        = Get-DiffApplyField -Obj $Row -Name 'task_id'
+            provider       = Get-DiffApplyField -Obj $Row -Name 'provider'
+            model_version  = Get-DiffApplyField -Obj $Row -Name 'model_version'
+            context_bytes  = Get-DiffApplyField -Obj $Row -Name 'context_bytes'
+            file_count     = Get-DiffApplyField -Obj $Row -Name 'file_count'
+            blocks_emitted = Get-DiffApplyField -Obj $Row -Name 'blocks_emitted'
+            blocks_applied = Get-DiffApplyField -Obj $Row -Name 'blocks_applied'
+            parse_result   = Get-DiffApplyField -Obj $Row -Name 'parse_result'
+            apply_result   = Get-DiffApplyField -Obj $Row -Name 'apply_result'
+            verdict        = Get-DiffApplyField -Obj $Row -Name 'verdict'
+        }
+
+        $dir = Split-Path -Parent $targetPath
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        }
+
+        $json = $record | ConvertTo-Json -Compress -Depth 6
+        Add-Content -LiteralPath $targetPath -Value $json -Encoding utf8NoBOM
+        return $true
+    } catch {
+        return $false
+    }
 }

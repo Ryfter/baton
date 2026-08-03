@@ -702,6 +702,133 @@ try {
     }
 }
 
+# =====================================================================
+# Observation record checks (O*, d103 Task 4) — Write-DiffApplyObservation.
+# Hermetic: BATON_HOME pointed at a temp dir, restored in finally. Never
+# touches real ~/.baton or ~/.claude.
+# =====================================================================
+
+$origBatonHome = $env:BATON_HOME
+$obsTmp = Join-Path ([System.IO.Path]::GetTempPath()) ("baton-diffapply-obs-" + ([guid]::NewGuid().ToString('N').Substring(0, 8)))
+New-Item -ItemType Directory -Force -Path $obsTmp | Out-Null
+$env:BATON_HOME = $obsTmp
+
+function New-ObsRow {
+    param([hashtable]$Overrides = @{})
+    $row = [ordered]@{
+        run_id         = 'run-1'
+        task_id        = 'task-1'
+        provider       = 'local-host-a'
+        model_version  = 'model-small-v1'
+        context_bytes  = 1234
+        file_count     = 2
+        blocks_emitted = 3
+        blocks_applied = 3
+        parse_result   = 'ok'
+        apply_result   = 'ok'
+        verdict        = 'pass'
+    }
+    foreach ($k in $Overrides.Keys) { $row[$k] = $Overrides[$k] }
+    return $row
+}
+
+try {
+    # ---------- O1: one row written, all 12 fields present ----------
+    $o1Path = Join-Path $obsTmp 'o1.jsonl'
+    $o1r = Write-DiffApplyObservation -Row (New-ObsRow) -Path $o1Path
+    Assert 'O1 returns true' ($o1r -eq $true)
+    $o1Lines = @(Get-Content -LiteralPath $o1Path)
+    Assert 'O1 one line' ($o1Lines.Count -eq 1)
+    $o1Obj = $o1Lines[0] | ConvertFrom-Json
+    $o1ExpectedFields = @('ts', 'run_id', 'task_id', 'provider', 'model_version', 'context_bytes', 'file_count', 'blocks_emitted', 'blocks_applied', 'parse_result', 'apply_result', 'verdict')
+    $o1Props = @($o1Obj.PSObject.Properties.Name)
+    foreach ($f in $o1ExpectedFields) {
+        Assert "O1 field present: $f" ($o1Props -contains $f)
+    }
+    Assert 'O1 exactly 12 fields' ($o1Props.Count -eq 12)
+    Assert 'O1 run_id value' ($o1Obj.run_id -eq 'run-1')
+    Assert 'O1 ts non-empty' (-not [string]::IsNullOrWhiteSpace([string]$o1Obj.ts))
+
+    # ---------- O2: two calls append, not overwrite ----------
+    $o2Path = Join-Path $obsTmp 'o2.jsonl'
+    Write-DiffApplyObservation -Row (New-ObsRow @{ run_id = 'run-a' }) -Path $o2Path | Out-Null
+    Write-DiffApplyObservation -Row (New-ObsRow @{ run_id = 'run-b' }) -Path $o2Path | Out-Null
+    $o2Lines = @(Get-Content -LiteralPath $o2Path)
+    Assert 'O2 two lines' ($o2Lines.Count -eq 2)
+    $o2a = $o2Lines[0] | ConvertFrom-Json
+    $o2b = $o2Lines[1] | ConvertFrom-Json
+    Assert 'O2 first row run_id' ($o2a.run_id -eq 'run-a')
+    Assert 'O2 second row run_id' ($o2b.run_id -eq 'run-b')
+
+    # ---------- O3: injected ts honored, round-trips exactly ----------
+    $o3Path = Join-Path $obsTmp 'o3.jsonl'
+    $o3Ts = '2026-08-03T09:15:00.0000000+00:00'
+    Write-DiffApplyObservation -Row (New-ObsRow) -Path $o3Path -Timestamp $o3Ts | Out-Null
+    $o3Obj = (@(Get-Content -LiteralPath $o3Path))[0] | ConvertFrom-Json
+    Assert 'O3 injected ts round-trips exactly' ($o3Obj.ts -eq $o3Ts)
+
+    # ---------- O4: missing optional fields present as '' / null, never absent ----------
+    $o4Path = Join-Path $obsTmp 'o4.jsonl'
+    $o4RowSparse = [ordered]@{
+        run_id  = 'run-sparse'
+        task_id = 'task-sparse'
+    }
+    Write-DiffApplyObservation -Row $o4RowSparse -Path $o4Path | Out-Null
+    $o4Obj = (@(Get-Content -LiteralPath $o4Path))[0] | ConvertFrom-Json
+    $o4Props = @($o4Obj.PSObject.Properties.Name)
+    foreach ($f in $o1ExpectedFields) {
+        Assert "O4 field present: $f" ($o4Props -contains $f)
+    }
+    Assert 'O4 model_version present though unknown' ($o4Props -contains 'model_version')
+    Assert 'O4 provider is empty string or null' ([string]::IsNullOrEmpty($o4Obj.provider))
+    Assert 'O4 context_bytes is empty/null (not omitted)' ($o4Props -contains 'context_bytes')
+
+    # ---------- O5: unwritable path (parent is an existing FILE) => $false, no throw ----------
+    $o5ParentFile = Join-Path $obsTmp 'o5-parent-is-a-file.txt'
+    Set-Content -LiteralPath $o5ParentFile -Value 'not a directory' -Encoding utf8
+    $o5Path = Join-Path $o5ParentFile 'nested/o5.jsonl'
+    $o5Threw = $false
+    $o5r = $null
+    try {
+        $o5r = Write-DiffApplyObservation -Row (New-ObsRow) -Path $o5Path
+    } catch {
+        $o5Threw = $true
+    }
+    Assert 'O5 returns false' ($o5r -eq $false)
+    Assert 'O5 does not throw' ($o5Threw -eq $false)
+
+    # ---------- O6: quote/newline in a string field round-trips intact ----------
+    $o6Path = Join-Path $obsTmp 'o6.jsonl'
+    $o6Tricky = "line one`nline ""two"" with quotes`ttabbed"
+    Write-DiffApplyObservation -Row (New-ObsRow @{ task_id = $o6Tricky }) -Path $o6Path | Out-Null
+    $o6Lines = @(Get-Content -LiteralPath $o6Path)
+    Assert 'O6 still one line on disk (JSON-escaped, not literal newline)' ($o6Lines.Count -eq 1)
+    $o6Obj = $o6Lines[0] | ConvertFrom-Json
+    Assert 'O6 tricky string round-trips intact' ($o6Obj.task_id -eq $o6Tricky)
+
+    # ---------- O7: default path derives from Get-BatonHome ----------
+    $o7Obj = $null
+    try {
+        $defaultPath = Join-Path (Get-BatonHome) 'diff-apply-observations.jsonl'
+        if (Test-Path -LiteralPath $defaultPath) { Remove-Item -LiteralPath $defaultPath -Force }
+        $o7r = Write-DiffApplyObservation -Row (New-ObsRow @{ run_id = 'run-default-path' })
+        Assert 'O7 returns true' ($o7r -eq $true)
+        Assert 'O7 file created at Get-BatonHome default path' (Test-Path -LiteralPath $defaultPath)
+        $o7Obj = (@(Get-Content -LiteralPath $defaultPath))[-1] | ConvertFrom-Json
+        Assert 'O7 row content correct' ($o7Obj.run_id -eq 'run-default-path')
+    } catch {
+        Assert 'O7 default path threw unexpectedly' ($false)
+    }
+} catch {
+    Write-Host "FAIL  O-section threw: $_" -ForegroundColor Red
+    $script:failures++
+} finally {
+    $env:BATON_HOME = $origBatonHome
+    if (Test-Path -LiteralPath $obsTmp) {
+        Remove-Item -LiteralPath $obsTmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 if ($failures -gt 0) {
     Write-Host "`nFAILED: $failures assertion(s)" -ForegroundColor Red
 } else {
