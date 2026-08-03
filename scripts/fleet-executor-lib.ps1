@@ -133,10 +133,40 @@ function Test-ProviderAgentic {
     return (([string]$Provider.platform) -in @('claude', 'codex', 'gemini'))
 }
 
+function Test-ProviderDiffApply {
+    <# Diff-apply eligibility (d103, closes #168): a provider reachable only over a
+       text transport (kind http / stdio-json) has no filesystem harness, but it can
+       still take an edit task when Baton does the hands — read the files in, take
+       SEARCH/REPLACE blocks back, apply them to the worktree. The opt-in is explicit
+       and required: `diff_apply: true` on the fleet row. Absent or false -> $false.
+       A `kind: cli` provider is never a diff-apply worker — it already has hands.
+       Pure predicate over a provider object: deliberately depends on nothing in
+       diff-apply-lib.ps1, so eligibility can be asked long before any edit is applied.
+       Accepts a fleet provider hashtable or a Select-Capability candidate object. #>
+    param([Parameter(Mandatory)]$Provider)
+    if ($Provider.diff_apply -ne $true) { return $false }
+    return ([string]$Provider.kind -in @('http', 'stdio-json'))
+}
+
+function Test-ProviderEditCapable {
+    <# The question every edit call site actually asks: may this provider take an edit
+       task at all? True when it brings its own filesystem harness
+       (Test-ProviderAgentic) OR when Baton can apply its diffs for it
+       (Test-ProviderDiffApply). Test-ProviderAgentic keeps the d091 transport veto
+       exactly as it was — diff-apply is a SEPARATE capability, not a relaxation of
+       that veto: an `agentic: true` marker still cannot grant edit powers to a text
+       transport, only an explicit `diff_apply: true` can. #>
+    param([Parameter(Mandatory)]$Provider)
+    return ((Test-ProviderAgentic -Provider $Provider) -or (Test-ProviderDiffApply -Provider $Provider))
+}
+
 function Get-CapabilityCostTierFloor {
     <# Cheapest cost_tier among enabled fleet providers that claim $Capability.
        For code-gen/code-transform, only edit-eligible providers count
-       (Test-ProviderAgentic). Also applies Select-Capability context floors
+       (Test-ProviderEditCapable — agentic harness OR diff-apply opt-in; d103/#168
+       is what lets a local diff-apply provider put a real floor under code-gen
+       instead of the whole capability reading UNAVAILABLE below the paid tier).
+       Also applies Select-Capability context floors
        (Get-CapabilityFloors + known-too-small context). Returns
        'local'|'free'|'paid'|'UNAVAILABLE'. Fail-soft: missing/unparseable
        fleet => 'UNAVAILABLE', never throws. #>
@@ -165,7 +195,7 @@ function Get-CapabilityCostTierFloor {
                          else { $generalCaps -contains $Capability }
             if (-not $claimsCap) { continue }
             if ($Capability -in @('code-gen', 'code-transform')) {
-                if (-not (Test-ProviderAgentic -Provider $prov)) { continue }
+                if (-not (Test-ProviderEditCapable -Provider $prov)) { continue }
             }
             # Same as Select-Capability: known-too-small context disqualifies;
             # unknown/missing context never does.
@@ -232,8 +262,14 @@ function Get-EditPoolExclusions {
                 [void]$rows.Add([ordered]@{ name = $name; stage = 'static'; reason = "does not claim $Capability"; reset_at = $null; eta = $null })
                 continue
             }
-            if (-not (Test-ProviderAgentic -Provider $prov)) {
-                [void]$rows.Add([ordered]@{ name = $name; stage = 'static'; reason = 'not edit-eligible'; reset_at = $null; eta = $null })
+            if (-not (Test-ProviderEditCapable -Provider $prov)) {
+                # Name the actionable remedy: a text-transport provider is one config
+                # line (diff_apply: true) away from eligible, so say so instead of the
+                # generic verdict an operator can do nothing about.
+                $editReason = if ([string]$prov.kind -in @('http', 'stdio-json')) {
+                    'not edit-eligible (no diff_apply opt-in)'
+                } else { 'not edit-eligible' }
+                [void]$rows.Add([ordered]@{ name = $name; stage = 'static'; reason = $editReason; reset_at = $null; eta = $null })
                 continue
             }
             if ($capFloors.ContainsKey($Capability) -and $prov.context -and
@@ -436,7 +472,7 @@ function Resolve-AgenticSubstituteCandidates {
         -UsagePath $UsagePath -RatingsPath $RatingsPath -JournalPath $JournalPath
     $eligible = @($retryRaw | Where-Object {
         ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and
-        (Test-ProviderAgentic -Provider $_) -and
+        (Test-ProviderEditCapable -Provider $_) -and
         (-not $AttemptedProviders.Contains([string]$_.name)) -and
         ([double]$_.quality -ge [double]$OriginalCandidate.quality)
     })
@@ -822,8 +858,8 @@ function New-AgenticSpawner {
             -UsagePath $UsagePath -RatingsPath $RatingsPath -JournalPath $JournalPath
         # Edit dispatch is fleet-only (Invoke-Fleet resolves names against fleet.yaml);
         # tools.yaml candidates cannot take edit dispatch even if they infer agentic
-        # via a platform field, so require source='fleet' before the agentic test.
-        $cands = @($raw | Where-Object { ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and (Test-ProviderAgentic -Provider $_) })
+        # via a platform field, so require source='fleet' before the eligibility test.
+        $cands = @($raw | Where-Object { ($null -ne $_) -and ([string]$_.source -eq 'fleet') -and (Test-ProviderEditCapable -Provider $_) })
         if ($cands.Count -lt 1) {
             # Message-only remedy (#127): name the stakes/tier collision; do NOT auto-escalate.
             # #124: audit per-provider exclusions to tell 'the roster cannot do this'

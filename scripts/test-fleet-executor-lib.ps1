@@ -231,8 +231,10 @@ providers:
     Check 'LU4 tier-capped empty pool keeps labor flag empty + stakes message' (
         $luR2.ok -eq $false -and [string]$luR2.labor -eq '' -and ($luR2.why -match 'stakes'))
 
-    # ---- Eligibility agreement: Test-ProviderAgentic vs Test-PlannerProviderEditEligible ----
-    # Drift guard for the intentional mirror pair (d078/d091 / #127 review).
+    # ---- Eligibility agreement: Test-ProviderEditCapable vs Test-PlannerProviderEditEligible ----
+    # Drift guard for the intentional mirror pair (d078/d091/d103 / #127 review). The
+    # executor side is the COMBINED predicate (agentic harness OR diff-apply opt-in),
+    # which is exactly what the planner mirror models.
     # Same case table intent as conductor suite if ever split; load planner mirror here.
     if (-not (Get-Command Test-PlannerProviderEditEligible -ErrorAction SilentlyContinue)) {
         . "$PSScriptRoot/conductor-lib.ps1"
@@ -249,12 +251,21 @@ providers:
         @{ name='cli agentic absent noplat';  kind='cli';        agentic=$null;  platform=$null;     expect=$false }
         @{ name='http agentic false';         kind='http';       agentic=$false; platform='codex';   expect=$false }
         @{ name='cli agentic true noplat';    kind='cli';        agentic=$true;  platform=$null;     expect=$true }
+        # DA12 (d103): diff-apply rows must agree too — the mirror has to know the new
+        # opt-in, not just the d091 transport veto.
+        @{ name='DA12 http diff_apply true';        kind='http';       agentic=$null;  platform='local'; diff_apply=$true;  expect=$true }
+        @{ name='DA12 stdio-json diff_apply true';  kind='stdio-json'; agentic=$null;  platform='local'; diff_apply=$true;  expect=$true }
+        @{ name='DA12 http diff_apply over agentic false'; kind='http'; agentic=$false; platform='codex'; diff_apply=$true; expect=$true }
+        @{ name='DA12 http diff_apply false';       kind='http';       agentic=$true;  platform='codex'; diff_apply=$false; expect=$false }
+        @{ name='DA12 http diff_apply absent';      kind='http';       agentic=$null;  platform='local'; expect=$false }
+        @{ name='DA12 cli diff_apply true local';   kind='cli';        agentic=$null;  platform='local'; diff_apply=$true;  expect=$false }
     )
     foreach ($ec in $eligCases) {
         $prov = @{ kind = $ec.kind }
         if ($null -ne $ec.agentic) { $prov['agentic'] = $ec.agentic }
         if ($null -ne $ec.platform) { $prov['platform'] = $ec.platform }
-        $a = [bool](Test-ProviderAgentic -Provider $prov)
+        if ($null -ne $ec.diff_apply) { $prov['diff_apply'] = $ec.diff_apply }
+        $a = [bool](Test-ProviderEditCapable -Provider $prov)
         $b = [bool](Test-PlannerProviderEditEligible -Provider $prov)
         Check "EA $($ec.name) agreement" (($a -eq $b) -and ($a -eq $ec.expect))
     }
@@ -1521,6 +1532,77 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
         try { $rvS = & $vsS2 (New-VerifyTask) } finally { Remove-Item env:BATON_VERIFY_TEST_HOOK -ErrorAction SilentlyContinue }
         Check 'VS10 retried true' ($rvS.verification.retried -eq $true)
         Check 'VS10 spend summed across both attempts' ([Math]::Abs([double]$rvS.spend - (2 * $singleSpend)) -lt 0.0001)
+
+        # ---- Diff-apply eligibility predicates (d103 / #168) ----
+        # A text-transport provider has no filesystem harness, but it can still take
+        # edit work when it opts in: Baton reads the files and applies the model's
+        # SEARCH/REPLACE blocks. The d091 transport veto on Test-ProviderAgentic is
+        # untouched — this is a SEPARATE capability, not a relaxation of that one.
+        $daRow = @{ name = 'local-host-a'; kind = 'http'; diff_apply = $true; platform = 'codex' }
+        Check 'DA1 http + diff_apply opt-in is a diff-apply provider' (
+            Test-ProviderDiffApply -Provider @{ kind = 'http'; diff_apply = $true })
+        Check 'DA2 stdio-json + diff_apply opt-in is a diff-apply provider' (
+            Test-ProviderDiffApply -Provider @{ kind = 'stdio-json'; diff_apply = $true })
+        Check 'DA3 http without diff_apply is not a diff-apply provider' (
+            -not (Test-ProviderDiffApply -Provider @{ kind = 'http' }))
+        Check 'DA4 http with diff_apply:false is not a diff-apply provider' (
+            -not (Test-ProviderDiffApply -Provider @{ kind = 'http'; diff_apply = $false }))
+        Check 'DA5 cli is never a diff-apply provider (already has hands)' (
+            -not (Test-ProviderDiffApply -Provider @{ kind = 'cli'; diff_apply = $true }))
+        Check 'DA6 diff_apply does NOT make a provider agentic (A9/A10 invariant holds)' (
+            -not (Test-ProviderAgentic -Provider $daRow))
+        Check 'DA7 diff-apply provider is edit-capable' (
+            Test-ProviderEditCapable -Provider $daRow)
+        Check 'DA8 agentic cli provider is edit-capable' (
+            Test-ProviderEditCapable -Provider @{ name = 'cli-host-a'; kind = 'cli'; platform = 'claude' })
+        Check 'DA9 local cli without opt-in is not edit-capable' (
+            -not (Test-ProviderEditCapable -Provider @{ name = 'cli-host-b'; kind = 'cli'; platform = 'local' }))
+
+        # DA10 (#168 regression guard): a fleet whose ONLY code-gen provider is a
+        # local-tier diff-apply provider must report a 'local' floor. Before d103 this
+        # returned UNAVAILABLE, which made every stakes=low task undispatchable
+        # (Resolve-TaskDepthPolicy caps low at 'free', and the floor said 'paid').
+        $daFleet = Join-Path $tmpRoot 'da-floor-fleet.yaml'
+        Set-Content -LiteralPath $daFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: [code-gen]
+providers:
+  - name: local-host-a
+    kind: http
+    enabled: true
+    cost_tier: local
+    platform: local
+    diff_apply: true
+    base_url: 'http://127.0.0.1:1'
+    model_default: model-small
+    capabilities: [code-gen]
+'@
+        Check 'DA10 #168 guard: local diff-apply provider gives code-gen a local floor' (
+            (Get-CapabilityCostTierFloor -Capability 'code-gen' -FleetPath $daFleet) -eq 'local')
+        Check 'DA10b diff-apply provider is not excluded as ineligible' (
+            @(Get-EditPoolExclusions -Capability 'code-gen' -TierCap 'local' -FleetPath $daFleet `
+                -UsagePath (Join-Path $tmpRoot 'da-no-usage.jsonl') |
+                Where-Object { $_.name -eq 'local-host-a' -and $_.reason -match 'not edit-eligible' }).Count -eq 0)
+
+        # DA11: the exclusion reason has to tell an operator WHY a text-transport
+        # provider was dropped — the remedy is the opt-in, not a tier or stakes change.
+        $daFleetNoOptIn = Join-Path $tmpRoot 'da-no-optin-fleet.yaml'
+        Set-Content -LiteralPath $daFleetNoOptIn -Encoding utf8NoBOM -Value @'
+general_capabilities: [code-gen]
+providers:
+  - name: local-host-b
+    kind: http
+    enabled: true
+    cost_tier: local
+    platform: local
+    base_url: 'http://127.0.0.1:1'
+    model_default: model-small
+    capabilities: [code-gen]
+'@
+        $daExcl = @(Get-EditPoolExclusions -Capability 'code-gen' -TierCap 'local' -FleetPath $daFleetNoOptIn `
+            -UsagePath (Join-Path $tmpRoot 'da-no-usage.jsonl'))
+        Check 'DA11 text-transport without opt-in names the missing diff_apply opt-in' (
+            @($daExcl | Where-Object { $_.name -eq 'local-host-b' -and $_.stage -eq 'static' -and
+                $_.reason -eq 'not edit-eligible (no diff_apply opt-in)' }).Count -eq 1)
     } finally {
         if ($null -eq $savedBatonHome) { Remove-Item env:BATON_HOME -ErrorAction SilentlyContinue }
         else { $env:BATON_HOME = $savedBatonHome }
