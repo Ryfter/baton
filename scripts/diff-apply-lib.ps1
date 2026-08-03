@@ -188,6 +188,16 @@ function Test-DiffApplyPathSafe {
 
     # A symlink (or junction) at the target, or at ANY existing ancestor directory
     # under the root, is the same escape as '..' — reject it.
+    #
+    # ACCEPTED RESIDUAL RISK (adversarial review 2026-08-03): a HARD LINK inside the
+    # worktree that points at a file outside it is NOT detected here — a hard link
+    # carries no ReparsePoint attribute and is indistinguishable from an ordinary
+    # directory entry without per-file link-count/volume-id inspection on every
+    # candidate path. Judged exotic in a throwaway git worktree that Baton creates
+    # itself from a clean checkout: git does not create hard links in a worktree, so
+    # one could only arrive from outside the system. Revisit if worktrees ever get
+    # populated from an untrusted source (a restored archive, an rsync mirror, a
+    # user-supplied directory) rather than a fresh `git worktree add`.
     $reparse = [System.IO.FileAttributes]::ReparsePoint
     if (Test-Path -LiteralPath $full) {
         $item = Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
@@ -226,9 +236,21 @@ function Invoke-EditBlockApply {
        Matching is EXACT and ordinal — no fuzzy matching, and the substitution is
        an index-based Remove/Insert, never PowerShell's regex -replace.
 
+       The batch is keyed by the CANONICAL ABSOLUTE path of each target, never by
+       the relative string the model emitted: 'src/a.txt', './src/a.txt' and
+       'src/./a.txt' are one file, and keying by the raw spelling would give each
+       its own snapshot and let the flush overwrite one edit with another. The
+       relative form is kept alongside for error messages, telemetry and
+       files_written, whose user-facing values stay relative.
+
        Returns [ordered]@{ ok; result; error; files_written; blocks_applied } where
        result is 'ok' | 'search-not-found' | 'search-ambiguous' | 'path-rejected' |
-       'scope-rejected' | 'create-exists' | 'flush-failed'. 'flush-failed' means the
+       'scope-rejected' | 'create-exists' | 'encoding-rejected' | 'flush-failed'.
+       'encoding-rejected' means a target file's bytes are not valid UTF-8: this
+       function round-trips text, so decoding it leniently would replace the
+       offending bytes with U+FFFD and write EF BF BD back, mutating the file far
+       outside the SEARCH region. Refusing the batch is the only safe answer.
+       'flush-failed' means the
        flush loop itself threw (disk full, locked file, permission denied, path too
        long) after validation passed; every file already written in the batch is
        rolled back byte-exact (or deleted, if it was a create) before returning, so
@@ -250,9 +272,13 @@ function Invoke-EditBlockApply {
     $blockList = @($Blocks | Where-Object { $null -ne $_ })
     if ($blockList.Count -eq 0) { $out.ok = $true; return $out }
 
-    # --- 1. Validate every path first; one bad path rejects the whole batch. ---
-    $resolved = @{}     # normalized rel path -> absolute path
-    $order = @()        # first-seen order of distinct rel paths
+    # --- 1. Validate every path first; one bad path rejects the whole batch.
+    #        The map key is the canonical absolute path Test-DiffApplyPathSafe
+    #        returns, so every spelling of one file collapses to one entry. ---
+    $rootFull = [System.IO.Path]::GetFullPath($Worktree).TrimEnd('\', '/')
+    $resolved = [ordered]@{}   # canonical full path -> @{ full; rel }
+    $order = @()               # first-seen order of distinct canonical keys
+    $blockKeys = @()           # parallel to $blockList: the key each block targets
     foreach ($b in $blockList) {
         $rel = [string]$b.path
         $safe = Test-DiffApplyPathSafe -Worktree $Worktree -RelPath $rel
@@ -261,15 +287,20 @@ function Invoke-EditBlockApply {
             $out.error = "path rejected ($($safe.reason)): $rel"
             return $out
         }
-        $norm = $rel.Replace('\', '/')
-        if (-not $resolved.ContainsKey($norm)) {
+        $key = [string]$safe.full
+        $blockKeys += $key
+        if (-not $resolved.Contains($key)) {
             if (Test-Path -LiteralPath $safe.full -PathType Container) {
                 $out.result = 'path-rejected'
                 $out.error = "path rejected (directory-target): $rel"
                 return $out
             }
-            $resolved[$norm] = $safe.full
-            $order += $norm
+            # Derive the relative form from the canonical path, not from the model's
+            # spelling: './src/a.txt' and 'src/a.txt' must present identically to the
+            # scope oracle, to error messages, and in files_written.
+            $relNorm = $key.Substring($rootFull.Length).TrimStart('\', '/').Replace('\', '/')
+            $resolved[$key] = [ordered]@{ full = $safe.full; rel = $relNorm }
+            $order += $key
         }
     }
 
@@ -279,7 +310,8 @@ function Invoke-EditBlockApply {
         $out.error = 'scope oracle Test-DiffFilesInAllowedPaths unavailable — failing closed'
         return $out
     }
-    $scope = Test-DiffFilesInAllowedPaths -DiffFiles $order -AllowedPaths $AllowedPaths
+    $relOrder = @($order | ForEach-Object { $resolved[$_].rel })
+    $scope = Test-DiffFilesInAllowedPaths -DiffFiles $relOrder -AllowedPaths $AllowedPaths
     if (-not $scope.ok) {
         $out.result = 'scope-rejected'
         $out.error = "path outside allowed_paths: $($scope.first_offender)"
@@ -288,14 +320,30 @@ function Invoke-EditBlockApply {
 
     # --- 3. Load every existing target into memory (content + shape). ---
     $files = [ordered]@{}
-    foreach ($norm in $order) {
-        $full = $resolved[$norm]
+    # Strict decoder: throwOnInvalidBytes. A lenient decode maps every invalid byte
+    # to U+FFFD, and the flush re-encodes that as EF BF BD — silent corruption of
+    # bytes the model never asked to touch. Fail the batch instead.
+    $strictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
+    foreach ($key in $order) {
+        $full = $resolved[$key].full
         if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
         $bytes = [System.IO.File]::ReadAllBytes($full)
         $bom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
         $offset = if ($bom) { 3 } else { 0 }
-        $content = [System.Text.Encoding]::UTF8.GetString($bytes, $offset, $bytes.Length - $offset)
+        try {
+            $content = $strictUtf8.GetString($bytes, $offset, $bytes.Length - $offset)
+        } catch {
+            $out.result = 'encoding-rejected'
+            $out.error = "file is not valid UTF-8, refusing to edit it: $($resolved[$key].rel)"
+            return $out
+        }
 
+        # EOL detection. CR-only (classic Mac) line endings are NOT supported: they
+        # are counted as neither CRLF nor LF, so such a file is treated as LF-shaped.
+        # That is deliberate and it fails LOUDLY, not silently — a multi-line SEARCH
+        # arrives LF-joined, never matches the CR-separated content, and the batch is
+        # rejected with 'search-not-found'. A single-line SEARCH still matches and
+        # splices correctly. No CR-only file is ever silently rewritten.
         $crlfCount = 0
         $idx = $content.IndexOf("`r`n", [System.StringComparison]::Ordinal)
         while ($idx -ge 0) {
@@ -310,8 +358,9 @@ function Invoke-EditBlockApply {
         }
         $eol = if ($crlfCount -gt ($lfCount - $crlfCount)) { "`r`n" } else { "`n" }
 
-        $files[$norm] = [ordered]@{
+        $files[$key] = [ordered]@{
             full             = $full
+            rel              = $resolved[$key].rel
             content          = $content
             eol              = $eol
             bom              = $bom
@@ -324,20 +373,23 @@ function Invoke-EditBlockApply {
     # --- 4. Apply every block in order against the in-memory copies. ---
     $writeOrder = @()
     $applied = 0
-    foreach ($b in $blockList) {
-        $norm = ([string]$b.path).Replace('\', '/')
+    for ($bi = 0; $bi -lt $blockList.Count; $bi++) {
+        $b = $blockList[$bi]
+        $key = $blockKeys[$bi]
+        $norm = $resolved[$key].rel   # relative form, for messages only
         $searchRaw = [string]$b.search
         $replaceRaw = [string]$b.replace
         $isCreate = ([bool]$b.is_create) -or ($searchRaw -eq '')
 
         if ($isCreate) {
-            if ($files.Contains($norm)) {
+            if ($files.Contains($key)) {
                 $out.result = 'create-exists'
                 $out.error = "create block targets a file that already exists: $norm"
                 return $out
             }
-            $files[$norm] = [ordered]@{
-                full             = $resolved[$norm]
+            $files[$key] = [ordered]@{
+                full             = $resolved[$key].full
+                rel              = $norm
                 content          = $replaceRaw
                 eol              = "`n"
                 bom              = $false
@@ -346,25 +398,31 @@ function Invoke-EditBlockApply {
                 original_bytes   = $null
             }
         } else {
-            if (-not $files.Contains($norm)) {
+            if (-not $files.Contains($key)) {
                 $out.result = 'search-not-found'
                 $out.error = "search text not found in ${norm} (file does not exist): $(Get-EditSearchSnippet $searchRaw)"
                 return $out
             }
-            $f = $files[$norm]
+            $f = $files[$key]
             $search = if ($f.eol -eq "`r`n") { $searchRaw.Replace("`n", "`r`n") } else { $searchRaw }
             $replace = if ($f.eol -eq "`r`n") { $replaceRaw.Replace("`n", "`r`n") } else { $replaceRaw }
 
+            # Count OVERLAPPING occurrences: advance by one character past the hit,
+            # not by the search length. In 'aaa' the search 'aa' occurs at index 0
+            # AND index 1; a length-stride scan steps over the second one, calls the
+            # match unique, and edits a file the model cannot have meant
+            # unambiguously. Short-circuit at 2 — the exact count beyond that is
+            # never used, only "more than one".
             $count = 0
             $firstIdx = -1
             $scan = 0
-            while ($scan -le $f.content.Length) {
+            while ($scan -le ($f.content.Length - $search.Length)) {
                 $hit = $f.content.IndexOf($search, $scan, [System.StringComparison]::Ordinal)
                 if ($hit -lt 0) { break }
                 $count++
                 if ($firstIdx -lt 0) { $firstIdx = $hit }
                 if ($count -ge 2) { break }
-                $scan = $hit + $search.Length
+                $scan = $hit + 1
             }
 
             if ($count -eq 0) {
@@ -382,7 +440,7 @@ function Invoke-EditBlockApply {
             $f.content = $f.content.Remove($firstIdx, $search.Length).Insert($firstIdx, $replace)
         }
 
-        if ($writeOrder -notcontains $norm) { $writeOrder += $norm }
+        if ($writeOrder -notcontains $key) { $writeOrder += $key }
         $applied++
     }
 
@@ -391,10 +449,10 @@ function Invoke-EditBlockApply {
     #        denied, path too long) rolls back every file already written
     #        in this batch instead of leaving the tree half-changed, and
     #        never lets the exception escape this function. ---
-    $written = @()
+    $written = @()      # canonical keys, in write order — the rollback set
     try {
-        foreach ($norm in $writeOrder) {
-            $f = $files[$norm]
+        foreach ($key in $writeOrder) {
+            $f = $files[$key]
             $text = $f.content
             if ($f.trailing_newline) {
                 if (-not $text.EndsWith("`n")) { $text += $f.eol }
@@ -412,7 +470,7 @@ function Invoke-EditBlockApply {
             # or partial — enrolling afterwards would skip exactly that file, which
             # is the silent-truncation case this whole function exists to prevent.
             # Restoring a file the write never touched is a byte-identical no-op.
-            $written += $norm
+            $written += $key
             [System.IO.File]::WriteAllText($f.full, $text, [System.Text.UTF8Encoding]::new([bool]$f.bom))
         }
     } catch {
@@ -421,8 +479,8 @@ function Invoke-EditBlockApply {
         # Reverse write order. Rollback is itself exception-safe: a failure
         # restoring/removing one file must not stop the rest.
         for ($ri = $written.Count - 1; $ri -ge 0; $ri--) {
-            $norm = $written[$ri]
-            $f = $files[$norm]
+            $f = $files[$written[$ri]]
+            $norm = [string]$f.rel
             try {
                 if ($f.existed) {
                     # Restore only when the bytes actually differ. The rollback set now
@@ -464,7 +522,9 @@ function Invoke-EditBlockApply {
 
     $out.ok = $true
     $out.result = 'ok'
-    $out.files_written = @($written)
+    # Report RELATIVE paths: the keys are absolute worktree-internal paths, which no
+    # consumer of this contract (telemetry, error text, the run report) wants.
+    $out.files_written = @($written | ForEach-Object { [string]$files[$_].rel })
     $out.blocks_applied = $applied
     return $out
 }
@@ -635,9 +695,19 @@ function Get-DiffApplyContext {
                 if (-not $collected.Contains($rel)) { $collected[$rel] = $full }
             }
         } else {
-            $rel = $e.Replace('\', '/')
-            $full = [System.IO.Path]::GetFullPath((Join-Path $Worktree $e))
+            # A concrete-FILE entry gets the SAME containment test as a write target:
+            # '../outer-secret.txt' would otherwise be read and pasted into the model
+            # prompt, which is an exfiltration route out of the worktree even though
+            # nothing is written. Reuse Test-DiffApplyPathSafe — never a second
+            # implementation of containment.
+            #
+            # Skip SILENTLY rather than throwing: allowed_paths is planner-supplied,
+            # and one bad entry must not be able to abort a whole run.
+            $safe = Test-DiffApplyPathSafe -Worktree $Worktree -RelPath $e
+            if (-not $safe.ok) { continue }
+            $full = [string]$safe.full
             if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }   # not-yet-created file: not read
+            $rel = $full.Substring($rootFull.Length).TrimStart('\', '/').Replace('\', '/')
             if (-not $collected.Contains($rel)) { $collected[$rel] = $full }
         }
     }

@@ -625,6 +625,37 @@ function Invoke-DiffApplyAttempt {
         return & $newFailure "diff-apply: parse $($parsed.result): $detail"
     }
 
+    # The block cap is part of the SIZE ENVELOPE, and the envelope is how Baton
+    # discovers how small a task has to be for a cheap model to succeed. An
+    # advertised-but-unenforced cap makes that data meaningless: a model told
+    # "emit at most 8 blocks" that emits 50 would have all 50 applied and the
+    # observation would record a success at a size the envelope says is out of
+    # bounds. Enforced here, after parsing and BEFORE applying, so the worktree is
+    # left byte-identical. Same failure shape as the over-context path above,
+    # including the literal 'diff-apply envelope' that Resolve-OutcomeRatingValue
+    # matches to skip the capability rating — an oversized task is not evidence
+    # about model quality.
+    $maxBlocks = 8
+    $maxBlocksVal = Get-DiffApplyField -Obj $limits -Name 'max_blocks'
+    if ($null -ne $maxBlocksVal) {
+        $mb = 0
+        if ([int]::TryParse([string]$maxBlocksVal, [ref]$mb)) { $maxBlocks = $mb }
+    }
+    if ([int]$obs.blocks_emitted -gt $maxBlocks) {
+        $capReason = "task exceeds diff-apply envelope: $($obs.blocks_emitted) blocks > limit $maxBlocks"
+        $obs.apply_result = 'envelope-exceeded'
+        $obs.verdict = 'fail'
+        [void](Write-DiffApplyObservation -Row $obs -Path $ObservationPath)
+        return @{
+            result = @{ stdout = ''; stderr = $capReason; exit_code = -1; duration_s = 0 }
+            dispatch_error = $capReason
+            # Unlike the over-context refusal, this prompt WAS dispatched — report it
+            # so the caller measures what was actually sent (the same invariant that
+            # makes this function return prompt_sent at all).
+            prompt_sent = $prompt
+        }
+    }
+
     $applied = Invoke-EditBlockApply -Worktree $Worktree -Blocks @($parsed.blocks) -AllowedPaths $AllowedPaths
     $obs.apply_result = [string]$applied.result
     $obs.blocks_applied = [int]$applied.blocks_applied

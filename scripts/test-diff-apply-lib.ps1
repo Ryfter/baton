@@ -566,6 +566,61 @@ try {
     Assert 'A22 read-only file untouched' ((Get-Sha $f22b) -eq $h22b)
     Assert 'A22 no spurious rollback error for the untouched failing file' ($a22.error -notmatch 'rollback failed')
 
+    # ---------- A30: overlapping occurrences are ambiguous, not unique ----------
+    #            'aa' occurs at index 0 AND index 1 of 'aaa'. An occurrence scan
+    #            that advances by the search LENGTH steps straight over the second
+    #            hit, calls the match unique, and edits a file the model could not
+    #            have meant unambiguously — breaking the exact-once guarantee.
+    $wt = New-FixtureWorktree
+    $f30 = Set-FixtureFile $wt 'ov.txt' 'aaa'
+    $h30 = Get-Sha $f30
+    $a30 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'ov.txt' 'aa' 'X')) -AllowedPaths @()
+    Assert 'A30 ok=false' ($a30.ok -eq $false)
+    Assert 'A30 overlapping match is search-ambiguous' ($a30.result -eq 'search-ambiguous')
+    Assert 'A30 file byte-identical' ((Get-Sha $f30) -eq $h30)
+
+    # ---------- A33: invalid UTF-8 is refused, never silently transcoded ----------
+    #            Bytes 61 FF 62 0A are not valid UTF-8. A lenient decoder turns FF
+    #            into U+FFFD and the flush writes EF BF BD back, mutating the file
+    #            far outside the SEARCH region. Fail closed instead.
+    $wt = New-FixtureWorktree
+    $f33 = Join-Path $wt 'bad.txt'
+    [System.IO.File]::WriteAllBytes($f33, [byte[]]@(0x61, 0xFF, 0x62, 0x0A))
+    $h33 = Get-Sha $f33
+    $a33 = Invoke-EditBlockApply -Worktree $wt -Blocks @((New-Blk 'bad.txt' 'a' 'A')) -AllowedPaths @()
+    Assert 'A33 ok=false' ($a33.ok -eq $false)
+    Assert 'A33 result=encoding-rejected' ($a33.result -eq 'encoding-rejected')
+    Assert 'A33 error names the file' ($a33.error -match 'bad\.txt')
+    Assert 'A33 file byte-identical (the 0xFF byte survives)' ((Get-Sha $f33) -eq $h33)
+
+    # ---------- A31: path spellings of ONE file share ONE key ----------
+    #            'src/a.txt' and './src/a.txt' name the same file. Keying the batch
+    #            by the raw relative string gives them separate snapshots and the
+    #            flush writes both in sequence — last one wins, first edit lost.
+    $wt = New-FixtureWorktree
+    Set-FixtureFile $wt 'src/a.txt' "one`ntwo`n" | Out-Null
+    $a31 = Invoke-EditBlockApply -Worktree $wt -Blocks @(
+        (New-Blk 'src/a.txt' 'one' 'ONE'),
+        (New-Blk './src/a.txt' 'two' 'TWO')
+    ) -AllowedPaths @()
+    Assert 'A31 ok=true' ($a31.ok -eq $true)
+    # -ceq, not -eq: PowerShell's -eq is case-INSENSITIVE, and the whole point of
+    # this fixture is a pair of case-only edits. -eq would pass on the corrupt result.
+    Assert 'A31 both edits survive (no silently lost write)' ((Get-FixtureText $wt 'src/a.txt') -ceq "ONE`nTWO`n")
+    Assert 'A31 blocks_applied=2' ($a31.blocks_applied -eq 2)
+    Assert 'A31 one file written, not two' (@($a31.files_written).Count -eq 1)
+    Assert 'A31 files_written stays relative' (@($a31.files_written) -contains 'src/a.txt')
+
+    # ---------- A32: create then edit the same file under a different spelling ----------
+    $wt = New-FixtureWorktree
+    $a32 = Invoke-EditBlockApply -Worktree $wt -Blocks @(
+        (New-Blk 'created2.txt' '' "alpha`nbeta"),
+        (New-Blk './created2.txt' 'beta' 'BETA')
+    ) -AllowedPaths @()
+    Assert 'A32 ok=true' ($a32.ok -eq $true)
+    Assert 'A32 result=ok (create is visible to the later spelling)' ($a32.result -eq 'ok')
+    Assert 'A32 content reflects both blocks' ((Get-FixtureText $wt 'created2.txt') -ceq "alpha`nBETA`n")
+
     # C12: a max_prompt_bytes below the 4000-byte reserve must floor the context
     # budget at 0, not go negative. A negative budget would only behave correctly
     # by accident.
@@ -693,6 +748,28 @@ try {
     Assert 'C10 contains REPLACE marker' ($prompt10 -match [regex]::Escape('>>>>>>> REPLACE'))
     Assert 'C11 states block cap from Limits' ($prompt10 -match [regex]::Escape('5 blocks'))
     Assert 'C11 states the minimality rule verbatim' ($prompt10 -match [regex]::Escape('keep each SEARCH section as small as possible while still matching only once'))
+
+    # ---------- C30: a concrete-FILE entry that escapes the worktree is skipped ----------
+    #            Directory-prefix entries were containment-checked; entries naming a
+    #            concrete file were not, so '../outer-secret.txt' was read and its
+    #            contents embedded in the model prompt. allowed_paths is
+    #            planner-supplied, so a bad entry must be skipped silently, never
+    #            abort the run.
+    $wt30 = New-FixtureWorktree
+    Set-FixtureFile $wt30 'dir/inside.txt' "inside`n" | Out-Null
+    $secret30 = Join-Path $applyTmp 'outer-secret.txt'
+    [System.IO.File]::WriteAllText($secret30, "SUPER-SECRET-OUTSIDE-MARKER`n", [System.Text.UTF8Encoding]::new($false))
+    $limits30 = Get-DiffApplyLimits -Provider ([ordered]@{})
+    $c30Paths = @('dir/inside.txt', '../outer-secret.txt')
+    $c30 = Get-DiffApplyContext -Worktree $wt30 -AllowedPaths $c30Paths -Limits $limits30
+    Assert 'C30 ok=true (one bad planner entry does not abort the task)' ($c30.ok -eq $true)
+    Assert 'C30 only the in-worktree file is collected' (
+        @($c30.files).Count -eq 1 -and $c30.files[0].path -eq 'dir/inside.txt')
+    Assert 'C30 outside file contributes no text' (
+        @($c30.files | Where-Object { $_.text -match 'SUPER-SECRET-OUTSIDE-MARKER' }).Count -eq 0)
+    $prompt30 = Build-DiffApplyPrompt -TaskDesc 'edit the inside file' -InputBlock '' `
+        -Context $c30 -AllowedPaths $c30Paths -Limits $limits30
+    Assert 'C30 outside content absent from the built prompt' ($prompt30 -notmatch 'SUPER-SECRET-OUTSIDE-MARKER')
 } catch {
     Write-Host "FAIL  C-section threw: $_" -ForegroundColor Red
     $script:failures++

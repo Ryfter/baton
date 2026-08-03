@@ -131,6 +131,9 @@ Baton selects what the model sees: it reads files under the task's
 skipped for that task with a specific reason
 (`task exceeds diff-apply envelope: N bytes > limit`) and selection falls
 through to the next candidate — this is a routing signal, not a failure.
+`max_blocks` is enforced on the *response* as well as advertised in the
+prompt: a reply carrying more than the cap is refused after parsing and
+before anything is applied.
 Baton never truncates context to make a task fit; a model shown only part of
 a file can produce a `SEARCH` block that matches nothing, or worse, matches
 the wrong region.
@@ -156,7 +159,9 @@ before the oracle is even invoked:
 | Rejection | Meaning |
 |---|---|
 | `search-not-found` | The quoted `SEARCH` text does not occur in the target file at all — usually stale context (the model saw an older version of the file) or a paraphrase instead of an exact quote. |
-| `search-ambiguous` | The quoted `SEARCH` text occurs 2+ times — the model needs to quote more surrounding context to pin down a single match. |
+| `search-ambiguous` | The quoted `SEARCH` text occurs 2+ times — the model needs to quote more surrounding context to pin down a single match. Occurrences are counted **overlapping**, so `aa` in `aaa` is ambiguous, not unique. |
+| `encoding-rejected` | A target file's bytes are not valid UTF-8. The applier round-trips text, so decoding leniently would rewrite the offending bytes as `EF BF BD` and corrupt the file far outside the `SEARCH` region. Baton fails closed and edits nothing. |
+| `envelope-exceeded` (too many blocks) | The model emitted more than `max_blocks` blocks. Enforced after parsing and before applying, so the worktree is untouched — an advertised-but-unenforced cap would make the envelope measurements meaningless. |
 | a rejected path (`..` segment, absolute/drive/UNC path, empty segment, control character, or a target outside the worktree root) | Path-containment check failed. The model named a file outside the task's worktree; the block is refused before anything is touched. |
 | a rejected write through a symlink | The target path's existing file has the `ReparsePoint` attribute — refused because a pure string/path check cannot see through it. |
 | a rejected `.git/` write | The path resolves under `.git/`; always refused. |

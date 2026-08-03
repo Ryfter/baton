@@ -1818,6 +1818,43 @@ sneaky new file
             [long]$daPbSeen.bytes -eq (Get-Utf8ByteCount -Text $daSeen.prompt))
         Check 'E11c observed prompt_bytes is NOT the agentic prompt that was never sent' (
             [long]$daPbSeen.bytes -ne (Get-Utf8ByteCount -Text $daAgenticPrompt))
+
+        # E12 — max_blocks is ENFORCED, not merely advertised. The prompt tells the
+        # model "emit at most N blocks"; a model that ignores it must be refused
+        # after parsing and BEFORE applying, or the size envelope (the mechanism for
+        # discovering how small a task must be for a cheap model) measures nothing.
+        Set-Content -LiteralPath $daGreet -Value 'Hello' -Encoding utf8NoBOM
+        $daBefore12 = [System.IO.File]::ReadAllBytes($daGreet)
+        # Nine blocks against the default max_blocks of 8. Every block is INDIVIDUALLY
+        # valid and they chain (each SEARCHes what the previous one wrote), so an
+        # unenforced cap applies all nine and the task succeeds — the check has to
+        # discriminate on the cap, not on a block that happens to be broken.
+        $daManyBlocks = ((1..9) | ForEach-Object {
+            $from = if ($_ -eq 1) { 'Hello' } else { "step$($_ - 1)" }
+            "FILE: src/greet.txt`n<<<<<<< SEARCH`n$from`n=======`nstep$_`n>>>>>>> REPLACE"
+        }) -join "`n"
+        $daManySeen = @{ calls = 0 }
+        $daManyDisp = {
+            param($pick, $prompt, $depthTier)
+            $daManySeen.calls++
+            @{ stdout = $daManyBlocks; stderr = ''; exit_code = 0; duration_s = 0 }
+        }.GetNewClosure()
+        $daR12 = & (& $daNewSpawner $daManyDisp 'local' 'e12') (& $daTask 'da-e12' $daScope)
+        Check 'E12 too-many-blocks response fails the task' ($daR12.ok -eq $false)
+        Check 'E12b failure names the diff-apply envelope' ($daR12.why -match 'diff-apply envelope')
+        Check 'E12c worktree byte-identical after an over-cap response' (
+            [System.Linq.Enumerable]::SequenceEqual([byte[]]$daBefore12, [byte[]][System.IO.File]::ReadAllBytes($daGreet)))
+        $daObsRows12 = @()
+        if (Test-Path -LiteralPath $daObsPath) {
+            $daObsRows12 = @(Get-Content -LiteralPath $daObsPath |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                ForEach-Object { $_ | ConvertFrom-Json })
+        }
+        Check 'E12d observation row is envelope-exceeded with the emitted block count' (
+            @($daObsRows12 | Where-Object {
+                $_.task_id -eq 'da-e12' -and $_.apply_result -eq 'envelope-exceeded' -and
+                [int]$_.blocks_emitted -eq 9 -and [int]$_.blocks_applied -eq 0
+            }).Count -eq 1)
     } finally {
         if ($null -eq $savedBatonHome) { Remove-Item env:BATON_HOME -ErrorAction SilentlyContinue }
         else { $env:BATON_HOME = $savedBatonHome }
