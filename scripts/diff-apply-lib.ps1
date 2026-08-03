@@ -406,8 +406,13 @@ function Invoke-EditBlockApply {
             if ($dir -and -not (Test-Path -LiteralPath $dir)) {
                 New-Item -ItemType Directory -Force -Path $dir | Out-Null
             }
-            [System.IO.File]::WriteAllText($f.full, $text, [System.Text.UTF8Encoding]::new([bool]$f.bom))
+            # Enrol in the rollback set BEFORE attempting the write. WriteAllText
+            # truncates on open, so a throw part-way through leaves the file empty
+            # or partial — enrolling afterwards would skip exactly that file, which
+            # is the silent-truncation case this whole function exists to prevent.
+            # Restoring a file the write never touched is a byte-identical no-op.
             $written += $norm
+            [System.IO.File]::WriteAllText($f.full, $text, [System.Text.UTF8Encoding]::new([bool]$f.bom))
         }
     } catch {
         $flushErrorMsg = $_.Exception.Message
@@ -419,7 +424,25 @@ function Invoke-EditBlockApply {
             $f = $files[$norm]
             try {
                 if ($f.existed) {
-                    [System.IO.File]::WriteAllBytes($f.full, $f.original_bytes)
+                    # Restore only when the bytes actually differ. The rollback set now
+                    # includes the file the write DIED on, which may never have been
+                    # opened (e.g. it was read-only, so the throw came before any
+                    # truncation). Rewriting such a file is pointless and, when it is
+                    # read-only, would itself throw and report a rollback error that
+                    # never happened.
+                    $needsRestore = $true
+                    try {
+                        $nowBytes = [System.IO.File]::ReadAllBytes($f.full)
+                        if ($nowBytes.Length -eq $f.original_bytes.Length) {
+                            $needsRestore = $false
+                            for ($bi = 0; $bi -lt $nowBytes.Length; $bi++) {
+                                if ($nowBytes[$bi] -ne $f.original_bytes[$bi]) { $needsRestore = $true; break }
+                            }
+                        }
+                    } catch { $needsRestore = $true }
+                    if ($needsRestore) {
+                        [System.IO.File]::WriteAllBytes($f.full, $f.original_bytes)
+                    }
                 } else {
                     Remove-Item -LiteralPath $f.full -Force -ErrorAction SilentlyContinue
                 }
@@ -494,7 +517,14 @@ function Get-DiffApplyLimits {
     if ($null -ne $maxPromptBytes -and [string]$maxPromptBytes -ne '') {
         $mp = [long]0
         if ([long]::TryParse([string]$maxPromptBytes, [ref]$mp)) {
+            # Floor at 0: a provider declaring a max_prompt_bytes below the 4000-byte
+            # reserve would otherwise yield a NEGATIVE budget, and a negative budget
+            # compares as "everything is over budget" only by accident. Clamping to 0
+            # makes the refusal explicit and correctly worded — no task fits, which is
+            # the honest answer for a provider whose prompt ceiling cannot even hold
+            # the instruction block.
             $clamped = $mp - 4000
+            if ($clamped -lt 0) { $clamped = 0 }
             if ($out.max_context_bytes -gt $clamped) { $out.max_context_bytes = $clamped }
         }
     }

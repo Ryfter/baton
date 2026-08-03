@@ -525,6 +525,53 @@ try {
     Assert 'A21 already-written file rolled back byte-identical' ((Get-Sha $f21a) -eq $h21a)
     Assert 'A21 locked file left untouched' ((Get-Sha $f21c) -eq $h21c)
     Assert 'A21 newly-created file does not exist after rollback' (-not (Test-Path -LiteralPath $newPath21))
+
+    # ---------- A22: the file the flush DIES on is enrolled in the rollback set
+    #                 before its write is attempted, because WriteAllText truncates
+    #                 on open and a throw part-way through would otherwise leave it
+    #                 truncated and un-restored. Enrolling it means rollback may
+    #                 revisit a file that was never actually opened -- so rollback
+    #                 restores only when the bytes genuinely differ.
+    #
+    #                 This case forces the failure with a READ-ONLY file: the throw
+    #                 happens at open, before any truncation, so the file is
+    #                 untouched. The discriminating assertion is that this produces
+    #                 NO spurious 'rollback failed' text -- a blind restore would
+    #                 try to rewrite a read-only file and report a rollback error
+    #                 for damage that never occurred.
+    #
+    #                 HONEST LIMIT: a genuine post-truncation I/O failure (disk
+    #                 full, hardware error) cannot be forced deterministically on
+    #                 this platform. The enrolment-before-write ordering is
+    #                 defence-in-depth against it and is verified by inspection,
+    #                 not by this check. ----------
+    $wt22 = New-FixtureWorktree
+    $f22a = Set-FixtureFile $wt22 'writable.txt' "one`n"
+    $h22a = Get-Sha $f22a
+    $f22b = Set-FixtureFile $wt22 'readonly.txt' "keep`n"
+    $h22b = Get-Sha $f22b
+    Set-ItemProperty -LiteralPath $f22b -Name IsReadOnly -Value $true
+    try {
+        $a22 = Invoke-EditBlockApply -Worktree $wt22 -Blocks @(
+            (New-Blk 'writable.txt' 'one' 'ONE'),
+            (New-Blk 'readonly.txt' 'keep' 'CHANGED')
+        ) -AllowedPaths @()
+    } finally {
+        Set-ItemProperty -LiteralPath $f22b -Name IsReadOnly -Value $false
+    }
+
+    Assert 'A22 ok=false' ($a22.ok -eq $false)
+    Assert 'A22 result=flush-failed' ($a22.result -eq 'flush-failed')
+    Assert 'A22 writable file rolled back byte-identical' ((Get-Sha $f22a) -eq $h22a)
+    Assert 'A22 read-only file untouched' ((Get-Sha $f22b) -eq $h22b)
+    Assert 'A22 no spurious rollback error for the untouched failing file' ($a22.error -notmatch 'rollback failed')
+
+    # C12: a max_prompt_bytes below the 4000-byte reserve must floor the context
+    # budget at 0, not go negative. A negative budget would only behave correctly
+    # by accident.
+    $lim12 = Get-DiffApplyLimits -Provider @{ max_prompt_bytes = 1000 }
+    Assert 'C12 tiny max_prompt_bytes floors at 0' ([int]$lim12.max_context_bytes -eq 0)
+    Assert 'C12 does not go negative' ([int]$lim12.max_context_bytes -ge 0)
 } catch {
     Write-Host "FAIL  A-section threw: $_" -ForegroundColor Red
     $script:failures++
