@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# POSIX entry point — exec the PowerShell dispatcher with full arg passthrough.
+# Works on Linux and macOS when pwsh is on PATH.
+set -eu
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec pwsh -NoProfile -File "$dir/scripts/baton.ps1" "$@"

@@ -1,0 +1,11 @@
+# The POSIX entry point is executed by /bin/sh. If a Windows checkout CRLF-converts
+# it, Linux and macOS fail with "bad interpreter: /usr/bin/env sh^M" — which would
+# silently defeat the cross-platform entry point it exists to provide. Pin LF.
+baton          text eol=lf
+*.sh           text eol=lf
+
+# Windows-only entry points are fine either way; pin CRLF so cmd.exe is never
+# handed a file it has to guess about.
+*.cmd          text eol=crlf
+
+# PowerShell 7 reads both, so leave .ps1 to the platform default.
