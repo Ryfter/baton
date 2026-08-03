@@ -14,6 +14,7 @@
 . "$PSScriptRoot/usage-lib.ps1"   # Sprint 2: Get-WorkerState/Get-ConserveMode for route-around
 . "$PSScriptRoot/saturation-lib.ps1"   # d-wa-5 active saturation driver
 . "$PSScriptRoot/effective-cost-lib.ps1"   # d060 learned-cost re-rank
+. "$PSScriptRoot/window-budget-lib.ps1"   # window token pressure (5h/7d), gated by BATON_WINDOW_PRESSURE
 
 $script:DefaultToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml')
 
@@ -223,6 +224,19 @@ function Select-Capability {
         }
     }
 
+    # 3b2. Window token pressure (opt-in via BATON_WINDOW_PRESSURE=on). Soft/hard
+    #     de-rank under-headroom models inside the same saturation ranking seam —
+    #     never drops a candidate (conserving budget must not break the golden path).
+    #     Default off so shipping this is a no-op on ranking until explicitly enabled.
+    if ((Get-Command Apply-WindowPressureToCandidates -ErrorAction SilentlyContinue) -and
+        (Get-Command Test-WindowPressureEnabled -ErrorAction SilentlyContinue) -and
+        (Test-WindowPressureEnabled)) {
+        # Assign directly (unary-comma return); @() would re-nest the candidate array.
+        $filtered = Apply-WindowPressureToCandidates -Candidates @($filtered) `
+            -Capability $Capability -JournalPath $JournalPath
+        if ($null -eq $filtered) { $filtered = @() }
+    }
+
     # 3c. Learned-cost re-rank (d060) — opt-in, economy-only, confidence-gated.
     $learnedOn = (Get-LearnedRoutingEnabled -FleetPath $FleetPath)
     $board = @()
@@ -245,10 +259,34 @@ function Select-Capability {
 
     # 4. Rank. economy: cost tier asc, quality desc ("smallest that clears the bar").
     #    champion: quality desc, cost tier asc tiebreak ("just the best" — BoB slot).
+    #    Window pressure (when gated on) folds into the learned-adjust term so soft/hard
+    #    de-rank without ever removing a candidate. When the gate is off, the sort keys
+    #    are byte-identical to pre-window-budget ranking.
+    $wpOn = (Get-Command Test-WindowPressureEnabled -ErrorAction SilentlyContinue) -and (Test-WindowPressureEnabled)
     if ($SelectionMode -eq 'champion') {
         $ranked = $filtered |
             Select-Object *, @{n='score'; e={ -$_.quality + ((Get-CostTierRank $_.cost_tier) * 0.001) }} |
             Sort-Object @{e={ -$_.quality }}, @{e={ Get-CostTierRank $_.cost_tier }}, @{e='name'}
+    } elseif ($wpOn) {
+        $ranked = $filtered |
+            Select-Object *, @{n='score'; e={
+                $wpAdj = 0.0
+                if ($null -ne $_.PSObject.Properties['window_pressure_adjust']) {
+                    $wpAdj = [double]$_.window_pressure_adjust
+                }
+                (Get-LearnedTierRank $_.cost_tier ([bool]$_.saturate) ([double]$_.learned_adjust + $wpAdj)) - ($_.quality * 0.001)
+            }} |
+            Sort-Object `
+                @{e={
+                    $wpAdj = 0.0
+                    if ($null -ne $_.PSObject.Properties['window_pressure_adjust']) {
+                        $wpAdj = [double]$_.window_pressure_adjust
+                    }
+                    Get-LearnedTierRank $_.cost_tier ([bool]$_.saturate) ([double]$_.learned_adjust + $wpAdj)
+                }}, `
+                @{e={ if ([bool]$_.saturate) { [double]$_.sat_util } else { 0 } }}, `
+                @{e={ -$_.quality }}, `
+                @{e='name'}
     } else {
         $ranked = $filtered |
             Select-Object *, @{n='score'; e={ (Get-LearnedTierRank $_.cost_tier ([bool]$_.saturate) ([double]$_.learned_adjust)) - ($_.quality * 0.001) }} |
