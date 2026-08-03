@@ -42,7 +42,30 @@ Assert "first line timestamp is ISO-8601 with offset" ($otelLines[0] -match '^\d
 # Catalog computes: 3214/1e6 * 3 + 892/1e6 * 15 = 0.009642 + 0.01338 = 0.023022 -> rounds to 0.0230
 # The fixture explicitly carries 0.0231, so this distinguishes "read native" from "compute from table".
 Assert "first line uses native cost_usd (`$0.0231)" ($otelLines[0] -match '\| \$0\.0231 \|')
-Assert "first line event-type is api_request (claude_code. prefix stripped)" ($otelLines[0] -match '\| api_request\s*$')
+# api_request is no longer last on the line — #171 appends the tok: field after it.
+Assert "first line event-type is api_request (claude_code. prefix stripped)" ($otelLines[0] -match '\| api_request(\s*\||\s*$)')
+
+# --- #171: the line must FOLD into the window budget ---
+# The budget's Parse-ModelRoutingLine treats a line without tok: as "not
+# consumption" and silently skips it, so every Claude Code request used to be
+# journalled and then dropped — the one provider the budget exists to protect was
+# the one it could not see. These assert the seam BETWEEN the two files, which is
+# where the gap lived: each file was individually correct and self-consistent.
+Assert "first line carries tok:N(exact) for the budget fold" ($otelLines[0] -match '\| tok:\d+\(exact\)')
+Assert "tok total equals in + out (3214 + 892 = 4106)" ($otelLines[0] -match '\| tok:4106\(exact\)')
+Assert "in:/out: detail is preserved alongside tok:" ($otelLines[0] -match 'in:3214 out:892')
+
+. (Join-Path $here 'window-budget-lib.ps1')
+$foldedRow = Parse-ModelRoutingLine -Line $otelLines[0]
+Assert "the budget fold actually parses the emitted otel line" ($null -ne $foldedRow)
+Assert "folded row is attributed to source=otel" ($null -ne $foldedRow -and [string]$foldedRow.source -eq 'otel')
+Assert "folded row carries the full token total" ($null -ne $foldedRow -and [int]$foldedRow.tokens -eq 4106)
+
+# Regression guard: the pre-fix shape (no tok: field) must still be REJECTED, so
+# this test fails if anyone drops the field again.
+$preFixShape = ($otelLines[0] -replace '\s*\|\s*tok:\d+\(exact\)\s*$', '')
+Assert "a line WITHOUT tok: is still dropped by the fold (guards the regression)" (
+    $null -eq (Parse-ModelRoutingLine -Line $preFixShape))
 
 # Idempotence: re-run should not duplicate
 & pwsh -NoProfile -File $parser `
