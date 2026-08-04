@@ -1,7 +1,7 @@
 # Run-branch durability design
 
 **Date:** 2026-08-03  
-**Status:** approved direction; written-spec review pending  
+**Status:** approved; implementation planned  
 **Issue:** [#157](https://github.com/Ryfter/baton/issues/157)
 
 ## Problem
