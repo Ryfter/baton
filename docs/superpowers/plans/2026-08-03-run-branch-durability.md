@@ -8,6 +8,16 @@
 
 **Tech Stack:** PowerShell 7, Git CLI, Baton's existing hashtable/JSON result contracts, temporary real Git repositories and bare remotes for tests.
 
+## Execution status (2026-08-03)
+
+- Tasks 1 and 2 implemented and committed on `feat/run-branch-durability`.
+- Task 3 operator documentation and targeted verification completed.
+- Python verification: `166 passed`.
+- PowerShell verification: 82 of 83 repository suites pass. `test-heartbeat.ps1`
+  has three pre-existing bare-clock assertions that fail identically on `master`.
+- Grimdex d107 is pending: its checkout contains an unrelated local edit, and the
+  environment approval quota blocked creation of an isolated Grimdex worktree.
+
 ## Global Constraints
 
 - Pre-labor statuses `plan-rejected`, `plan-gate-degraded`, `plan-invalid`, and `plan-failed` retain their current local worktree/branch discard behavior and never publish.
@@ -437,4 +447,3 @@ git commit -m "docs: document durable run branch contract"
 - [ ] **Step 7: Request adversarial code review before any PR or merge**
 
 Use the `superpowers:requesting-code-review` skill against `master...HEAD`. Fix every verified blocker test-first, re-run affected and full verification, and keep merge as a separate explicit human gate.
-

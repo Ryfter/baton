@@ -51,7 +51,10 @@ completion. Stay thin — coordinate, narrate, and let the engine and the fleet 
    - `interrupted-destructive` → the next task is `reversible:false` (touches master,
      force-push, out-of-worktree delete, or external publish). Describe exactly what it
      would do and ASK for explicit approval before resuming.
-   - `failed` → a task could not complete; show the failing task and the event log.
+   - `failed` → a task could not complete; show the failing task and the event log. If
+     `failure_category` is `archive-failed`, labor finished but Baton could not make the
+     retained branch durable: show `work_status`, the archive reason, and the preserved
+     local `worktree` recovery path.
    - `rejected` / `needs-polish` → the authoritative execute acceptance panel found
      blocking work. Show `## Acceptance`; retain the branch for repair/review. The run is
      not successful, and Baton never auto-merges or rolls back.
@@ -90,10 +93,13 @@ completion. Stay thin — coordinate, narrate, and let the engine and the fleet 
   agy, claude-cli — `agentic`/platform-eligible providers) edit a throwaway worktree
   at `<repo-parent>/.baton-worktrees/<run-id>` on branch `baton/run-<run-id>`; the
   cumulative diff is written to `<run-dir>/changes.diff` and reviewed by the named
-  fail-loud acceptance panel unless `--no-gate` is supplied. The
-  branch is ALWAYS left for the user to review and merge — Baton never merges. The one
-  exception is a `plan-rejected` or `plan-gate-degraded` run under `--execute`: the worktree/branch are created
-  before the gate but never touched, so on rejection they are discarded and the result's
+  fail-loud acceptance panel unless `--no-gate` is supplied. After any post-labor
+  terminal result, Baton commits unreviewed work to the `baton/run-*` branch and pushes
+  that exact branch to `origin`; Baton still never merges. If commit or push fails, the
+  run returns `status: failed` with `failure_category: archive-failed`, preserves the
+  original `work_status`, and leaves the local worktree/branch in place for recovery.
+  Pre-labor `plan-rejected`, `plan-gate-degraded`, `plan-invalid`, and `plan-failed`
+  halts continue to discard their untouched worktree and branch, and the result's
   `branch`/`worktree` fields come back null (nothing to merge, nothing advertised).
 - Execute enables Plan Gate by default; `--no-plan-gate` restores the legacy walk. Two
   extra artifacts land in the run dir: `plan-review.json` (the
