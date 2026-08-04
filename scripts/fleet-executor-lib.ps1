@@ -398,6 +398,104 @@ function Remove-RunWorktree {
     if ($LASTEXITCODE -ne 0) { throw "execute: git worktree remove failed: $(@($out) -join ' ')" }
 }
 
+function Publish-RunBranch {
+    <# Commit the staged run tree and publish the exact run branch to origin.
+       This is the terminal durability step for retained execute work (#157). #>
+    param(
+        [Parameter(Mandatory)][string]$Worktree,
+        [Parameter(Mandatory)][string]$RepoPath,
+        [Parameter(Mandatory)][string]$Branch,
+        [Parameter(Mandatory)][string]$BaseSha,
+        [Parameter(Mandatory)][string]$RunDir
+    )
+
+    $remoteRef = "refs/heads/$Branch"
+    $archive = [ordered]@{
+        schema = 1
+        status = 'failed'
+        branch = $Branch
+        base_sha = $BaseSha
+        commit_sha = ''
+        committed = $false
+        pushed = $false
+        remote = 'origin'
+        remote_ref = $remoteRef
+        reason = ''
+    }
+
+    try {
+        if (-not $Branch.StartsWith('baton/run-', [StringComparison]::Ordinal) -or
+            $Branch.Length -le 'baton/run-'.Length) {
+            throw "expected branch must match baton/run-*: $Branch"
+        }
+        $currentBranch = ([string](& git -C $Worktree branch --show-current 2>$null)).Trim()
+        if ($LASTEXITCODE -ne 0 -or $currentBranch -ne $Branch) {
+            throw "expected branch $Branch is not checked out (found $currentBranch)"
+        }
+
+        & git -C $Worktree add -A 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'git add failed while archiving run branch' }
+
+        & git -C $Worktree diff --cached --quiet HEAD 2>$null
+        $diffExit = $LASTEXITCODE
+        if ($diffExit -eq 1) {
+            $runId = $Branch.Substring('baton/run-'.Length)
+            $message = "chore(baton-run): archive unreviewed run $runId"
+            $out = & git -C $Worktree commit -q -m $message 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "git commit failed while archiving run branch: $(@($out) -join ' ')" }
+            $archive.committed = $true
+        } elseif ($diffExit -ne 0) {
+            throw 'git diff failed while archiving run branch'
+        }
+
+        $localTip = ([string](& git -C $Worktree rev-parse HEAD 2>$null)).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($localTip)) {
+            throw 'could not resolve archived run branch tip'
+        }
+        $archive.commit_sha = $localTip
+
+        if ($localTip -eq $BaseSha) {
+            $archive.status = 'skipped-no-changes'
+            $archive.reason = 'no tree changes or commits differ from the base'
+        } else {
+            $out = & git -C $Worktree push origin "HEAD:$remoteRef" 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "git push to origin failed while archiving run branch: $(@($out) -join ' ')" }
+
+            $remoteLine = [string](& git -C $RepoPath ls-remote --heads origin $remoteRef 2>$null)
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($remoteLine)) {
+                throw 'could not verify archived run branch on origin'
+            }
+            $remoteTip = ($remoteLine.Trim() -split '\s+')[0]
+            if ($remoteTip -ne $localTip) { throw 'archived run branch tip does not match origin' }
+
+            $archive.status = 'pushed'
+            $archive.pushed = $true
+            $archive.reason = 'run branch archived to origin'
+        }
+    } catch {
+        $archive.status = 'failed'
+        $archive.reason = $_.Exception.Message
+    }
+
+    New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
+    $archive | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $RunDir 'archive.json') -Encoding utf8NoBOM
+    return $archive
+}
+
+function Format-RunArchiveSection {
+    param(
+        [Parameter(Mandatory)]$Archive,
+        [Parameter(Mandatory)][string]$Worktree
+    )
+    if ($Archive.status -eq 'pushed') {
+        return "## Durability`n`nArchived unreviewed run branch ``$($Archive.branch)`` at ``$($Archive.commit_sha)`` to ``origin``. Baton did not merge it."
+    }
+    if ($Archive.status -eq 'skipped-no-changes') {
+        return '## Durability' + "`n`nNo tree changes or commits differed from the base; no archive commit or push was needed."
+    }
+    return "## Durability`n`nARCHIVE FAILED: $($Archive.reason)`n`nLocal recovery remains at ``$Worktree`` on ``$($Archive.branch)``."
+}
+
 function Resolve-TaskDepthPolicy {
     <# Pure d086 PR-B policy: resolve planner/operator stakes into a generic
        provider depth, router objective, and effective per-task cost ceiling. #>
