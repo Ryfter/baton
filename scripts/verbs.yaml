@@ -62,6 +62,16 @@ verbs:
     class: engine
     runner: fleet-project.ps1
     json: true
+  - name: session
+    summary: Portable controller lifecycle (start, refresh, stop) for any agent.
+    class: engine
+    runner: baton-session.ps1
+    json: true
+    flag_aliases:
+      --agent: -Agent
+      --session-id: -SessionId
+      --cwd: -Cwd
+      --kind: -Kind
   - name: heartbeat
     summary: Pin the usage window and fold free housekeeping into the same tick.
     class: engine
