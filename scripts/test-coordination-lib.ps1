@@ -467,5 +467,24 @@ finally {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+
+# ---- capacity_unknown must be ACTIONABLE, not just correct ----
+# This is the denial a fresh box hits on its very first local dispatch, and it is
+# not a fault — it is an unconfigured host. A bare code here reads as a broken
+# feature and sends the operator to the source to find out what to do.
+$tmpRem = Join-Path ([System.IO.Path]::GetTempPath()) ("coord-remedy-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $tmpRem | Out-Null
+$remOut = Request-ResourceClaim -HostName 'host-a' -Stack 'stack-a' -LoadProfile 'p' `
+    -VramGb 8 -Class 'c' -RunId 'r' -Project 'proj' -BatonHome $tmpRem
+Check 'REM1 unconfigured host still denies' ($remOut.granted -eq $false)
+Check 'REM2 reason stays the bare machine code' ($remOut.reason -eq 'capacity_unknown')
+Check 'REM3 denial carries a remedy' (-not [string]::IsNullOrWhiteSpace([string]$remOut.remedy))
+Check 'REM4 remedy names the real config path on this box' (
+    [string]$remOut.remedy -like "*$(Join-Path $tmpRem 'coordination')*")
+Check 'REM5 remedy names the vram_gb key to set' ([string]$remOut.remedy -like '*vram_gb*')
+Check 'REM6 remedy names the host being denied' ([string]$remOut.remedy -like '*host-a*')
+Check 'REM7 remedy states that unknown denies (never guessed)' ([string]$remOut.remedy -like '*never guessed*')
+
 if ($script:fail -gt 0) { Write-Host "$script:fail CHECK(S) FAILED"; exit 1 }
 Write-Host 'ALL CHECKS PASS'
+
