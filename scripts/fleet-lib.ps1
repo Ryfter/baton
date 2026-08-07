@@ -52,7 +52,8 @@ function ConvertTo-FleetUsagePolicy {
         [Parameter(Mandatory)][string]$ProviderName,
         [Parameter(Mandatory)][hashtable]$RawPolicy
     )
-    $allowed = @('probe', 'soft_cap_5h', 'soft_cap_weekly', 'monthly_allowance')
+    $allowed = @('probe', 'probe_transport', 'probe_provider', 'probe_command', 'scope_id',
+                 'soft_cap_5h', 'soft_cap_weekly', 'monthly_allowance')
     foreach ($key in $RawPolicy.Keys) {
         if ($key -notin $allowed) {
             throw "Provider '$ProviderName' usage_policy has unknown field '$key'."
@@ -69,6 +70,35 @@ function ConvertTo-FleetUsagePolicy {
             throw "Provider '$ProviderName' usage_policy.probe must be true or false."
         }
         $policy.probe = [bool]$RawPolicy.probe
+    }
+    # #173: the transport NAME this row is probed with. Only shape is validated here;
+    # an unregistered name is resolved to "no probe" at dispatch time (fail closed)
+    # rather than failing the whole config parse. Absent => back-compat inference.
+    if ($RawPolicy.ContainsKey('probe_transport')) {
+        $transportName = [string]$RawPolicy.probe_transport
+        if ([string]::IsNullOrWhiteSpace($transportName)) {
+            throw "Provider '$ProviderName' usage_policy.probe_transport must be a non-empty transport name."
+        }
+        $policy.probe_transport = $transportName.Trim()
+    }
+    # #173: identity + binary + sub-quota binding for transports that need them.
+    #  probe_provider — WHICH account the probe tool should be asked about. Absent
+    #    means the transport does not run; nothing is ever inferred from the row name.
+    #  probe_command  — optional explicit path to the probe binary (else PATH, else
+    #    the platform default). Kept out of the repo; it lives in box-private config.
+    #  scope_id       — optional binding to a model-scoped sub-quota window. The set
+    #    of windows is plan-dependent, so this is a free-form id, never an enum; a
+    #    bound id missing from a response falls back to the plan-wide window.
+    foreach ($textField in @('probe_provider', 'probe_command', 'scope_id')) {
+        if (-not $RawPolicy.ContainsKey($textField)) { continue }
+        $textValue = [string]$RawPolicy[$textField]
+        if ([string]::IsNullOrWhiteSpace($textValue)) {
+            throw "Provider '$ProviderName' usage_policy.$textField must be a non-empty string."
+        }
+        $policy[$textField] = $textValue.Trim()
+    }
+    if ($policy.ContainsKey('probe_provider') -and $policy.probe_provider -notmatch '^[A-Za-z0-9._-]{1,64}$') {
+        throw "Provider '$ProviderName' usage_policy.probe_provider must be a short token (letters, digits, dot, dash, underscore)."
     }
     foreach ($capField in @('soft_cap_5h', 'soft_cap_weekly')) {
         if (-not $RawPolicy.ContainsKey($capField)) { continue }
