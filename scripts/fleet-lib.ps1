@@ -1000,7 +1000,16 @@ function Invoke-Fleet {
             $overflowFloor = $declaredFloor
         }
     }
-    $usageObservation = if ($NoUsageJournal) {
+    # A prepaid cap refusal is BATON's decision, not a provider failure, so it is
+    # never fed to the reactive classifier. Left in, the guard's own wording
+    # ("...prepaid credit, reached soft_cap_credit=85...") sits one comma away
+    # from the `credits?\s+exhausted` quota pattern — a rewording would silently
+    # journal a phantom quota_exhausted event and lock out a provider that is
+    # working fine. The provider never even saw the request. (prompt_too_large
+    # keeps classifying: its overflow verdict is deliberate and correct.)
+    $usageObservation = if ([string]$result.skipped -eq 'prepaid_cap_reached') {
+        [ordered]@{ event = $null; classification = 'none'; reason = 'baton-side prepaid cap refusal' }
+    } elseif ($NoUsageJournal) {
         Get-UsageFailureObservation -ExitCode ([int]$result.exit_code) `
             -Stdout ([string]$result.stdout) -Stderr ([string]$result.stderr) `
             -PromptBytes $promptBytes -OverflowFloorBytes $overflowFloor

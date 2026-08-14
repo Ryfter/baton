@@ -1020,6 +1020,16 @@ providers:
         Check 'E5b the refusal is journalled as limited + held preflight' (
             @($e5Usage | Where-Object { [string]$_.event -eq 'limited' }).Count -ge 1 -and
             @($e5Usage | Where-Object { [string]$_.event -eq 'preflight' -and [string]$_.outcome -eq 'held' }).Count -ge 1)
+        # Baton's own refusal must not be re-read as a PROVIDER quota failure --
+        # that would lock out a provider that is working fine and never saw the
+        # request. The guard's wording sits one comma from the quota pattern.
+        Check 'E5c a cap refusal is never classified as a provider failure' (
+            [string]$blockedCall.usage_observation.classification -eq 'none' -and
+            $null -eq $blockedCall.usage_observation.event -and
+            @($e5Usage | Where-Object {
+                [string]$_.classification -eq 'quota_exhausted' -or
+                [string]$_.classification -eq 'rate_limit_burst' -or
+                [string]$_.classification -eq 'context_overflow' }).Count -eq 0)
 
         # Fail open: an unknown balance dispatches rather than wedging the fleet.
         # Rotating the key invalidates the seeded row by identity, so there is no
