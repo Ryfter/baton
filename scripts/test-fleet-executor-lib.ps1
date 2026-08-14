@@ -317,6 +317,113 @@ providers:
     $branches = [string](& git -C $repo branch --list 'baton/run-go-t1')
     Check 'R2 run branch KEPT after removal' ($branches -match 'baton/run-go-t1')
 
+    # ---- Publish-RunBranch ----
+    # Break caught: a retained changed branch stays zero commits ahead or absent
+    # from the remote, so the supposedly-retained work is local-disk-only (#157).
+    $archiveRoot = Join-Path $tmpRoot 'archive-success-case'
+    $archiveRepo = New-TempRepo -Root $archiveRoot
+    $archiveRemote = Join-Path $archiveRoot 'origin.git'
+    $archiveRunDir = Join-Path $archiveRoot 'run'
+    New-Item -ItemType Directory -Force -Path $archiveRunDir | Out-Null
+    & git init --bare -q $archiveRemote
+    & git -C $archiveRepo remote add origin $archiveRemote
+    $archiveBase = ([string](& git -C $archiveRepo rev-parse HEAD)).Trim()
+    $archiveWt = New-RunWorktree -RepoPath $archiveRepo -RunId 'archive-success'
+    Set-Content -LiteralPath (Join-Path $archiveWt.worktree 'new.txt') -Value 'retained' -Encoding utf8NoBOM
+
+    $archive = $null
+    $archiveError = ''
+    try {
+        $archive = Publish-RunBranch -Worktree $archiveWt.worktree -RepoPath $archiveRepo `
+            -Branch $archiveWt.branch -BaseSha $archiveBase -RunDir $archiveRunDir
+    } catch {
+        $archiveError = $_.Exception.Message
+    }
+    if (-not [string]::IsNullOrWhiteSpace($archiveError)) {
+        Write-Host "INFO: AR1 archive error: $archiveError"
+    }
+    $localTip = ([string](& git -C $archiveWt.worktree rev-parse HEAD)).Trim()
+    $remoteTip = [string](& git --git-dir $archiveRemote rev-parse "refs/heads/$($archiveWt.branch)" 2>$null)
+    if (-not [string]::IsNullOrWhiteSpace($archiveError)) {
+        Write-Host "INFO: AR1 local tip=$localTip remote tip=$($remoteTip.Trim())"
+    }
+    Check 'AR1 changed retained branch is committed and pushed' (
+        [string]::IsNullOrWhiteSpace($archiveError) -and
+        $null -ne $archive -and $archive.status -eq 'pushed' -and
+        $archive.committed -eq $true -and $archive.pushed -eq $true -and
+        $localTip -ne $archiveBase -and $remoteTip.Trim() -eq $localTip)
+
+    $existingRoot = Join-Path $tmpRoot 'archive-existing-commit'
+    $existingRepo = New-TempRepo -Root $existingRoot
+    $existingRemote = Join-Path $existingRoot 'origin.git'
+    $existingRunDir = Join-Path $existingRoot 'run'
+    & git init --bare -q $existingRemote
+    & git -C $existingRepo remote add origin $existingRemote
+    $existingBase = ([string](& git -C $existingRepo rev-parse HEAD)).Trim()
+    $existingWt = New-RunWorktree -RepoPath $existingRepo -RunId 'existing-commit'
+    Set-Content -LiteralPath (Join-Path $existingWt.worktree 'worker.txt') -Value 'worker commit' -Encoding utf8NoBOM
+    & git -C $existingWt.worktree add -A
+    & git -C $existingWt.worktree commit -q -m 'worker commit'
+    $beforeCount = [int](& git -C $existingWt.worktree rev-list --count HEAD)
+    $archiveExisting = Publish-RunBranch -Worktree $existingWt.worktree -RepoPath $existingRepo `
+        -Branch $existingWt.branch -BaseSha $existingBase -RunDir $existingRunDir
+    $afterCount = [int](& git -C $existingWt.worktree rev-list --count HEAD)
+    Check 'AR4 existing worker commit is pushed without archive commit' (
+        $archiveExisting.status -eq 'pushed' -and
+        $archiveExisting.committed -eq $false -and
+        $afterCount -eq $beforeCount)
+
+    $emptyRoot = Join-Path $tmpRoot 'archive-empty'
+    $emptyRepo = New-TempRepo -Root $emptyRoot
+    $emptyRemote = Join-Path $emptyRoot 'origin.git'
+    $emptyRunDir = Join-Path $emptyRoot 'run'
+    & git init --bare -q $emptyRemote
+    & git -C $emptyRepo remote add origin $emptyRemote
+    $emptyBase = ([string](& git -C $emptyRepo rev-parse HEAD)).Trim()
+    $emptyWt = New-RunWorktree -RepoPath $emptyRepo -RunId 'empty'
+    $emptyBefore = [int](& git -C $emptyWt.worktree rev-list --count HEAD)
+    $archiveEmpty = Publish-RunBranch -Worktree $emptyWt.worktree -RepoPath $emptyRepo `
+        -Branch $emptyWt.branch -BaseSha $emptyBase -RunDir $emptyRunDir
+    $emptyAfter = [int](& git -C $emptyWt.worktree rev-list --count HEAD)
+    $emptyRemoteRef = [string](& git --git-dir $emptyRemote branch --list $emptyWt.branch)
+    Check 'AR5 unchanged run skips without fake commit or push' (
+        $archiveEmpty.status -eq 'skipped-no-changes' -and
+        $archiveEmpty.committed -eq $false -and
+        $archiveEmpty.pushed -eq $false -and
+        $emptyAfter -eq $emptyBefore -and
+        [string]::IsNullOrWhiteSpace($emptyRemoteRef))
+
+    $brokenRoot = Join-Path $tmpRoot 'archive-broken-origin'
+    $brokenRepo = New-TempRepo -Root $brokenRoot
+    $brokenRunDir = Join-Path $brokenRoot 'run'
+    & git -C $brokenRepo remote add origin (Join-Path $brokenRoot 'missing-origin.git')
+    $brokenBase = ([string](& git -C $brokenRepo rev-parse HEAD)).Trim()
+    $brokenWt = New-RunWorktree -RepoPath $brokenRepo -RunId 'broken-origin'
+    Set-Content -LiteralPath (Join-Path $brokenWt.worktree 'recover-me.txt') -Value 'recover me' -Encoding utf8NoBOM
+    $archiveBroken = Publish-RunBranch -Worktree $brokenWt.worktree -RepoPath $brokenRepo `
+        -Branch $brokenWt.branch -BaseSha $brokenBase -RunDir $brokenRunDir
+    Check 'AR6 push failure is structured and preserves local recovery state' (
+        $archiveBroken.status -eq 'failed' -and
+        $archiveBroken.reason -match 'origin|push' -and
+        (Test-Path (Join-Path $brokenWt.worktree 'recover-me.txt')))
+
+    $wrongRunDir = Join-Path $brokenRoot 'wrong-run'
+    $archiveWrong = Publish-RunBranch -Worktree $brokenWt.worktree -RepoPath $brokenRepo `
+        -Branch 'main' -BaseSha $brokenBase -RunDir $wrongRunDir
+    Check 'AR7 wrong branch is refused before push' (
+        $archiveWrong.status -eq 'failed' -and
+        $archiveWrong.reason -match 'expected branch|baton/run-')
+
+    $artifact = Get-Content -Raw (Join-Path $brokenRunDir 'archive.json') | ConvertFrom-Json
+    Check 'AR8 archive artifact has stable schema and fields' (
+        $artifact.schema -eq 1 -and $artifact.status -eq 'failed' -and
+        $null -ne $artifact.committed -and $null -ne $artifact.pushed -and
+        $artifact.remote -eq 'origin')
+    Check 'AR9 archive report formatter distinguishes success, skip, and failure' (
+        (Format-RunArchiveSection -Archive $archive -Worktree $archiveWt.worktree) -match 'Archived unreviewed' -and
+        (Format-RunArchiveSection -Archive $archiveEmpty -Worktree $emptyWt.worktree) -match 'no archive commit or push' -and
+        (Format-RunArchiveSection -Archive $archiveBroken -Worktree $brokenWt.worktree) -match 'ARCHIVE FAILED')
+
     # ---- New-AgenticSpawner (hermetic: fake dispatcher, temp fleet.yaml, temp BATON_HOME) ----
     $savedBatonHome = $env:BATON_HOME
     $env:BATON_HOME = Join-Path $tmpRoot 'baton-home'

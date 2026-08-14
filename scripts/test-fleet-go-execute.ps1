@@ -30,6 +30,10 @@ try {
         ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $verifyDir 'verification.json') -Encoding utf8NoBOM
     & git -C $repo add -A 2>$null | Out-Null
     & git -C $repo commit -q -m 'init' 2>$null | Out-Null
+    $origin = Join-Path $tmpRoot 'origin.git'
+    & git init --bare -q $origin
+    & git -C $repo remote add origin $origin
+    & git -C $repo push -q -u origin HEAD
 
     # temp fleet with one fake agentic provider
     Set-Content -LiteralPath (Join-Path $env:BATON_HOME 'fleet.yaml') -Encoding utf8NoBOM -Value @'
@@ -93,6 +97,38 @@ function Invoke-TestExecDispatcher {
     Check 'E8 worktree has the instrument edit' (Test-Path (Join-Path ([string]$res.worktree) 'feature.txt'))
     $branches = [string](& git -C $repo branch --list 'baton/run-*')
     Check 'E9 run branch exists in the target repo' ($branches -match 'baton/run-')
+    $localRunTip = ([string](& git -C ([string]$res.worktree) rev-parse HEAD)).Trim()
+    $remoteRunTip = ([string](& git --git-dir $origin rev-parse "refs/heads/$($res.branch)" 2>$null)).Trim()
+    $ahead = if ($res.archive) { [int](& git -C $repo rev-list --count "$($res.archive.base_sha)..$($res.branch)") } else { 0 }
+    Check 'E9o retained run is committed ahead of base' ($ahead -ge 1 -and $res.archive.committed -eq $true)
+    Check 'E9p retained run remote tip matches local tip' (
+        $res.archive.status -eq 'pushed' -and $remoteRunTip -eq $localRunTip)
+    Check 'E9q archive artifact and report evidence exist' (
+        (Test-Path (Join-Path $res.run_dir 'archive.json')) -and
+        ((Get-Content -Raw (Join-Path $res.run_dir 'report.md')) -match '## Durability'))
+
+    $goodOrigin = [string](& git -C $repo remote get-url origin)
+    $brokenOrigin = Join-Path $tmpRoot 'missing-origin.git'
+    $archiveFailErr = Join-Path $tmpRoot 'archive-fail.err'
+    & git -C $repo remote set-url origin $brokenOrigin
+    try {
+        $rawArchiveFail = & pwsh -NoProfile -File "$PSScriptRoot/fleet-go.ps1" `
+            -Goal 'g' -Execute -RepoPath $repo -Json 2>$archiveFailErr | Out-String
+        $archiveFailExit = $LASTEXITCODE
+        $archiveFail = $rawArchiveFail | ConvertFrom-Json
+    } finally {
+        & git -C $repo remote set-url origin $goodOrigin
+    }
+    $archiveFailStderr = Get-Content -Raw -LiteralPath $archiveFailErr
+    Check 'E31 archive failure is exit-1 loud with original work status' (
+        $archiveFailExit -eq 1 -and $archiveFail.status -eq 'failed' -and
+        $archiveFail.failure_category -eq 'archive-failed' -and
+        $archiveFail.work_status -eq 'completed' -and
+        $archiveFailStderr -match 'run work exists locally but archive failed')
+    Check 'E32 archive failure preserves recoverable local state' (
+        $archiveFail.archive.status -eq 'failed' -and
+        (Test-Path ([string]$archiveFail.worktree)) -and
+        (& git -C $repo branch --list ([string]$archiveFail.branch)))
     Check 'E9a plain execute defaulted Plan Gate on' (Test-Path (Join-Path $res.run_dir 'plan-review.json'))
     Check 'E9b plain execute defaulted verification on' (Test-Path (Join-Path $res.run_dir 'tasks/t1/verification.json'))
     # #101: plan with ALL stakes present → no missing-stakes policy event (happy path above).

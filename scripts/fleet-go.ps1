@@ -293,11 +293,26 @@ if ($Execute -and $wt) {
         $result.worktree = $null
         $result.files_changed = 0
     } else {
+        $archive = Publish-RunBranch -Worktree $wt.worktree -RepoPath $repo `
+            -Branch $wt.branch -BaseSha $wt.base_sha -RunDir $runDir
+        $result.archive = $archive
+        $durabilitySection = Format-RunArchiveSection -Archive $archive -Worktree $wt.worktree
+        $result.report = ([string]$result.report).TrimEnd() + "`n`n" + $durabilitySection
+        Set-Content -LiteralPath (Join-Path $runDir 'report.md') -Value $result.report -Encoding utf8NoBOM
+        if ($archive.status -eq 'failed') {
+            $result.work_status = [string]$result.status
+            $result.status = 'failed'
+            $result.failure_category = 'archive-failed'
+        }
         $result.branch = $wt.branch
         $result.worktree = $wt.worktree
         $changed = @(& git -C $wt.worktree diff --name-only $wt.base_sha 2>$null)
         $result.files_changed = @($changed | Where-Object { $_ }).Count
     }
+}
+
+if ($Execute -and $result.failure_category -eq 'archive-failed') {
+    [Console]::Error.WriteLine("go: run work exists locally but archive failed: $($result.archive.reason)")
 }
 
 if ($Json) {
@@ -307,7 +322,11 @@ if ($Json) {
     Write-Host ""
     Write-Host "Status: $($result.status)  ·  spend $('{0:0.00}' -f $result.spend)  ·  $($result.run_dir)"
     if ($Execute -and $wt) {
-        Write-Host "$($result.files_changed) file(s) changed on branch $($result.branch) (worktree: $($result.worktree)) — review and merge when ready; Baton never merges for you."
+        if ($result.archive.status -eq 'failed') {
+            Write-Host "$($result.files_changed) file(s) remain locally on branch $($result.branch) (worktree: $($result.worktree)); archive failed, so recover from this worktree."
+        } else {
+            Write-Host "$($result.files_changed) file(s) changed on branch $($result.branch) (worktree: $($result.worktree)); archive: $($result.archive.status) — review and merge when ready; Baton never merges for you."
+        }
     }
     if ($result.status -like 'interrupted-*') {
         Write-Host "Paused at $($result.pending_task_id). Review, then resume to continue past this guard."

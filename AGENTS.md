@@ -29,8 +29,9 @@ any agent), reach the same engine directly:
 
 Active-session detection and resume pointers use a neutral marker contract
 under `$BATON_HOME/sessions/` (`{agent,session_id,cwd,started_at}`). The
-Claude adapter (SessionStart/SessionEnd hooks) ships now; a Codex lifecycle
-adapter writing the same marker shape is the documented follow-on.
+Claude adapter (SessionStart/SessionEnd hooks) and the portable `baton session`
+adapter ship now. Codex, Grok, or another controller can participate with:
+`baton session start|refresh|stop -Agent <label> -SessionId <id> -Cwd <path>`.
 
 Fleet health (model-agnostic):
 - `fleet doctor --live` — harness-neutral way to verify a box's roster actually answers (canary round-trip per enabled provider), not just that the binaries are installed.

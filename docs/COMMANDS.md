@@ -298,6 +298,26 @@ specific model's answer, not a routed or ensembled one.
 
 ---
 
+# Portable controller sessions
+
+### `baton session start|refresh|stop`
+
+The session command is the harness-neutral replacement for Claude-only lifecycle
+hooks. Use it from Codex, Grok, a local model shell, or a broker so the project
+registry sees the same active marker and resume pointer regardless of controller:
+
+```powershell
+baton session start -Agent codex -SessionId codex-123 -Cwd D:\Dev\MyProject
+baton session refresh -Agent codex -SessionId codex-123 -Cwd D:\Dev\MyProject
+baton session stop -Agent codex -SessionId codex-123 -Cwd D:\Dev\MyProject
+```
+
+Each call emits compact JSON. `start` writes the marker, `refresh` keeps a
+long-lived session alive, and `stop` clears the marker plus records the project's
+last controller/session as its resume pointer.
+
+---
+
 # Routing & capability — pick the right worker
 
 ### /baton:route

@@ -174,7 +174,7 @@ function Read-Fleet {
         $indent = ($rawLine -replace '\S.*$', '').Length
 
         # Supported child-block opener (no value on the line).
-        $blockMatch = [regex]::Match($rawLine, '^(\s+)(env|usage_policy):\s*$')
+        $blockMatch = [regex]::Match($rawLine, '^(\s+)(env|usage_policy|headers):\s*$')
         if ($blockMatch.Success) {
             $blockName = [string]$blockMatch.Groups[2].Value
             $current[$blockName] = @{}
@@ -370,10 +370,57 @@ function Get-InstrumentPromptGuard {
     }
 }
 
+function Resolve-FleetHttpAuth {
+    <# Build the request headers for an HTTP instrument, and report the secret so
+       callers can scrub it out of anything they journal.
+
+       A row that declares `api_key_env` but whose variable is unset is a LOUD
+       failure, never a silent unauthenticated call: against a paid endpoint an
+       anonymous request is a 401 whose message says nothing useful, and against
+       a permissive one it would spend from the wrong account.
+
+       Returns @{ headers; secret; error }. `error` non-null means do not dispatch. #>
+    param([Parameter(Mandatory)][hashtable]$Provider)
+    $headers = @{}
+    if ($Provider.headers -is [hashtable]) {
+        foreach ($headerName in $Provider.headers.Keys) {
+            $headers[[string]$headerName] = [string]$Provider.headers[$headerName]
+        }
+    }
+    $keyEnv = [string]$Provider.api_key_env
+    if ([string]::IsNullOrWhiteSpace($keyEnv)) {
+        return @{ headers = $headers; secret = $null; error = $null }
+    }
+    $secret = [Environment]::GetEnvironmentVariable($keyEnv)
+    if ([string]::IsNullOrWhiteSpace($secret)) {
+        return @{
+            headers = $null
+            secret = $null
+            error = "api_key_env '$keyEnv' is declared but not set in the environment."
+        }
+    }
+    # Defaults cover every OpenAI-compatible endpoint (Authorization: Bearer ...).
+    # auth_header / auth_prefix exist for the x-api-key dialects; an explicitly
+    # empty auth_prefix is honoured, so ContainsKey (not truthiness) decides.
+    $authHeader = if ($Provider.auth_header) { [string]$Provider.auth_header } else { 'Authorization' }
+    $authPrefix = if ($Provider.ContainsKey('auth_prefix')) { [string]$Provider.auth_prefix } else { 'Bearer ' }
+    $headers[$authHeader] = "$authPrefix$secret"
+    return @{ headers = $headers; secret = [string]$secret; error = $null }
+}
+
+function Protect-FleetSecret {
+    <# Redact a live credential out of transport text before it reaches a journal
+       or the console. No secret / no text -> the text unchanged. #>
+    param([string]$Text, [string]$Secret)
+    if ([string]::IsNullOrEmpty($Text) -or [string]::IsNullOrWhiteSpace($Secret)) { return $Text }
+    return $Text.Replace($Secret, '<redacted>')
+}
+
 function Resolve-FleetHttpModel {
     param(
         [Parameter(Mandatory)][hashtable]$Provider,
-        [string]$Model
+        [string]$Model,
+        [hashtable]$Headers
     )
     if ($Model) { return $Model }
     if ($Provider.model_default -and [string]$Provider.model_default -ne 'auto') {
@@ -381,7 +428,9 @@ function Resolve-FleetHttpModel {
     }
     if (-not $Provider.base_url) { throw 'HTTP instrument has no base_url.' }
     $modelsUri = "$([string]$Provider.base_url.TrimEnd('/'))/v1/models"
-    $models = Invoke-RestMethod -Uri $modelsUri -Method Get -TimeoutSec 10
+    $modelArgs = @{ Uri = $modelsUri; Method = 'Get'; TimeoutSec = 10 }
+    if ($Headers -and $Headers.Count -gt 0) { $modelArgs.Headers = $Headers }
+    $models = Invoke-RestMethod @modelArgs
     $firstModel = [string]$models.data[0].id
     if ([string]::IsNullOrWhiteSpace($firstModel)) {
         throw "HTTP instrument model resolution returned no models from $modelsUri."
@@ -424,9 +473,14 @@ function Invoke-FleetHttpChat {
         [string]$Model
     )
     $start = Get-Date
+    $secret = $null
     try {
         if (-not $Provider.base_url) { throw 'HTTP instrument has no base_url.' }
-        $modelName = Resolve-FleetHttpModel -Provider $Provider -Model $Model
+        $auth = Resolve-FleetHttpAuth -Provider $Provider
+        if ($auth.error) { throw [string]$auth.error }
+        $secret = [string]$auth.secret
+        $headers = [hashtable]$auth.headers
+        $modelName = Resolve-FleetHttpModel -Provider $Provider -Model $Model -Headers $headers
         $endpoint = if ($Provider.endpoint) { [string]$Provider.endpoint } else { '/v1/chat/completions' }
         if (-not $endpoint.StartsWith('/')) { $endpoint = "/$endpoint" }
         $uri = "$([string]$Provider.base_url.TrimEnd('/'))$endpoint"
@@ -438,8 +492,12 @@ function Invoke-FleetHttpChat {
         $body = ConvertTo-Json -InputObject $bodyObject -Depth 10 -Compress
         $timeoutS = if ($Provider.timeout_s) { [int]$Provider.timeout_s } else { 300 }
         if ($timeoutS -le 0) { throw 'HTTP instrument timeout_s must be positive.' }
-        $response = Invoke-RestMethod -Uri $uri -Method Post -Body $body `
-            -ContentType 'application/json' -TimeoutSec $timeoutS
+        $restArgs = @{
+            Uri = $uri; Method = 'Post'; Body = $body
+            ContentType = 'application/json'; TimeoutSec = $timeoutS
+        }
+        if ($headers -and $headers.Count -gt 0) { $restArgs.Headers = $headers }
+        $response = Invoke-RestMethod @restArgs
         $text = [string]$response.choices[0].message.content
         $duration = [int]((Get-Date) - $start).TotalSeconds
         $result = @{ stdout = $text; stderr = ''; exit_code = 0; duration_s = $duration }
@@ -451,7 +509,9 @@ function Invoke-FleetHttpChat {
         return $result
     } catch {
         $duration = [int]((Get-Date) - $start).TotalSeconds
-        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = 1; duration_s = $duration }
+        # Scrub the credential: this stderr is journaled.
+        $message = Protect-FleetSecret -Text ([string]$_.Exception.Message) -Secret $secret
+        return @{ stdout = ''; stderr = $message; exit_code = 1; duration_s = $duration }
     }
 }
 

@@ -19,9 +19,14 @@ try {
             $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $false, 4096, $true)
             $requestLine = $reader.ReadLine()
             $contentLength = 0
+            $requestHeaders = [ordered]@{}
             while ($true) {
                 $headerLine = $reader.ReadLine()
                 if ($null -eq $headerLine -or $headerLine -eq '') { break }
+                $splitMatch = [regex]::Match($headerLine, '^([^:]+):\s*(.*)$')
+                if ($splitMatch.Success) {
+                    $requestHeaders[$splitMatch.Groups[1].Value] = $splitMatch.Groups[2].Value
+                }
                 $lengthMatch = [regex]::Match($headerLine, '^Content-Length:\s*(\d+)$', 'IgnoreCase')
                 if ($lengthMatch.Success) { $contentLength = [int]$lengthMatch.Groups[1].Value }
             }
@@ -36,7 +41,7 @@ try {
                 }
                 $body = [string]::new($buffer, 0, $readCount)
             }
-            $capture = [ordered]@{ request_line = $requestLine; body = $body }
+            $capture = [ordered]@{ request_line = $requestLine; body = $body; headers = $requestHeaders }
             Add-Content -LiteralPath $CapturePath `
                 -Value (ConvertTo-Json -InputObject $capture -Compress) -Encoding utf8NoBOM
 

@@ -66,7 +66,12 @@ function Test-ProviderReachable {
         $UrlProbe = {
             param($url)
             try { Invoke-WebRequest -Uri $url -Method Head -TimeoutSec 5 -UseBasicParsing | Out-Null; return $true }
-            catch { return $false }
+            catch {
+                # Any HTTP status means the host answered — public API roots often
+                # refuse HEAD (405) or require auth (401). Only a transport-level
+                # failure, with no response at all, is genuinely unreachable.
+                return ($null -ne $_.Exception.Response)
+            }
         }
     }
     if ($Provider.kind -eq 'cli') {
