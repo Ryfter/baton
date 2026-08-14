@@ -631,7 +631,9 @@ function Invoke-PlanPhase {
         [scriptblock]$Dispatcher,
         [string]$RunDir,
         [scriptblock]$ShadowResolver,
-        [string]$RepoPath
+        [string]$RepoPath,
+        # How many reasoning candidates planning may try before giving up.
+        [int]$MaxPlannerAttempts = 3
     )
     $dispatch = {
         param($cand, $prompt)
@@ -662,9 +664,47 @@ function Invoke-PlanPhase {
     if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $promptParams.RepoPath = $RepoPath }
     if (-not [string]::IsNullOrWhiteSpace($FleetPath)) { $promptParams.FleetPath = $FleetPath }
     $prompt = Build-PlannerPrompt @promptParams
-    $res = & $dispatch $cands[0] $prompt
-    if ([int]$res.exit_code -ne 0) { return $null }
-    $plan = ConvertTo-PlanObject -RawStdout ([string]$res.stdout)
+
+    # Planning used to be one shot at $cands[0]: a failed dispatch or unparseable
+    # answer ended the whole run with plan-failed, even with viable candidates
+    # sitting right there in the list. That made the FIRST-RANKED provider a hard
+    # dependency of every run — on a box where economy ranking puts a Claude row
+    # first, `baton go` could not start from a shell with no Claude auth, despite
+    # the engine itself being vendor-neutral.
+    #
+    # Bounded on purpose: candidates are cost-ordered, so walking a few is cheap,
+    # but an unbounded walk could fan a broken prompt across the paid fleet.
+    $plan = $null
+    $attempts = 0
+    foreach ($cand in @($cands | Where-Object { $null -ne $_ })) {
+        if ($attempts -ge $MaxPlannerAttempts) { break }
+        $attempts++
+        $res = & $dispatch $cand $prompt
+        $why = $null
+        if ([int]$res.exit_code -ne 0) {
+            $why = "exit $([int]$res.exit_code)"
+        } else {
+            $plan = ConvertTo-PlanObject -RawStdout ([string]$res.stdout)
+            if ($null -eq $plan) { $why = 'unparseable plan' }
+        }
+        if ($null -ne $plan) {
+            if ($attempts -gt 1 -and $RunDir) {
+                try {
+                    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan' `
+                        -Message "planner failover: $($cand.name) produced the plan after $($attempts - 1) failed candidate(s)")
+                } catch { }
+            }
+            break
+        }
+        # Name the failure: a silent fallback would hide a planner that is broken
+        # for everyone rather than merely unavailable to this shell.
+        if ($RunDir) {
+            try {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan' `
+                    -Message "planner candidate $($cand.name) failed ($why); trying the next reasoning row")
+            } catch { }
+        }
+    }
     if ($null -eq $plan) { return $null }
     if ($RunId) { $plan.run_id = $RunId }
     $plan.goal = $Goal

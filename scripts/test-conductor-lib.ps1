@@ -380,6 +380,46 @@ providers:
     $dispBad = { param($c,$p) @{ stdout = 'not json'; stderr=''; exit_code = 0; duration_s = 1 } }
     Check 'T43 unparseable planner reply -> null' ($null -eq (Invoke-PlanPhase -Goal 'x' -FleetPath $refFleet -ToolsPath $tmpTools -Dispatcher $dispBad))
 
+    # ---- Planner failover. The first-ranked reasoning row used to be a hard
+    # dependency of every run: one bad dispatch ended it with plan-failed while
+    # viable candidates sat unused. On a box whose economy ranking puts a Claude
+    # row first, that made `baton go` unstartable from a shell with no Claude auth.
+    $script:planTried = [System.Collections.ArrayList]@()
+    $dispFirstDead = {
+        param($c,$p)
+        [void]$script:planTried.Add([string]$c.name)
+        if ($script:planTried.Count -eq 1) { return @{ stdout=''; stderr='no auth'; exit_code = 1; duration_s = 0 } }
+        return @{ stdout = $cannedPlan; stderr=''; exit_code = 0; duration_s = 1 }
+    }
+    $failoverPlan = Invoke-PlanPhase -Goal 'failover goal' -RunId 'go-fo-1' `
+        -FleetPath $refFleet -ToolsPath $tmpTools -Dispatcher $dispFirstDead
+    Check 'PF1 a dead first planner falls over to the next reasoning row' (
+        $null -ne $failoverPlan -and @($failoverPlan.tasks).Count -eq 1 -and
+        $script:planTried.Count -eq 2 -and $script:planTried[0] -ne $script:planTried[1])
+
+    # An unparseable answer is a failure too, not just a non-zero exit.
+    $script:planTried2 = [System.Collections.ArrayList]@()
+    $dispFirstGarbage = {
+        param($c,$p)
+        [void]$script:planTried2.Add([string]$c.name)
+        if ($script:planTried2.Count -eq 1) { return @{ stdout='not json'; stderr=''; exit_code = 0; duration_s = 1 } }
+        return @{ stdout = $cannedPlan; stderr=''; exit_code = 0; duration_s = 1 }
+    }
+    Check 'PF2 an unparseable first reply also falls over' (
+        $null -ne (Invoke-PlanPhase -Goal 'g' -FleetPath $refFleet -ToolsPath $tmpTools `
+            -Dispatcher $dispFirstGarbage) -and $script:planTried2.Count -eq 2)
+
+    # Bounded: a prompt that every planner rejects must not fan across the fleet.
+    $script:planTried3 = [System.Collections.ArrayList]@()
+    $dispAllDead = {
+        param($c,$p)
+        [void]$script:planTried3.Add([string]$c.name)
+        return @{ stdout=''; stderr='nope'; exit_code = 1; duration_s = 0 }
+    }
+    Check 'PF3 all-dead planning returns null and stops at the attempt cap' (
+        ($null -eq (Invoke-PlanPhase -Goal 'g' -FleetPath $refFleet -ToolsPath $tmpTools `
+            -Dispatcher $dispAllDead -MaxPlannerAttempts 2)) -and $script:planTried3.Count -eq 2)
+
     # ---- Multi-model planner replies (v1.11.1): providers like `codex exec` echo the
     # prompt (which itself contains the JSON schema) before the answer, and may emit
     # the answer JSON more than once. Greedy first-{-to-last-} spans echo+answer ->
