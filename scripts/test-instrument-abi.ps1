@@ -148,6 +148,110 @@ providers:
         -Path (Join-Path $PSScriptRoot 'fixtures/fleet-sample.yaml') -NoJournal -NoUsageJournal
     Check 'H8 hatch file retains precedence over generic HTTP' ($stubResult.stdout -eq 'stub-http-response:override')
 
+    # ── Authenticated HTTP instruments (api_key_env / headers / auth_* dialects) ──
+    $savedKeyVar = $env:BATON_TEST_API_KEY
+    try {
+        $env:BATON_TEST_API_KEY = 'sk-test-secret-value'
+
+        $server = Start-MockHttpServer -Mode usage-total
+        try {
+            $authProvider = @{
+                base_url = $server.base_url; model_default = 'pinned-model'; timeout_s = 5
+                api_key_env = 'BATON_TEST_API_KEY'
+                headers = @{ 'X-Title' = 'Baton' }
+            }
+            $authResult = Invoke-FleetHttpChat -Provider $authProvider -Prompt 'hello'
+            Stop-MockHttpServer -Server $server
+            $sent = (Get-HttpCaptureRows -Path $server.capture)[0].headers
+            Check 'H9 api_key_env is sent as a Bearer Authorization header' (
+                $authResult.exit_code -eq 0 -and
+                $sent.Authorization -eq 'Bearer sk-test-secret-value')
+            Check 'H9 static headers ride alongside the credential' ($sent.'X-Title' -eq 'Baton')
+        } finally { Stop-MockHttpServer -Server $server }
+
+        $server = Start-MockHttpServer -Mode usage-total
+        try {
+            $dialectProvider = @{
+                base_url = $server.base_url; model_default = 'pinned-model'; timeout_s = 5
+                api_key_env = 'BATON_TEST_API_KEY'
+                auth_header = 'x-api-key'
+                auth_prefix = ''
+            }
+            [void](Invoke-FleetHttpChat -Provider $dialectProvider -Prompt 'hello')
+            Stop-MockHttpServer -Server $server
+            $sent = (Get-HttpCaptureRows -Path $server.capture)[0].headers
+            Check 'H10 auth_header plus empty auth_prefix produces a raw x-api-key' (
+                $sent.'x-api-key' -eq 'sk-test-secret-value' -and $null -eq $sent.Authorization)
+        } finally { Stop-MockHttpServer -Server $server }
+
+        # A declared-but-unset key must fail loudly BEFORE any network call.
+        $env:BATON_TEST_API_KEY = $null
+        $missingResult = Invoke-FleetHttpChat -Prompt 'hello' -Provider @{
+            base_url = 'http://127.0.0.1:1'; model_default = 'pinned-model'; timeout_s = 5
+            api_key_env = 'BATON_TEST_API_KEY'
+        }
+        Check 'H11 unset api_key_env fails loudly and names the variable' (
+            $missingResult.exit_code -ne 0 -and
+            $missingResult.stderr -match 'BATON_TEST_API_KEY' -and
+            $missingResult.stderr -match 'not set')
+
+        # The credential must never survive into a journaled stderr string.
+        $env:BATON_TEST_API_KEY = 'sk-test-secret-value'
+        $server = Start-MockHttpServer -Mode non-200
+        try {
+            $leakResult = Invoke-FleetHttpChat -Prompt 'fail' -Provider @{
+                base_url = $server.base_url; model_default = 'fixture'; timeout_s = 5
+                api_key_env = 'BATON_TEST_API_KEY'
+            }
+            Check 'H12 failure stderr never carries the credential' (
+                $leakResult.exit_code -ne 0 -and
+                $leakResult.stderr -notmatch 'sk-test-secret-value')
+        } finally { Stop-MockHttpServer -Server $server }
+
+        Check 'H13 Protect-FleetSecret redacts the live credential' (
+            (Protect-FleetSecret -Text 'boom sk-test-secret-value boom' -Secret 'sk-test-secret-value') -eq
+            'boom <redacted> boom')
+        Check 'H13 Protect-FleetSecret is a no-op without a secret' (
+            (Protect-FleetSecret -Text 'unchanged' -Secret '') -eq 'unchanged')
+
+        # An unauthenticated row must keep sending no Authorization header.
+        $server = Start-MockHttpServer -Mode usage-total
+        try {
+            [void](Invoke-FleetHttpChat -Prompt 'hello' -Provider @{
+                base_url = $server.base_url; model_default = 'pinned-model'; timeout_s = 5 })
+            Stop-MockHttpServer -Server $server
+            $sent = (Get-HttpCaptureRows -Path $server.capture)[0].headers
+            Check 'H14 rows without api_key_env stay unauthenticated' ($null -eq $sent.Authorization)
+        } finally { Stop-MockHttpServer -Server $server }
+    } finally {
+        $env:BATON_TEST_API_KEY = $savedKeyVar
+    }
+
+    # The YAML parser must carry api_key_env and a nested headers block through.
+    $authFleetPath = Join-Path $script:tempRoot 'auth-fleet.yaml'
+    Set-Content -LiteralPath $authFleetPath -Encoding utf8NoBOM -Value @"
+providers:
+  - name: authed-http
+    kind: http
+    enabled: true
+    cost_tier: paid
+    base_url: 'https://example.invalid/api'
+    model_default: 'vendor/model'
+    api_key_env: BATON_TEST_API_KEY
+    headers:
+      HTTP-Referer: https://example.invalid/baton
+      X-Title: Baton
+    capabilities: [code-gen, reasoning]
+"@
+    $authRow = Get-FleetProvider -Name 'authed-http' -Path $authFleetPath
+    Check 'H15 parser reads api_key_env and the nested headers block' (
+        [string]$authRow.api_key_env -eq 'BATON_TEST_API_KEY' -and
+        $authRow.headers -is [hashtable] -and
+        [string]$authRow.headers.'X-Title' -eq 'Baton' -and
+        [string]$authRow.headers.'HTTP-Referer' -eq 'https://example.invalid/baton')
+    Check 'H15 fields after a headers block still parse' (
+        @($authRow.capabilities).Count -eq 2 -and $authRow.capabilities -contains 'code-gen')
+
     # Stdio JSON: request-file contract, parsing, failures, stderr, timeout, bytes.
     $fakeChild = Join-Path $PSScriptRoot 'fixtures/fake-stdio-json.ps1'
     $stdioCapture = Join-Path $script:tempRoot 'stdio-request.json'

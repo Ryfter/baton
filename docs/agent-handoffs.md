@@ -48,6 +48,13 @@ private data repo — see the Grimdex split section below).
    checklist explicitly, THEN prompt the human to compact the conversation. Save
    before compacting, always. Canonical copy: `~/.claude/rules/task-group-closeout.md`.
 
+8. **Credentials live in the environment, never in a registry file.** An
+   authenticated `kind: http` row names the *variable* (`api_key_env`), and the
+   transport fails loudly rather than falling back to an anonymous request. See
+   `docs/authenticated-instruments.md`. Corollary for prepaid providers
+   (OpenRouter is the first): the spend ceiling is set on the vendor's key as
+   well as in fleet policy — a Baton bug must not be able to drain a balance.
+
 Shared rules live HERE. Model files should **reference** this section, not re-copy
 it — re-copying is how drift starts.
 
