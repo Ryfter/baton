@@ -13,12 +13,9 @@
 #>
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/usage-classify-lib.ps1"
-# Authenticated-HTTP probes borrow Resolve-FleetHttpAuth from fleet-lib. Guarded
-# so the two libraries can be dot-sourced in either order without one clobbering
-# the other's definitions; fleet-lib does not source this file, so no cycle.
-if (-not (Get-Command -Name 'Resolve-FleetHttpAuth' -ErrorAction SilentlyContinue)) {
-    . "$PSScriptRoot/fleet-lib.ps1"
-}
+# Credential helpers for authenticated-HTTP probes. A leaf shared with fleet-lib,
+# so neither library has to source the other.
+. "$PSScriptRoot/http-auth-lib.ps1"
 
 function Get-BatonPluginVersion {
     $roots = [System.Collections.Generic.List[string]]::new()
@@ -640,6 +637,11 @@ $script:UsageProbeTransports = [ordered]@{
     }
     'openrouter-key' = [ordered]@{
         name = 'openrouter-key'
+        # Which observation scopes this transport can emit. The prepaid dispatch
+        # guard reads this to decide whether a row is worth probing AT ALL, so a
+        # subscription-only transport is never spawned on the hot path just to
+        # have its result discarded.
+        scopes = [string[]]@('paid_credit')
         # Identity rides on the ROW's api_key_env rather than a usage_policy
         # field — the key IS the account — so requires_policy stays empty and
         # the invoke enforces the same fail-closed rule itself.
@@ -655,6 +657,23 @@ $script:UsageProbeTransports = [ordered]@{
                 -ObservedAt $observedAt -TtlSeconds $ttlSeconds
         }
     }
+}
+
+function Test-UsageProbeTransportScope {
+    <# Does the transport a row would resolve to emit this observation scope?
+       Used to skip probing entirely for rows that could not produce the scope a
+       caller cares about. A transport that declares no `scopes` is treated as
+       emitting only the subscription windows it always has — the conservative
+       reading, since claiming a scope it cannot produce would put it back on a
+       hot path for nothing. #>
+    param($Provider, [Parameter(Mandatory)][string]$Scope)
+    $name = Resolve-UsageProbeTransportName -Provider $Provider
+    if ([string]::IsNullOrWhiteSpace($name)) { return $false }
+    $pair = Get-UsageProbeTransport -Name $name
+    if ($null -eq $pair) { return $false }
+    $scopes = @(Get-ProbeObjectField -InputObject $pair -Field 'scopes')
+    if ($scopes.Count -eq 0) { return $false }
+    return ($scopes -contains $Scope)
 }
 
 function Get-UsageProbeTransport {

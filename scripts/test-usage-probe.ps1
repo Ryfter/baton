@@ -16,6 +16,11 @@ if (-not (Test-Path -LiteralPath $libraryPath)) {
     exit 1
 }
 . $libraryPath
+# The enforcement checks drive Invoke-Fleet itself, so the dispatch library is a
+# direct dependency of this suite. It sources usage-probe-lib in turn; both are
+# idempotent, and neither sources the other any more (http-auth-lib is the
+# shared leaf), so load order does not matter.
+. (Join-Path $PSScriptRoot 'fleet-lib.ps1')
 
 $requiredFunctions = @(
     'Get-BatonPluginVersion',
@@ -1042,11 +1047,60 @@ providers:
             [string]$openCall.skipped -ne 'prepaid_cap_reached' -and
             [int]$openCall.exit_code -ne 0)
 
-        # And the escape hatch stays honest.
+        # The escape hatch, tested where it can actually FAIL: restore the key so
+        # the seeded crossing is live again (E6 rotated it away), confirm the
+        # guard really would block, and only then assert the bypass. Without the
+        # restore, -NoPrepaidCap could be a no-op and this would still pass.
+        $env:BATON_TEST_OR_KEY = 'sk-or-enforce-secret'
+        $stillBlocked = Invoke-Fleet -Name 'openrouter' -Prompt 'hello' -Path $capFleet `
+            -UsagePath (Join-Path $tmp 'e7-control.jsonl') -NoJournal
+        Check 'E7 control: the guard is armed for this exact call' (
+            [string]$stillBlocked.skipped -eq 'prepaid_cap_reached')
         $bypassCall = Invoke-Fleet -Name 'openrouter' -Prompt 'hello' -Path $capFleet `
             -UsagePath (Join-Path $tmp 'e7-usage.jsonl') -NoJournal -NoPrepaidCap
-        Check 'E7 -NoPrepaidCap bypasses the guard' (
-            [string]$bypassCall.skipped -ne 'prepaid_cap_reached')
+        Check 'E7b -NoPrepaidCap bypasses a guard that would otherwise block' (
+            [string]$bypassCall.skipped -ne 'prepaid_cap_reached' -and
+            [int]$bypassCall.exit_code -ne 0)
+
+        # E8: a SUBSCRIPTION crossing must not be enforced on this path, and the
+        # row must not even be probed. Asserting through Invoke-Fleet rather than
+        # the decision function is the point: if the guard ever blocked on
+        # decision.over_cap instead of filtering to paid_credit, codex-style rows
+        # would start refusing work and a decision-level test would not notice.
+        $subFleet = Join-Path $tmp 'subscription-fleet.yaml'
+        Set-Content -LiteralPath $subFleet -Encoding utf8NoBOM -Value @"
+providers:
+  - name: subworker
+    kind: http
+    enabled: true
+    cost_tier: paid
+    platform: local
+    base_url: 'https://subscription.test/api'
+    model_default: 'vendor/model'
+    usage_policy:
+      probe: true
+      probe_transport: codexbar-cli
+      probe_provider: someprovider
+      soft_cap_weekly: 85
+"@
+        $subRow = Get-FleetProvider -Name 'subworker' -Path $subFleet
+        Check 'E8 a subscription-only transport is not probed for a prepaid cap' (
+            -not (Test-UsageProbeTransportScope -Provider $subRow -Scope 'paid_credit'))
+        $subCall = Invoke-Fleet -Name 'subworker' -Prompt 'hello' -Path $subFleet `
+            -UsagePath (Join-Path $tmp 'e8-usage.jsonl') -NoJournal
+        Check 'E8b a subscription row is never refused by the prepaid guard' (
+            [string]$subCall.skipped -ne 'prepaid_cap_reached')
+
+        # E9: the guard must fail OPEN structurally, not just on the happy path.
+        # A row whose probe machinery throws still dispatches.
+        $throwRow = @{
+            name = 'openrouter'; kind = 'http'; platform = 'openrouter'
+            base_url = 'https://openrouter.test/api'; api_key_env = 'BATON_TEST_OR_KEY'
+            usage_policy = 'not-a-policy-object'
+        }
+        $throwGuard = Get-PrepaidCapGuard -Provider $throwRow -UsagePath (Join-Path $tmp 'e9-usage.jsonl') -NoUsageJournal
+        Check 'E9 a throwing cap check fails open rather than aborting dispatch' (
+            -not $throwGuard.blocked -and $null -eq $throwGuard.result)
 
         Check 'E4 a weekly crossing yields no paid_credit window for the prepaid guard' (
             $subOnly.over_cap -and

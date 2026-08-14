@@ -12,6 +12,12 @@
 
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/usage-classify-lib.ps1"
+. "$PSScriptRoot/http-auth-lib.ps1"
+# The prepaid cap guard lives on the dispatch path, so the probe library is a
+# real script-scope dependency. It can be sourced here (rather than lazily
+# inside Invoke-Fleet) because the credential helpers both libraries need now
+# live in the http-auth leaf above — there is no longer a cycle to dodge.
+. "$PSScriptRoot/usage-probe-lib.ps1"
 $script:DefaultFleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml')
 
 function Set-JsonFileAtomic {
@@ -372,52 +378,6 @@ function Get-InstrumentPromptGuard {
         exit_code = -1; duration_s = 0; tokens = 0; tokens_basis = 'estimate'
         reason = 'prompt_too_large'; prompt_bytes = $promptBytes; max_prompt_bytes = $ceiling
     }
-}
-
-function Resolve-FleetHttpAuth {
-    <# Build the request headers for an HTTP instrument, and report the secret so
-       callers can scrub it out of anything they journal.
-
-       A row that declares `api_key_env` but whose variable is unset is a LOUD
-       failure, never a silent unauthenticated call: against a paid endpoint an
-       anonymous request is a 401 whose message says nothing useful, and against
-       a permissive one it would spend from the wrong account.
-
-       Returns @{ headers; secret; error }. `error` non-null means do not dispatch. #>
-    param([Parameter(Mandatory)][hashtable]$Provider)
-    $headers = @{}
-    if ($Provider.headers -is [hashtable]) {
-        foreach ($headerName in $Provider.headers.Keys) {
-            $headers[[string]$headerName] = [string]$Provider.headers[$headerName]
-        }
-    }
-    $keyEnv = [string]$Provider.api_key_env
-    if ([string]::IsNullOrWhiteSpace($keyEnv)) {
-        return @{ headers = $headers; secret = $null; error = $null }
-    }
-    $secret = [Environment]::GetEnvironmentVariable($keyEnv)
-    if ([string]::IsNullOrWhiteSpace($secret)) {
-        return @{
-            headers = $null
-            secret = $null
-            error = "api_key_env '$keyEnv' is declared but not set in the environment."
-        }
-    }
-    # Defaults cover every OpenAI-compatible endpoint (Authorization: Bearer ...).
-    # auth_header / auth_prefix exist for the x-api-key dialects; an explicitly
-    # empty auth_prefix is honoured, so ContainsKey (not truthiness) decides.
-    $authHeader = if ($Provider.auth_header) { [string]$Provider.auth_header } else { 'Authorization' }
-    $authPrefix = if ($Provider.ContainsKey('auth_prefix')) { [string]$Provider.auth_prefix } else { 'Bearer ' }
-    $headers[$authHeader] = "$authPrefix$secret"
-    return @{ headers = $headers; secret = [string]$secret; error = $null }
-}
-
-function Protect-FleetSecret {
-    <# Redact a live credential out of transport text before it reaches a journal
-       or the console. No secret / no text -> the text unchanged. #>
-    param([string]$Text, [string]$Secret)
-    if ([string]::IsNullOrEmpty($Text) -or [string]::IsNullOrWhiteSpace($Secret)) { return $Text }
-    return $Text.Replace($Secret, '<redacted>')
 }
 
 function Resolve-FleetHttpModel {
@@ -889,42 +849,53 @@ function Get-PrepaidCapGuard {
         [switch]$NoUsageJournal
     )
     $none = @{ blocked = $false; result = $null; advisory = $null }
-    # Loaded lazily, not at file scope: usage-probe-lib dot-sources THIS file for
-    # Resolve-FleetHttpAuth, so a top-level source here would be circular.
-    if (-not (Get-Command -Name 'Get-ProviderUsageProbe' -ErrorAction SilentlyContinue)) {
-        . "$PSScriptRoot/usage-probe-lib.ps1"
-    }
-    if (-not (Test-UsageProbeEligible -Provider $Provider)) { return $none }
+    # EVERYTHING is inside one try. This guard sits on the hot path of every
+    # dispatch, so a throw here would abort ask/review/judge/ensemble outright —
+    # strictly worse than the uncapped spending it exists to prevent. Fail-open
+    # has to be structural, not a promise made by the happy path.
+    try {
+        # Cheapest gate first, and the one that keeps this PREPAID-ONLY: skip any
+        # row whose transport cannot even emit paid_credit. Without this, a
+        # probe-eligible codex row would pay a ~20s app-server spawn on every
+        # fleet-ask only to have its subscription windows discarded below.
+        if (-not (Test-UsageProbeEligible -Provider $Provider)) { return $none }
+        if (-not (Test-UsageProbeTransportScope -Provider $Provider -Scope 'paid_credit')) { return $none }
 
-    $name = [string]$Provider.name
-    $snapshot = Get-ProviderUsageProbe -Worker $name -Provider $Provider
-    if ($null -eq $snapshot) {
-        # Say it out loud: silence here would be indistinguishable from "under cap".
-        return @{ blocked = $false; result = $null
-                  advisory = "usage preflight: $name balance unknown (probe unavailable); dispatching uncapped" }
-    }
-    $decision = Get-UsageProbeCapDecision -Provider $Provider -Observations @($snapshot.observations)
-    $prepaid = @($decision.windows | Where-Object { [string]$_.window -eq 'paid_credit' })
-    if ($prepaid.Count -eq 0) { return $none }
-
-    $window = $prepaid[0]
-    $used = [math]::Round([double]$window.used_pct, 1)
-    $cap = [math]::Round([double]$window.cap, 1)
-    $line = "usage preflight: $name has spent $used% of its prepaid credit, reached $($window.policy_knob)=$cap; refusing to spend further"
-    if (-not $NoUsageJournal) {
-        try {
-            Add-UsageProbeLimitedRows -Worker $name -Decision @{ windows = @($prepaid) } -UsagePath $UsagePath
-            Add-UsagePreflightEvent -Worker $name -Outcome 'held' -WindowDecision $prepaid `
-                -UsagePath $UsagePath -Reason 'prepaid soft cap reached'
-        } catch {
-            # Journalling is advisory; never let it change the verdict.
+        $name = [string]$Provider.name
+        $snapshot = Get-ProviderUsageProbe -Worker $name -Provider $Provider
+        if ($null -eq $snapshot) {
+            # Say it out loud: silence would be indistinguishable from "under cap".
+            return @{ blocked = $false; result = $null
+                      advisory = "usage preflight: $name balance unknown (probe unavailable); dispatching uncapped" }
         }
-    }
-    return @{
-        blocked = $true
-        advisory = $line
-        result = @{ stdout = ''; stderr = $line; exit_code = 1; duration_s = 0
-                    skipped = 'prepaid_cap_reached' }
+        $decision = Get-UsageProbeCapDecision -Provider $Provider -Observations @($snapshot.observations)
+        $prepaid = @($decision.windows | Where-Object { [string]$_.window -eq 'paid_credit' })
+        if ($prepaid.Count -eq 0) { return $none }
+
+        $window = $prepaid[0]
+        $used = [math]::Round([double]$window.used_pct, 1)
+        $cap = [math]::Round([double]$window.cap, 1)
+        $line = "usage preflight: $name has spent $used% of its prepaid credit, reached $($window.policy_knob)=$cap; refusing to spend further"
+        if (-not $NoUsageJournal) {
+            try {
+                Add-UsageProbeLimitedRows -Worker $name -Decision @{ windows = @($prepaid) } -UsagePath $UsagePath
+                Add-UsagePreflightEvent -Worker $name -Outcome 'held' -WindowDecision $prepaid `
+                    -UsagePath $UsagePath -Reason 'prepaid soft cap reached'
+            } catch {
+                # Journalling is advisory; never let it change the verdict.
+            }
+        }
+        return @{
+            blocked = $true
+            advisory = $line
+            result = @{ stdout = ''; stderr = $line; exit_code = 1; duration_s = 0
+                        skipped = 'prepaid_cap_reached' }
+        }
+    } catch {
+        # Named, not swallowed: an operator who sees this knows the balance went
+        # unchecked for this dispatch and the vendor-side key limit is carrying it.
+        return @{ blocked = $false; result = $null
+                  advisory = "usage preflight: cap check failed ($($_.Exception.Message)); dispatching uncapped" }
     }
 }
 
