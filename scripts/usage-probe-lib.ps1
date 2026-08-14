@@ -456,6 +456,44 @@ function ConvertFrom-CodexBarUsageResponse {
     return ,([object[]]$rows.ToArray())
 }
 
+function ConvertTo-ProbeDouble {
+    <# Coerce a JSON money field to a double, or $null if it is not a real number.
+
+       JSON numbers arrive from Invoke-RestMethod ALREADY typed as double, so the
+       obvious `[double]::TryParse([string]$v, ..., InvariantCulture, ...)` is a
+       trap: stringifying uses the CURRENT culture, and on a comma-decimal box
+       "25.5" becomes "25,5", which the invariant parse then rejects. That turns
+       a fractional-dollar balance into "no observation" — which reads as
+       headroom. Numeric input therefore bypasses string handling entirely. #>
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [bool]) { return $null }
+    if ($Value -is [double] -or $Value -is [single] -or $Value -is [decimal] -or
+        $Value -is [int] -or $Value -is [long]) {
+        $numeric = [double]$Value
+        if (-not [double]::IsFinite($numeric)) { return $null }
+        return $numeric
+    }
+    $parsed = [double]0
+    if (-not [double]::TryParse([string]$Value, [System.Globalization.NumberStyles]::Float,
+            [System.Globalization.CultureInfo]::InvariantCulture, [ref]$parsed)) { return $null }
+    if (-not [double]::IsFinite($parsed)) { return $null }
+    return $parsed
+}
+
+function Get-ProbeIdentityFingerprint {
+    <# A non-reversible fingerprint of the credential a probe was taken with, so
+       a cached row can be bound to the account that produced it without ever
+       storing the secret. #>
+    param([string]$Secret)
+    if ([string]::IsNullOrWhiteSpace($Secret)) { return $null }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Secret))
+        return ([System.BitConverter]::ToString($bytes) -replace '-', '').Substring(0, 16).ToLowerInvariant()
+    } finally { $sha.Dispose() }
+}
+
 function Invoke-OpenRouterKeyTransport {
     <# GET {base_url}/v1/key for the account behind a row's api_key_env.
 
@@ -476,8 +514,16 @@ function Invoke-OpenRouterKeyTransport {
         $auth = Resolve-FleetHttpAuth -Provider $Provider
         if ($auth.error -or $null -eq $auth.headers) { return $null }
         $uri = "$([string]$Provider.base_url.TrimEnd('/'))/v1/key"
-        if ($Invoker) { return (& $Invoker $uri $auth.headers $TimeoutSeconds) }
-        return Invoke-RestMethod -Uri $uri -Method Get -Headers $auth.headers -TimeoutSec $TimeoutSeconds
+        $response = if ($Invoker) { & $Invoker $uri $auth.headers $TimeoutSeconds }
+                    else { Invoke-RestMethod -Uri $uri -Method Get -Headers $auth.headers -TimeoutSec $TimeoutSeconds }
+        # `label` is a truncated key (sk-or-v1-au7...890). Not replayable, but it
+        # fingerprints WHICH key was probed and the raw body gets cached to disk,
+        # so strip it at the boundary rather than storing a credential fragment.
+        if ($null -ne $response -and $null -ne $response.data -and
+            $null -ne $response.data.PSObject.Properties['label']) {
+            $response.data.label = '<redacted>'
+        }
+        return $response
     } catch {
         # Probes observe; they never change dispatch by throwing.
         return $null
@@ -507,28 +553,33 @@ function ConvertFrom-OpenRouterKeyResponse {
     $data = Get-ProbeObjectField -InputObject $Response -Field 'data'
     if ($null -eq $data) { return $null }
 
-    $limitRaw = Get-ProbeObjectField -InputObject $data -Field 'limit'
-    $usageRaw = Get-ProbeObjectField -InputObject $data -Field 'usage'
-    if ($null -eq $limitRaw -or $null -eq $usageRaw) { return $null }
+    $limit = ConvertTo-ProbeDouble (Get-ProbeObjectField -InputObject $data -Field 'limit')
+    if ($null -eq $limit -or $limit -le 0) { return $null }
 
-    $limit = [double]0
-    $usage = [double]0
-    if (-not [double]::TryParse([string]$limitRaw, [System.Globalization.NumberStyles]::Float,
-            [System.Globalization.CultureInfo]::InvariantCulture, [ref]$limit)) { return $null }
-    if (-not [double]::TryParse([string]$usageRaw, [System.Globalization.NumberStyles]::Float,
-            [System.Globalization.CultureInfo]::InvariantCulture, [ref]$usage)) { return $null }
-    if (-not [double]::IsFinite($limit) -or -not [double]::IsFinite($usage)) { return $null }
-    if ($limit -le 0 -or $usage -lt 0) { return $null }
+    # PREFER limit_remaining. `usage` is all-time spend, but `limit` is per-cycle
+    # whenever limit_reset is set — dividing one by the other compares a running
+    # total against a single cycle's ceiling, which pins used_pct at 100 forever
+    # after the first cycle. limit_remaining is always "left on THIS cap", so it
+    # is the only figure that means the same thing in both modes. Fall back to
+    # usage/limit only for a pure prepaid balance, where they agree.
+    $remaining = ConvertTo-ProbeDouble (Get-ProbeObjectField -InputObject $data -Field 'limit_remaining')
+    if ($null -ne $remaining) {
+        $spent = $limit - $remaining
+    } else {
+        $spent = ConvertTo-ProbeDouble (Get-ProbeObjectField -InputObject $data -Field 'usage')
+        if ($null -eq $spent) { return $null }
+    }
+    if ($spent -lt 0) { $spent = [double]0 }
 
     # Spend past the limit is possible in flight; clamp so the cap comparison
     # stays on the 0-100 scale the other windows use.
-    $usedPct = [math]::Min([double]100, ($usage / $limit) * 100)
+    $usedPct = [math]::Min([double]100, ($spent / $limit) * 100)
 
     $observation = [ordered]@{
         worker = $Worker
         scope = 'paid_credit'
         used_pct = $usedPct
-        consumed = $usage
+        consumed = $spent
         allowance = $limit
         source = 'openrouter_key_probe'
         observed_at = $ObservedAt.ToString('o')
@@ -701,7 +752,8 @@ function Add-UsageProbeCacheRow {
         [Parameter(Mandatory)][object[]]$Observations,
         [string]$CachePath = (Join-Path (Get-BatonHome) 'usage-probe-cache.jsonl'),
         [datetimeoffset]$ObservedAt = [datetimeoffset]::UtcNow,
-        [int]$TtlSeconds = 600
+        [int]$TtlSeconds = 600,
+        [string]$Identity
     )
     if ($TtlSeconds -le 0 -or @($Observations).Count -eq 0) { return }
     try {
@@ -716,6 +768,7 @@ function Add-UsageProbeCacheRow {
             raw = $Raw
             observations = @($Observations)
         }
+        if ($Identity) { $row.identity = $Identity }
         $json = ConvertTo-Json -InputObject $row -Depth 20 -Compress
         Add-Content -LiteralPath $CachePath -Value $json -Encoding utf8NoBOM
     } catch {
@@ -724,10 +777,16 @@ function Add-UsageProbeCacheRow {
 }
 
 function Get-FreshUsageProbeCache {
+    <# -Identity binds a cached row to the credential that produced it. The cache
+       is otherwise keyed by worker name alone, which would let a rotated (or
+       unset) key keep serving the PREVIOUS account's balance for a full TTL —
+       bypassing the fail-closed identity gate in the transport itself. A row
+       whose identity does not match is treated as absent, forcing a fresh probe. #>
     param(
         [Parameter(Mandatory)][string]$Worker,
         [string]$CachePath = (Join-Path (Get-BatonHome) 'usage-probe-cache.jsonl'),
-        [datetimeoffset]$Now = [datetimeoffset]::UtcNow
+        [datetimeoffset]$Now = [datetimeoffset]::UtcNow,
+        [string]$Identity
     )
     if (-not (Test-Path -LiteralPath $CachePath)) { return $null }
     $latest = $null
@@ -737,6 +796,9 @@ function Get-FreshUsageProbeCache {
         try {
             $row = [string]$line | ConvertFrom-Json -ErrorAction Stop
             if ([string]$row.worker -ne $Worker) { continue }
+            # Identity must match exactly when either side declares one: an
+            # identity-bearing row is not interchangeable with an anonymous one.
+            if ([string]$row.identity -ne [string]$Identity) { continue }
             $rowAt = [datetimeoffset]::MinValue
             $rowTtl = 0
             if (-not [datetimeoffset]::TryParse([string]$row.observed_at, [ref]$rowAt)) { continue }
@@ -778,8 +840,18 @@ function Get-ProviderUsageProbe {
     $transportPair = Get-UsageProbeTransport -Name $resolvedName
     if ($null -eq $transportPair) { return $null }
 
+    # Bind cache reads/writes to the credential in play, so a rotated or removed
+    # key cannot keep serving the previous account's balance for a whole TTL.
+    # Rows without a credential (codex, codexbar) get $null and behave as before.
+    $identity = $null
+    if ($null -ne $Provider -and -not [string]::IsNullOrWhiteSpace([string]$Provider.api_key_env)) {
+        $identity = Get-ProbeIdentityFingerprint -Secret ([Environment]::GetEnvironmentVariable([string]$Provider.api_key_env))
+        # A declared-but-unset key must not fall back to an anonymous cache row.
+        if ([string]::IsNullOrWhiteSpace($identity)) { return $null }
+    }
+
     if (-not $Force) {
-        $cached = Get-FreshUsageProbeCache -Worker $Worker -CachePath $CachePath -Now $Now
+        $cached = Get-FreshUsageProbeCache -Worker $Worker -CachePath $CachePath -Now $Now -Identity $identity
         if ($null -ne $cached) {
             return [ordered]@{
                 raw = $cached.raw
@@ -801,7 +873,7 @@ function Get-ProviderUsageProbe {
         $observations = & $transportPair.parse $Worker $response $Now $TtlSeconds
         if ($null -eq $observations -or @($observations).Count -eq 0) { return $null }
         Add-UsageProbeCacheRow -Worker $Worker -Raw $response -Observations @($observations) `
-            -CachePath $CachePath -ObservedAt $Now -TtlSeconds $TtlSeconds
+            -CachePath $CachePath -ObservedAt $Now -TtlSeconds $TtlSeconds -Identity $identity
         return [ordered]@{
             raw = $response
             observations = @($observations)

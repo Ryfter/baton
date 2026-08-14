@@ -869,6 +869,72 @@ Start-Sleep -Seconds 120
         $env:BATON_TEST_OR_KEY = $savedOrKey
     }
 
+    # ── Fixes from the adversarial review (grok, 2026-08-13) ─────────────────
+    # R1: JSON money fields arrive as [double]; stringifying them under a
+    # comma-decimal culture used to produce "25,5", which the invariant parse
+    # rejected -> no observation -> read as headroom.
+    $savedCulture = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('de-DE')
+        $cultureObs = ConvertFrom-OpenRouterKeyResponse -Worker 'openrouter' `
+            -Response (New-OrKeyResponse ([double]20.0) ([double]5.5) $null) -ObservedAt $orNow -TtlSeconds 600
+        # Rounded compare: (5.5/20)*100 is 27.500000000000004 in binary floating
+        # point. The contract is the percentage, not the last ulp.
+        Check 'R1 fractional dollars survive a comma-decimal culture' (
+            @($cultureObs).Count -eq 1 -and
+            [math]::Round([double]$cultureObs[0].used_pct, 6) -eq 27.5)
+    } finally {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = $savedCulture
+    }
+    Check 'R1b non-numeric and boolean money fields are still rejected' (
+        ($null -eq (ConvertTo-ProbeDouble 'lots')) -and ($null -eq (ConvertTo-ProbeDouble $true)) -and
+        ($null -eq (ConvertTo-ProbeDouble $null)) -and ([double](ConvertTo-ProbeDouble '25.5') -eq 25.5))
+
+    # R2: limit_remaining wins over all-time usage, so a resetting key is not
+    # pinned at 100% forever once cumulative usage passes one cycle's limit.
+    $cycleData = [pscustomobject]@{ data = [pscustomobject]@{
+        label = 'sk-or-v1-abc...xyz'; limit = 20; limit_remaining = 18; usage = 95; limit_reset = 'monthly' } }
+    $cycleObs = ConvertFrom-OpenRouterKeyResponse -Worker 'openrouter' -Response $cycleData `
+        -ObservedAt $orNow -TtlSeconds 600
+    Check 'R2 limit_remaining beats all-time usage on a resetting key' (
+        [double]$cycleObs[0].used_pct -eq 10 -and [double]$cycleObs[0].consumed -eq 2)
+
+    # R3: the truncated key label must not reach the cache.
+    $savedOrKey2 = $env:BATON_TEST_OR_KEY
+    try {
+        $env:BATON_TEST_OR_KEY = 'sk-or-test-secret'
+        $labelled = Invoke-OpenRouterKeyTransport -Provider $orRow -TimeoutSeconds 5 -Invoker {
+            param($uri, $headers, $timeout)
+            [pscustomobject]@{ data = [pscustomobject]@{ label = 'sk-or-v1-au7...890'; limit = 20; usage = 5 } }
+        }
+        Check 'R3 the key label is redacted before the body is ever cached' (
+            [string]$labelled.data.label -eq '<redacted>')
+
+        # R4: a cached row is bound to the credential that produced it.
+        $rotPath = Join-Path $tmp 'openrouter-rotate.jsonl'
+        $script:rotCalls = 0
+        $rotProbe = { param($clientVersion, $timeoutSeconds, $providerRow)
+                      $script:rotCalls++; New-OrKeyResponse 20 5 $null }
+        [void](Get-ProviderUsageProbe -Worker 'openrouter' -TransportName 'openrouter-key' -Provider $orRow `
+            -CachePath $rotPath -Now $orNow -TimeoutSeconds 5 -TtlSeconds 600 -Transport $rotProbe)
+        [void](Get-ProviderUsageProbe -Worker 'openrouter' -TransportName 'openrouter-key' -Provider $orRow `
+            -CachePath $rotPath -Now $orNow -TimeoutSeconds 5 -TtlSeconds 600 -Transport $rotProbe)
+        Check 'R4 the same key reuses the cached row' ($script:rotCalls -eq 1)
+
+        $env:BATON_TEST_OR_KEY = 'sk-or-DIFFERENT-account'
+        [void](Get-ProviderUsageProbe -Worker 'openrouter' -TransportName 'openrouter-key' -Provider $orRow `
+            -CachePath $rotPath -Now $orNow -TimeoutSeconds 5 -TtlSeconds 600 -Transport $rotProbe)
+        Check 'R4b a rotated key refuses the previous account cached row' ($script:rotCalls -eq 2)
+
+        $env:BATON_TEST_OR_KEY = $null
+        $unsetSnapshot = Get-ProviderUsageProbe -Worker 'openrouter' -TransportName 'openrouter-key' -Provider $orRow `
+            -CachePath $rotPath -Now $orNow -TimeoutSeconds 5 -TtlSeconds 600 -Transport $rotProbe
+        Check 'R4c an unset key serves no cached row at all' (
+            $null -eq $unsetSnapshot -and $script:rotCalls -eq 2)
+    } finally {
+        $env:BATON_TEST_OR_KEY = $savedOrKey2
+    }
+
     Check 'OR15 openrouter-key is a registered transport' (
         (Get-UsageProbeTransportName) -contains 'openrouter-key')
     Check 'OR16 an http openrouter row infers the transport without declaring it' (
