@@ -77,8 +77,13 @@ only the variable's *name*, so the file stays safe to commit and to share.
 
 ```powershell
 baton fleet doctor            # expect: openrouter … alive; OPENROUTER_API_KEY set
-baton fleet test openrouter --prompt 'Reply with the word PONG.'
+pwsh -NoProfile -File scripts\smoke-openrouter.ps1
 ```
+
+The smoke script runs the canary battery against every enabled OpenRouter row
+and prints the account's credit position before and after, so the cost of the
+smoke itself is visible. It refuses to run — with the variable named — when the
+key is missing, rather than letting each row 401 in turn.
 
 ### The rows
 
