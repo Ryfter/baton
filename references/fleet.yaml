@@ -90,7 +90,11 @@
 #                     Absent = no proactive probe and fully backward-compatible.
 #                     `probe: true` is meaningful only where Baton ships an adapter.
 #                     Defaults inside a present block: probe false, soft_cap_5h 75,
-#                     soft_cap_weekly 85. monthly_allowance is user-entered; find it
+#                     soft_cap_weekly 85, soft_cap_credit 85. soft_cap_credit is
+#                     percent of a PREPAID key's credit limit spent (scope
+#                     paid_credit) — a depleting balance, not a rolling window;
+#                     pair it with a vendor-side limit on the key itself.
+#                     monthly_allowance is user-entered; find it
 #                     at GitHub -> avatar (top-right) -> Copilot Settings -> usage,
 #                     shown as consumed / allowance. Never commit real values here.
 #                     probe_transport/probe_provider/probe_command/scope_id select
@@ -323,6 +327,13 @@ providers:
       X-Title: Baton
     context: 1048576
     timeout_s: 180
+    # Enable the credit probe in your live ~/.baton/fleet.yaml. soft_cap_credit
+    # is percent of the KEY's credit limit spent; crossing it reroutes off this
+    # row. It is the ergonomic guard — the vendor-side key limit is the real one.
+    # usage_policy:
+    #   probe: true
+    #   probe_transport: openrouter-key
+    #   soft_cap_credit: 85
 
   # Lineage diversity for the gates: a reviewer that shares no training ancestry
   # with claude / codex / gemini / grok is worth more on a panel than a fourth

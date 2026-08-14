@@ -763,6 +763,120 @@ Start-Sleep -Seconds 120
     Check 'SB9 a weekly figure past soft_cap_weekly is over cap through the unchanged decision path' (
         $overCapDecision.over_cap -and [string]$overCapDecision.windows[0].window -eq 'weekly' -and
         [string]$overCapDecision.windows[0].policy_knob -eq 'soft_cap_weekly')
+
+    # ── OpenRouter credit probe (prepaid balance, scope paid_credit) ──────────
+    $orNow = [datetimeoffset]::Parse('2026-08-13T18:00:00Z')
+    $orRow = @{
+        name = 'openrouter'; kind = 'http'; platform = 'openrouter'
+        base_url = 'https://openrouter.test/api'; api_key_env = 'BATON_TEST_OR_KEY'
+        usage_policy = @{ probe = $true; probe_transport = 'openrouter-key'; soft_cap_credit = [double]85 }
+    }
+    function New-OrKeyResponse($Limit, $Usage, $Reset) {
+        $data = [ordered]@{ label = 'sk-or-v1-abc...xyz'; limit = $Limit; usage = $Usage }
+        if ($null -ne $Reset) { $data.limit_reset = $Reset }
+        return ([pscustomobject]@{ data = [pscustomobject]$data })
+    }
+
+    $orObs = ConvertFrom-OpenRouterKeyResponse -Worker 'openrouter' `
+        -Response (New-OrKeyResponse 20 5 $null) -ObservedAt $orNow -TtlSeconds 600
+    Check 'OR1 usage over limit becomes a paid_credit observation with the right percent' (
+        @($orObs).Count -eq 1 -and [string]$orObs[0].scope -eq 'paid_credit' -and
+        [double]$orObs[0].used_pct -eq 25 -and [double]$orObs[0].consumed -eq 5 -and
+        [double]$orObs[0].allowance -eq 20 -and
+        [string]$orObs[0].source -eq 'openrouter_key_probe')
+    Check 'OR2 a prepaid balance invents no reset_at' (
+        -not $orObs[0].Contains('reset_at') -and -not $orObs[0].Contains('limit_reset'))
+
+    $orCycle = ConvertFrom-OpenRouterKeyResponse -Worker 'openrouter' `
+        -Response (New-OrKeyResponse 20 5 'monthly') -ObservedAt $orNow -TtlSeconds 600
+    Check 'OR3 a vendor-declared cycle is carried through' ([string]$orCycle[0].limit_reset -eq 'monthly')
+
+    Check 'OR4 an uncapped key yields NO observation rather than 0 percent' (
+        $null -eq (ConvertFrom-OpenRouterKeyResponse -Worker 'openrouter' `
+            -Response (New-OrKeyResponse $null 5 $null) -ObservedAt $orNow -TtlSeconds 600))
+    Check 'OR5 malformed and missing figures yield null' (
+        ($null -eq (ConvertFrom-OpenRouterKeyResponse -Worker 'openrouter' `
+            -Response (New-OrKeyResponse 'lots' 5 $null) -ObservedAt $orNow -TtlSeconds 600)) -and
+        ($null -eq (ConvertFrom-OpenRouterKeyResponse -Worker 'openrouter' `
+            -Response ([pscustomobject]@{ data = [pscustomobject]@{ label = 'x' } }) -ObservedAt $orNow -TtlSeconds 600)) -and
+        ($null -eq (ConvertFrom-OpenRouterKeyResponse -Worker 'openrouter' `
+            -Response ([pscustomobject]@{ nothing = $true }) -ObservedAt $orNow -TtlSeconds 600)))
+    Check 'OR6 overspend clamps to 100 rather than exceeding the percentage scale' (
+        [double](ConvertFrom-OpenRouterKeyResponse -Worker 'openrouter' `
+            -Response (New-OrKeyResponse 20 25 $null) -ObservedAt $orNow -TtlSeconds 600)[0].used_pct -eq 100)
+
+    # Identity fails closed: no key, no probe, and provably no network call.
+    $savedOrKey = $env:BATON_TEST_OR_KEY
+    try {
+        $env:BATON_TEST_OR_KEY = $null
+        $script:orCalled = $false
+        $noKeyResult = Invoke-OpenRouterKeyTransport -Provider $orRow -TimeoutSeconds 5 `
+            -Invoker { param($uri, $headers, $timeout) $script:orCalled = $true; return 'should-not-happen' }
+        Check 'OR7 an unset api_key_env probes nothing and calls nothing' (
+            $null -eq $noKeyResult -and -not $script:orCalled)
+
+        $anonRow = @{ name = 'anon'; kind = 'http'; platform = 'openrouter'; base_url = 'https://openrouter.test/api' }
+        $script:orCalled = $false
+        $noDeclResult = Invoke-OpenRouterKeyTransport -Provider $anonRow -TimeoutSeconds 5 `
+            -Invoker { param($uri, $headers, $timeout) $script:orCalled = $true; return 'should-not-happen' }
+        Check 'OR8 a row with no api_key_env never probes anonymously' (
+            $null -eq $noDeclResult -and -not $script:orCalled)
+
+        $env:BATON_TEST_OR_KEY = 'sk-or-test-secret'
+        $script:orUri = ''
+        $script:orAuth = ''
+        $liveResult = Invoke-OpenRouterKeyTransport -Provider $orRow -TimeoutSeconds 5 -Invoker {
+            param($uri, $headers, $timeout)
+            $script:orUri = [string]$uri
+            $script:orAuth = [string]$headers.Authorization
+            return (New-OrKeyResponse 20 5 $null)
+        }
+        Check 'OR9 the probe hits /v1/key with the row credential' (
+            $script:orUri -eq 'https://openrouter.test/api/v1/key' -and
+            $script:orAuth -eq 'Bearer sk-or-test-secret' -and
+            [double]$liveResult.data.limit -eq 20)
+
+        # The credential must not survive into the cache file.
+        $orCachePath = Join-Path $tmp 'openrouter-cache.jsonl'
+        $orSnapshot = Get-ProviderUsageProbe -Worker 'openrouter' -TransportName 'openrouter-key' `
+            -Provider $orRow -CachePath $orCachePath -Now $orNow -TimeoutSeconds 5 -TtlSeconds 600 `
+            -Transport { param($clientVersion, $timeoutSeconds, $providerRow) New-OrKeyResponse 20 18 $null }
+        Check 'OR10 the registry drives the probe end to end' (
+            $null -ne $orSnapshot -and @($orSnapshot.observations).Count -eq 1 -and
+            [double]$orSnapshot.observations[0].used_pct -eq 90)
+        Check 'OR11 the credential never lands in the probe cache' (
+            (Get-Content -LiteralPath $orCachePath -Raw) -notmatch 'sk-or-test-secret')
+
+        # The whole point: a credit crossing must gate dispatch like any window.
+        $orOverDecision = Get-UsageProbeCapDecision -Provider $orRow -Observations @($orSnapshot.observations)
+        Check 'OR12 spending past soft_cap_credit is over cap' (
+            $orOverDecision.over_cap -and
+            [string]$orOverDecision.windows[0].window -eq 'paid_credit' -and
+            [string]$orOverDecision.windows[0].policy_knob -eq 'soft_cap_credit')
+
+        $orUnderDecision = Get-UsageProbeCapDecision -Provider $orRow -Observations @($orObs)
+        Check 'OR13 spending under soft_cap_credit is not over cap' (
+            -not $orUnderDecision.over_cap -and @($orUnderDecision.checked).Count -eq 1)
+
+        # Preflight provenance must follow the transport that observed it.
+        $orEventPath = Join-Path $tmp 'openrouter-preflight.jsonl'
+        Add-UsagePreflightEvent -Worker 'openrouter' -Outcome 'held' `
+            -WindowDecision $orOverDecision.windows -UsagePath $orEventPath -Timestamp $orNow.ToString('o')
+        $orEvent = @(Get-Content -LiteralPath $orEventPath | ForEach-Object { $_ | ConvertFrom-Json })[0]
+        Check 'OR14 preflight events are attributed to the observing transport' (
+            [string]$orEvent.source -eq 'openrouter_key_probe')
+    } finally {
+        $env:BATON_TEST_OR_KEY = $savedOrKey
+    }
+
+    Check 'OR15 openrouter-key is a registered transport' (
+        (Get-UsageProbeTransportName) -contains 'openrouter-key')
+    Check 'OR16 an http openrouter row infers the transport without declaring it' (
+        (Resolve-UsageProbeTransportName -Provider @{
+            kind = 'http'; platform = 'openrouter'; usage_policy = @{ probe = $true } }) -eq 'openrouter-key')
+    Check 'OR17 eligibility holds for the inferred row' (
+        Test-UsageProbeEligible -Provider @{
+            kind = 'http'; platform = 'openrouter'; usage_policy = @{ probe = $true } })
 } finally {
     $env:BATON_HOME = $savedBatonHome
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

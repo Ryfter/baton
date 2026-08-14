@@ -13,6 +13,12 @@
 #>
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/usage-classify-lib.ps1"
+# Authenticated-HTTP probes borrow Resolve-FleetHttpAuth from fleet-lib. Guarded
+# so the two libraries can be dot-sourced in either order without one clobbering
+# the other's definitions; fleet-lib does not source this file, so no cycle.
+if (-not (Get-Command -Name 'Resolve-FleetHttpAuth' -ErrorAction SilentlyContinue)) {
+    . "$PSScriptRoot/fleet-lib.ps1"
+}
 
 function Get-BatonPluginVersion {
     $roots = [System.Collections.Generic.List[string]]::new()
@@ -450,6 +456,91 @@ function ConvertFrom-CodexBarUsageResponse {
     return ,([object[]]$rows.ToArray())
 }
 
+function Invoke-OpenRouterKeyTransport {
+    <# GET {base_url}/v1/key for the account behind a row's api_key_env.
+
+       Identity fails CLOSED: with no api_key_env, or an unset variable, this
+       returns $null WITHOUT a network call. There is no anonymous form of this
+       question — an unauthenticated /v1/key describes no account at all, so
+       guessing would be worse than not asking. Everything else fails soft.
+       -Invoker is the hermetic test seam; production uses Invoke-RestMethod. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [int]$TimeoutSeconds = 20,
+        [scriptblock]$Invoker
+    )
+    if ($TimeoutSeconds -le 0) { return $null }
+    try {
+        if ([string]::IsNullOrWhiteSpace([string]$Provider.api_key_env)) { return $null }
+        if ([string]::IsNullOrWhiteSpace([string]$Provider.base_url)) { return $null }
+        $auth = Resolve-FleetHttpAuth -Provider $Provider
+        if ($auth.error -or $null -eq $auth.headers) { return $null }
+        $uri = "$([string]$Provider.base_url.TrimEnd('/'))/v1/key"
+        if ($Invoker) { return (& $Invoker $uri $auth.headers $TimeoutSeconds) }
+        return Invoke-RestMethod -Uri $uri -Method Get -Headers $auth.headers -TimeoutSec $TimeoutSeconds
+    } catch {
+        # Probes observe; they never change dispatch by throwing.
+        return $null
+    }
+}
+
+function ConvertFrom-OpenRouterKeyResponse {
+    <# Normalize a /v1/key response to one `paid_credit` observation.
+
+       Prepaid credit is a DEPLETING BALANCE, not a rolling window, which drives
+       two deliberate choices:
+
+       - `limit: null` (an uncapped key) returns $null. There is no percentage of
+         infinity. Reporting 0% would read as "plenty of headroom" and is the
+         one wrong answer here; "no observation" is the honest one, and leaves
+         the vendor-side ceiling as the only guard — which is what it is.
+       - No reset_at is invented. OpenRouter only resets when limit_reset says
+         so; a fabricated timestamp would make a draining balance look like it
+         refills, and downstream advisories key off exactly that field. #>
+    param(
+        [Parameter(Mandatory)][string]$Worker,
+        [Parameter(Mandatory)]$Response,
+        [datetimeoffset]$ObservedAt = [datetimeoffset]::UtcNow,
+        [int]$TtlSeconds = 600
+    )
+    if ($TtlSeconds -le 0 -or $null -eq $Response -or $Response -is [string]) { return $null }
+    $data = Get-ProbeObjectField -InputObject $Response -Field 'data'
+    if ($null -eq $data) { return $null }
+
+    $limitRaw = Get-ProbeObjectField -InputObject $data -Field 'limit'
+    $usageRaw = Get-ProbeObjectField -InputObject $data -Field 'usage'
+    if ($null -eq $limitRaw -or $null -eq $usageRaw) { return $null }
+
+    $limit = [double]0
+    $usage = [double]0
+    if (-not [double]::TryParse([string]$limitRaw, [System.Globalization.NumberStyles]::Float,
+            [System.Globalization.CultureInfo]::InvariantCulture, [ref]$limit)) { return $null }
+    if (-not [double]::TryParse([string]$usageRaw, [System.Globalization.NumberStyles]::Float,
+            [System.Globalization.CultureInfo]::InvariantCulture, [ref]$usage)) { return $null }
+    if (-not [double]::IsFinite($limit) -or -not [double]::IsFinite($usage)) { return $null }
+    if ($limit -le 0 -or $usage -lt 0) { return $null }
+
+    # Spend past the limit is possible in flight; clamp so the cap comparison
+    # stays on the 0-100 scale the other windows use.
+    $usedPct = [math]::Min([double]100, ($usage / $limit) * 100)
+
+    $observation = [ordered]@{
+        worker = $Worker
+        scope = 'paid_credit'
+        used_pct = $usedPct
+        consumed = $usage
+        allowance = $limit
+        source = 'openrouter_key_probe'
+        observed_at = $ObservedAt.ToString('o')
+        ttl = $TtlSeconds
+        confidence = [double]0.95
+    }
+    # Only a vendor-declared cycle earns a reset; a prepaid balance gets none.
+    $limitReset = [string](Get-ProbeObjectField -InputObject $data -Field 'limit_reset')
+    if (-not [string]::IsNullOrWhiteSpace($limitReset)) { $observation.limit_reset = $limitReset.Trim() }
+    return ,([object[]]@($observation))
+}
+
 # ---------------------------------------------------------------------------
 # Usage-probe transport registry (#173)
 #
@@ -493,6 +584,23 @@ $script:UsageProbeTransports = [ordered]@{
         parse = {
             param($worker, $response, $observedAt, $ttlSeconds)
             ConvertFrom-CodexBarUsageResponse -Worker $worker -Response $response `
+                -ObservedAt $observedAt -TtlSeconds $ttlSeconds
+        }
+    }
+    'openrouter-key' = [ordered]@{
+        name = 'openrouter-key'
+        # Identity rides on the ROW's api_key_env rather than a usage_policy
+        # field — the key IS the account — so requires_policy stays empty and
+        # the invoke enforces the same fail-closed rule itself.
+        requires_policy = [string[]]@()
+        invoke = {
+            param($clientVersion, $timeoutSeconds, $providerRow)
+            if ($null -eq $providerRow) { return $null }
+            Invoke-OpenRouterKeyTransport -Provider ([hashtable]$providerRow) -TimeoutSeconds $timeoutSeconds
+        }
+        parse = {
+            param($worker, $response, $observedAt, $ttlSeconds)
+            ConvertFrom-OpenRouterKeyResponse -Worker $worker -Response $response `
                 -ObservedAt $observedAt -TtlSeconds $ttlSeconds
         }
     }
@@ -565,6 +673,11 @@ function Resolve-UsageProbeTransportName {
     # untouched; drop this branch once every probing row declares its transport.
     if (([string]$Provider.kind -eq 'cli') -and ([string]$Provider.platform -eq 'codex')) {
         return 'codex-rate-limit'
+    }
+    # An OpenRouter row carries its own identity (api_key_env), so the transport
+    # is unambiguous from the platform alone — no config field to forget.
+    if (([string]$Provider.kind -eq 'http') -and ([string]$Provider.platform -eq 'openrouter')) {
+        return 'openrouter-key'
     }
     return $null
 }
@@ -760,6 +873,7 @@ function Get-UsageProbeCapDecision {
         }
         $knob = if ([string]$observation.scope -eq 'five_hour') { 'soft_cap_5h' }
                 elseif ([string]$observation.scope -eq 'weekly') { 'soft_cap_weekly' }
+                elseif ([string]$observation.scope -eq 'paid_credit') { 'soft_cap_credit' }
                 else { $null }
         if (-not $knob -or $null -eq $policy[$knob]) { continue }
         $used = [double]$observation.used_pct
@@ -988,6 +1102,10 @@ function Add-UsagePreflightEvent {
         event = 'preflight'
         worker = $Worker
         outcome = $Outcome
+        # Provenance follows the window that actually crossed, matching
+        # Add-UsageProbeLimitedRows. Hardcoding app_server_probe here would file
+        # every non-codex transport's preflight under codex's name, which makes
+        # the journal quietly wrong rather than loudly broken.
         source = 'app_server_probe'
     }
     if ($WindowDecision) {
@@ -1004,6 +1122,10 @@ function Add-UsagePreflightEvent {
         } else {
             (([string[]]@($windowList | ForEach-Object { [string]$_.policy_knob })) -join ',')
         }
+        # The crossing window knows which transport observed it; prefer that over
+        # the codex-era default so a second transport is never misattributed.
+        $primarySource = [string]$primary.source
+        if (-not [string]::IsNullOrWhiteSpace($primarySource)) { $row.source = $primarySource }
         $row.reset_at = [string]$primary.reset_at
         if (-not [string]::IsNullOrWhiteSpace([string]$primary.scope_id)) { $row.scope_id = [string]$primary.scope_id }
         if (-not [string]::IsNullOrWhiteSpace([string]$primary.source)) { $row.source = [string]$primary.source }

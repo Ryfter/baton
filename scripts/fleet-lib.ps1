@@ -53,17 +53,21 @@ function ConvertTo-FleetUsagePolicy {
         [Parameter(Mandatory)][hashtable]$RawPolicy
     )
     $allowed = @('probe', 'probe_transport', 'probe_provider', 'probe_command', 'scope_id',
-                 'soft_cap_5h', 'soft_cap_weekly', 'monthly_allowance')
+                 'soft_cap_5h', 'soft_cap_weekly', 'soft_cap_credit', 'monthly_allowance')
     foreach ($key in $RawPolicy.Keys) {
         if ($key -notin $allowed) {
             throw "Provider '$ProviderName' usage_policy has unknown field '$key'."
         }
     }
 
+    # soft_cap_credit governs a PREPAID balance (percent of the key's credit
+    # limit spent), not a rolling window. It defaults alongside the others so a
+    # prepaid row is capped the moment it is probed, never accidentally uncapped.
     $policy = @{
         probe = $false
         soft_cap_5h = [double]75
         soft_cap_weekly = [double]85
+        soft_cap_credit = [double]85
     }
     if ($RawPolicy.ContainsKey('probe')) {
         if ($RawPolicy.probe -isnot [bool]) {
@@ -100,7 +104,7 @@ function ConvertTo-FleetUsagePolicy {
     if ($policy.ContainsKey('probe_provider') -and $policy.probe_provider -notmatch '^[A-Za-z0-9._-]{1,64}$') {
         throw "Provider '$ProviderName' usage_policy.probe_provider must be a short token (letters, digits, dot, dash, underscore)."
     }
-    foreach ($capField in @('soft_cap_5h', 'soft_cap_weekly')) {
+    foreach ($capField in @('soft_cap_5h', 'soft_cap_weekly', 'soft_cap_credit')) {
         if (-not $RawPolicy.ContainsKey($capField)) { continue }
         $capValue = [double]0
         if (-not [double]::TryParse(
