@@ -935,6 +935,116 @@ Start-Sleep -Seconds 120
         $env:BATON_TEST_OR_KEY = $savedOrKey2
     }
 
+    # ── E: the cap must actually gate Invoke-Fleet, not just produce a verdict ──
+    $savedOrKey3 = $env:BATON_TEST_OR_KEY
+    try {
+        $env:BATON_TEST_OR_KEY = 'sk-or-enforce-secret'
+        $capFleet = Join-Path $tmp 'enforce-fleet.yaml'
+        Set-Content -LiteralPath $capFleet -Encoding utf8NoBOM -Value @"
+providers:
+  - name: openrouter
+    kind: http
+    enabled: true
+    cost_tier: paid
+    platform: openrouter
+    base_url: 'https://openrouter.test/api'
+    model_default: 'vendor/model'
+    api_key_env: BATON_TEST_OR_KEY
+    usage_policy:
+      probe: true
+      probe_transport: openrouter-key
+      soft_cap_credit: 85
+"@
+        $capRow = Get-FleetProvider -Name 'openrouter' -Path $capFleet
+        $capUsage = Join-Path $tmp 'enforce-usage.jsonl'
+        $capCache = Join-Path $tmp 'enforce-cache.jsonl'
+
+        # Over cap (90% of 20 USD) -> blocked, journalled, no dispatch.
+        Add-UsageProbeCacheRow -Worker 'openrouter' -Raw ([pscustomobject]@{ data = 'x' }) `
+            -CachePath $capCache -ObservedAt $orNow -TtlSeconds 600 `
+            -Identity (Get-ProbeIdentityFingerprint -Secret 'sk-or-enforce-secret') `
+            -Observations @([ordered]@{
+                worker = 'openrouter'; scope = 'paid_credit'; used_pct = [double]90
+                consumed = [double]18; allowance = [double]20; source = 'openrouter_key_probe'
+                observed_at = $orNow.ToString('o'); ttl = 600; confidence = [double]0.95 })
+        $overSnapshot = Get-ProviderUsageProbe -Worker 'openrouter' -Provider $capRow `
+            -CachePath $capCache -Now $orNow
+        $overDecision = Get-UsageProbeCapDecision -Provider $capRow -Observations @($overSnapshot.observations)
+        Check 'E1 a cached prepaid crossing is detected through the generic entry' (
+            $overDecision.over_cap -and [string]$overDecision.windows[0].window -eq 'paid_credit')
+
+        Add-UsageProbeLimitedRows -Worker 'openrouter' -Decision $overDecision -UsagePath $capUsage
+        $limitedRow = @(Get-Content -LiteralPath $capUsage | ForEach-Object { $_ | ConvertFrom-Json })[0]
+        Check 'E2 the crossing journals under the openrouter transport, not codex' (
+            [string]$limitedRow.source -eq 'openrouter_key_probe' -and
+            [string]$limitedRow.scope -eq 'paid_credit')
+
+        # Under cap -> no crossing, dispatch proceeds.
+        $underDecision = Get-UsageProbeCapDecision -Provider $capRow -Observations @([ordered]@{
+            worker = 'openrouter'; scope = 'paid_credit'; used_pct = [double]10
+            source = 'openrouter_key_probe'; observed_at = $orNow.ToString('o')
+            ttl = 600; confidence = [double]0.95 })
+        Check 'E3 under the cap there is no crossing to act on' (-not $underDecision.over_cap)
+
+        # A subscription window must NOT be caught by the prepaid-only guard.
+        $subOnly = Get-UsageProbeCapDecision -Provider @{
+            name = 'codexish'; usage_policy = @{ soft_cap_weekly = [double]85; soft_cap_credit = [double]85 } } `
+            -Observations @([ordered]@{
+                worker = 'codexish'; scope = 'weekly'; used_pct = [double]99
+                source = 'app_server_probe'; observed_at = $orNow.ToString('o')
+                ttl = 600; confidence = [double]0.95 })
+        # E5-E7 are the checks that OR12 was missing: they drive the REAL entry
+        # point, so they fail if the guard is not wired into dispatch at all.
+        # base_url is unroutable, so a dispatch that slips past the cap fails with
+        # a transport error -- never mistakable for a cap refusal.
+        #
+        # Invoke-Fleet resolves the probe cache from BATON_HOME, so the crossing
+        # has to be seeded THERE; pointing it at a fixture path would test a cache
+        # the production path never reads.
+        Add-UsageProbeCacheRow -Worker 'openrouter' -Raw ([pscustomobject]@{ data = 'x' }) `
+            -ObservedAt ([datetimeoffset]::UtcNow) -TtlSeconds 600 `
+            -Identity (Get-ProbeIdentityFingerprint -Secret 'sk-or-enforce-secret') `
+            -Observations @([ordered]@{
+                worker = 'openrouter'; scope = 'paid_credit'; used_pct = [double]90
+                consumed = [double]18; allowance = [double]20; source = 'openrouter_key_probe'
+                observed_at = ([datetimeoffset]::UtcNow).ToString('o'); ttl = 600; confidence = [double]0.95 })
+        $blockedCall = Invoke-Fleet -Name 'openrouter' -Prompt 'should not be sent' -Path $capFleet `
+            -UsagePath (Join-Path $tmp 'e5-usage.jsonl') -NoJournal
+        Check 'E5 Invoke-Fleet REFUSES to dispatch past the prepaid cap' (
+            [string]$blockedCall.skipped -eq 'prepaid_cap_reached' -and
+            [int]$blockedCall.exit_code -ne 0 -and
+            [string]$blockedCall.stderr -match 'prepaid credit' -and
+            [string]$blockedCall.stdout -eq '')
+
+        $e5Usage = @(Get-Content -LiteralPath (Join-Path $tmp 'e5-usage.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
+        Check 'E5b the refusal is journalled as limited + held preflight' (
+            @($e5Usage | Where-Object { [string]$_.event -eq 'limited' }).Count -ge 1 -and
+            @($e5Usage | Where-Object { [string]$_.event -eq 'preflight' -and [string]$_.outcome -eq 'held' }).Count -ge 1)
+
+        # Fail open: an unknown balance dispatches rather than wedging the fleet.
+        # Rotating the key invalidates the seeded row by identity, so there is no
+        # usable observation; the unroutable host then produces a transport
+        # failure -- which is proof we got PAST the guard rather than blocked by it.
+        $env:BATON_TEST_OR_KEY = 'sk-or-rotated-no-cache'
+        $openCall = Invoke-Fleet -Name 'openrouter' -Prompt 'hello' -Path $capFleet `
+            -UsagePath (Join-Path $tmp 'e6-usage.jsonl') -NoJournal
+        Check 'E6 an unknown balance fails OPEN and still attempts dispatch' (
+            [string]$openCall.skipped -ne 'prepaid_cap_reached' -and
+            [int]$openCall.exit_code -ne 0)
+
+        # And the escape hatch stays honest.
+        $bypassCall = Invoke-Fleet -Name 'openrouter' -Prompt 'hello' -Path $capFleet `
+            -UsagePath (Join-Path $tmp 'e7-usage.jsonl') -NoJournal -NoPrepaidCap
+        Check 'E7 -NoPrepaidCap bypasses the guard' (
+            [string]$bypassCall.skipped -ne 'prepaid_cap_reached')
+
+        Check 'E4 a weekly crossing yields no paid_credit window for the prepaid guard' (
+            $subOnly.over_cap -and
+            @($subOnly.windows | Where-Object { [string]$_.window -eq 'paid_credit' }).Count -eq 0)
+    } finally {
+        $env:BATON_TEST_OR_KEY = $savedOrKey3
+    }
+
     Check 'OR15 openrouter-key is a registered transport' (
         (Get-UsageProbeTransportName) -contains 'openrouter-key')
     Check 'OR16 an http openrouter row infers the transport without declaring it' (

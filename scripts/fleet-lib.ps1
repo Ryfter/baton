@@ -865,6 +865,69 @@ function Invoke-Fleet-Cli {
     }
 }
 
+function Get-PrepaidCapGuard {
+    <# PREPAID-ONLY pre-flight cap (Kevin, 2026-08-13).
+
+       The agentic executor has always run a pre-flight probe, but only for
+       workers that edit files. Everything else — review, judge, ensemble,
+       fleet-ask — spends through Invoke-Fleet with no cap at all, which is fine
+       for a subscription (overuse costs latency) and NOT fine for a prepaid
+       balance (overuse costs money that does not come back).
+
+       So the guard here is deliberately narrow: it acts only on a `paid_credit`
+       crossing. Subscription windows (five_hour / weekly) are observed and
+       reported exactly as before, so codex's behaviour on this path is
+       unchanged — widening that is a separate decision.
+
+       FAIL OPEN, LOUDLY. An unknown balance dispatches, because a downed
+       /v1/key must never wedge the fleet; the vendor-side key limit is the
+       backstop that does not depend on Baton being correct. Returns
+       @{ blocked; result; advisory } — `result` is a normalized failure row. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [string]$UsagePath,
+        [switch]$NoUsageJournal
+    )
+    $none = @{ blocked = $false; result = $null; advisory = $null }
+    # Loaded lazily, not at file scope: usage-probe-lib dot-sources THIS file for
+    # Resolve-FleetHttpAuth, so a top-level source here would be circular.
+    if (-not (Get-Command -Name 'Get-ProviderUsageProbe' -ErrorAction SilentlyContinue)) {
+        . "$PSScriptRoot/usage-probe-lib.ps1"
+    }
+    if (-not (Test-UsageProbeEligible -Provider $Provider)) { return $none }
+
+    $name = [string]$Provider.name
+    $snapshot = Get-ProviderUsageProbe -Worker $name -Provider $Provider
+    if ($null -eq $snapshot) {
+        # Say it out loud: silence here would be indistinguishable from "under cap".
+        return @{ blocked = $false; result = $null
+                  advisory = "usage preflight: $name balance unknown (probe unavailable); dispatching uncapped" }
+    }
+    $decision = Get-UsageProbeCapDecision -Provider $Provider -Observations @($snapshot.observations)
+    $prepaid = @($decision.windows | Where-Object { [string]$_.window -eq 'paid_credit' })
+    if ($prepaid.Count -eq 0) { return $none }
+
+    $window = $prepaid[0]
+    $used = [math]::Round([double]$window.used_pct, 1)
+    $cap = [math]::Round([double]$window.cap, 1)
+    $line = "usage preflight: $name has spent $used% of its prepaid credit, reached $($window.policy_knob)=$cap; refusing to spend further"
+    if (-not $NoUsageJournal) {
+        try {
+            Add-UsageProbeLimitedRows -Worker $name -Decision @{ windows = @($prepaid) } -UsagePath $UsagePath
+            Add-UsagePreflightEvent -Worker $name -Outcome 'held' -WindowDecision $prepaid `
+                -UsagePath $UsagePath -Reason 'prepaid soft cap reached'
+        } catch {
+            # Journalling is advisory; never let it change the verdict.
+        }
+    }
+    return @{
+        blocked = $true
+        advisory = $line
+        result = @{ stdout = ''; stderr = $line; exit_code = 1; duration_s = 0
+                    skipped = 'prepaid_cap_reached' }
+    }
+}
+
 function Invoke-Fleet {
     <# Main entry. Dispatches to declared transports and journals the invocation. #>
     param(
@@ -876,13 +939,19 @@ function Invoke-Fleet {
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md'),
         [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl'),
         [switch]$NoUsageJournal,
-        [switch]$NoJournal
+        [switch]$NoJournal,
+        [switch]$NoPrepaidCap
     )
     $provider = Get-FleetProvider -Name $Name -Path $Path
     if (-not $provider) { throw "Unknown fleet provider '$Name'. Run /fleet list to see valid names." }
     if ($provider.enabled -ne $true) { throw "Provider '$Name' is disabled in fleet.yaml. Set enabled: true to use." }
 
-    $promptGuard = Get-InstrumentPromptGuard -Instrument $provider -Prompt $Prompt
+    $prepaidGuard = if ($NoPrepaidCap) { @{ blocked = $false; result = $null; advisory = $null } }
+                    else { Get-PrepaidCapGuard -Provider $provider -UsagePath $UsagePath -NoUsageJournal:$NoUsageJournal }
+    if ($prepaidGuard.advisory) { [Console]::Error.WriteLine([string]$prepaidGuard.advisory) }
+
+    $promptGuard = if ($prepaidGuard.blocked) { $prepaidGuard.result }
+                   else { Get-InstrumentPromptGuard -Instrument $provider -Prompt $Prompt }
     if ($null -ne $promptGuard) {
         $result = $promptGuard
     } elseif ($provider.kind -eq 'cli') {
