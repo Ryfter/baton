@@ -49,6 +49,17 @@ providers:
       soft_cap_5h: 70.5
       soft_cap_weekly: 82
       monthly_allowance: 900
+  - name: probe-transport-policy
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    command_template: 'tool "{{prompt}}"'
+    usage_policy:
+      probe: true
+      probe_transport: transport-a
+      probe_provider: provider-a
+      probe_command: tool-binary-placeholder
+      scope_id: scope-window-a
 '@
     $policyRows = Read-Fleet -Path $policyFleet
     $noPolicy = $policyRows | Where-Object { $_.name -eq 'no-policy' }
@@ -68,6 +79,15 @@ providers:
     Assert 'usage policy child fields do not leak onto provider' (
         -not $explicitPolicy.ContainsKey('probe') -and
         -not $explicitPolicy.ContainsKey('soft_cap_5h'))
+    # #173: probe identity (which account), binary override, and sub-quota binding.
+    $transportPolicy = $policyRows | Where-Object { $_.name -eq 'probe-transport-policy' }
+    Assert 'usage policy accepts probe identity, binary override, and scope binding' (
+        [string]$transportPolicy.usage_policy.probe_transport -eq 'transport-a' -and
+        [string]$transportPolicy.usage_policy.probe_provider -eq 'provider-a' -and
+        [string]$transportPolicy.usage_policy.probe_command -eq 'tool-binary-placeholder' -and
+        [string]$transportPolicy.usage_policy.scope_id -eq 'scope-window-a')
+    Assert 'scope_id is free-form: no enum, no known-window list to drift against' (
+        $transportPolicy.usage_policy.scope_id -is [string])
 
     $invalidPolicyCases = @(
         @{ name = 'probe'; line = '      probe: yes'; field = 'probe' },
@@ -75,7 +95,9 @@ providers:
         @{ name = 'high-cap'; line = '      soft_cap_weekly: 101'; field = 'soft_cap_weekly' },
         @{ name = 'text-cap'; line = '      soft_cap_5h: many'; field = 'soft_cap_5h' },
         @{ name = 'zero-allowance'; line = '      monthly_allowance: 0'; field = 'monthly_allowance' },
-        @{ name = 'text-allowance'; line = '      monthly_allowance: plenty'; field = 'monthly_allowance' }
+        @{ name = 'text-allowance'; line = '      monthly_allowance: plenty'; field = 'monthly_allowance' },
+        @{ name = 'unknown-field'; line = '      probe_scope: whatever'; field = 'probe_scope' },
+        @{ name = 'shell-y-provider'; line = '      probe_provider: provider a; echo'; field = 'probe_provider' }
     )
     foreach ($invalidCase in $invalidPolicyCases) {
         $badFleet = Join-Path $policyDir ("bad-{0}.yaml" -f $invalidCase.name)

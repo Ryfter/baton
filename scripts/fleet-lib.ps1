@@ -12,6 +12,12 @@
 
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/usage-classify-lib.ps1"
+. "$PSScriptRoot/http-auth-lib.ps1"
+# The prepaid cap guard lives on the dispatch path, so the probe library is a
+# real script-scope dependency. It can be sourced here (rather than lazily
+# inside Invoke-Fleet) because the credential helpers both libraries need now
+# live in the http-auth leaf above — there is no longer a cycle to dodge.
+. "$PSScriptRoot/usage-probe-lib.ps1"
 $script:DefaultFleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml')
 
 function Set-JsonFileAtomic {
@@ -52,17 +58,22 @@ function ConvertTo-FleetUsagePolicy {
         [Parameter(Mandatory)][string]$ProviderName,
         [Parameter(Mandatory)][hashtable]$RawPolicy
     )
-    $allowed = @('probe', 'soft_cap_5h', 'soft_cap_weekly', 'monthly_allowance')
+    $allowed = @('probe', 'probe_transport', 'probe_provider', 'probe_command', 'scope_id',
+                 'soft_cap_5h', 'soft_cap_weekly', 'soft_cap_credit', 'monthly_allowance')
     foreach ($key in $RawPolicy.Keys) {
         if ($key -notin $allowed) {
             throw "Provider '$ProviderName' usage_policy has unknown field '$key'."
         }
     }
 
+    # soft_cap_credit governs a PREPAID balance (percent of the key's credit
+    # limit spent), not a rolling window. It defaults alongside the others so a
+    # prepaid row is capped the moment it is probed, never accidentally uncapped.
     $policy = @{
         probe = $false
         soft_cap_5h = [double]75
         soft_cap_weekly = [double]85
+        soft_cap_credit = [double]85
     }
     if ($RawPolicy.ContainsKey('probe')) {
         if ($RawPolicy.probe -isnot [bool]) {
@@ -70,7 +81,36 @@ function ConvertTo-FleetUsagePolicy {
         }
         $policy.probe = [bool]$RawPolicy.probe
     }
-    foreach ($capField in @('soft_cap_5h', 'soft_cap_weekly')) {
+    # #173: the transport NAME this row is probed with. Only shape is validated here;
+    # an unregistered name is resolved to "no probe" at dispatch time (fail closed)
+    # rather than failing the whole config parse. Absent => back-compat inference.
+    if ($RawPolicy.ContainsKey('probe_transport')) {
+        $transportName = [string]$RawPolicy.probe_transport
+        if ([string]::IsNullOrWhiteSpace($transportName)) {
+            throw "Provider '$ProviderName' usage_policy.probe_transport must be a non-empty transport name."
+        }
+        $policy.probe_transport = $transportName.Trim()
+    }
+    # #173: identity + binary + sub-quota binding for transports that need them.
+    #  probe_provider — WHICH account the probe tool should be asked about. Absent
+    #    means the transport does not run; nothing is ever inferred from the row name.
+    #  probe_command  — optional explicit path to the probe binary (else PATH, else
+    #    the platform default). Kept out of the repo; it lives in box-private config.
+    #  scope_id       — optional binding to a model-scoped sub-quota window. The set
+    #    of windows is plan-dependent, so this is a free-form id, never an enum; a
+    #    bound id missing from a response falls back to the plan-wide window.
+    foreach ($textField in @('probe_provider', 'probe_command', 'scope_id')) {
+        if (-not $RawPolicy.ContainsKey($textField)) { continue }
+        $textValue = [string]$RawPolicy[$textField]
+        if ([string]::IsNullOrWhiteSpace($textValue)) {
+            throw "Provider '$ProviderName' usage_policy.$textField must be a non-empty string."
+        }
+        $policy[$textField] = $textValue.Trim()
+    }
+    if ($policy.ContainsKey('probe_provider') -and $policy.probe_provider -notmatch '^[A-Za-z0-9._-]{1,64}$') {
+        throw "Provider '$ProviderName' usage_policy.probe_provider must be a short token (letters, digits, dot, dash, underscore)."
+    }
+    foreach ($capField in @('soft_cap_5h', 'soft_cap_weekly', 'soft_cap_credit')) {
         if (-not $RawPolicy.ContainsKey($capField)) { continue }
         $capValue = [double]0
         if (-not [double]::TryParse(
@@ -144,7 +184,7 @@ function Read-Fleet {
         $indent = ($rawLine -replace '\S.*$', '').Length
 
         # Supported child-block opener (no value on the line).
-        $blockMatch = [regex]::Match($rawLine, '^(\s+)(env|usage_policy):\s*$')
+        $blockMatch = [regex]::Match($rawLine, '^(\s+)(env|usage_policy|headers):\s*$')
         if ($blockMatch.Success) {
             $blockName = [string]$blockMatch.Groups[2].Value
             $current[$blockName] = @{}
@@ -343,7 +383,8 @@ function Get-InstrumentPromptGuard {
 function Resolve-FleetHttpModel {
     param(
         [Parameter(Mandatory)][hashtable]$Provider,
-        [string]$Model
+        [string]$Model,
+        [hashtable]$Headers
     )
     if ($Model) { return $Model }
     if ($Provider.model_default -and [string]$Provider.model_default -ne 'auto') {
@@ -351,7 +392,9 @@ function Resolve-FleetHttpModel {
     }
     if (-not $Provider.base_url) { throw 'HTTP instrument has no base_url.' }
     $modelsUri = "$([string]$Provider.base_url.TrimEnd('/'))/v1/models"
-    $models = Invoke-RestMethod -Uri $modelsUri -Method Get -TimeoutSec 10
+    $modelArgs = @{ Uri = $modelsUri; Method = 'Get'; TimeoutSec = 10 }
+    if ($Headers -and $Headers.Count -gt 0) { $modelArgs.Headers = $Headers }
+    $models = Invoke-RestMethod @modelArgs
     $firstModel = [string]$models.data[0].id
     if ([string]::IsNullOrWhiteSpace($firstModel)) {
         throw "HTTP instrument model resolution returned no models from $modelsUri."
@@ -394,9 +437,14 @@ function Invoke-FleetHttpChat {
         [string]$Model
     )
     $start = Get-Date
+    $secret = $null
     try {
         if (-not $Provider.base_url) { throw 'HTTP instrument has no base_url.' }
-        $modelName = Resolve-FleetHttpModel -Provider $Provider -Model $Model
+        $auth = Resolve-FleetHttpAuth -Provider $Provider
+        if ($auth.error) { throw [string]$auth.error }
+        $secret = [string]$auth.secret
+        $headers = [hashtable]$auth.headers
+        $modelName = Resolve-FleetHttpModel -Provider $Provider -Model $Model -Headers $headers
         $endpoint = if ($Provider.endpoint) { [string]$Provider.endpoint } else { '/v1/chat/completions' }
         if (-not $endpoint.StartsWith('/')) { $endpoint = "/$endpoint" }
         $uri = "$([string]$Provider.base_url.TrimEnd('/'))$endpoint"
@@ -408,8 +456,12 @@ function Invoke-FleetHttpChat {
         $body = ConvertTo-Json -InputObject $bodyObject -Depth 10 -Compress
         $timeoutS = if ($Provider.timeout_s) { [int]$Provider.timeout_s } else { 300 }
         if ($timeoutS -le 0) { throw 'HTTP instrument timeout_s must be positive.' }
-        $response = Invoke-RestMethod -Uri $uri -Method Post -Body $body `
-            -ContentType 'application/json' -TimeoutSec $timeoutS
+        $restArgs = @{
+            Uri = $uri; Method = 'Post'; Body = $body
+            ContentType = 'application/json'; TimeoutSec = $timeoutS
+        }
+        if ($headers -and $headers.Count -gt 0) { $restArgs.Headers = $headers }
+        $response = Invoke-RestMethod @restArgs
         $text = [string]$response.choices[0].message.content
         $duration = [int]((Get-Date) - $start).TotalSeconds
         $result = @{ stdout = $text; stderr = ''; exit_code = 0; duration_s = $duration }
@@ -421,7 +473,9 @@ function Invoke-FleetHttpChat {
         return $result
     } catch {
         $duration = [int]((Get-Date) - $start).TotalSeconds
-        return @{ stdout = ''; stderr = $_.Exception.Message; exit_code = 1; duration_s = $duration }
+        # Scrub the credential: this stderr is journaled.
+        $message = Protect-FleetSecret -Text ([string]$_.Exception.Message) -Secret $secret
+        return @{ stdout = ''; stderr = $message; exit_code = 1; duration_s = $duration }
     }
 }
 
@@ -771,6 +825,80 @@ function Invoke-Fleet-Cli {
     }
 }
 
+function Get-PrepaidCapGuard {
+    <# PREPAID-ONLY pre-flight cap (Kevin, 2026-08-13).
+
+       The agentic executor has always run a pre-flight probe, but only for
+       workers that edit files. Everything else — review, judge, ensemble,
+       fleet-ask — spends through Invoke-Fleet with no cap at all, which is fine
+       for a subscription (overuse costs latency) and NOT fine for a prepaid
+       balance (overuse costs money that does not come back).
+
+       So the guard here is deliberately narrow: it acts only on a `paid_credit`
+       crossing. Subscription windows (five_hour / weekly) are observed and
+       reported exactly as before, so codex's behaviour on this path is
+       unchanged — widening that is a separate decision.
+
+       FAIL OPEN, LOUDLY. An unknown balance dispatches, because a downed
+       /v1/key must never wedge the fleet; the vendor-side key limit is the
+       backstop that does not depend on Baton being correct. Returns
+       @{ blocked; result; advisory } — `result` is a normalized failure row. #>
+    param(
+        [Parameter(Mandatory)][hashtable]$Provider,
+        [string]$UsagePath,
+        [switch]$NoUsageJournal
+    )
+    $none = @{ blocked = $false; result = $null; advisory = $null }
+    # EVERYTHING is inside one try. This guard sits on the hot path of every
+    # dispatch, so a throw here would abort ask/review/judge/ensemble outright —
+    # strictly worse than the uncapped spending it exists to prevent. Fail-open
+    # has to be structural, not a promise made by the happy path.
+    try {
+        # Cheapest gate first, and the one that keeps this PREPAID-ONLY: skip any
+        # row whose transport cannot even emit paid_credit. Without this, a
+        # probe-eligible codex row would pay a ~20s app-server spawn on every
+        # fleet-ask only to have its subscription windows discarded below.
+        if (-not (Test-UsageProbeEligible -Provider $Provider)) { return $none }
+        if (-not (Test-UsageProbeTransportScope -Provider $Provider -Scope 'paid_credit')) { return $none }
+
+        $name = [string]$Provider.name
+        $snapshot = Get-ProviderUsageProbe -Worker $name -Provider $Provider
+        if ($null -eq $snapshot) {
+            # Say it out loud: silence would be indistinguishable from "under cap".
+            return @{ blocked = $false; result = $null
+                      advisory = "usage preflight: $name balance unknown (probe unavailable); dispatching uncapped" }
+        }
+        $decision = Get-UsageProbeCapDecision -Provider $Provider -Observations @($snapshot.observations)
+        $prepaid = @($decision.windows | Where-Object { [string]$_.window -eq 'paid_credit' })
+        if ($prepaid.Count -eq 0) { return $none }
+
+        $window = $prepaid[0]
+        $used = [math]::Round([double]$window.used_pct, 1)
+        $cap = [math]::Round([double]$window.cap, 1)
+        $line = "usage preflight: $name has spent $used% of its prepaid credit, reached $($window.policy_knob)=$cap; refusing to spend further"
+        if (-not $NoUsageJournal) {
+            try {
+                Add-UsageProbeLimitedRows -Worker $name -Decision @{ windows = @($prepaid) } -UsagePath $UsagePath
+                Add-UsagePreflightEvent -Worker $name -Outcome 'held' -WindowDecision $prepaid `
+                    -UsagePath $UsagePath -Reason 'prepaid soft cap reached'
+            } catch {
+                # Journalling is advisory; never let it change the verdict.
+            }
+        }
+        return @{
+            blocked = $true
+            advisory = $line
+            result = @{ stdout = ''; stderr = $line; exit_code = 1; duration_s = 0
+                        skipped = 'prepaid_cap_reached' }
+        }
+    } catch {
+        # Named, not swallowed: an operator who sees this knows the balance went
+        # unchecked for this dispatch and the vendor-side key limit is carrying it.
+        return @{ blocked = $false; result = $null
+                  advisory = "usage preflight: cap check failed ($($_.Exception.Message)); dispatching uncapped" }
+    }
+}
+
 function Invoke-Fleet {
     <# Main entry. Dispatches to declared transports and journals the invocation. #>
     param(
@@ -782,13 +910,19 @@ function Invoke-Fleet {
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md'),
         [string]$UsagePath = (Join-Path (Get-BatonHome) 'usage-journal.jsonl'),
         [switch]$NoUsageJournal,
-        [switch]$NoJournal
+        [switch]$NoJournal,
+        [switch]$NoPrepaidCap
     )
     $provider = Get-FleetProvider -Name $Name -Path $Path
     if (-not $provider) { throw "Unknown fleet provider '$Name'. Run /fleet list to see valid names." }
     if ($provider.enabled -ne $true) { throw "Provider '$Name' is disabled in fleet.yaml. Set enabled: true to use." }
 
-    $promptGuard = Get-InstrumentPromptGuard -Instrument $provider -Prompt $Prompt
+    $prepaidGuard = if ($NoPrepaidCap) { @{ blocked = $false; result = $null; advisory = $null } }
+                    else { Get-PrepaidCapGuard -Provider $provider -UsagePath $UsagePath -NoUsageJournal:$NoUsageJournal }
+    if ($prepaidGuard.advisory) { [Console]::Error.WriteLine([string]$prepaidGuard.advisory) }
+
+    $promptGuard = if ($prepaidGuard.blocked) { $prepaidGuard.result }
+                   else { Get-InstrumentPromptGuard -Instrument $provider -Prompt $Prompt }
     if ($null -ne $promptGuard) {
         $result = $promptGuard
     } elseif ($provider.kind -eq 'cli') {
@@ -837,7 +971,16 @@ function Invoke-Fleet {
             $overflowFloor = $declaredFloor
         }
     }
-    $usageObservation = if ($NoUsageJournal) {
+    # A prepaid cap refusal is BATON's decision, not a provider failure, so it is
+    # never fed to the reactive classifier. Left in, the guard's own wording
+    # ("...prepaid credit, reached soft_cap_credit=85...") sits one comma away
+    # from the `credits?\s+exhausted` quota pattern — a rewording would silently
+    # journal a phantom quota_exhausted event and lock out a provider that is
+    # working fine. The provider never even saw the request. (prompt_too_large
+    # keeps classifying: its overflow verdict is deliberate and correct.)
+    $usageObservation = if ([string]$result.skipped -eq 'prepaid_cap_reached') {
+        [ordered]@{ event = $null; classification = 'none'; reason = 'baton-side prepaid cap refusal' }
+    } elseif ($NoUsageJournal) {
         Get-UsageFailureObservation -ExitCode ([int]$result.exit_code) `
             -Stdout ([string]$result.stdout) -Stderr ([string]$result.stderr) `
             -PromptBytes $promptBytes -OverflowFloorBytes $overflowFloor

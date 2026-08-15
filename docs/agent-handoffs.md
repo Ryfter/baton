@@ -48,6 +48,13 @@ private data repo — see the Grimdex split section below).
    checklist explicitly, THEN prompt the human to compact the conversation. Save
    before compacting, always. Canonical copy: `~/.claude/rules/task-group-closeout.md`.
 
+8. **Credentials live in the environment, never in a registry file.** An
+   authenticated `kind: http` row names the *variable* (`api_key_env`), and the
+   transport fails loudly rather than falling back to an anonymous request. See
+   `docs/authenticated-instruments.md`. Corollary for prepaid providers
+   (OpenRouter is the first): the spend ceiling is set on the vendor's key as
+   well as in fleet policy — a Baton bug must not be able to drain a balance.
+
 Shared rules live HERE. Model files should **reference** this section, not re-copy
 it — re-copying is how drift starts.
 
@@ -76,6 +83,17 @@ it — re-copying is how drift starts.
   scope oracle and the frozen verification contract are unchanged and remain the
   sole authorities either way — diff-apply only changes who holds the pen, not who
   judges the result. See `docs/diff-apply.md` for the full opt-in and grammar.
+
+- **Usage probes** (`usage_policy.probe_transport`, #173) decide whether a row's
+  soft caps are enforceable or decorative. A probe is resolved by transport NAME,
+  observes only, and fails soft — except identity, which fails closed: without
+  `usage_policy.probe_provider` the transport does not run rather than guess which
+  account it is querying. Rows can bind to a model-scoped sub-quota via
+  `usage_policy.scope_id`; a bound id absent from a response falls back to the
+  plan-wide window, never to "unlimited," because the set of windows is
+  plan-dependent and shrinks when a plan is downgraded. On Windows, `codexbar-cli`
+  is the recommended (and for some providers the only) way to read remaining plan
+  allowance. See `docs/usage-probes.md`.
 
 ## Drift policy
 - Change a **shared** rule → change it **here** only; the model files don't repeat
