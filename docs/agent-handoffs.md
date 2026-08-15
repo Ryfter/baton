@@ -115,9 +115,11 @@ it — re-copying is how drift starts.
   security expectations, disciplined promotion). Smallest, most aggressively trimmed layer.
 - **Grimlore** remembers **why / who / context** (rationale, history, environment, hardware,
   organization, audience, models, research). Format is **OKF v0.2** (`grimdex:d021`). Repo
-  `Ryfter/Grimlore` (**private**, `D:\Dev\Grimlore`) stood up 2026-08-15 — structure and authoring
-  rules only; content is **not populated** and **Baton does not read it yet**. Do not write a
-  code path that assumes Grimlore context is available.
+  `Ryfter/Grimlore` (**private**, `D:\Dev\Grimlore`) stood up 2026-08-15 (`grimdex-d026`).
+  Baton's landscape lives at `D:\Dev\Grimlore\projects\baton\` — start at `BATON.md`,
+  then `index.md`. Reach it by **file path** (same as Grimdex). No indexer, no MCP,
+  no assumption that every dispatch has Grimlore loaded. Isolation enforcement is
+  still unchosen: load this bundle + `universal/` only.
 - **Grimdex Baton** (this project) decides **what happens next and when**, then executes.
 - **Grimdex-Know** is **not a layer** — it is the name of the private personalized Grimdex
   instance (`Ryfter/grimdex-know`, mounted at `D:\Dev\Grimdex`). Never diagram it as a peer.

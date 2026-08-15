@@ -131,7 +131,8 @@ already how Baton's gates work.
 guidance *and* Grimlore context, but whether it queries both directly or goes through a shared
 context-loading mechanism is an open implementation question. Do not build one in on
 assumption. (Note: today Baton reaches Grimdex via plain file paths + the pointer stanza,
-and Grimlore does not exist yet, so nothing forces the question.)
+and Grimlore is reached the same way: a file path to
+`D:\Dev\Grimlore\projects\baton\BATON.md`. Do not invent a second loader.)
 
 ## Project isolation
 
