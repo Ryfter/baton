@@ -18,7 +18,12 @@ $script:DefaultKbRoot = (Join-Path $HOME '.claude/knowledge')
 $script:DefaultOptOut = (Join-Path $HOME '.claude/decisions-off')
 
 function Get-NextDecisionId {
-    <# Scan ProjectDecisionsDir for the highest dNNN-*.md and return the next id. #>
+    <#
+      Scan ProjectDecisionsDir for the highest dNNN-*.md and return the next NUMBER (dNNN).
+      This is the FILENAME form. Filenames stay bare because the folder already namespaces
+      them on disk; the project prefix exists to disambiguate *references*. Pair with
+      Get-DecisionPrefix / Get-QualifiedDecisionId for the id written into frontmatter.
+    #>
     param([Parameter(Mandatory)][string]$ProjectDecisionsDir)
     if (-not (Test-Path $ProjectDecisionsDir)) { return 'd001' }
     $max = 0
@@ -29,6 +34,34 @@ function Get-NextDecisionId {
         }
     }
     return ('d{0:D3}' -f ($max + 1))
+}
+
+function Get-DecisionPrefix {
+    <#
+      Resolve a project tier's decision-id prefix: `projects/<id>/.prefix` if present
+      (a short alias, for project ids too long to read comfortably), else the project id
+      itself. Most projects need no .prefix file at all.
+    #>
+    param([Parameter(Mandatory)][string]$ProjectDir)
+    $prefixFile = Join-Path $ProjectDir '.prefix'
+    if (Test-Path $prefixFile) {
+        $alias = (Get-Content $prefixFile -Raw).Trim()
+        if ($alias) { return $alias }
+    }
+    return (Split-Path $ProjectDir -Leaf)
+}
+
+function Get-QualifiedDecisionId {
+    <#
+      Canonical, project-qualified decision id: `<prefix>-dNNN` (e.g. baton-d107).
+      Ids are assigned per project tier, so a bare dNNN is ambiguous across projects —
+      this is the form that goes in frontmatter and in every cross-project reference.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ProjectDir,
+        [Parameter(Mandatory)][string]$Number      # bare dNNN from Get-NextDecisionId
+    )
+    return ('{0}-{1}' -f (Get-DecisionPrefix -ProjectDir $ProjectDir), $Number)
 }
 
 function Test-DecisionsOptOut {
@@ -77,7 +110,8 @@ function Add-DecisionRecord {
     $decDir = Join-Path $projDir 'decisions'
     if (-not (Test-Path $decDir)) { New-Item -ItemType Directory -Force -Path $decDir | Out-Null }
 
-    $id = Get-NextDecisionId -ProjectDecisionsDir $decDir
+    $num = Get-NextDecisionId -ProjectDecisionsDir $decDir          # dNNN — filename form
+    $id  = Get-QualifiedDecisionId -ProjectDir $projDir -Number $num # <prefix>-dNNN — canonical id
     $slug = if (Get-Command ConvertTo-JobSlug -ErrorAction SilentlyContinue) {
         ConvertTo-JobSlug $Title
     } else {
@@ -88,7 +122,7 @@ function Add-DecisionRecord {
         if ([string]::IsNullOrEmpty($s)) { $s = 'untitled' }
         $s.Substring(0, [Math]::Min(40, $s.Length))
     }
-    $path = Join-Path $decDir "$id-$slug.md"
+    $path = Join-Path $decDir "$num-$slug.md"
 
     $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
     $altLines = ($Alternatives | ForEach-Object { "- $_" }) -join "`n"
@@ -218,7 +252,8 @@ function Add-DecisionRecordFromFile {
     $decDir = Join-Path $projDir 'decisions'
     if (-not (Test-Path $decDir)) { New-Item -ItemType Directory -Force -Path $decDir | Out-Null }
 
-    $id = Get-NextDecisionId -ProjectDecisionsDir $decDir
+    $num = Get-NextDecisionId -ProjectDecisionsDir $decDir          # dNNN — filename form
+    $id  = Get-QualifiedDecisionId -ProjectDir $projDir -Number $num # <prefix>-dNNN — canonical id
     $title = $fm['title']
     $slug = if (Get-Command ConvertTo-JobSlug -ErrorAction SilentlyContinue) {
         ConvertTo-JobSlug $title
@@ -227,7 +262,7 @@ function Add-DecisionRecordFromFile {
         if ([string]::IsNullOrEmpty($s)) { $s = 'untitled' }
         $s.Substring(0, [Math]::Min(40, $s.Length))
     }
-    $finalPath = Join-Path $decDir "$id-$slug.md"
+    $finalPath = Join-Path $decDir "$num-$slug.md"
 
     $ts = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
     $jobVal   = if ($fm['job'])   { $fm['job'] }   else { 'null' }
@@ -275,7 +310,11 @@ function Find-DecisionRecordPath {
     )
     $decDir = Join-Path $KbRoot "projects/$Project/decisions"
     if (-not (Test-Path $decDir)) { return $null }
-    $match = Get-ChildItem -Path $decDir -Filter "$Id-*.md" -ErrorAction SilentlyContinue | Select-Object -First 1
+    # Ids are project-qualified (`baton-d107`) but filenames stay bare (`d107-<slug>.md`) —
+    # the folder namespaces the file, the prefix namespaces the reference. Strip the prefix
+    # before globbing so both forms resolve; callers hand us whichever they hold.
+    $bare = if ($Id -match '(d\d{3,})$') { $Matches[1] } else { $Id }
+    $match = Get-ChildItem -Path $decDir -Filter "$bare-*.md" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($match) { return $match.FullName }
     return $null
 }
@@ -321,7 +360,8 @@ function Read-Decisions {
     $out = @()
     foreach ($f in (Get-ChildItem -Path $decDir -Filter 'd*.md' -ErrorAction SilentlyContinue)) {
         $raw = Get-Content $f.FullName -Raw
-        $id    = if ($raw -match '(?m)^id:\s+(d\d{3})')          { $matches[1] } else { $f.BaseName }
+        # Accepts both the canonical qualified form (baton-d107) and legacy bare dNNN.
+        $id    = if ($raw -match '(?m)^id:\s+([a-z0-9-]*d\d{3,})') { $matches[1] } else { $f.BaseName }
         $title = if ($raw -match '(?m)^#\s+(.+)$')                { $matches[1].Trim() } else { '(no title)' }
         $conf  = if ($raw -match '(?m)^confidence:\s+(\w+)')      { $matches[1] } else { 'unknown' }
         $flag  = if ($raw -match '(?m)^flag:\s+(\S+)')            { $matches[1] } else { 'null' }

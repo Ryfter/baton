@@ -175,8 +175,10 @@ expense of the coding bot being awesome"). The general-conductor / non-coding pr
 the *artifact + review-role + check* abstraction **opportunistically at the named-review-roster
 seam**, never as a rescope or rebrand. Coding priority order is unchanged (d083 → V3 → V4).
 Keystone if/when pursued: a codified **Voice/Brand skill** that copywriter + product-marketing
-inherit; AI analysis is the strongest-check non-coding profile (Kevin's BI wheelhouse). (Grimdex
-reserves `Grimlore` for the future general second-brain KB — the knowledge layer anticipates this split.)
+inherit; AI analysis is the strongest-check non-coding profile (Kevin's BI wheelhouse). (**Update
+2026-08-14, `grimdex:d018`:** `Grimlore` is no longer merely *reserved* — it is now the ecosystem's
+context/knowledge layer, and the general second-brain role lands there. See
+[`ecosystem-boundaries.md`](ecosystem-boundaries.md).)
 
 ### Housekeeping ideas (no issue tracked yet)
 

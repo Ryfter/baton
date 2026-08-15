@@ -19,6 +19,19 @@ PROGRAMMING DECISIONS, rules, and lessons → record them in **Grimdex** at
 - Grimdex engine is open source: <https://github.com/Ryfter/Grimdex>.
 <!-- grimdex:end -->
 
+<!-- grimlore:start -->
+# Grimlore — context layer (read when why/who/landscape matters)
+
+WHY / WHO / durable context → **Grimlore** at `D:\Dev\Grimlore`.
+Baton landscape (watched repos, keep-vs-adopt):
+`D:\Dev\Grimlore\projects\baton\BATON.md` then `index.md`.
+
+- Authoring: `D:\Dev\Grimlore\GRIMLORE.md` (OKF v0.2 + `x-grimdex`).
+- Do not copy Source cards into this repo. Reference the path or
+  `x-grimdex.repo`.
+- Decisions still go to Grimdex, not Grimlore.
+<!-- grimlore:end -->
+
 ## Project command center (from any agent)
 
 Baton's project registry and front door are harness-neutral. From Codex (or

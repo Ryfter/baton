@@ -13,6 +13,7 @@
 . "$PSScriptRoot/verification-lib.ps1"   # Invoke-VerificationContract etc. (d082 V2)
 . "$PSScriptRoot/routing-observe-lib.ps1"   # #159 write-on-observe outcome ratings
 . "$PSScriptRoot/diff-apply-lib.ps1"   # d103 parse/apply/context for the diff-apply dispatch branch
+. "$PSScriptRoot/coordination-lib.ps1"   # resource facet: admission control for LOCAL dispatch only
 
 function New-RunWorktree {
     <# Throwaway worktree at <repo-parent>/.baton-worktrees/<run-id> on a new branch
@@ -769,6 +770,275 @@ function Invoke-DiffApplyAttempt {
     return @{ result = $attemptResult; dispatch_error = ''; prompt_sent = $prompt }
 }
 
+# ---------------------------------------------------------------------------
+# Coordination gate (resource facet) — the ONLY call site of coordination-lib.
+# ---------------------------------------------------------------------------
+# Until this gate existed the library protected nothing: two Baton runs could both
+# decide to load a large local model on the same box, which is what once overloaded
+# the operator's machine. Two rules govern everything below and neither may be
+# "simplified" away:
+#
+#   1. NON-LOCAL IS NEVER GATED. A paid or free dispatch must behave exactly as it
+#      did before this gate existed, with the coordination store entirely absent. If
+#      coordination being unavailable could break paid work, this change would be a
+#      net loss — so the non-local path returns BEFORE any store access: nothing is
+#      read, no directory is created, nothing can throw.
+#   2. LOCAL FAILS CLOSED. Library not loaded, store unwritable, claim call throws —
+#      every one of those means DENIED, never an implicit grant. A wrong deny costs a
+#      retry; a wrong grant costs hardware.
+#
+# TTL, and why there is deliberately no heartbeat: coordination-lib's default lease
+# is 60s and a real dispatch takes minutes, so a default lease would expire mid-
+# dispatch and let a second run in. The fix is NOT a background renewal thread —
+# PowerShell makes that fragile. Instead the lease is acquired long enough to outlive
+# the whole dispatch (Get-CoordDispatchTtlSec) and released in a `finally`
+# (Invoke-CoordinatedDispatch). If the process dies mid-dispatch, coordination-lib's
+# existing PID/TTL reclaim recovers the claim.
+
+$script:CoordDispatchTtlMarginSec = 600     # slack added over a declared timeout_s
+$script:CoordDispatchTtlFloorSec  = 1800    # generous constant when none is declared
+
+function Get-CoordRowField {
+    <# Named field off the fleet provider row (authoritative), falling back to the
+       routed Select-Capability candidate. Get-DiffApplyField is reused deliberately:
+       it is a generic IDictionary-or-PSCustomObject accessor, and a second copy of
+       that logic here would be one more thing to drift. #>
+    param(
+        $Row,
+        $Candidate,
+        [Parameter(Mandatory)][string]$Name
+    )
+    $v = Get-DiffApplyField -Obj $Row -Name $Name
+    if ($null -eq $v -or [string]::IsNullOrWhiteSpace([string]$v)) {
+        $v = Get-DiffApplyField -Obj $Candidate -Name $Name
+    }
+    return $v
+}
+
+function Get-CoordDispatchTtlSec {
+    <# Lease length for ONE dispatch. It must comfortably exceed the dispatch timeout:
+       a lease that expires mid-dispatch is a claim another run may legitimately
+       reclaim, which is exactly the double-load this gate exists to prevent. Derived
+       from the provider's declared timeout_s plus a margin; when no timeout is
+       declared there is nothing to derive from, so a generous constant is used. #>
+    param($Provider, $Candidate)
+    $ttl = [int]$script:CoordDispatchTtlFloorSec
+    $raw = Get-CoordRowField -Row $Provider -Candidate $Candidate -Name 'timeout_s'
+    if ($null -ne $raw) {
+        $t = 0
+        if ([int]::TryParse([string]$raw, [ref]$t) -and $t -gt 0) {
+            $ttl = [int][math]::Max($ttl, $t + $script:CoordDispatchTtlMarginSec)
+        }
+    }
+    return $ttl
+}
+
+function Resolve-CoordRunContext {
+    <# RunId / Project annotations for a claim row. Weight orders nothing in v1, so
+       both are annotations: every failure degrades to '' rather than blocking a
+       dispatch. RunId is the run dir's leaf (New-RunWorktree names the worktree after
+       it); Project is the repository the worktree belongs to, via git's common dir. #>
+    param(
+        [string]$Worktree = '',
+        [string]$RunDir = ''
+    )
+    $runId = ''
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($RunDir)) { $runId = [string](Split-Path -Leaf $RunDir) }
+        elseif (-not [string]::IsNullOrWhiteSpace($Worktree)) { $runId = [string](Split-Path -Leaf $Worktree) }
+    } catch { $runId = '' }
+    $project = ''
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($Worktree) -and (Test-Path -LiteralPath $Worktree)) {
+            $common = [string](& git -C $Worktree rev-parse --git-common-dir 2>$null)
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($common)) {
+                $repoRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath((Join-Path $Worktree $common.Trim())))
+                if ($repoRoot) { $project = [string](Split-Path -Leaf $repoRoot) }
+            }
+        }
+    } catch { $project = '' }
+    return [ordered]@{ run_id = $runId; project = $project }
+}
+
+function New-LocalDispatchDenial {
+    <# Every local failure mode funnels through here, so there is exactly one shape a
+       caller has to handle and no path that can accidentally return granted=$true. #>
+    param(
+        [Parameter(Mandatory)][string]$Reason,
+        [string]$HostName = '',
+        [string]$Stack = '',
+        [string]$LoadProfile = '',
+        [int]$TtlSec = 0,
+        [string]$Remedy = ''
+    )
+    return [ordered]@{
+        gated = $true; granted = $false; reason = $Reason; claim_id = ''
+        ttl_sec = $TtlSec; host = $HostName; stack = $Stack; load_profile = $LoadProfile
+        # Operator-facing next step, when there is one. The overwhelmingly common
+        # denial on a fresh box is capacity_unknown — an UNCONFIGURED box, not a
+        # fault — and a bare code there reads as a broken feature.
+        remedy = $Remedy
+    }
+}
+
+function Request-LocalDispatchClaim {
+    <# Admission decision for one dispatch. Returns
+         [ordered]@{ gated; granted; reason; claim_id; ttl_sec; host; stack; load_profile }
+       and NEVER throws.
+
+       gated=$false means the coordination store was not consulted at all — that is
+       the non-local invariant, not a soft "we skipped it": the function returns
+       before touching Get-BatonHome, the store, or coordination-lib. #>
+    param(
+        [Parameter(Mandatory)]$Candidate,
+        [string]$FleetPath = '',
+        [string]$Worktree = '',
+        [string]$RunDir = '',
+        [int]$TtlSec = 0
+    )
+    $row = $null
+    if (-not [string]::IsNullOrWhiteSpace($FleetPath)) {
+        try { $row = Get-FleetProvider -Name ([string]$Candidate.name) -Path $FleetPath } catch { $row = $null }
+    }
+    $tier = [string](Get-CoordRowField -Row $row -Candidate $Candidate -Name 'cost_tier')
+    if ($tier -ne 'local') {
+        # RULE 1. Nothing below this line runs for a paid or free provider.
+        return [ordered]@{
+            gated = $false; granted = $true; reason = 'not_local'; claim_id = ''
+            ttl_sec = 0; host = ''; stack = ''; load_profile = ''
+        }
+    }
+
+    $HostName = ''; $stack = ''; $loadProfile = ''; $ttl = 0
+    try {
+        # RULE 2, first case: the library is not in scope. Deny — an unloaded gate is
+        # an ungoverned box, and dispatching anyway would be an implicit grant.
+        if (-not (Get-Command Request-ResourceClaim -ErrorAction SilentlyContinue)) {
+            return (New-LocalDispatchDenial -Reason 'coordination_unavailable')
+        }
+        $HostName = [string](Get-CoordRowField -Row $row -Candidate $Candidate -Name 'host')
+        if ([string]::IsNullOrWhiteSpace($HostName)) { $HostName = [string][System.Environment]::MachineName }
+        $stack = [string](Get-CoordRowField -Row $row -Candidate $Candidate -Name 'stack')
+        if ([string]::IsNullOrWhiteSpace($stack)) { $stack = [string]$Candidate.name }
+        $loadProfile = [string](Get-CoordRowField -Row $row -Candidate $Candidate -Name 'load_profile')
+        if ([string]::IsNullOrWhiteSpace($loadProfile)) {
+            $loadProfile = [string](Get-CoordRowField -Row $row -Candidate $Candidate -Name 'model_default')
+        }
+        if ([string]::IsNullOrWhiteSpace($loadProfile)) { $loadProfile = [string]$Candidate.name }
+        $vram = [double]0
+        $vramRaw = Get-CoordRowField -Row $row -Candidate $Candidate -Name 'vram_gb'
+        if ($null -ne $vramRaw) {
+            $parsedVram = [double]0
+            if ([double]::TryParse([string]$vramRaw, [System.Globalization.NumberStyles]::Float,
+                    [cultureinfo]::InvariantCulture, [ref]$parsedVram) -and $parsedVram -gt 0) {
+                $vram = $parsedVram
+            }
+        }
+        $class = [string](Get-CoordRowField -Row $row -Candidate $Candidate -Name 'class')
+        $ttl = if ($TtlSec -gt 0) { [int]$TtlSec } else { Get-CoordDispatchTtlSec -Provider $row -Candidate $Candidate }
+        $ctx = Resolve-CoordRunContext -Worktree $Worktree -RunDir $RunDir
+        $weight = 0
+        try { $weight = [int](Get-ProjectWeight -Project ([string]$ctx.project)) } catch { $weight = 0 }
+
+        $outcome = Request-ResourceClaim -HostName $HostName -Stack $stack -LoadProfile $loadProfile `
+            -VramGb $vram -Class $class -RunId ([string]$ctx.run_id) -Project ([string]$ctx.project) `
+            -Weight $weight -TtlSec $ttl
+        if ($null -eq $outcome) {
+            return (New-LocalDispatchDenial -Reason 'error: empty decision' -HostName $HostName -Stack $stack -LoadProfile $loadProfile -TtlSec $ttl)
+        }
+        if (-not $outcome.granted) {
+            # Carry coordination-lib's remedy through verbatim when it supplied one.
+            $remedy = ''
+            if ($null -ne $outcome.PSObject.Properties['remedy']) { $remedy = [string]$outcome.remedy }
+            elseif ($outcome -is [System.Collections.IDictionary] -and $outcome.Contains('remedy')) { $remedy = [string]$outcome['remedy'] }
+            return (New-LocalDispatchDenial -Reason ([string]$outcome.reason) -HostName $HostName -Stack $stack -LoadProfile $loadProfile -TtlSec $ttl -Remedy $remedy)
+        }
+        return [ordered]@{
+            gated = $true; granted = $true; reason = [string]$outcome.reason
+            claim_id = [string]$outcome.claim.claim_id; ttl_sec = $ttl
+            host = $HostName; stack = $stack; load_profile = $loadProfile
+        }
+    } catch {
+        # RULE 2, general case: an exception is a denial, never an implicit grant.
+        return (New-LocalDispatchDenial -Reason ('error: ' + $_.Exception.Message) -HostName $HostName -Stack $stack -LoadProfile $loadProfile -TtlSec $ttl)
+    }
+}
+
+function Remove-LocalDispatchClaim {
+    <# Release. Never throws and never changes a task outcome: a failed release still
+       self-heals through the lease TTL and coordination-lib's PID reclaim, so the
+       worst case is a bounded delay, not a lost task. #>
+    param($Gate)
+    if ($null -eq $Gate) { return $false }
+    $claimId = [string](Get-DiffApplyField -Obj $Gate -Name 'claim_id')
+    if ([string]::IsNullOrWhiteSpace($claimId)) { return $false }
+    try {
+        if (-not (Get-Command Remove-ResourceClaim -ErrorAction SilentlyContinue)) { return $false }
+        $out = Remove-ResourceClaim -ClaimId $claimId
+        return [bool]$out.ok
+    } catch {
+        return $false
+    }
+}
+
+function Invoke-CoordinatedDispatch {
+    <# Run $Dispatch under a resource claim. Returns
+         [ordered]@{ dispatched=<bool>; gate=<claim gate>; attempt=<$Dispatch result> }
+
+       dispatched=$false means the scriptblock was NEVER invoked — the caller must
+       surface the denial, not treat it as an empty result. The release lives in a
+       `finally`, so it runs on the success path AND when $Dispatch throws; a leaked
+       claim would block the box for the whole lease. #>
+    param(
+        [Parameter(Mandatory)]$Candidate,
+        [Parameter(Mandatory)][scriptblock]$Dispatch,
+        [string]$FleetPath = '',
+        [string]$Worktree = '',
+        [string]$RunDir = '',
+        [int]$TtlSec = 0
+    )
+    $gate = Request-LocalDispatchClaim -Candidate $Candidate -FleetPath $FleetPath `
+        -Worktree $Worktree -RunDir $RunDir -TtlSec $TtlSec
+    if (-not $gate.granted) {
+        return [ordered]@{ dispatched = $false; gate = $gate; attempt = $null }
+    }
+    try {
+        $attempt = & $Dispatch
+        return [ordered]@{ dispatched = $true; gate = $gate; attempt = $attempt }
+    } finally {
+        [void](Remove-LocalDispatchClaim -Gate $gate)
+    }
+}
+
+function Format-CoordinationDenialWhy {
+    <# The spec calls for a VISIBLE re-route, never a silent stall: the denial reason
+       is carried verbatim so an operator sees which coordination rule fired. #>
+    param(
+        [Parameter(Mandatory)][string]$Provider,
+        [Parameter(Mandatory)]$Gate
+    )
+    $reason = [string]$Gate.reason
+    $where = ''
+    if (-not [string]::IsNullOrWhiteSpace([string]$Gate.host)) {
+        $where = " (host $([string]$Gate.host)"
+        if (-not [string]::IsNullOrWhiteSpace([string]$Gate.stack)) { $where += ", stack $([string]$Gate.stack)" }
+        $where += ')'
+    }
+    # Prefer the specific remedy the denial carried (it names the real path on THIS
+    # box and the exact JSON to write) over the generic menu. capacity_unknown on a
+    # fresh box is by far the most common denial and is not a fault at all — it is an
+    # unconfigured host — so a bare code there reads as a broken feature.
+    $specific = ''
+    if ($null -ne $Gate) {
+        if ($null -ne $Gate.PSObject.Properties['remedy']) { $specific = [string]$Gate.remedy }
+        elseif ($Gate -is [System.Collections.IDictionary] -and $Gate.Contains('remedy')) { $specific = [string]$Gate['remedy'] }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($specific)) {
+        return "coordination: local dispatch denied for ${Provider}: ${reason}${where}. Fix: ${specific}"
+    }
+    return "coordination: local dispatch denied for ${Provider}: ${reason}${where}. Remedies: wait for the in-flight local claim to finish, declare the host's capacity in <BATON_HOME>/coordination/config.json, or re-run at a tier that does not need the local box."
+}
+
 function Resolve-AgenticSubstituteCandidates {
     <# Shared quality-first re-resolution for proactive and reactive usage hops. #>
     param(
@@ -1228,11 +1498,14 @@ function New-AgenticSpawner {
         $advisoryLines = [System.Collections.Generic.List[string]]::new()
 
         $providerRow = Get-FleetProvider -Name ([string]$pick.name) -Path $FleetPath
-        $canProbe = ($null -ne $providerRow) -and ($null -ne $providerRow.usage_policy) -and
-            ($providerRow.usage_policy.probe -eq $true) -and ([string]$providerRow.kind -eq 'cli') -and
-            ([string]$providerRow.platform -eq 'codex')
+        # #173: probe eligibility = the policy opts in AND a transport resolves BY NAME.
+        # Fail closed — a provider with no resolvable transport is simply not probed and
+        # dispatches normally; it must never become un-dispatchable for lacking a probe.
+        $probeTransportName = Resolve-UsageProbeTransportName -Provider $providerRow
+        $canProbe = Test-UsageProbeEligible -Provider $providerRow
         if ($canProbe) {
-            $snapshot = Get-CodexUsageProbe -Worker ([string]$pick.name) -Transport $ProbeTransport `
+            $snapshot = Get-ProviderUsageProbe -Worker ([string]$pick.name) -TransportName $probeTransportName `
+                -Provider $providerRow -Transport $ProbeTransport `
                 -CachePath $ProbeCachePath -Now $preflightNow -TimeoutSeconds 20 -TtlSeconds 600
             if ($null -ne $snapshot) {
                 $capDecision = Get-UsageProbeCapDecision -Provider $providerRow -Observations @($snapshot.observations)
@@ -1279,11 +1552,12 @@ function New-AgenticSpawner {
                     # One-hop only: re-run the same probe+cap preflight on the substitute
                     # before dispatch. If the hop target is also over cap, hold (no chain).
                     $subProvider = Get-FleetProvider -Name ([string]$pick.name) -Path $FleetPath
-                    $subCanProbe = ($null -ne $subProvider) -and ($null -ne $subProvider.usage_policy) -and
-                        ($subProvider.usage_policy.probe -eq $true) -and ([string]$subProvider.kind -eq 'cli') -and
-                        ([string]$subProvider.platform -eq 'codex')
+                    # Same name-resolved eligibility as the primary (#173).
+                    $subTransportName = Resolve-UsageProbeTransportName -Provider $subProvider
+                    $subCanProbe = Test-UsageProbeEligible -Provider $subProvider
                     if ($subCanProbe) {
-                        $subSnapshot = Get-CodexUsageProbe -Worker ([string]$pick.name) -Transport $ProbeTransport `
+                        $subSnapshot = Get-ProviderUsageProbe -Worker ([string]$pick.name) -TransportName $subTransportName `
+                            -Provider $subProvider -Transport $ProbeTransport `
                             -CachePath $ProbeCachePath -Now $preflightNow -TimeoutSeconds 20 -TtlSeconds 600
                         if ($null -ne $subSnapshot) {
                             $subCapDecision = Get-UsageProbeCapDecision -Provider $subProvider `
@@ -1332,15 +1606,35 @@ function New-AgenticSpawner {
         # blocks it gets back. Everything after this branch (proof-by-diff, per-task
         # diff, usage observation, verification) is identical for both doors.
         $isDiffApply = (Resolve-CandidateEditMode -Candidate $pick -FleetPath $FleetPath) -eq 'diff-apply'
-        $firstAttempt = if ($isDiffApply) {
-            Invoke-DiffApplyAttempt -Candidate $pick -TaskDesc ([string]$task.desc) -InputBlock $busInputs `
-                -AllowedPaths $scopePaths -DepthTier $policy.depth_tier -Worktree $Worktree `
-                -FleetPath $FleetPath -UsagePath $UsagePath -RunDir $RunDir -TaskId ([string]$task.id) `
-                -Dispatcher $Dispatcher
-        } else {
-            Invoke-AgenticDispatchAttempt -Candidate $pick -Prompt $prompt -DepthTier $policy.depth_tier `
-                -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
+        # Coordination gate. A LOCAL provider must hold a resource claim for the whole
+        # dispatch; anything else dispatches exactly as before and never touches the
+        # coordination store. Deliberately a PLAIN scriptblock, not .GetNewClosure():
+        # GetNewClosure captures only the immediate local scope, which would silently
+        # blank out the spawner-closure variables ($Worktree, $FleetPath, $Dispatcher…).
+        $firstDispatch = {
+            if ($isDiffApply) {
+                Invoke-DiffApplyAttempt -Candidate $pick -TaskDesc ([string]$task.desc) -InputBlock $busInputs `
+                    -AllowedPaths $scopePaths -DepthTier $policy.depth_tier -Worktree $Worktree `
+                    -FleetPath $FleetPath -UsagePath $UsagePath -RunDir $RunDir -TaskId ([string]$task.id) `
+                    -Dispatcher $Dispatcher
+            } else {
+                Invoke-AgenticDispatchAttempt -Candidate $pick -Prompt $prompt -DepthTier $policy.depth_tier `
+                    -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
+            }
         }
+        $firstCoord = Invoke-CoordinatedDispatch -Candidate $pick -Dispatch $firstDispatch `
+            -FleetPath $FleetPath -Worktree $Worktree -RunDir $RunDir
+        if (-not $firstCoord.dispatched) {
+            # Visible re-route, never a silent stall: the pool emptied at the admission
+            # seam, which is the same labor-unavailable flavor as a preflight hold.
+            return $resultBase + @{
+                ok=$false; spend=0.0; chose=$pick.name; alternatives=$alts
+                why=(Format-CoordinationDenialWhy -Provider ([string]$pick.name) -Gate $firstCoord.gate)
+                labor='unavailable'
+                exclusions=@([ordered]@{ name=[string]$pick.name; stage='usage'; reason=("coordination denied: " + [string]$firstCoord.gate.reason); reset_at=$null; eta=$null })
+            }
+        }
+        $firstAttempt = $firstCoord.attempt
         $res = $firstAttempt.result
         # Measure the prompt that was ACTUALLY dispatched. On a diff-apply dispatch
         # $prompt (the agentic prompt) was built but never sent; reporting its size
@@ -1441,15 +1735,32 @@ function New-AgenticSpawner {
             # A failover target may be a diff-apply provider too — same branch, and the
             # same "measure what was actually sent" rule.
             $subIsDiffApply = (Resolve-CandidateEditMode -Candidate $substitute -FleetPath $FleetPath) -eq 'diff-apply'
-            $retryAttempt = if ($subIsDiffApply) {
-                Invoke-DiffApplyAttempt -Candidate $substitute -TaskDesc ([string]$task.desc) -InputBlock $busInputs `
-                    -AllowedPaths $scopePaths -DepthTier $retryPolicy.depth_tier -Worktree $Worktree `
-                    -FleetPath $FleetPath -UsagePath $UsagePath -RunDir $RunDir -TaskId ([string]$task.id) `
-                    -Dispatcher $Dispatcher
-            } else {
-                Invoke-AgenticDispatchAttempt -Candidate $substitute -Prompt $prompt -DepthTier $retryPolicy.depth_tier `
-                    -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
+            # The failover target goes through the same coordination gate: a hop onto a
+            # local peer is still a local dispatch, and the box does not care which
+            # attempt loaded the weights.
+            $retryDispatch = {
+                if ($subIsDiffApply) {
+                    Invoke-DiffApplyAttempt -Candidate $substitute -TaskDesc ([string]$task.desc) -InputBlock $busInputs `
+                        -AllowedPaths $scopePaths -DepthTier $retryPolicy.depth_tier -Worktree $Worktree `
+                        -FleetPath $FleetPath -UsagePath $UsagePath -RunDir $RunDir -TaskId ([string]$task.id) `
+                        -Dispatcher $Dispatcher
+                } else {
+                    Invoke-AgenticDispatchAttempt -Candidate $substitute -Prompt $prompt -DepthTier $retryPolicy.depth_tier `
+                        -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
+                }
             }
+            $retryCoord = Invoke-CoordinatedDispatch -Candidate $substitute -Dispatch $retryDispatch `
+                -FleetPath $FleetPath -Worktree $Worktree -RunDir $RunDir
+            if (-not $retryCoord.dispatched) {
+                $subBase = New-AgenticResultBase -Candidate $substitute -Policy $retryPolicy -FleetPath $FleetPath
+                return $subBase + @{
+                    ok=$false; spend=0.0; chose=$substitute.name; alternatives=$retryAlts
+                    why=("$hopLine; " + (Format-CoordinationDenialWhy -Provider ([string]$substitute.name) -Gate $retryCoord.gate))
+                    labor='unavailable'
+                    exclusions=@([ordered]@{ name=[string]$substitute.name; stage='usage'; reason=("coordination denied: " + [string]$retryCoord.gate.reason); reset_at=$null; eta=$null })
+                }
+            }
+            $retryAttempt = $retryCoord.attempt
             $res = $retryAttempt.result
             $retryPrompt = if ($subIsDiffApply) { [string]$retryAttempt.prompt_sent } else { $prompt }
             Write-TaskBusOutput -RunDir $RunDir -TaskId ([string]$task.id) -Stdout $(if ($null -ne $res) { [string]$res.stdout } else { '' })

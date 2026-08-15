@@ -48,6 +48,13 @@ private data repo — see the Grimdex split section below).
    checklist explicitly, THEN prompt the human to compact the conversation. Save
    before compacting, always. Canonical copy: `~/.claude/rules/task-group-closeout.md`.
 
+8. **Credentials live in the environment, never in a registry file.** An
+   authenticated `kind: http` row names the *variable* (`api_key_env`), and the
+   transport fails loudly rather than falling back to an anonymous request. See
+   `docs/authenticated-instruments.md`. Corollary for prepaid providers
+   (OpenRouter is the first): the spend ceiling is set on the vendor's key as
+   well as in fleet policy — a Baton bug must not be able to drain a balance.
+
 Shared rules live HERE. Model files should **reference** this section, not re-copy
 it — re-copying is how drift starts.
 
@@ -77,11 +84,99 @@ it — re-copying is how drift starts.
   sole authorities either way — diff-apply only changes who holds the pen, not who
   judges the result. See `docs/diff-apply.md` for the full opt-in and grammar.
 
+- **Usage probes** (`usage_policy.probe_transport`, #173) decide whether a row's
+  soft caps are enforceable or decorative. A probe is resolved by transport NAME,
+  observes only, and fails soft — except identity, which fails closed: without
+  `usage_policy.probe_provider` the transport does not run rather than guess which
+  account it is querying. Rows can bind to a model-scoped sub-quota via
+  `usage_policy.scope_id`; a bound id absent from a response falls back to the
+  plan-wide window, never to "unlimited," because the set of windows is
+  plan-dependent and shrinks when a plan is downgraded. On Windows, `codexbar-cli`
+  is the recommended (and for some providers the only) way to read remaining plan
+  allowance. See `docs/usage-probes.md`.
+
 ## Drift policy
 - Change a **shared** rule → change it **here** only; the model files don't repeat
   it, so they can't drift.
 - Add a **model-specific** item → put it in that model's file **and** list it in the
   registry above, so every divergence is intentional and visible.
+
+## Grimdex ecosystem — the three-layer boundary (2026-08-14, `grimdex:d018` + `grimdex:d019`)
+
+**Authoritative for every agent on this project.** Full brief:
+`D:\Dev\Grimdex-engine\docs\2026-08-14-grimdex-ecosystem-architecture.md`. Baton's own half:
+[`ecosystem-boundaries.md`](ecosystem-boundaries.md). Grimlore design draft:
+`D:\Dev\Grimdex-engine\docs\2026-08-14-grimlore-spec.md`.
+
+> **The Law:** Bloat is the enemy of Grimdex. Context is the purpose of Grimlore. Execution is
+> the purpose of Baton.
+
+- **Grimdex** governs **how** coding work is done (rules, conventions, lessons, verification and
+  security expectations, disciplined promotion). Smallest, most aggressively trimmed layer.
+- **Grimlore** remembers **why / who / context** (rationale, history, environment, hardware,
+  organization, audience, models, research). Format is **OKF v0.2** (`grimdex:d021`). Repo
+  `Ryfter/Grimlore` (**private**, `D:\Dev\Grimlore`) stood up 2026-08-15 (`grimdex-d026`).
+  Baton's landscape lives at `D:\Dev\Grimlore\projects\baton\` — start at `BATON.md`,
+  then `index.md`. Reach it by **file path** (same as Grimdex). No indexer, no MCP,
+  no assumption that every dispatch has Grimlore loaded. Isolation enforcement is
+  still unchosen: load this bundle + `universal/` only.
+- **Grimdex Baton** (this project) decides **what happens next and when**, then executes.
+- **Grimdex-Know** is **not a layer** — it is the name of the private personalized Grimdex
+  instance (`Ryfter/grimdex-know`, mounted at `D:\Dev\Grimdex`). Never diagram it as a peer.
+
+**Routing rule when you're unsure where something goes:** changes *how* work is done → Grimdex;
+explains *why/who/context* → Grimlore; makes something *happen* → Baton. *Grimdex prescribes. Grimlore
+explains. Baton acts.*
+
+**Prohibitions that bind Baton specifically:** do not let Baton become the permanent home for
+durable rules or long-term context just because it discovers them during execution; do not turn
+Grimlore into an execution engine; do not collapse Grimlore context into Grimdex merely because it's
+useful.
+
+**Discarded — do not reintroduce unless explicitly asked:** Open Brain / AWS is not part of this
+architecture branch. Do not let it shape designs, diagrams, or proposals.
+
+**Naming:** the context layer is **Grimlore** — Kevin renamed it from the brief's "Grimdex Wiki"
+(2026-08-14), spending the name Grimdex had already reserved for a general second-brain KB. It is a
+*sibling* of Grimdex, not a component of it: `Grimdex` (rules) / `Grimlore` (context) / `Baton`
+(action). "Grimdex Baton" is still a working name — do not rename anything unless explicitly asked.
+
+**Layer inventory** — Grimdex: conventions · lessons · rules · schemas · gates · standards ·
+validation · security guidance · project rules → universal rules. Grimlore: design · rationale ·
+history · environment · user · company · audience · hardware · models · research · project
+knowledge. Baton: orchestrate · execute · route · build · test · verify · deploy · agents ·
+models · workflows.
+
+**A layer is defined by the question it answers, not the nouns it touches.** *models* span all
+three: **what it is** (roster, availability, characteristics) → Grimlore; **the rules for using
+it** (spend ceilings, permitted tier per stakes, what may never leave the box) → Grimdex; **how
+to use it** (selection, routing, flags, retries) → Baton. Likewise *gates/validation* are
+Grimdex's (defines the standard) while *test/verify* are Baton's (runs it). And *project rules →
+universal rules* is both two content types and the gate between them.
+
+⚠️ **Grimdex writes the spend rule; Baton enforces it.** The usage governor, cost meter,
+pre-flight quota probe, depth policy, and `max_cost_tier` ceiling are runtime machinery and
+**stay in Baton** — nothing here moves to Grimdex. Grimdex owns the constraint, not the meter.
+
+⚠️ **Baton's fleet config is ground truth for quota numbers (`grimdex:d022`).** Quota policy is
+deliberately duplicated — documented in Grimlore (with reasoning), ruled in Grimdex, enforced
+here. The halves are bound by a shared `policy_id` and reconciled by the weekly KB audit. **The
+values in `~/.baton/fleet.yaml` are the ones that actually govern behavior**, so when a soft cap
+or usage policy changes here, the paired Grimlore concept and Grimdex rule are stale until
+updated. Do not treat a prose copy as authoritative for a number.
+
+⚠️ **"Rules layer" is Grimdex's position, not its contents.** Inside it are the decisions,
+lessons, and artifacts that **back the rules up** — not a flat list of rules. A decision record's
+*Rationale* (the why behind a **rule**) is Grimdex's; the why behind the **work** — purpose,
+audience, environment — is Grimlore's. Do not start filing d-records into Grimlore.
+
+**Grimlore's format is settled — OKF v0.2** (`grimdex:d021`): markdown + YAML frontmatter in bundles, with
+standard provenance/trust/staleness fields. Spec:
+<https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md>
+
+**Left open on purpose (do not silently settle):** how Baton reaches Grimlore context (direct query
+vs. a shared context-loading mechanism); how project isolation is enforced; retrieval mechanism;
+rule-family organization inside Grimdex. All mechanism — the format question is closed.
 
 ## Grimdex knowledge base — go-public engine/data split (2026-06-10, decision d037)
 

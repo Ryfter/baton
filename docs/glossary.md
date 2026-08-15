@@ -4,6 +4,43 @@ One canonical vocabulary so every agent (Claude, Codex, Grok, Gemini, local mode
 brief speaks the same language. Fleet briefs should reference this file ("terms per
 `docs/glossary.md`") instead of re-explaining concepts inline.
 
+## The ecosystem (the three layers)
+
+The outer frame Baton sits inside. Full brief: [`ecosystem-boundaries.md`](ecosystem-boundaries.md).
+
+- **Grimdex** — the public governance framework. Governs **how** AI-augmented coding is done:
+  rules, conventions, lessons, verification and security expectations, disciplined promotion.
+  Deliberately the smallest, most aggressively maintained layer.
+- **Grimlore** — the long-term knowledge/context layer. Remembers **why** decisions were made,
+  **who** the work serves, and the surrounding environment. Format is **OKF v0.2**, markdown +
+  YAML frontmatter in bundles (`grimdex:d021`). Repo `Ryfter/Grimlore` (**private**,
+  `D:\Dev\Grimlore`). Baton's project bundle is `projects/baton/` — load brief
+  `BATON.md`. Reach by file path. Isolation enforcement still unchosen.
+- **OKF** — Open Knowledge Format, Grimlore's file format. A directory ("bundle") of markdown
+  files with YAML frontmatter carrying `type`, provenance (`sources`), trust
+  (`generated`/`verified`), and staleness (`status`/`stale_after`).
+- **Grimdex Baton** — this project. The action/orchestration layer: decides **what happens next**
+  and **when**, then executes under Grimdex governance using Grimlore context.
+- **Grimdex-Know** — *not a layer.* The name for a private, backed-up, personalized Grimdex
+  instance. Never draw it as a peer beside Grimdex/Grimlore/Baton.
+- **Boundary test** — the one-line routing rule: changes *how* work is done → Grimdex; explains
+  *why/who/context* → Grimlore; makes something *happen* → Baton. *Grimdex prescribes. Grimlore explains.
+  Baton acts.*
+- **Layer inventory** — what each layer contains. Grimdex: conventions · lessons · rules ·
+  schemas · gates · standards · validation · security guidance · project→universal promotion.
+  Grimlore: design · rationale · history · environment · user · company · audience · hardware ·
+  models · research · project knowledge. Baton: orchestrate · execute · route · build · test ·
+  verify · deploy · agents · models · workflows.
+- **Layer overlaps** — a layer is defined by the *question it answers*, not the nouns it touches.
+  *models* span all three: **what it is** (roster, characteristics) → Grimlore; **rules for using
+  it** (spend ceilings, permitted tier per stakes) → Grimdex; **how to use it** (selection,
+  routing, flags, retries) → Baton. *gates/validation* are Grimdex's (defines) while
+  *test/verify* are Baton's (runs). *project rules → universal rules* is both two content types
+  and the gate between them.
+- **Grimdex writes the rule, Baton holds the meter** — spend ceilings and tier restrictions are
+  Grimdex's constraint; the usage governor, cost meter, quota probe, and depth policy that
+  enforce them are Baton's runtime machinery and stay here.
+
 ## The three tiers (the musical model)
 
 - **Conductor** — the thin natural-language front door (`/baton:go`). Holds the operator's
@@ -69,7 +106,10 @@ brief speaks the same language. Fleet briefs should reference this file ("terms 
 - **Taste seam** — a deliberate interrupt where the operator injects judgment (design forks,
   merge words, over-cap dispatches). Automation routes *between* seams, never through them.
 - **d-records** — numbered decision records (`d086`) in the knowledge base; referenced by id,
-  never duplicated.
+  never duplicated. ⚠️ **Ids are per-project, so they collide across tiers** — this repo's
+  `d018` is "orchestrator is conductor," while the Grimdex tier's `d018` is the three-layer
+  ecosystem boundary. A bare `dNNN` in Baton docs means **Baton's** tier
+  (`grimdex-know` → `projects/baton/`); qualify anything else as `grimdex:dNNN`.
 - **Box-private** — data that never leaves the operator's machines: real rosters, endpoints,
   quotas, allowances, scorecards. Repo seeds and docs carry placeholders.
 

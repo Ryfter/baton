@@ -32,11 +32,11 @@ project: testproj
 '@ | Set-Content -Path $draft1 -Encoding utf8NoBOM
 
 $r = Add-DecisionRecordFromFile -Path $draft1 -KbRoot $tmpKb
-Assert "T1 returns id"        ($r.id -eq 'd001')
+Assert "T1 returns qualified id" ($r.id -eq 'testproj-d001')
 Assert "T1 writes final file" (Test-Path $r.path)
 Assert "T1 draft deleted"     (-not (Test-Path $draft1))
 $final = Get-Content $r.path -Raw
-Assert "T1 id in front-matter"     ($final -match '(?m)^id: d001')
+Assert "T1 id in front-matter"     ($final -match '(?m)^id: testproj-d001')
 Assert "T1 timestamp present"      ($final -match '(?m)^timestamp: \d{4}-')
 Assert "T1 project from front-matter" ($final -match '(?m)^project: testproj')
 Assert "T1 confidence preserved"   ($final -match '(?m)^confidence: high')
@@ -65,7 +65,7 @@ project: testproj
 **Rationale:** Because.
 '@ | Set-Content -Path $draft2 -Encoding utf8NoBOM
 $r2 = Add-DecisionRecordFromFile -Path $draft2 -KbRoot $tmpKb
-Assert "T2 next id is d002" ($r2.id -eq 'd002')
+Assert "T2 next id is d002" ($r2.id -eq 'testproj-d002')
 
 # --- T3: KeepDraft retains the draft file ---
 $draft3 = Join-Path ([System.IO.Path]::GetTempPath()) "draft3-$(Get-Random).md"
@@ -85,7 +85,7 @@ project: testproj
 **Rationale:** Because.
 '@ | Set-Content -Path $draft3 -Encoding utf8NoBOM
 $r3 = Add-DecisionRecordFromFile -Path $draft3 -KbRoot $tmpKb -KeepDraft
-Assert "T3 returns id d003"   ($r3.id -eq 'd003')
+Assert "T3 returns id d003"   ($r3.id -eq 'testproj-d003')
 Assert "T3 draft preserved"   (Test-Path $draft3)
 Remove-Item $draft3 -Force -ErrorAction SilentlyContinue
 

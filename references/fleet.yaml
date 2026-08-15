@@ -25,6 +25,19 @@
 #                     POSTs to {base_url}{endpoint}. Optional hatch scripts/fleet/<name>.ps1
 #                     still overrides the generic path when present (escape valve).
 #   endpoint          (http, optional) path under base_url; default /v1/chat/completions
+#   api_key_env       (http, optional) NAME of the environment variable holding the
+#                     credential — never the credential itself. The key is read at
+#                     dispatch and sent as `Authorization: Bearer <key>`. A row that
+#                     declares this but whose variable is unset FAILS LOUDLY before
+#                     any network call (an anonymous request against a paid endpoint
+#                     is a useless 401; against a permissive one it bills the wrong
+#                     account). The value is scrubbed out of any journaled stderr.
+#   auth_header       (http, optional) header name for the credential; default
+#                     'Authorization'. Set 'x-api-key' for that dialect.
+#   auth_prefix       (http, optional) string prepended to the credential; default
+#                     'Bearer '. An explicitly empty value sends the raw key.
+#   headers           (http, optional) nested map of static request headers, e.g.
+#                     OpenRouter's HTTP-Referer / X-Title attribution pair.
 #   role              (optional) draft | bulk | finisher — cascade stage (Slice B).
 #                     Absent -> inferred: local/free = draft, paid = finisher.
 #   adapter           (optional) names the worker-adapter that meters this provider
@@ -77,9 +90,15 @@
 #                     Absent = no proactive probe and fully backward-compatible.
 #                     `probe: true` is meaningful only where Baton ships an adapter.
 #                     Defaults inside a present block: probe false, soft_cap_5h 75,
-#                     soft_cap_weekly 85. monthly_allowance is user-entered; find it
+#                     soft_cap_weekly 85, soft_cap_credit 85. soft_cap_credit is
+#                     percent of a PREPAID key's credit limit spent (scope
+#                     paid_credit) — a depleting balance, not a rolling window;
+#                     pair it with a vendor-side limit on the key itself.
+#                     monthly_allowance is user-entered; find it
 #                     at GitHub -> avatar (top-right) -> Copilot Settings -> usage,
 #                     shown as consumed / allowance. Never commit real values here.
+#                     probe_transport/probe_provider/probe_command/scope_id select
+#                     and address the probe adapter. See docs/usage-probes.md.
 #
 # VRAM rule (d043): run ONE model-serving process per box — e.g. never enable
 # ollama AND lm-studio on the same machine; they cannot see each other's VRAM
@@ -144,6 +163,10 @@ providers:
     #   soft_cap_5h: 75
     #   soft_cap_weekly: 85
     #   monthly_allowance: <enter allowance>
+    #   probe_transport: <transport name, see docs/usage-probes.md>
+    #   probe_provider: <the probe tool's own name for this account>
+    #   probe_command: <optional explicit path to the probe binary>
+    #   scope_id: <optional model-scoped window id to bind this row to>
     # Named tiers: --tier <name> substitutes the fragment at {{tier_args}}; --tier all
     # runs every tier (boundary tester). Real model IDs are BOX-PRIVATE — add
     # `tier_<name>: '-m <model-id> ...'` rows in your live ~/.baton/fleet.yaml.
@@ -279,6 +302,74 @@ providers:
     capabilities: [judge, commit-msg, extract-json, summarize-short]
     context: 16384
     usage_class: tight
+
+  # ── OpenRouter: one key, ~400 models, pay-per-token. ────────────────────────
+  # The first PREPAID provider in the fleet — every other paid row is a flat
+  # subscription where over-use costs latency, not money. Two consequences:
+  #   1. Set a credit limit on the KEY itself at openrouter.ai/settings/keys.
+  #      That ceiling is vendor-enforced and cannot be bypassed by a Baton bug;
+  #      the in-fleet policy is the second line of defence, never the only one.
+  #   2. kind: http can never be agentic (d091) — these rows do review, judging,
+  #      drafting and summarizing, not file edits.
+  # Model ids move fast; check https://openrouter.ai/models before pinning, and
+  # keep an explicit pin (never 'auto') so spend is attributable to a known model.
+  # All three are disabled here: enable in your live ~/.baton/fleet.yaml.
+  - name: openrouter
+    kind: http
+    enabled: false
+    cost_tier: paid
+    role: bulk
+    platform: openrouter
+    base_url: 'https://openrouter.ai/api'
+    model_default: 'deepseek/deepseek-v4-flash'   # cheap 1M-context workhorse
+    api_key_env: OPENROUTER_API_KEY
+    headers:
+      X-Title: Baton
+    context: 1048576
+    timeout_s: 180
+    # Enable the credit probe in your live ~/.baton/fleet.yaml. soft_cap_credit
+    # is percent of the KEY's credit limit spent; crossing it reroutes off this
+    # row. It is the ergonomic guard — the vendor-side key limit is the real one.
+    # usage_policy:
+    #   probe: true
+    #   probe_transport: openrouter-key
+    #   soft_cap_credit: 85
+
+  # Lineage diversity for the gates: a reviewer that shares no training ancestry
+  # with claude / codex / gemini / grok is worth more on a panel than a fourth
+  # frontier opinion. Non-reasoning by default — a thinking preamble breaks the
+  # strict-JSON parse the review and judge capabilities depend on (see phi-4).
+  - name: openrouter-gap
+    kind: http
+    enabled: false
+    cost_tier: paid
+    role: finisher
+    platform: openrouter
+    base_url: 'https://openrouter.ai/api'
+    model_default: 'z-ai/glm-4.7'
+    api_key_env: OPENROUTER_API_KEY
+    headers:
+      X-Title: Baton
+    capabilities: [review, plan-review, judge, reasoning, synthesize]
+    context: 204800
+    timeout_s: 180
+
+  # $0 rows: rate-limited and variable, so they claim only cheap utility work.
+  # Free-tier daily request ceilings scale with the account's credit balance.
+  - name: openrouter-free
+    kind: http
+    enabled: false
+    cost_tier: free
+    role: draft
+    platform: openrouter
+    base_url: 'https://openrouter.ai/api'
+    model_default: 'nvidia/nemotron-3.5-lightning:free'
+    api_key_env: OPENROUTER_API_KEY
+    headers:
+      X-Title: Baton
+    capabilities: [summarize-short, classify, triage, extract-json]
+    context: 1000000
+    timeout_s: 180
 
   - name: github-models
     kind: cli

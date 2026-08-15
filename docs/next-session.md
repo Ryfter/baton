@@ -2,7 +2,148 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
-## ⚑ RESUME HERE — 2026-08-03 (d103 diff-apply BUILT — PR #169 open, HELD for merge)
+## ⚑ RESUME HERE — 2026-08-15 (Maestro front-door design LOCKED)
+
+**Design is closed.** Do not reopen layers, Buzz-as-brain, two-seat chat, Gantt, or durability 3–4 unless Kevin asks.
+
+- Spec: [`docs/superpowers/specs/2026-08-15-maestro-front-door-design.md`](superpowers/specs/2026-08-15-maestro-front-door-design.md)
+- Decision: **`baton-d111`** (one Baton front door; Maestro fires; Conductor talks). Extends `baton-d108` / `baton-d109`.
+- Slice: factory first, just enough client (C biased hard toward A). **Not authorized to build** until an implementation plan exists.
+
+**What to do next (when Kevin says implement):** writing-plans off that spec. First plan must include the `#190` fire-path unblocks and `diff_apply: true` on `lm-studio` (Kevin flips fleet.yaml). Scheduler is Task Scheduler now, `launchd` on the Mac mini later.
+
+**One-line reminder:** Kevin starts Baton (CLI / Buzz member already on the Mac / later one web page). He talks. Conductor answers. Maestro only admits and fires. One factory host. Never merge without his word.
+
+---
+
+## Prior — 2026-08-15 (merge queue CLEARED; four gates documented in #190)
+
+**The queue is empty except draft #189.** Six PRs merged to master in one session:
+
+| PR | What |
+|---|---|
+| **#186** | planner failover — **landed the #179 → #181 → #184 stack** (all three auto-closed) |
+| **#187** | ecosystem boundaries + project-qualified decision ids |
+| **#176** | coordination wiring — resource claim gates local dispatch |
+| **#192** | regression fix (see below) |
+
+`#179 → #181 → #184 → #186` was a **linear ancestor stack**, proved with
+`git merge-base --is-ancestor`, so #186 carried the other three. One merge word covered all
+four — a deliberate waiver of the per-PR rule, recorded as **`baton-d110`** with the ancestry
+shown to Kevin first. Narrow precedent: *a linear stack may share one word when the ancestry is
+surfaced first.* Not a licence to batch unrelated PRs.
+
+**Master sweep: 83/84.** The single failure is `test-heartbeat`, **pre-existing** — verified by
+running it at `0b2d9cf` (pre-#187) where it also exits 1.
+
+### The regression worth remembering (#191 / PR #192)
+
+#187 made ids project-qualified (`baton-d107`) while filenames stayed bare (`d107-<slug>.md`).
+`Find-DecisionRecordPath` kept globbing `"$Id-*.md"` **with the prefix attached**, so the library
+threw `No decision record found` on its own output — hand `Append-DecisionFeedback` the id
+`Add-DecisionRecord` just returned and it failed.
+
+**How it reached master:** the stack merge was verified with a **ten-suite subset** reported as
+green. `test-decisions-fromfile` was outside it and broken the same way. *A subset is not a
+sweep.* Run all 84.
+
+### Known-open state
+
+- **#190** — umbrella: four gates blocking `baton go --execute` as the one-command front door.
+  1. no `.baton/` in this repo (execute mode can't onboard itself)
+  2. no free + enabled + review-capable provider (acceptance fails silently)
+  3. six deployed libs diverge from repo — **diff before redeploying**, a hash mismatch does not
+     say which side is ahead
+  4. the merge queue itself
+- **#188** — `gh-copilot` is not Copilot: it runs `gh models` (GitHub Models), and is mislabelled
+  `cost_tier: paid` on a free product, so cost-ordered routing outranks it every time. Fixing the
+  tier + declaring `review` also closes gate 2. Real `copilot` CLI is not installed.
+- **Ryfter/Grimdex#1** — the cross-project GitHub Projects convention (`grimdex-d024` owes it).
+  30 repos, 8 boards, no pattern; one board is literally untitled.
+- **No CI exists.** `.github/workflows/` is empty — nothing ran these suites on any PR. Arguably
+  a fifth gate: Baton cannot be a trustworthy front door while its merge gate depends on human
+  diligence.
+
+### Ecosystem note
+
+**Grimlore landscape is readable by path** — `D:\Dev\Grimlore\projects\baton\BATON.md`
+(then `index.md` + `sources/`). Watched GitHub repos, keep-vs-adopt, re-scan by SHA.
+Pointer stanza is in `CLAUDE.md` / `AGENTS.md` / `GROK.md` / `GEMINI.md`. No
+middleware; isolation still unchosen (this bundle + `universal/` only). Do not
+copy Source cards into Baton.
+
+### Architecture direction set 2026-08-15 (`baton-d108`, `baton-d109`)
+
+Full reasoning: `~/.claude/knowledge/projects/baton/design-notes/2026-08-15-*.md` (KB repo,
+GitHub-backed, model-agnostic). Summary for cold pickup:
+
+**The objective is not cost minimization.** It is **7-day uptime at 80–100% subscription
+utilization**. Subscription quota is *perishable* (unused at reset = wasted money → maximize
+use); prepaid/metered credit is *not* (unused = still money → minimize spend). Prepaid is the
+**shock absorber** that makes running subscriptions to the rail safe. Route by each provider's
+**opportunity cost** (remaining quota × time to its own reset), never by sticker price.
+
+**Four layers, separated by scope — not seniority:**
+
+| Layer | Where | Job | Cost |
+|---|---|---|---|
+| **Maestro** | `D:\dev\`, all projects | quota arithmetic, burn rate, admission control, resource claim, **scheduling** | **free by construction** — deterministic code + at most a tiny local classifier |
+| **Conductor** | `D:\dev\`, all projects | takes Maestro's go-ahead, creates tasks, drives tool workflows, spins orchestrators | thin and cheap |
+| **Orchestrators** | **inside one project** | the real brains: plan, route, pick models/tools | strongest models |
+| **Instruments** | — | models and tools that do the work (**n8n flows are instruments**) | varies |
+
+> **NAMING — read this before you "correct" anything.** Maestro is a **new top layer**, not the
+> old name for Conductor. This does **not** revert the 2026-06-18 Maestro→Conductor rename;
+> Conductor keeps its job and Maestro sits above it. "Composer" was floated and dropped
+> (Conductor absorbed it); parked as a possible future *design-authoring* role.
+
+**Maestro is Kevin's control plane** (where he sets weights/priority — cross-project priority is
+**policy, not intelligence**). **GitHub is the management plane** (PRs, Projects, Kanban, Roadmap).
+Rule: *if GitHub Projects lacks a capability natively, do not build it* — push critical path in as
+a computed field instead (the DAG already carries `depends_on`; longest chain is arithmetic).
+
+**Scheduling moved out of the agent** into Maestro: a scheduler needing tokens to decide when to
+spend tokens deadlocks at the very window reset it exists to catch. Durability **levels 1–2 only**
+(persist to disk; OS scheduler re-reads on boot). Missed-fire policy must be **per-job**
+(catch-up / skip / coalesce). The 5h window **anchors on first use**, not a clock constant (`d099`).
+
+**Determinism is about where you put the variance** — concentrate it in code generation, remove it
+everywhere else. n8n is an **instrument, never an engine**: it must not own decomposition or
+routing, and must take the same resource claim as any other caller.
+
+**GitHub safety:** an LLM flipping a repo public is an **over-scoped credential** problem, not a
+missing-workflow problem. Order: fine-grained PAT without `administration` → branch protection →
+n8n as credential broker for the dangerous verbs. Do not justify n8n on token savings.
+
+**Telemetry:** capture now, it cannot be backfilled — context fingerprint, task size, **failover
+position**, effort setting, estimate-vs-actual. `agreed` from `Merge-ReviewFindings` is
+**unreliable in both directions**; do not train on it. Outcome labels (especially **false
+negatives** — bugs that escaped review) are the missing supervision signal.
+
+### PR #189 — draft, **REJECTED** by adversarial review
+
+First real proof of the non-Claude review layer: `codex` + `grok-cli`, 9 minutes, **zero Claude
+tokens**, verdict **reject** — 5 critical / 10 important. Artifacts:
+`~/.baton/reviews/nightly-2026-08-15T13-57-59/`; rework brief in the KB design-notes dir.
+
+It does **not** do what its title claims:
+
+1. The new N-walk landed on `Invoke-TaskViaFleet`, which **`--execute` never calls** — execute
+   labor still uses `fleet-executor-lib`'s single usage hop, so a capped editor still stalls.
+2. Plan-gate failover is **unreachable**: `Invoke-Conductor` always passes `-Reviewers`; unset is
+   `$null`, and `@($null).Count` is `1`, so `reviewersExplicit` is true and substitution is off.
+3. `Invoke-AcceptanceGate` still returns `verdict='accept'` when every reviewer is unusable — the
+   fail-open bug it claimed to fix (gate 2 of #190 is **still open**).
+4. `scripts/test-all.ps1` matches its own `test-*.ps1` filter and recursively spawns itself; the
+   `full` verification profile **can never pass** and was never run.
+
+**Reviewer invocation gotcha:** `pwsh -File fleet-gate.ps1 --fail-loud` fails — PowerShell parses
+it as `-fail-loud`, which cannot bind to `[switch]$FailLoud`. Use `-FailLoud`. `commands/gate.md`
+documents the `--` form, which is wrong for direct `-File` invocation.
+
+---
+
+## 2026-08-03 (d103 diff-apply BUILT — PR #169 open, HELD for merge)
 
 **PR #169 is open and NOT merged.** 16 commits, +3771/-22 across 14 files. Merge needs
 Kevin's word. Everything below is done and verified.

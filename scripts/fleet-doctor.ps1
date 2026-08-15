@@ -83,7 +83,23 @@ foreach ($p in $fleet) {
             Invoke-WebRequest -Uri $p.base_url -Method Head -TimeoutSec 5 -UseBasicParsing | Out-Null
             $status = 'ok'; $detail = "$($p.base_url) alive"
         } catch {
-            $status = 'err'; $detail = "$($p.base_url) unreachable"
+            # An HTTP status (405/404 on HEAD, 401 without a key) still proves the
+            # host answered. Only a transport failure — no response at all — is
+            # "unreachable". Public API roots routinely refuse HEAD.
+            if ($_.Exception.Response) {
+                $status = 'ok'; $detail = "$($p.base_url) alive (HTTP $([int]$_.Exception.Response.StatusCode))"
+            } else {
+                $status = 'err'; $detail = "$($p.base_url) unreachable"
+            }
+        }
+        # A declared key that is not exported would fail every dispatch; say so here
+        # rather than at the first labor call.
+        if ($status -eq 'ok' -and $p.api_key_env) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable([string]$p.api_key_env))) {
+                $status = 'err'; $detail += "; $($p.api_key_env) not set"
+            } else {
+                $detail += "; $($p.api_key_env) set"
+            }
         }
     }
 

@@ -646,7 +646,9 @@ function Invoke-PlanPhase {
         [scriptblock]$Dispatcher,
         [string]$RunDir,
         [scriptblock]$ShadowResolver,
-        [string]$RepoPath
+        [string]$RepoPath,
+        # How many reasoning candidates planning may try before giving up.
+        [int]$MaxPlannerAttempts = 3
     )
     $dispatch = {
         param($cand, $prompt)
@@ -677,10 +679,24 @@ function Invoke-PlanPhase {
     if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $promptParams.RepoPath = $RepoPath }
     if (-not [string]::IsNullOrWhiteSpace($FleetPath)) { $promptParams.FleetPath = $FleetPath }
     $prompt = Build-PlannerPrompt @promptParams
-    # Code factory (#code-factory): walk the cost-ordered roster instead of binding to
-    # $cands[0]. A planner that hit its cap — or exited 0 with an unparseable reply —
-    # hands off to the next-cheapest reasoning provider rather than killing the run.
+    # Planning used to be one shot at $cands[0]: a failed dispatch or unparseable
+    # answer ended the whole run with plan-failed, even with viable candidates
+    # sitting right there in the list. That made the FIRST-RANKED provider a hard
+    # dependency of every run — on a box where economy ranking puts a Claude row
+    # first, `baton go` could not start from a shell with no Claude auth, despite
+    # the engine itself being vendor-neutral.
+    #
+    # Bounded on purpose: candidates are cost-ordered, so walking a few is cheap,
+    # but an unbounded walk could fan a broken prompt across the paid fleet.
+    #
+    # MERGE NOTE (#186 + #189): both branches fixed this independently — #186 with a
+    # hand-rolled bounded loop, #189 by routing through the shared walk helper. Kept
+    # the shared helper (one failover implementation for every model-calling phase,
+    # which is the point of #code-factory) and passed #186's bound through as
+    # -MaxAttempts, so neither the consistency nor the safety property was dropped.
+    # Events use the 'provider-failover' kind other phases use, not 'plan'.
     $walk = Invoke-CapabilityFailover -Candidates ([object[]]$cands) -Phase 'planner' `
+        -MaxAttempts $MaxPlannerAttempts `
         -Attempt { param($c) & $dispatch $c $prompt } `
         -IsUsable { param($r)
             if (-not (Test-FailoverResultUsable -Result $r)) { return $false }
@@ -688,6 +704,8 @@ function Invoke-PlanPhase {
         } `
         -OnHop {
             param($from, $to, $why)
+            # Name the failure: a silent fallback would hide a planner that is broken
+            # for everyone rather than merely unavailable to this shell.
             if (-not [string]::IsNullOrWhiteSpace($RunDir)) {
                 Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'provider-failover' -Level 'warn' -Message "planner: $from -> $to ($why)")
             }
