@@ -364,7 +364,20 @@ function Invoke-AcceptanceGate {
         [switch]$FailLoud,
         [scriptblock]$Dispatcher
     )
+    # Two DIFFERENT questions, previously answered by one flag:
+    #   $reviewersExplicit — did the operator engage the -Reviewers contract at all?
+    #                        Governs panel suppression. -Reviewers @() still counts:
+    #                        it means "not the roles panel", and the empty roster is
+    #                        then resolved or thrown on below.
+    #   $reviewersNamed    — did they name at least one REAL reviewer? Governs
+    #                        substitution. Only a named roster is a no-substitute
+    #                        contract; an auto-resolved one must keep its failover
+    #                        peers. Conflating the two meant an empty/splatted-null
+    #                        -Reviewers auto-resolved the roster and then denied every
+    #                        reviewer a peer, making the walk below dead code.
+    # Counting @($Reviewers).Count would not distinguish them: @($null).Count is 1.
     $reviewersExplicit = $PSBoundParameters.ContainsKey('Reviewers')
+    $reviewersNamed = @($Reviewers | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -ge 1
     $panelRequested = $Panel -or ((Test-Path -LiteralPath $RolesPath) -and -not $reviewersExplicit)
     $roles = if ($panelRequested) { @(Get-ReviewRoles -Path $RolesPath) } else { @() }
     $panelActive = $panelRequested
@@ -425,7 +438,7 @@ function Invoke-AcceptanceGate {
             # An operator-supplied -Reviewers list is an explicit contract: substituting a
             # different model behind their back would change what the panel MEANS. Only an
             # auto-resolved roster gets failover peers.
-            $peers = if ($reviewersExplicit) { @([pscustomobject]@{ name = $reviewerName }) }
+            $peers = if ($reviewersNamed) { @([pscustomobject]@{ name = $reviewerName }) }
                      else { @($Reviewers | ForEach-Object { [pscustomobject]@{ name = [string]$_ } }) }
             [void]$reviewWork.Add(@{ reviewer = $reviewerName; provider = $reviewerName; candidates = $peers; role = $null })
         }
@@ -481,8 +494,15 @@ function Invoke-AcceptanceGate {
     $noUsableRoles = $panelActive -and $roles.Count -eq 0
     $noReviewerRan = $panelActive -and $roles.Count -gt 0 -and $reviews.Count -eq 0
     $allUnparsed = $reviews.Count -gt 0 -and @($merge.unparsed).Count -ge $reviews.Count
-    if ($allUnparsed) {
-        $verdict.reason = 'no usable review obtained (fail-open accept)'
+    # NO usable review is not an acceptance (#190 gate 2). This used to leave
+    # verdict='accept' and only reword the reason, so every caller keying on
+    # `verdict` -- the conductor does -- sailed through a quota storm with no
+    # effective review at all. 'unreviewed' is deliberately neither accept nor
+    # reject: nothing was judged, so callers must handle it rather than infer.
+    $noUsableReview = ($reviews.Count -lt 1) -or $allUnparsed
+    if ($noUsableReview) {
+        $verdict.verdict = 'unreviewed'
+        $verdict.reason  = 'no usable review obtained — artifact was NOT reviewed'
     }
     $degradationReasons = [System.Collections.ArrayList]@()
     if ($noUsableRoles) {
@@ -514,11 +534,26 @@ function Invoke-AcceptanceGate {
     # asked for did not happen. That used to require -FailLoud to surface, so the shipped
     # roster's two cheap roles vanished from every run in silence. A lost lens is now
     # degradation whether or not the caller opted into fail-loud.
-    $degraded = $panelActive -and (
+    # A total review failure is degradation on EVERY path. It was previously gated
+    # behind $panelActive (so the explicit-reviewer path never reported it) and, for
+    # dispatch-time death where the roster existed but every hop failed, behind
+    # -FailLoud (nothing added the role to $degradedRoles). Both let a run with zero
+    # effective review report degraded=false.
+    $degraded = $noUsableReview -or ($panelActive -and (
         $noUsableRoles -or $noReviewerRan -or $degradedRoles.Count -gt 0 -or
         ($FailLoud -and $degradationReasons.Count -gt 0)
-    )
-    if ($degraded) { $verdict.reason = "acceptance panel degraded: $($degradationReasons -join '; ')" }
+    ))
+    if ($noUsableReview) {
+        # Lead with the fact that matters. This reason is what a human reads in the
+        # report and what the run event records, so "artifact was NOT reviewed" must
+        # survive the degradation summary rather than be replaced by a failover note.
+        [void]$degradationReasons.Insert(0, 'artifact was NOT reviewed — no usable review obtained')
+    }
+    if ($degraded) {
+        # "panel degraded" is a lie when no panel was active (explicit-reviewer path).
+        $degradedLabel = if ($panelActive) { 'acceptance panel degraded' } else { 'acceptance review degraded' }
+        $verdict.reason = "${degradedLabel}: $($degradationReasons -join '; ')"
+    }
     # Tier relaxation and failover hops are reported even on a healthy panel — the
     # operator paid more, or a provider died, and neither should be discoverable only
     # by reading a journal.

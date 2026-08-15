@@ -172,8 +172,15 @@ function Invoke-PlanGate {
         [switch]$FailLoud,
         [scriptblock]$Dispatcher
     )
-    $reviewersExplicit = $PSBoundParameters.ContainsKey('Reviewers') -and @($Reviewers).Count -ge 1
-    if (-not $Reviewers -or $Reviewers.Count -lt 1) {
+    # "Explicit" must mean the caller named at least one REAL reviewer. Testing
+    # @($Reviewers).Count is the classic PowerShell null-array trap: @($null).Count
+    # is 1, so a caller that always splats -Reviewers $x (Invoke-Conductor does)
+    # marked an unset roster as explicit, which auto-resolved the reviewers and then
+    # denied every one of them a failover peer -- making the walk below unreachable
+    # on the normal path. Count only non-blank entries.
+    $namedReviewers = @($Reviewers | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $reviewersExplicit = $PSBoundParameters.ContainsKey('Reviewers') -and $namedReviewers.Count -ge 1
+    if ($namedReviewers.Count -lt 1) {
         $cands = Select-Capability -Capability plan-review -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
         $Reviewers = @($cands | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.name })
     }

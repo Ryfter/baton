@@ -1194,7 +1194,16 @@ providers:
             $staleResult = & $staleSpawner $preflightTask
             Check 'PF5 stale cache re-probes exactly once then dispatches' ($staleResult.ok -and $staleSeen.probes -eq 1 -and $staleSeen.dispatches -eq 1)
 
-            # A proactive reroute consumes the one-hop budget; peer quota failure cannot cascade.
+            # Failover WALK past a proactive reroute (#code-factory C1). This used to assert
+            # calls -eq 1: a preflight reroute consumed the whole budget, so a substitute that
+            # was ALSO capped ended the task. That is the factory stall -- during a quota storm
+            # the preflight almost always hops first, which disabled dispatch failover exactly
+            # when it was needed. The cascade concern is now handled by a BOUND, not a ban.
+            # Every provider here answers 'quota exhausted'. The walk goes preflight
+            # primary->substitute (hop 1), then substitute->third (hop 2), and then stops:
+            # worker-lower is quality 0.8 and quality_first refuses to fail over BELOW the
+            # current provider, so the walk ends on an empty peer pool rather than the hop
+            # budget. Degrading quality to keep a task moving is never the trade made here.
             $oneHopSeen = @{ calls = 0; names = @() }
             $oneHopSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
                 -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-pf-one-hop.jsonl') `
@@ -1202,7 +1211,41 @@ providers:
                 -ProbeTransport { param($clientVersion,$timeoutSeconds) New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 20 -At $probeNow }.GetNewClosure() `
                 -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-one-hop.jsonl') -ProbeClock $probeClock
             $oneHopResult = & $oneHopSpawner $preflightTask
-            Check 'PF6 proactive reroute consumes the one-hop budget' (-not $oneHopResult.ok -and $oneHopSeen.calls -eq 1 -and ($oneHopSeen.names -join ',') -eq 'worker-substitute')
+            Check 'PF6 reroute then walk: dispatch failover continues past a preflight hop' (
+                -not $oneHopResult.ok -and $oneHopSeen.calls -eq 2 -and
+                ($oneHopSeen.names -join ',') -eq 'worker-substitute,worker-third' -and
+                $oneHopResult.why -match 'no peer available' -and $oneHopResult.labor -eq 'unavailable')
+
+            # The budget is what stops the cascade, and a preflight reroute counts against it:
+            # with MaxFailoverHops=1 the old "one hop total" guarantee still holds exactly.
+            $budgetSeen = @{ calls = 0; names = @() }
+            $budgetSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -MaxFailoverHops 1 -UsagePath (Join-Path $env:BATON_HOME 'usage-pf-budget.jsonl') `
+                -Dispatcher { param($pick,$prompt,$depthTier) $budgetSeen.calls++; $budgetSeen.names += [string]$pick.name; @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 20 -At $probeNow }.GetNewClosure() `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-budget.jsonl') -ProbeClock $probeClock
+            $budgetResult = & $budgetSpawner $preflightTask
+            Check 'PF6b MaxFailoverHops bounds the walk; preflight reroute counts as a hop' (
+                -not $budgetResult.ok -and $budgetSeen.calls -eq 1 -and
+                ($budgetSeen.names -join ',') -eq 'worker-substitute')
+
+            # A walk that finds a healthy peer must actually finish the task, not just stop
+            # hopping -- the whole point of the walk is labor completing during a quota storm.
+            $walkOkSeen = @{ calls = 0; names = @() }
+            $walkOkSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-pf-walk-ok.jsonl') `
+                -Dispatcher {
+                    param($pick,$prompt,$depthTier)
+                    $walkOkSeen.calls++; $walkOkSeen.names += [string]$pick.name
+                    if ([string]$pick.name -eq 'worker-third') { return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }
+                    return @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 }
+                }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 20 -At $probeNow }.GetNewClosure() `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-walk-ok.jsonl') -ProbeClock $probeClock
+            $walkOkResult = & $walkOkSpawner $preflightTask
+            Check 'PF6c walk reaching a healthy peer completes the task and names the chain' (
+                $walkOkResult.ok -and $walkOkResult.chose -eq 'worker-third' -and
+                $walkOkSeen.calls -eq 2 -and $walkOkResult.why -match 'worker-substitute -> worker-third')
 
             # High stakes remains champion/high when preflight selects a peer.
             $pfHighSeen = @{ calls = 0; depths = @() }

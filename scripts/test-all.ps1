@@ -27,7 +27,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $suiteDir = $PSScriptRoot
+
+# This script's own name matches the default 'test-*.ps1' filter, so without an
+# unconditional self-exclusion it Start-Processes itself once per pass and forks
+# until the box runs out of processes -- meaning the 'full' profile could never
+# pass. Not part of -Exclude: a caller-supplied list must not be able to switch
+# the guard off.
+$selfName = Split-Path -Leaf $PSCommandPath
+
 $suites = @(Get-ChildItem -Path $suiteDir -Filter $Filter -File | Sort-Object Name |
+    Where-Object { $_.Name -ne $selfName } |
     Where-Object { $name = $_.Name; -not (@($Exclude) | Where-Object { $name -like $_ }) })
 
 if ($suites.Count -lt 1) {

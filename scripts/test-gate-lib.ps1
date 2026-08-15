@@ -247,8 +247,11 @@ roles:
         $emptyPanelLoud = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Panel -FailLoud `
             -RolesPath $emptyRolesPath -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
             -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $genericDispatcher
-        Check 'GP11 explicit panel with empty roster is advisory degraded with a named reason' (
-            $emptyPanelAdvisory.degraded -and $emptyPanelAdvisory.verdict -eq 'accept' -and
+        # verdict was 'accept' here: a panel whose roster produced no reviewer at all
+        # reported the same verdict as a clean review. No reviewer ran, so nothing was
+        # judged -> 'unreviewed'. The named roster reason still has to survive.
+        Check 'GP11 explicit panel with empty roster is degraded and unreviewed, with a named reason' (
+            $emptyPanelAdvisory.degraded -and $emptyPanelAdvisory.verdict -eq 'unreviewed' -and
             @($emptyPanelAdvisory.reviews).Count -eq 0 -and
             $emptyPanelAdvisory.reason -match 'roster' -and $emptyPanelAdvisory.reason -notmatch '^no findings$')
         Check 'GP12 explicit panel with empty roster is degraded under FailLoud' (
@@ -300,7 +303,12 @@ roles:
     $g2 = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Reviewers @('r1','r3') -Dispatcher $disp
     Check 'G33 garbage reviewer degraded, survivor counted' (@($g2.unparsed) -contains 'r3' -and $g2.verdict -eq 'polish')
     $g3 = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Reviewers @('r3') -Dispatcher $disp
-    Check 'G34 all-unparsed -> accept, flagged' ($g3.verdict -eq 'accept' -and $g3.reason -match 'no usable review')
+    # Was 'all-unparsed -> accept, flagged'. Asserting accept here locked in #190 gate 2:
+    # a quota storm that killed every reviewer returned the same verdict as a clean pass,
+    # so any caller keying on `verdict` shipped unreviewed work. Nothing was judged, so
+    # the verdict is 'unreviewed' and the run is degraded on the non-panel path too.
+    Check 'G34 all-unparsed -> unreviewed, degraded' (
+        $g3.verdict -eq 'unreviewed' -and $g3.reason -match 'NOT reviewed' -and $g3.degraded)
 
     # zero reviewers + a fleet with no review-capable provider -> throws
     $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "gate-test-$([System.IO.Path]::GetRandomFileName())"

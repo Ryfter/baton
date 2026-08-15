@@ -1150,6 +1150,9 @@ function New-AgenticSpawner {
         [string]$RatingsPath = (Join-Path (Get-BatonHome) 'routing-ratings.jsonl'),
         [string]$JournalPath = (Join-Path (Get-BatonHome) 'routing-journal.jsonl'),
         [ValidateSet('quality_first','never')][string]$FailoverPolicy = 'quality_first',
+        # Total failover hops allowed for ONE task, counting a preflight reroute. Bounds
+        # the walk so a fleet-wide outage costs a few dispatches, not one per provider.
+        [ValidateRange(0, 20)][int]$MaxFailoverHops = 3,
         [scriptblock]$ProbeTransport,
         [string]$ProbeCachePath = (Join-Path (Get-BatonHome) 'usage-probe-cache.jsonl'),
         [string]$FleetJournalPath = (Join-Path (Get-BatonHome) 'model-routing-log.md'),
@@ -1348,17 +1351,40 @@ function New-AgenticSpawner {
         Write-TaskBusOutput -RunDir $RunDir -TaskId ([string]$task.id) -Stdout $(if ($null -ne $res) { [string]$res.stdout } else { '' })
         $observation = Get-AgenticUsageObservation -Result $res -Worker ([string]$pick.name) -UsagePath $UsagePath `
             -PromptBytes (Get-Utf8ByteCount -Text $dispatchedPrompt)
-        $firstPostTree = Get-WorktreeTreeSha -Worktree $Worktree
-        $hadPartialDiff = ($null -ne $preTree) -and ($null -ne $firstPostTree) -and ($preTree -ne $firstPostTree)
+        # (partial-diff detection now happens per hop inside the failover walk below,
+        # since any attempt in the walk -- not only the first -- can dirty the worktree)
 
-        # hard_failover = quota/burst usage hop. context_overflow is NOT a usage
-        # lockout (provider stays routable) but still gets one quality_first peer
-        # retry with a soft preference for larger declared max_prompt_bytes.
-        $isContextOverflow = $observation -and ([string]$observation.classification -eq 'context_overflow')
-        $shouldSubstitute = [int]$res.exit_code -ne 0 -and $observation -and
-            $FailoverPolicy -eq 'quality_first' -and -not $preflightRerouted -and
-            ($observation.hard_failover -or $isContextOverflow)
-        if ($shouldSubstitute) {
+        # Cost-ordered failover WALK (#code-factory). THIS is the factory's labor path:
+        # --execute always installs this spawner, so a walk that lives on
+        # Invoke-TaskViaFleet (only reached when no spawner is supplied) never runs for
+        # real execute labor. Two limits used to stall a task here anyway:
+        #   * exactly ONE substitute was tried, so a second capped editor ended the task;
+        #   * `-not $preflightRerouted` disabled dispatch failover entirely whenever the
+        #     preflight had already hopped -- the likeliest case during a quota storm.
+        # Now the task walks to successive untried peers until one produces a usable
+        # attempt, the peer pool empties, or the hop budget is spent. A preflight reroute
+        # counts as a hop, so $MaxFailoverHops bounds TOTAL hops per task, not per stage.
+        #
+        # hard_failover = quota/burst usage hop. context_overflow is NOT a usage lockout
+        # (provider stays routable) but still earns a quality_first peer retry with a soft
+        # preference for larger declared max_prompt_bytes.
+        $hopLines = [System.Collections.Generic.List[string]]::new()
+        if ($hopLine) { [void]$hopLines.Add([string]$hopLine) }
+        $hops = if ($preflightRerouted) { 1 } else { 0 }
+        while ($true) {
+            $isContextOverflow = $observation -and ([string]$observation.classification -eq 'context_overflow')
+            $shouldSubstitute = [int]$res.exit_code -ne 0 -and $observation -and
+                $FailoverPolicy -eq 'quality_first' -and
+                ($observation.hard_failover -or $isContextOverflow)
+            if (-not $shouldSubstitute) { break }
+            if ($hops -ge $MaxFailoverHops) {
+                $advisoryLines.Add("failover budget spent ($hops hop(s)); $($pick.name) left holding the task")
+                break
+            }
+            # Recomputed per hop: a later attempt can dirty the worktree too, and the
+            # usage-failover event records whether THIS attempt left a partial diff.
+            $attemptPostTree = Get-WorktreeTreeSha -Worktree $Worktree
+            $hadPartialDiff = ($null -ne $preTree) -and ($null -ne $attemptPostTree) -and ($preTree -ne $attemptPostTree)
             # v1.17.0 delta: re-resolve the same authoritative stakes/depth policy
             # before substitute selection. Never reuse a raw pre-policy ladder.
             $substitution = Resolve-AgenticSubstituteCandidates -Capability $cap -OriginalCandidate $pick `
@@ -1410,6 +1436,7 @@ function New-AgenticSpawner {
                 $resetText = if ($observation.reset_at) { "reset $($observation.reset_at)" } else { 'reset unknown' }
                 $hopLine = "usage failover: $($pick.name) -> $($substitute.name) ($($observation.classification); $resetText)"
             }
+            [void]$hopLines.Add([string]$hopLine)
 
             # A failover target may be a diff-apply provider too — same branch, and the
             # same "measure what was actually sent" rule.
@@ -1426,13 +1453,17 @@ function New-AgenticSpawner {
             $res = $retryAttempt.result
             $retryPrompt = if ($subIsDiffApply) { [string]$retryAttempt.prompt_sent } else { $prompt }
             Write-TaskBusOutput -RunDir $RunDir -TaskId ([string]$task.id) -Stdout $(if ($null -ne $res) { [string]$res.stdout } else { '' })
-            [void](Get-AgenticUsageObservation -Result $res -Worker ([string]$substitute.name) -UsagePath $UsagePath `
-                -PromptBytes (Get-Utf8ByteCount -Text $retryPrompt))
+            # MUST be captured, not discarded: the loop condition re-tests $observation to
+            # decide whether to hop again. Throwing this away would leave the previous
+            # provider's verdict in place and walk on a stale classification forever.
+            $observation = Get-AgenticUsageObservation -Result $res -Worker ([string]$substitute.name) -UsagePath $UsagePath `
+                -PromptBytes (Get-Utf8ByteCount -Text $retryPrompt)
             $pick = $substitute
             $alts = $retryAlts
             $policy = $retryPolicy
             $resultBase = New-AgenticResultBase -Candidate $pick -Policy $policy -FleetPath $FleetPath
             $firstAttempt = $retryAttempt
+            $hops++
         }
 
         $postTree = Get-WorktreeTreeSha -Worktree $Worktree
@@ -1446,9 +1477,12 @@ function New-AgenticSpawner {
                 Set-Content -LiteralPath (Join-Path $tasksDir "$($task.id).diff") -Value $taskDiff -Encoding utf8NoBOM
             } catch { }
         }
+        # Every hop, not just the last one: "a -> b -> c, all capped" is the legible
+        # story of a quota storm, and reporting only the final hop hid the walk.
+        $hopChain = if ($hopLines.Count -gt 0) { $hopLines -join '; ' } else { '' }
         if ([int]$res.exit_code -ne 0) {
-            if ($hopLine) {
-                $failureWhy = "$hopLine; substitute exit $($res.exit_code)"
+            if ($hopChain) {
+                $failureWhy = "$hopChain; substitute exit $($res.exit_code)"
             } elseif ($observation -and [string]$observation.classification -eq 'context_overflow') {
                 $pb = if ($null -ne $observation.prompt_bytes) { [Nullable[long]][long]$observation.prompt_bytes } else { [Nullable[long]]$null }
                 $fb = if ($null -ne $observation.overflow_floor_bytes) { [long]$observation.overflow_floor_bytes } else { 35000 }
@@ -1462,11 +1496,11 @@ function New-AgenticSpawner {
             return $resultBase + @{ ok = $false; spend = 0.0; chose = $pick.name; why = $failureWhy; alternatives = $alts }
         }
         if ($grew) {
-            $successWhy = if ($hopLine) { "$hopLine; worktree diff grew" } else { "routed $cap -> $($pick.name); worktree diff grew" }
+            $successWhy = if ($hopChain) { "$hopChain; worktree diff grew" } else { "routed $cap -> $($pick.name); worktree diff grew" }
             if ($advisoryLines.Count -gt 0) { $successWhy += '; ' + ($advisoryLines -join '; ') }
             return $resultBase + @{ ok = $true; spend = 0.0; chose = $pick.name; why = $successWhy; alternatives = $alts }
         }
-        $noChangeWhy = if ($hopLine) { "$hopLine; no changes" } else { "$($pick.name): no changes" }
+        $noChangeWhy = if ($hopChain) { "$hopChain; no changes" } else { "$($pick.name): no changes" }
         if ($advisoryLines.Count -gt 0) { $noChangeWhy += '; ' + ($advisoryLines -join '; ') }
         return $resultBase + @{ ok = $true; spend = 0.0; chose = $pick.name; why = $noChangeWhy; alternatives = $alts }
     }.GetNewClosure()
