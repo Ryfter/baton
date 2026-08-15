@@ -37,8 +37,9 @@ $rec = Add-DecisionRecord `
     -Phase 'design' `
     -KbRoot $tmpKb
 
-Assert "Add-DecisionRecord returns an id" ($rec.id -match '^d\d{3}$')
+Assert "Add-DecisionRecord returns a project-qualified id" ($rec.id -match '^testproj-d\d{3,}$')
 Assert "record file exists" (Test-Path $rec.path)
+Assert "filename stays bare (no prefix on disk)" ((Split-Path $rec.path -Leaf) -match '^d\d{3,}-')
 $content = Get-Content $rec.path -Raw
 Assert "front-matter id matches" ($content -match "(?m)^id:\s+$($rec.id)")
 Assert "front-matter has project" ($content -match "(?m)^project:\s+testproj")
@@ -117,13 +118,25 @@ $noJob = Read-Decisions -Project 'p1' -Job 'j-other' -KbRoot $tmpKb2
 Assert "Read-Decisions -Job other returns 0" ($noJob.Count -eq 0)
 
 # Read-Decisions returns id/title/confidence/flag for retro listing
-Assert "first record has id field" ($forJob[0].id -match '^d\d{3}$')
+Assert "first record has a qualified id field" ($forJob[0].id -match '^p1-d\d{3,}$')
 Assert "first record has title field" ($forJob[0].title.Length -gt 0)
 
 # Append-DecisionFeedback on unknown id throws
 $threw = $false
 try { Append-DecisionFeedback -Id 'd999' -Project 'p1' -KbRoot $tmpKb2 -Text 'x' -Outcome 'worked' -Author 'kevin' } catch { $threw = $true }
 Assert "Append on unknown id throws" $threw
+
+# Regression: ids are qualified (`p1-d001`) but filenames are bare (`d001-<slug>.md`).
+# Lookup must resolve BOTH forms — a caller holding the id Add-DecisionRecord returned
+# was throwing "no decision record found" because the glob kept the prefix.
+Assert "lookup resolves a qualified id" `
+    ($null -ne (Find-DecisionRecordPath -Id $r1.id -Project 'p1' -KbRoot $tmpKb2))
+$bareId = if ($r1.id -match '(d\d{3,})$') { $Matches[1] } else { $r1.id }
+Assert "lookup still resolves a bare id" `
+    ($null -ne (Find-DecisionRecordPath -Id $bareId -Project 'p1' -KbRoot $tmpKb2))
+Assert "qualified and bare resolve to the same file" `
+    ((Find-DecisionRecordPath -Id $r1.id -Project 'p1' -KbRoot $tmpKb2) -eq `
+     (Find-DecisionRecordPath -Id $bareId -Project 'p1' -KbRoot $tmpKb2))
 
 Remove-Item $tmpKb2 -Recurse -Force
 

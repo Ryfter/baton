@@ -310,7 +310,11 @@ function Find-DecisionRecordPath {
     )
     $decDir = Join-Path $KbRoot "projects/$Project/decisions"
     if (-not (Test-Path $decDir)) { return $null }
-    $match = Get-ChildItem -Path $decDir -Filter "$Id-*.md" -ErrorAction SilentlyContinue | Select-Object -First 1
+    # Ids are project-qualified (`baton-d107`) but filenames stay bare (`d107-<slug>.md`) —
+    # the folder namespaces the file, the prefix namespaces the reference. Strip the prefix
+    # before globbing so both forms resolve; callers hand us whichever they hold.
+    $bare = if ($Id -match '(d\d{3,})$') { $Matches[1] } else { $Id }
+    $match = Get-ChildItem -Path $decDir -Filter "$bare-*.md" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($match) { return $match.FullName }
     return $null
 }
