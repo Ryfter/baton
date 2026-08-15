@@ -2,7 +2,64 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
-## ⚑ RESUME HERE — 2026-08-03 (d103 diff-apply BUILT — PR #169 open, HELD for merge)
+## ⚑ RESUME HERE — 2026-08-15 (merge queue CLEARED; four gates documented in #190)
+
+**The queue is empty except draft #189.** Six PRs merged to master in one session:
+
+| PR | What |
+|---|---|
+| **#186** | planner failover — **landed the #179 → #181 → #184 stack** (all three auto-closed) |
+| **#187** | ecosystem boundaries + project-qualified decision ids |
+| **#176** | coordination wiring — resource claim gates local dispatch |
+| **#192** | regression fix (see below) |
+
+`#179 → #181 → #184 → #186` was a **linear ancestor stack**, proved with
+`git merge-base --is-ancestor`, so #186 carried the other three. One merge word covered all
+four — a deliberate waiver of the per-PR rule, recorded as **`baton-d110`** with the ancestry
+shown to Kevin first. Narrow precedent: *a linear stack may share one word when the ancestry is
+surfaced first.* Not a licence to batch unrelated PRs.
+
+**Master sweep: 83/84.** The single failure is `test-heartbeat`, **pre-existing** — verified by
+running it at `0b2d9cf` (pre-#187) where it also exits 1.
+
+### The regression worth remembering (#191 / PR #192)
+
+#187 made ids project-qualified (`baton-d107`) while filenames stayed bare (`d107-<slug>.md`).
+`Find-DecisionRecordPath` kept globbing `"$Id-*.md"` **with the prefix attached**, so the library
+threw `No decision record found` on its own output — hand `Append-DecisionFeedback` the id
+`Add-DecisionRecord` just returned and it failed.
+
+**How it reached master:** the stack merge was verified with a **ten-suite subset** reported as
+green. `test-decisions-fromfile` was outside it and broken the same way. *A subset is not a
+sweep.* Run all 84.
+
+### Known-open state
+
+- **#190** — umbrella: four gates blocking `baton go --execute` as the one-command front door.
+  1. no `.baton/` in this repo (execute mode can't onboard itself)
+  2. no free + enabled + review-capable provider (acceptance fails silently)
+  3. six deployed libs diverge from repo — **diff before redeploying**, a hash mismatch does not
+     say which side is ahead
+  4. the merge queue itself
+- **#188** — `gh-copilot` is not Copilot: it runs `gh models` (GitHub Models), and is mislabelled
+  `cost_tier: paid` on a free product, so cost-ordered routing outranks it every time. Fixing the
+  tier + declaring `review` also closes gate 2. Real `copilot` CLI is not installed.
+- **Ryfter/Grimdex#1** — the cross-project GitHub Projects convention (`grimdex-d024` owes it).
+  30 repos, 8 boards, no pattern; one board is literally untitled.
+- **No CI exists.** `.github/workflows/` is empty — nothing ran these suites on any PR. Arguably
+  a fifth gate: Baton cannot be a trustworthy front door while its merge gate depends on human
+  diligence.
+
+### Ecosystem note
+
+**Grimlore is real now** — `Ryfter/Grimlore` (private, `D:\Dev\Grimlore`), created 2026-08-15
+(`grimdex-d026`). Structure + authoring rules + four **draft, unverified** seed concepts. Baton
+**does not read it**; no retrieval path exists and isolation enforcement is unchosen. Do not write
+code assuming Grimlore context is available.
+
+---
+
+## 2026-08-03 (d103 diff-apply BUILT — PR #169 open, HELD for merge)
 
 **PR #169 is open and NOT merged.** 16 commits, +3771/-22 across 14 files. Merge needs
 Kevin's word. Everything below is done and verified.
