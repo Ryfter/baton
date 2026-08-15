@@ -21,6 +21,7 @@ it's useful — not a turnkey product.
 - **[Command reference](docs/COMMANDS.md)** — every command and flag, in plain language.
 - **[Decision log](docs/DECISIONS.md)** — every design decision and why.
 - [Roadmap](docs/roadmap.md) — what's shipped and what's parked.
+- **[Ecosystem boundaries](docs/ecosystem-boundaries.md)** — where Baton ends and Grimdex / the Grimlore begin.
 
 ### Install (Claude Code plugin)
 
