@@ -57,6 +57,75 @@ sweep.* Run all 84.
 **does not read it**; no retrieval path exists and isolation enforcement is unchosen. Do not write
 code assuming Grimlore context is available.
 
+### Architecture direction set 2026-08-15 (`baton-d108`, `baton-d109`)
+
+Full reasoning: `~/.claude/knowledge/projects/baton/design-notes/2026-08-15-*.md` (KB repo,
+GitHub-backed, model-agnostic). Summary for cold pickup:
+
+**The objective is not cost minimization.** It is **7-day uptime at 80–100% subscription
+utilization**. Subscription quota is *perishable* (unused at reset = wasted money → maximize
+use); prepaid/metered credit is *not* (unused = still money → minimize spend). Prepaid is the
+**shock absorber** that makes running subscriptions to the rail safe. Route by each provider's
+**opportunity cost** (remaining quota × time to its own reset), never by sticker price.
+
+**Four layers, separated by scope — not seniority:**
+
+| Layer | Where | Job | Cost |
+|---|---|---|---|
+| **Maestro** | `D:\dev\`, all projects | quota arithmetic, burn rate, admission control, resource claim, **scheduling** | **free by construction** — deterministic code + at most a tiny local classifier |
+| **Conductor** | `D:\dev\`, all projects | takes Maestro's go-ahead, creates tasks, drives tool workflows, spins orchestrators | thin and cheap |
+| **Orchestrators** | **inside one project** | the real brains: plan, route, pick models/tools | strongest models |
+| **Instruments** | — | models and tools that do the work (**n8n flows are instruments**) | varies |
+
+> **NAMING — read this before you "correct" anything.** Maestro is a **new top layer**, not the
+> old name for Conductor. This does **not** revert the 2026-06-18 Maestro→Conductor rename;
+> Conductor keeps its job and Maestro sits above it. "Composer" was floated and dropped
+> (Conductor absorbed it); parked as a possible future *design-authoring* role.
+
+**Maestro is Kevin's control plane** (where he sets weights/priority — cross-project priority is
+**policy, not intelligence**). **GitHub is the management plane** (PRs, Projects, Kanban, Roadmap).
+Rule: *if GitHub Projects lacks a capability natively, do not build it* — push critical path in as
+a computed field instead (the DAG already carries `depends_on`; longest chain is arithmetic).
+
+**Scheduling moved out of the agent** into Maestro: a scheduler needing tokens to decide when to
+spend tokens deadlocks at the very window reset it exists to catch. Durability **levels 1–2 only**
+(persist to disk; OS scheduler re-reads on boot). Missed-fire policy must be **per-job**
+(catch-up / skip / coalesce). The 5h window **anchors on first use**, not a clock constant (`d099`).
+
+**Determinism is about where you put the variance** — concentrate it in code generation, remove it
+everywhere else. n8n is an **instrument, never an engine**: it must not own decomposition or
+routing, and must take the same resource claim as any other caller.
+
+**GitHub safety:** an LLM flipping a repo public is an **over-scoped credential** problem, not a
+missing-workflow problem. Order: fine-grained PAT without `administration` → branch protection →
+n8n as credential broker for the dangerous verbs. Do not justify n8n on token savings.
+
+**Telemetry:** capture now, it cannot be backfilled — context fingerprint, task size, **failover
+position**, effort setting, estimate-vs-actual. `agreed` from `Merge-ReviewFindings` is
+**unreliable in both directions**; do not train on it. Outcome labels (especially **false
+negatives** — bugs that escaped review) are the missing supervision signal.
+
+### PR #189 — draft, **REJECTED** by adversarial review
+
+First real proof of the non-Claude review layer: `codex` + `grok-cli`, 9 minutes, **zero Claude
+tokens**, verdict **reject** — 5 critical / 10 important. Artifacts:
+`~/.baton/reviews/nightly-2026-08-15T13-57-59/`; rework brief in the KB design-notes dir.
+
+It does **not** do what its title claims:
+
+1. The new N-walk landed on `Invoke-TaskViaFleet`, which **`--execute` never calls** — execute
+   labor still uses `fleet-executor-lib`'s single usage hop, so a capped editor still stalls.
+2. Plan-gate failover is **unreachable**: `Invoke-Conductor` always passes `-Reviewers`; unset is
+   `$null`, and `@($null).Count` is `1`, so `reviewersExplicit` is true and substitution is off.
+3. `Invoke-AcceptanceGate` still returns `verdict='accept'` when every reviewer is unusable — the
+   fail-open bug it claimed to fix (gate 2 of #190 is **still open**).
+4. `scripts/test-all.ps1` matches its own `test-*.ps1` filter and recursively spawns itself; the
+   `full` verification profile **can never pass** and was never run.
+
+**Reviewer invocation gotcha:** `pwsh -File fleet-gate.ps1 --fail-loud` fails — PowerShell parses
+it as `-fail-loud`, which cannot bind to `[switch]$FailLoud`. Use `-FailLoud`. `commands/gate.md`
+documents the `--` form, which is wrong for direct `-File` invocation.
+
 ---
 
 ## 2026-08-03 (d103 diff-apply BUILT — PR #169 open, HELD for merge)
