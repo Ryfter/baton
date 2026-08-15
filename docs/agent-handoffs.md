@@ -96,8 +96,10 @@ it — re-copying is how drift starts.
 - **Grimdex** governs **how** coding work is done (rules, conventions, lessons, verification and
   security expectations, disciplined promotion). Smallest, most aggressively trimmed layer.
 - **Grimlore** remembers **why / who / context** (rationale, history, environment, hardware,
-  organization, audience, models, research). Optional; format settled (**OKF v0.2**, `grimdex:d021`),
-  **not built yet — spec only**.
+  organization, audience, models, research). Format is **OKF v0.2** (`grimdex:d021`). Repo
+  `Ryfter/Grimlore` (**private**, `D:\Dev\Grimlore`) stood up 2026-08-15 — structure and authoring
+  rules only; content is **not populated** and **Baton does not read it yet**. Do not write a
+  code path that assumes Grimlore context is available.
 - **Grimdex Baton** (this project) decides **what happens next and when**, then executes.
 - **Grimdex-Know** is **not a layer** — it is the name of the private personalized Grimdex
   instance (`Ryfter/grimdex-know`, mounted at `D:\Dev\Grimdex`). Never diagram it as a peer.

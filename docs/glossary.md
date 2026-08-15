@@ -11,9 +11,11 @@ The outer frame Baton sits inside. Full brief: [`ecosystem-boundaries.md`](ecosy
 - **Grimdex** — the public governance framework. Governs **how** AI-augmented coding is done:
   rules, conventions, lessons, verification and security expectations, disciplined promotion.
   Deliberately the smallest, most aggressively maintained layer.
-- **Grimlore** — an optional long-term knowledge/context layer. Remembers **why** decisions
-  were made, **who** the work serves, and the surrounding environment. Format settled — **OKF
-  v0.2**, markdown + YAML frontmatter in bundles (`grimdex:d021`); **not built yet** (spec only).
+- **Grimlore** — the long-term knowledge/context layer. Remembers **why** decisions were made,
+  **who** the work serves, and the surrounding environment. Format is **OKF v0.2**, markdown +
+  YAML frontmatter in bundles (`grimdex:d021`). Repo `Ryfter/Grimlore` (**private**) exists as of
+  2026-08-15: structure + authoring rules seeded, content **not populated**. Baton does not read
+  it yet — no retrieval path is built, and isolation enforcement is unchosen.
 - **OKF** — Open Knowledge Format, Grimlore's file format. A directory ("bundle") of markdown
   files with YAML frontmatter carrying `type`, provenance (`sources`), trust
   (`generated`/`verified`), and staleness (`status`/`stale_after`).
