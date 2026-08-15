@@ -2,7 +2,21 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
-## ⚑ RESUME HERE — 2026-08-15 (merge queue CLEARED; four gates documented in #190)
+## ⚑ RESUME HERE — 2026-08-15 (Maestro front-door design LOCKED)
+
+**Design is closed.** Do not reopen layers, Buzz-as-brain, two-seat chat, Gantt, or durability 3–4 unless Kevin asks.
+
+- Spec: [`docs/superpowers/specs/2026-08-15-maestro-front-door-design.md`](superpowers/specs/2026-08-15-maestro-front-door-design.md)
+- Decision: **`baton-d111`** (one Baton front door; Maestro fires; Conductor talks). Extends `baton-d108` / `baton-d109`.
+- Slice: factory first, just enough client (C biased hard toward A). **Not authorized to build** until an implementation plan exists.
+
+**What to do next (when Kevin says implement):** writing-plans off that spec. First plan must include the `#190` fire-path unblocks and `diff_apply: true` on `lm-studio` (Kevin flips fleet.yaml). Scheduler is Task Scheduler now, `launchd` on the Mac mini later.
+
+**One-line reminder:** Kevin starts Baton (CLI / Buzz member already on the Mac / later one web page). He talks. Conductor answers. Maestro only admits and fires. One factory host. Never merge without his word.
+
+---
+
+## Prior — 2026-08-15 (merge queue CLEARED; four gates documented in #190)
 
 **The queue is empty except draft #189.** Six PRs merged to master in one session:
 
@@ -52,10 +66,11 @@ sweep.* Run all 84.
 
 ### Ecosystem note
 
-**Grimlore is real now** — `Ryfter/Grimlore` (private, `D:\Dev\Grimlore`), created 2026-08-15
-(`grimdex-d026`). Structure + authoring rules + four **draft, unverified** seed concepts. Baton
-**does not read it**; no retrieval path exists and isolation enforcement is unchosen. Do not write
-code assuming Grimlore context is available.
+**Grimlore landscape is readable by path** — `D:\Dev\Grimlore\projects\baton\BATON.md`
+(then `index.md` + `sources/`). Watched GitHub repos, keep-vs-adopt, re-scan by SHA.
+Pointer stanza is in `CLAUDE.md` / `AGENTS.md` / `GROK.md` / `GEMINI.md`. No
+middleware; isolation still unchosen (this bundle + `universal/` only). Do not
+copy Source cards into Baton.
 
 ### Architecture direction set 2026-08-15 (`baton-d108`, `baton-d109`)
 
