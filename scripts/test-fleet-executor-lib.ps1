@@ -428,6 +428,18 @@ providers:
     $savedBatonHome = $env:BATON_HOME
     $env:BATON_HOME = Join-Path $tmpRoot 'baton-home'
     New-Item -ItemType Directory -Force -Path $env:BATON_HOME | Out-Null
+    # Coordination store for the LOCAL-tier fixtures below. Local dispatch is now gated
+    # on a resource claim, and coordination-lib grants nothing without DECLARED host
+    # capacity (absent/0 VRAM means "I don't know", which means deny). Placeholder names
+    # only — host-a / stack-a / model-large are never a real host, stack, or model.
+    # Hermetic: this lives under the temp BATON_HOME, never the operator's ~/.baton.
+    New-Item -ItemType Directory -Force -Path (Join-Path $env:BATON_HOME 'coordination') | Out-Null
+    Set-Content -LiteralPath (Join-Path $env:BATON_HOME 'coordination/config.json') -Encoding utf8NoBOM -Value @'
+{
+  "hosts": { "host-a": { "vram_gb": 48 } },
+  "profiles": { "model-large": { "vram_gb": 8, "class": "broad" } }
+}
+'@
     try {
         $fleetPath = Join-Path $env:BATON_HOME 'fleet.yaml'
         Set-Content -LiteralPath $fleetPath -Encoding utf8NoBOM -Value @'
@@ -566,6 +578,10 @@ providers:
     cost_tier: local
     platform: local
     agentic: true
+    host: host-a
+    stack: stack-a
+    load_profile: model-large
+    vram_gb: 8
     command_template: 'echo "{{prompt}}"'
 '@
         $sp5 = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $fleetOverride -ToolsPath $toolsPath -Dispatcher $noopDisp
@@ -1820,6 +1836,10 @@ providers:
     diff_apply: true
     base_url: 'http://127.0.0.1:1'
     model_default: model-small
+    host: host-a
+    stack: stack-a
+    load_profile: model-large
+    vram_gb: 8
     capabilities: [code-gen]
   - name: cli-host-a
     kind: cli
@@ -2044,6 +2064,291 @@ sneaky new file
                 $_.task_id -eq 'da-e12' -and $_.apply_result -eq 'envelope-exceeded' -and
                 [int]$_.blocks_emitted -eq 9 -and [int]$_.blocks_applied -eq 0
             }).Count -eq 1)
+
+        # ================================================================
+        # C-series: the coordination gate (resource facet) wired into local
+        # dispatch. Each case owns its BATON_HOME so store presence/absence is
+        # exact and nothing here can reach the operator's real ~/.baton.
+        # Placeholder names only — host-a / stack-a / stack-b / model-large.
+        # ================================================================
+        $cOuterHome = $env:BATON_HOME
+        try {
+            $cRoot = Join-Path $tmpRoot 'coord'
+            New-Item -ItemType Directory -Force -Path $cRoot | Out-Null
+            $cRepo = New-TempRepo -Root (New-Item -ItemType Directory -Force -Path (Join-Path $cRoot 'repo-root')).FullName
+            $cWt = (New-RunWorktree -RepoPath $cRepo -RunId 'go-coord').worktree
+            $cRunDir = Join-Path $cRoot 'run-coord'
+            New-Item -ItemType Directory -Force -Path $cRunDir | Out-Null
+            $cTools = Join-Path $cRoot 'tools-absent.yaml'
+
+            # timeout_s is declared so C9 can assert the lease is derived from it.
+            $cFleet = Join-Path $cRoot 'fleet-local.yaml'
+            Set-Content -LiteralPath $cFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: [code-gen]
+providers:
+  - name: local-a
+    kind: cli
+    enabled: true
+    cost_tier: local
+    platform: local
+    agentic: true
+    quality: 0.9
+    host: host-a
+    stack: stack-a
+    load_profile: model-large
+    vram_gb: 8
+    timeout_s: 3600
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+'@
+            $cPaidFleet = Join-Path $cRoot 'fleet-paid.yaml'
+            Set-Content -LiteralPath $cPaidFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: [code-gen]
+providers:
+  - name: paid-a
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+'@
+            $cTask = [pscustomobject]@{ id = 'c-task'; desc = 'write the feature'; capability = 'code-gen'
+                stakes = 'standard'; stakes_basis = 'ordinary bounded feature' }
+
+            # Plain scriptblocks throughout (never .GetNewClosure()): a new closure
+            # captures only the immediate local scope and would blank $cRoot here.
+            $cNewHome = {
+                param([string]$Name, [switch]$WithCapacity)
+                $h = Join-Path $cRoot $Name
+                New-Item -ItemType Directory -Force -Path $h | Out-Null
+                if ($WithCapacity) {
+                    New-Item -ItemType Directory -Force -Path (Join-Path $h 'coordination') | Out-Null
+                    Set-Content -LiteralPath (Join-Path $h 'coordination/config.json') -Encoding utf8NoBOM `
+                        -Value '{ "hosts": { "host-a": { "vram_gb": 48 } } }'
+                }
+                return $h
+            }
+
+            # ---- C1: granted -> the dispatch happens and the worktree changes ----
+            $cHomeOk = & $cNewHome 'home-ok' -WithCapacity
+            $env:BATON_HOME = $cHomeOk
+            $cSeen = @{ calls = 0 }
+            $cEditDisp = {
+                param($pick, $prompt, $depthTier)
+                $cSeen.calls++
+                Set-Content -LiteralPath (Join-Path (Get-Location).Path 'coord-edit.txt') -Value 'work' -Encoding utf8NoBOM
+                @{ stdout = 'done'; stderr = ''; exit_code = 0; duration_s = 0 }
+            }
+            $cSp1 = New-AgenticSpawner -Worktree $cWt -FleetPath $cFleet -ToolsPath $cTools `
+                -MaxCostTier 'local' -RunDir $cRunDir -Dispatcher $cEditDisp `
+                -UsagePath (Join-Path $cHomeOk 'usage-c1.jsonl')
+            $cR1 = & $cSp1 $cTask
+            Check 'C1 local dispatch under a granted claim succeeds' (
+                $cR1.ok -eq $true -and $cR1.chose -eq 'local-a' -and $cSeen.calls -eq 1)
+            Check 'C1b the worktree changed exactly as it did before the gate existed' (
+                (Test-Path (Join-Path $cWt 'coord-edit.txt')) -and ($cR1.why -match 'diff grew'))
+            Check 'C1c the coordination journal recorded a grant for host-a/stack-a' (
+                @(Get-CoordJournal -BatonHome $cHomeOk | Where-Object {
+                    $_.event -eq 'grant' -and $_.host -eq 'host-a' -and $_.stack -eq 'stack-a' -and
+                    $_.load_profile -eq 'model-large' }).Count -ge 1)
+
+            # ---- C2: the claim is RELEASED after a successful dispatch ----
+            # Stack exclusivity is the proof: a claim for a different stack on the same
+            # host is denied while ANY live claim exists there, so its success means
+            # the dispatch's own claim is gone.
+            $cAfter = Request-ResourceClaim -HostName 'host-a' -Stack 'stack-b' -LoadProfile 'model-large' `
+                -VramGb 8 -RunId 'probe-run' -Project 'probe' -TtlSec 60 -BatonHome $cHomeOk
+            Check 'C2 claim released after a successful dispatch (a fresh claim is granted)' (
+                $cAfter.granted -eq $true)
+            [void](Remove-ResourceClaim -ClaimId ([string]$cAfter.claim.claim_id) -BatonHome $cHomeOk)
+            Check 'C2b no claim is left behind on host-a' (
+                @(Get-ResourceClaims -HostName 'host-a' -BatonHome $cHomeOk).Count -eq 0)
+
+            # ---- C3: denied -> the dispatcher is NEVER invoked ----
+            # The real-world case: another run already loaded a model on this box.
+            $cBlock = Request-ResourceClaim -HostName 'host-a' -Stack 'stack-b' -LoadProfile 'model-large' `
+                -VramGb 8 -RunId 'other-run' -Project 'other' -TtlSec 300 -BatonHome $cHomeOk
+            Check 'C3 setup: a competing run holds the box' ($cBlock.granted -eq $true)
+            $cDeniedSeen = @{ calls = 0 }
+            $cDeniedDisp = {
+                param($pick, $prompt, $depthTier)
+                $cDeniedSeen.calls++
+                @{ stdout = 'should never run'; stderr = ''; exit_code = 0; duration_s = 0 }
+            }
+            $cSp3 = New-AgenticSpawner -Worktree $cWt -FleetPath $cFleet -ToolsPath $cTools `
+                -MaxCostTier 'local' -RunDir $cRunDir -Dispatcher $cDeniedDisp `
+                -UsagePath (Join-Path $cHomeOk 'usage-c3.jsonl')
+            $cR3 = & $cSp3 $cTask
+            Check 'C3a a denied local dispatch never invokes the dispatcher' ($cDeniedSeen.calls -eq 0)
+            Check 'C3b a denied local dispatch is not ok and flags labor unavailable' (
+                $cR3.ok -eq $false -and [string]$cR3.labor -eq 'unavailable')
+            Check 'C3c why names the denial reason verbatim and the provider' (
+                ($cR3.why -match 'stack_exclusive') -and ($cR3.why -match 'local-a'))
+            Check 'C3d the exclusion audit rides the result' (
+                @($cR3.exclusions | Where-Object {
+                    $_.name -eq 'local-a' -and $_.stage -eq 'usage' -and $_.reason -match 'stack_exclusive'
+                }).Count -eq 1)
+            [void](Remove-ResourceClaim -ClaimId ([string]$cBlock.claim.claim_id) -BatonHome $cHomeOk)
+
+            # ---- C4: the claim is released even when the dispatch THROWS ----
+            $cThrew = $false
+            try {
+                [void](Invoke-CoordinatedDispatch -Candidate ([pscustomobject]@{ name = 'local-a'; cost_tier = 'local' }) `
+                    -FleetPath $cFleet -Worktree $cWt -RunDir $cRunDir -Dispatch { throw 'dispatch exploded' })
+            } catch { $cThrew = $true }
+            Check 'C4 a throwing dispatch still propagates out of the wrapper' $cThrew
+            $cAfterThrow = Request-ResourceClaim -HostName 'host-a' -Stack 'stack-b' -LoadProfile 'model-large' `
+                -VramGb 8 -TtlSec 60 -BatonHome $cHomeOk
+            Check 'C4b claim released after a dispatch that throws (a fresh claim is granted)' (
+                $cAfterThrow.granted -eq $true)
+            [void](Remove-ResourceClaim -ClaimId ([string]$cAfterThrow.claim.claim_id) -BatonHome $cHomeOk)
+            # Same property through the spawner, where the throw is caught downstream.
+            $cThrowDisp = { param($pick, $prompt, $depthTier) throw 'instrument exploded' }
+            $cSp4 = New-AgenticSpawner -Worktree $cWt -FleetPath $cFleet -ToolsPath $cTools `
+                -MaxCostTier 'local' -RunDir $cRunDir -Dispatcher $cThrowDisp `
+                -UsagePath (Join-Path $cHomeOk 'usage-c4.jsonl')
+            $cR4 = & $cSp4 $cTask
+            Check 'C4c a throwing instrument fails the task without crashing the spawner' ($cR4.ok -eq $false)
+            $cAfterSpawnThrow = Request-ResourceClaim -HostName 'host-a' -Stack 'stack-b' -LoadProfile 'model-large' `
+                -VramGb 8 -TtlSec 60 -BatonHome $cHomeOk
+            Check 'C4d claim released after a throwing spawner dispatch' ($cAfterSpawnThrow.granted -eq $true)
+            [void](Remove-ResourceClaim -ClaimId ([string]$cAfterSpawnThrow.claim.claim_id) -BatonHome $cHomeOk)
+
+            # ---- C5: THE REGRESSION GUARD ----
+            # A paid provider must dispatch exactly as it does today with the
+            # coordination store absent entirely. If coordination being unavailable
+            # could break paid work, this whole change would be a net loss.
+            $cHomeNone = & $cNewHome 'home-no-store'   # deliberately no coordination dir
+            $env:BATON_HOME = $cHomeNone
+            Check 'C5 setup: the coordination store does not exist' (
+                -not (Test-Path (Join-Path $cHomeNone 'coordination')))
+            $cPaidSeen = @{ calls = 0 }
+            $cPaidDisp = {
+                param($pick, $prompt, $depthTier)
+                $cPaidSeen.calls++
+                Set-Content -LiteralPath (Join-Path (Get-Location).Path 'paid-edit.txt') -Value 'work' -Encoding utf8NoBOM
+                @{ stdout = 'done'; stderr = ''; exit_code = 0; duration_s = 0 }
+            }
+            $cSp5 = New-AgenticSpawner -Worktree $cWt -FleetPath $cPaidFleet -ToolsPath $cTools `
+                -MaxCostTier 'paid' -RunDir $cRunDir -Dispatcher $cPaidDisp `
+                -UsagePath (Join-Path $cHomeNone 'usage-c5.jsonl')
+            $cR5 = & $cSp5 ([pscustomobject]@{ id = 'c-paid'; desc = 'write the feature'; capability = 'code-gen'
+                est_cost_tier = 'paid'; stakes = 'standard'; stakes_basis = 'ordinary bounded feature' })
+            Check 'C5 PAID PROVIDER DISPATCHES NORMALLY WITH THE COORDINATION STORE ABSENT' (
+                $cR5.ok -eq $true -and $cR5.chose -eq 'paid-a' -and $cPaidSeen.calls -eq 1 -and
+                (Test-Path (Join-Path $cWt 'paid-edit.txt')) -and ($cR5.why -match 'diff grew'))
+            Check 'C5b non-local dispatch never touches the store — not even to create it' (
+                -not (Test-Path (Join-Path $cHomeNone 'coordination')))
+            $cPaidGate = Request-LocalDispatchClaim -Candidate ([pscustomobject]@{ name = 'paid-a'; cost_tier = 'paid' }) `
+                -FleetPath $cPaidFleet -Worktree $cWt -RunDir $cRunDir
+            Check 'C5c the gate reports non-local as ungated without consulting the store' (
+                $cPaidGate.gated -eq $false -and $cPaidGate.granted -eq $true -and
+                $cPaidGate.reason -eq 'not_local' -and $cPaidGate.claim_id -eq '' -and
+                (-not (Test-Path (Join-Path $cHomeNone 'coordination'))))
+
+            # ---- C6: an UNUSABLE store still cannot break paid work, and denies local ----
+            $cHomeBroken = & $cNewHome 'home-broken'
+            Set-Content -LiteralPath (Join-Path $cHomeBroken 'coordination') -Value 'a file, not a directory' -Encoding utf8NoBOM
+            $env:BATON_HOME = $cHomeBroken
+            $cPaidSeen2 = @{ calls = 0 }
+            $cPaidDisp2 = {
+                param($pick, $prompt, $depthTier)
+                $cPaidSeen2.calls++
+                Set-Content -LiteralPath (Join-Path (Get-Location).Path 'paid-edit-2.txt') -Value 'work' -Encoding utf8NoBOM
+                @{ stdout = 'done'; stderr = ''; exit_code = 0; duration_s = 0 }
+            }
+            $cSp6 = New-AgenticSpawner -Worktree $cWt -FleetPath $cPaidFleet -ToolsPath $cTools `
+                -MaxCostTier 'paid' -RunDir $cRunDir -Dispatcher $cPaidDisp2 `
+                -UsagePath (Join-Path $cHomeBroken 'usage-c6.jsonl')
+            $cR6 = & $cSp6 ([pscustomobject]@{ id = 'c-paid-2'; desc = 'write the feature'; capability = 'code-gen'
+                est_cost_tier = 'paid'; stakes = 'standard'; stakes_basis = 'ordinary bounded feature' })
+            Check 'C6 paid dispatch is unaffected by an UNUSABLE coordination store' (
+                $cR6.ok -eq $true -and $cPaidSeen2.calls -eq 1 -and (Test-Path (Join-Path $cWt 'paid-edit-2.txt')))
+            $cBrokenSeen = @{ calls = 0 }
+            $cBrokenDisp = { param($pick, $prompt, $depthTier) $cBrokenSeen.calls++
+                @{ stdout = 'should never run'; stderr = ''; exit_code = 0; duration_s = 0 } }
+            $cSp6b = New-AgenticSpawner -Worktree $cWt -FleetPath $cFleet -ToolsPath $cTools `
+                -MaxCostTier 'local' -RunDir $cRunDir -Dispatcher $cBrokenDisp `
+                -UsagePath (Join-Path $cHomeBroken 'usage-c6b.jsonl')
+            $cR6b = & $cSp6b $cTask
+            Check 'C6b an unusable store FAILS CLOSED for local (denied, never dispatched)' (
+                $cR6b.ok -eq $false -and $cBrokenSeen.calls -eq 0 -and
+                [string]$cR6b.labor -eq 'unavailable' -and ($cR6b.why -match 'store_unavailable'))
+
+            # ---- C7: an exception from the coordination call is a DENIAL ----
+            $env:BATON_HOME = $cHomeOk
+            $cThrowSeen = @{ calls = 0 }
+            $cGateThrowDisp = { param($pick, $prompt, $depthTier) $cThrowSeen.calls++
+                @{ stdout = 'should never run'; stderr = ''; exit_code = 0; duration_s = 0 } }
+            $cSp7 = New-AgenticSpawner -Worktree $cWt -FleetPath $cFleet -ToolsPath $cTools `
+                -MaxCostTier 'local' -RunDir $cRunDir -Dispatcher $cGateThrowDisp `
+                -UsagePath (Join-Path $cHomeOk 'usage-c7.jsonl')
+            $cR7 = $null
+            $cR7Escaped = $false
+            function Request-ResourceClaim { throw 'coordination exploded' }
+            try { $cR7 = & $cSp7 $cTask }
+            catch { $cR7Escaped = $true }
+            finally { . "$PSScriptRoot/coordination-lib.ps1" }
+            Check 'C7 a throwing coordination call is a denial, never an implicit grant' (
+                $null -ne $cR7 -and $cR7.ok -eq $false -and $cThrowSeen.calls -eq 0)
+            Check 'C7b no exception escapes the spawner and why carries the fault' (
+                (-not $cR7Escaped) -and ($cR7.why -match 'coordination exploded'))
+            Check 'C7c the denial is labor-unavailable shaped' ([string]$cR7.labor -eq 'unavailable')
+
+            # ---- C8: coordination-lib not loaded at all is also a denial ----
+            $cNoLibSeen = @{ calls = 0 }
+            $cNoLibDisp = { param($pick, $prompt, $depthTier) $cNoLibSeen.calls++
+                @{ stdout = 'should never run'; stderr = ''; exit_code = 0; duration_s = 0 } }
+            $cSp8 = New-AgenticSpawner -Worktree $cWt -FleetPath $cFleet -ToolsPath $cTools `
+                -MaxCostTier 'local' -RunDir $cRunDir -Dispatcher $cNoLibDisp `
+                -UsagePath (Join-Path $cHomeOk 'usage-c8.jsonl')
+            $cR8 = $null
+            Remove-Item -LiteralPath 'Function:Request-ResourceClaim' -Force -ErrorAction SilentlyContinue
+            try { $cR8 = & $cSp8 $cTask }
+            finally { . "$PSScriptRoot/coordination-lib.ps1" }
+            Check 'C8 an unloaded coordination library denies local dispatch' (
+                $null -ne $cR8 -and $cR8.ok -eq $false -and $cNoLibSeen.calls -eq 0 -and
+                ($cR8.why -match 'coordination_unavailable'))
+
+            # ---- C9: the acquired TTL must OUTLIVE the dispatch timeout ----
+            # The 60s library default would expire mid-dispatch and let a second run in.
+            # Asserted on the value actually passed, not on observed behaviour.
+            $cTtlSeen = @{ ttl = 0; host = ''; stack = ''; profile = ''; vram = [double]0 }
+            $cTtlDisp = { param($pick, $prompt, $depthTier)
+                @{ stdout = 'ok'; stderr = ''; exit_code = 0; duration_s = 0 } }
+            $cSp9 = New-AgenticSpawner -Worktree $cWt -FleetPath $cFleet -ToolsPath $cTools `
+                -MaxCostTier 'local' -RunDir $cRunDir -Dispatcher $cTtlDisp `
+                -UsagePath (Join-Path $cHomeOk 'usage-c9.jsonl')
+            function Request-ResourceClaim {
+                param(
+                    [Parameter(Mandatory)][string]$HostName,
+                    [Parameter(Mandatory)][string]$Stack,
+                    [Parameter(Mandatory)][string]$LoadProfile,
+                    [double]$VramGb = 0, [string]$Class = '', [string]$RunId = '', [string]$Project = '',
+                    [int]$Weight = 0, [int]$TtlSec = 60, [int]$TimeoutSec = 5, [string]$BatonHome = ''
+                )
+                $cTtlSeen.ttl = $TtlSec; $cTtlSeen.host = $HostName; $cTtlSeen.stack = $Stack
+                $cTtlSeen.profile = $LoadProfile; $cTtlSeen.vram = $VramGb
+                return [ordered]@{ granted = $true; reason = 'granted'; claim = [ordered]@{ claim_id = 'stub-claim-id' } }
+            }
+            try { $cR9 = & $cSp9 $cTask }
+            finally { . "$PSScriptRoot/coordination-lib.ps1" }
+            Check 'C9 the dispatch ran under the stub grant' ($cR9.ok -eq $true)
+            Check 'C9a acquired TTL comfortably exceeds the declared dispatch timeout (3600s)' (
+                [int]$cTtlSeen.ttl -ge 4200)
+            Check 'C9b acquired TTL is far above the 60s library default' ([int]$cTtlSeen.ttl -gt 60)
+            Check 'C9c claim identity is taken from the provider row' (
+                $cTtlSeen.host -eq 'host-a' -and $cTtlSeen.stack -eq 'stack-a' -and
+                $cTtlSeen.profile -eq 'model-large' -and [double]$cTtlSeen.vram -eq [double]8)
+            Check 'C9d no declared timeout falls back to the generous constant' (
+                (Get-CoordDispatchTtlSec -Provider @{ name = 'x' } -Candidate $null) -ge 1800)
+            Check 'C9e a declared timeout always raises the lease above itself' (
+                (Get-CoordDispatchTtlSec -Provider @{ timeout_s = '7200' } -Candidate $null) -gt 7200)
+        } finally {
+            $env:BATON_HOME = $cOuterHome
+        }
     } finally {
         if ($null -eq $savedBatonHome) { Remove-Item env:BATON_HOME -ErrorAction SilentlyContinue }
         else { $env:BATON_HOME = $savedBatonHome }
