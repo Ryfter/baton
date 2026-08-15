@@ -12,7 +12,7 @@ function Assert($label, $cond) {
     else { Write-Host "FAIL  $label" -ForegroundColor Red; $script:failures++ }
 }
 
-$noState = Join-Path $env:TEMP "six-hats-nostate-$(Get-Random).json"
+$noState = Join-Path ([System.IO.Path]::GetTempPath()) "six-hats-nostate-$(Get-Random).json"
 $env:CAO_STATE_PATH = $noState
 
 # --- T1: Build-SixHatsTasks returns 6 tasks with canonical labels ---
@@ -48,8 +48,8 @@ try { Build-SixHatsTasks -Question 'Q5' -Providers @() | Out-Null } catch { $thr
 Assert "T5 empty roster throws" $threw
 
 # --- T6: Integration — six hats run via stub-cli, all 6 files written ---
-$out6 = Join-Path $env:TEMP "six-hats-out-$(Get-Random)"
-$jrn6 = Join-Path $env:TEMP "six-hats-jrn-$(Get-Random).md"
+$out6 = Join-Path ([System.IO.Path]::GetTempPath()) "six-hats-out-$(Get-Random)"
+$jrn6 = Join-Path ([System.IO.Path]::GetTempPath()) "six-hats-jrn-$(Get-Random).md"
 $tasks6 = Build-SixHatsTasks -Question 'IntegrationQ' -Providers @('stub-cli')
 $m6 = Invoke-FleetEnsembleTasks -Tasks $tasks6 -OutputDir $out6 `
         -FleetPath $fixture -JournalPath $jrn6 -TimeoutS 60
@@ -67,8 +67,8 @@ Remove-Item $out6 -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $jrn6 -ErrorAction SilentlyContinue
 
 # --- T7: Partial failure — one hat's provider fails, others succeed ---
-$out7 = Join-Path $env:TEMP "six-hats-fail-$(Get-Random)"
-$jrn7 = Join-Path $env:TEMP "six-hats-failj-$(Get-Random).md"
+$out7 = Join-Path ([System.IO.Path]::GetTempPath()) "six-hats-fail-$(Get-Random)"
+$jrn7 = Join-Path ([System.IO.Path]::GetTempPath()) "six-hats-failj-$(Get-Random).md"
 # Use 2 providers — one good, one failing. Hats 0/2/4 -> stub-cli, 1/3/5 -> stub-fail.
 $tasks7 = Build-SixHatsTasks -Question 'PartialQ' -Providers @('stub-cli','stub-fail')
 $m7 = Invoke-FleetEnsembleTasks -Tasks $tasks7 -OutputDir $out7 `

@@ -302,3 +302,133 @@ function Select-Capability {
     }
     return ,([object[]]$ranked)
 }
+
+function Test-FailoverResultUsable {
+    <# Default usability predicate for Invoke-CapabilityFailover: a dispatch result
+       is usable when it exists and exited 0. Callers that also need the REPLY to be
+       parseable (a planner that must yield JSON, a reviewer that must yield findings)
+       pass their own -IsUsable so an exit-0-but-empty reply also hops. #>
+    param($Result)
+    if ($null -eq $Result) { return $false }
+    try { return ([int]$Result.exit_code -eq 0) } catch { return $false }
+}
+
+function Get-FailoverExclusionReason {
+    <# Plain-language reason a candidate was excluded, enriched with the usage
+       classification when usage-classify-lib is in scope. Never throws: the walk
+       must not die because a classifier is missing or a result is malformed. #>
+    param($Result, [string]$Name)
+    $exit = -1
+    try { if ($null -ne $Result) { $exit = [int]$Result.exit_code } } catch { $exit = -1 }
+    $classification = ''
+    $resetAt = ''
+    if (Get-Command Get-UsageFailureObservation -ErrorAction SilentlyContinue) {
+        try {
+            $obs = Get-UsageFailureObservation -ExitCode $exit `
+                -Stdout ([string]$Result.stdout) -Stderr ([string]$Result.stderr)
+            $classification = [string]$obs.classification
+            $resetAt = [string]$obs.reset_at
+        } catch { $classification = '' }
+    }
+    if ([string]::IsNullOrWhiteSpace($classification)) {
+        $classification = if ($null -eq $Result) { 'no_result' } elseif ($exit -eq 0) { 'unusable_reply' } else { 'dispatch_failed' }
+    }
+    return [ordered]@{
+        name = [string]$Name
+        stage = 'dispatch'
+        reason = "exit $exit ($classification)"
+        classification = $classification
+        reset_at = $resetAt
+        eta = $null
+    }
+}
+
+function Invoke-CapabilityFailover {
+    <# Walk a COST-ORDERED candidate list until one produces a usable result.
+
+       This is the code-factory contract for every model-calling phase: a provider
+       that hits its cap (or otherwise fails to produce usable output) must not stall
+       the run while cheaper-or-equal peers sit idle. -Candidates arrives already
+       ranked by Select-Capability (cheapest tier first), so the walk is cost-ordered
+       by construction — it never re-sorts and never reaches past the caller's
+       -MaxCostTier, because that filtering happened during selection.
+
+       Read-only phases (planning, review, acceptance, research synthesis) hop on ANY
+       unusable result, not only on a classified quota death: these dispatches have no
+       filesystem side effects, so a second opinion from the next provider is always
+       safe and always cheaper than a halted run. The exclusion reason still records
+       the classification, so `quota_exhausted` reads differently from `auth_config`
+       in the journal. The agentic LABOR path is deliberately NOT routed through here
+       — it mutates a worktree and needs the snapshot-restore dance around each hop
+       (see Invoke-AgenticTask in fleet-executor-lib.ps1).
+
+       Returns @{ ok; result; chose; candidate; attempts; exclusions; hops; why }.
+       Never throws: a throwing -Attempt is treated as that candidate failing.
+
+       NAMING IS LOad-BEARING — do not "tidy" these names. PowerShell resolves a
+       scriptblock's free variables DYNAMICALLY, against the call stack at invocation
+       time, and variable names are CASE-INSENSITIVE. Every phase lib in this repo
+       keeps a local dispatch seam literally named `$dispatch`; if this function's
+       scriptblock parameter were named `-Dispatch`, then a caller's callback body
+       reading `& $dispatch $c $prompt` would resolve `$dispatch` to THIS function's
+       parameter — the callback — and call itself forever. (Observed: the planner walk
+       spun on candidate 1 until the run was killed.) Hence `-Attempt`, and hence every
+       local below carries the `fov` prefix: a caller's callback reading `$cand`,
+       `$name`, `$res`, `$prompt` or `$ok` must reach ITS OWN variables, not ours. #>
+    param(
+        [AllowNull()][AllowEmptyCollection()][object[]]$Candidates,
+        [Parameter(Mandatory)][scriptblock]$Attempt,
+        [scriptblock]$IsUsable,
+        [int]$MaxAttempts = 0,
+        [scriptblock]$OnHop,
+        [string]$Phase = 'dispatch'
+    )
+    $fovUsable = if ($IsUsable) { $IsUsable } else { { param($fovR) Test-FailoverResultUsable -Result $fovR } }
+    $fovPool = @($Candidates | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_.name) })
+    $fovAttempts = [System.Collections.ArrayList]@()
+    $fovExclusions = [System.Collections.ArrayList]@()
+    if ($fovPool.Count -lt 1) {
+        return @{
+            ok = $false; result = $null; chose = ''; candidate = $null
+            attempts = @(); exclusions = @(); hops = 0
+            why = "$Phase — no candidate available"
+        }
+    }
+    $fovLimit = if ($MaxAttempts -gt 0) { [Math]::Min($MaxAttempts, $fovPool.Count) } else { $fovPool.Count }
+    for ($fovI = 0; $fovI -lt $fovLimit; $fovI++) {
+        $fovCand = $fovPool[$fovI]
+        $fovName = [string]$fovCand.name
+        [void]$fovAttempts.Add($fovName)
+        $fovRes = $null
+        try { $fovRes = & $Attempt $fovCand }
+        catch {
+            Write-Debug "$Phase dispatch to $fovName threw: $($_.Exception.Message)"
+            $fovRes = $null
+        }
+        $fovOk = $false
+        try { $fovOk = [bool](& $fovUsable $fovRes) } catch { $fovOk = $false }
+        if ($fovOk) {
+            $fovWhy = if ($fovI -eq 0) { "$Phase -> $fovName" }
+                      else { "$Phase -> $fovName after $fovI provider failover hop(s): $(@($fovExclusions | ForEach-Object { "$($_.name) $($_.classification)" }) -join ', ')" }
+            return @{
+                ok = $true; result = $fovRes; chose = $fovName; candidate = $fovCand
+                attempts = @($fovAttempts.ToArray()); exclusions = @($fovExclusions.ToArray())
+                hops = $fovI; why = $fovWhy
+            }
+        }
+        $fovExc = Get-FailoverExclusionReason -Result $fovRes -Name $fovName
+        [void]$fovExclusions.Add($fovExc)
+        if ($fovI -lt ($fovLimit - 1) -and $OnHop) {
+            try { & $OnHop $fovName ([string]$fovPool[$fovI + 1].name) ([string]$fovExc.classification) } catch { }
+        }
+    }
+    $fovDetail = @($fovExclusions | ForEach-Object { "$($_.name): $($_.reason)" }) -join '; '
+    $fovUnwalked = $fovPool.Count - $fovLimit
+    $fovCapNote = if ($fovUnwalked -gt 0) { " (attempt cap $fovLimit reached; $fovUnwalked candidate(s) not tried)" } else { '' }
+    return @{
+        ok = $false; result = $null; chose = ''; candidate = $null
+        attempts = @($fovAttempts.ToArray()); exclusions = @($fovExclusions.ToArray())
+        hops = [Math]::Max(0, $fovAttempts.Count - 1)
+        why = "$Phase — every candidate failed${fovCapNote}: $fovDetail"
+    }
+}

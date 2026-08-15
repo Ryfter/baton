@@ -16,15 +16,15 @@ function Assert($c, $m) { if ($c) { Write-Host "  PASS  $m" -ForegroundColor Gre
 $realRunsRoot   = Get-RunsRoot
 $realRunsBefore = @(if (Test-Path $realRunsRoot) { Get-ChildItem $realRunsRoot -Name })
 $prevRunsRoot   = $env:ROUTING_RUNS_ROOT
-$tmpRunsRoot    = Join-Path $env:TEMP ("cao-ccruns-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$tmpRunsRoot    = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-ccruns-" + [guid]::NewGuid().ToString('N').Substring(0,8))
 $env:ROUTING_RUNS_ROOT = $tmpRunsRoot
 try {
 # (body intentionally not re-indented under the isolation try)
 
 Write-Host "[concurrent driver e2e]" -ForegroundColor Cyan
-$root   = Join-Path $env:TEMP ("cao-cc-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
-$wtRoot = Join-Path $env:TEMP ("cao-ccwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
-$out    = Join-Path $env:TEMP ("cao-ccout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
+$root   = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-cc-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
+$wtRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-ccwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$out    = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-ccout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Force -Path $root, $out | Out-Null
 Push-Location $root
 try {
@@ -82,9 +82,9 @@ Assert ($leaked.Count -eq 0) "real runs root gained no entries ($realRunsRoot)"
 
 # ===== Slice C: rank order + paid-peak gate + MaxParallel =====
 Write-Host "`n[rank + gate + cap]" -ForegroundColor Cyan
-$groot  = Join-Path $env:TEMP ("cao-ccg-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
-$gwt    = Join-Path $env:TEMP ("cao-ccgwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
-$gout   = Join-Path $env:TEMP ("cao-ccgout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
+$groot  = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-ccg-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
+$gwt    = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-ccgwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$gout   = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-ccgout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Force -Path $groot, $gout | Out-Null
 Push-Location $groot
 try {
@@ -150,9 +150,9 @@ Remove-Item -Recurse -Force $groot, $gwt, $gout -ErrorAction SilentlyContinue
 
 # ===== Slice C: cascade items through child workers =====
 Write-Host "`n[concurrent cascade]" -ForegroundColor Cyan
-$kroot  = Join-Path $env:TEMP ("cao-cck-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
-$kwt    = Join-Path $env:TEMP ("cao-cckwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
-$kout   = Join-Path $env:TEMP ("cao-cckout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
+$kroot  = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-cck-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
+$kwt    = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-cckwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$kout   = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-cckout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Force -Path $kroot, $kout | Out-Null
 Push-Location $kroot
 try {

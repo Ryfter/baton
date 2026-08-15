@@ -22,7 +22,7 @@ Assert "stub-with-env has env hashtable" (($fleet | Where-Object { $_.name -eq '
 Assert "stub-http has base_url" (($fleet | Where-Object { $_.name -eq 'stub-http' }).base_url -eq 'http://localhost:9999')
 
 # --- usage_policy nested block (d090 Layer 2) ---
-$policyDir = Join-Path $env:TEMP "baton-fleet-policy-$(Get-Random)"
+$policyDir = Join-Path ([System.IO.Path]::GetTempPath()) "baton-fleet-policy-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $policyDir | Out-Null
 try {
     $policyFleet = Join-Path $policyDir 'fleet-policy.yaml'
@@ -139,8 +139,8 @@ Assert "inner quotes preserved"              ((ConvertFrom-FleetValue "'claude -
 Assert "hash without leading space kept"     ((ConvertFrom-FleetValue "ab#cd") -eq 'ab#cd')
 
 # --- Write-FleetJournalLine ---
-$tmpJournal = Join-Path $env:TEMP "fleet-journal-$(Get-Random).md"
-$tmpState   = Join-Path $env:TEMP "fleet-state-$(Get-Random).json"
+$tmpJournal = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-journal-$(Get-Random).md"
+$tmpState   = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-state-$(Get-Random).json"
 
 # No active job -> line has no job/phase tags
 Remove-Item $tmpState -ErrorAction SilentlyContinue
@@ -168,7 +168,7 @@ Assert "active-job line has job tag" ($line2 -match 'job:j-fleet-test')
 Assert "active-job line has phase tag" ($line2 -match 'phase:research')
 
 # Pipe in prompt sanitized to ¦
-$env:CAO_STATE_PATH = (Join-Path $env:TEMP "nope-$(Get-Random).json")
+$env:CAO_STATE_PATH = (Join-Path ([System.IO.Path]::GetTempPath()) "nope-$(Get-Random).json")
 try {
     Write-FleetJournalLine -Provider 'stub-cli' -DurationS 0 -ExitCode 0 -Prompt 'a | b' -JournalPath $tmpJournal
 } finally { Remove-Item env:CAO_STATE_PATH -ErrorAction SilentlyContinue }
@@ -178,7 +178,7 @@ Assert "pipe in prompt sanitized" ($line3 -match 'a ¦ b')
 # Origin host tag (Plan 9 / issue #20) — always present so merged cross-machine
 # journals are attributable per node; honors the CAO_FLEET_HOST override.
 Assert "line has origin-host tag" ($line3 -match 'host:\S')
-$env:CAO_STATE_PATH = (Join-Path $env:TEMP "nope-$(Get-Random).json")
+$env:CAO_STATE_PATH = (Join-Path ([System.IO.Path]::GetTempPath()) "nope-$(Get-Random).json")
 $env:CAO_FLEET_HOST = 'testbox-9'
 try {
     Write-FleetJournalLine -Provider 'stub-cli' -DurationS 0 -ExitCode 0 -Prompt 'host probe' -JournalPath $tmpJournal
@@ -189,8 +189,8 @@ Assert "origin-host override honored" ($line4 -match 'host:testbox-9')
 Remove-Item $tmpJournal, $tmpState -ErrorAction SilentlyContinue
 
 # --- Invoke-Fleet -NoJournal ---
-$njJournal = Join-Path $env:TEMP "fleet-nojournal-$(Get-Random).md"
-$njState   = Join-Path $env:TEMP "fleet-nojournal-state-$(Get-Random).json"
+$njJournal = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-nojournal-$(Get-Random).md"
+$njState   = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-nojournal-state-$(Get-Random).json"
 $env:CAO_STATE_PATH = $njState   # no such file → no tags either way
 try {
     $njResult = Invoke-Fleet -Name 'stub-cli' -Prompt 'x' -Path $fixture -JournalPath $njJournal -NoJournal
@@ -206,14 +206,14 @@ Assert "research_default first is stub-cli" ($rd[0] -eq 'stub-cli')
 Assert "research_default second is stub-with-model" ($rd[1] -eq 'stub-with-model')
 
 # absent key → empty array
-$noRdFixture = Join-Path $env:TEMP "fleet-nord-$(Get-Random).yaml"
+$noRdFixture = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-nord-$(Get-Random).yaml"
 Set-Content -Path $noRdFixture -Value "providers:`n  - name: x`n    kind: cli`n    enabled: true`n    cost_tier: free`n    command_template: 'echo {{prompt}}'" -Encoding utf8NoBOM
 $rdEmpty = Get-FleetResearchDefault -Path $noRdFixture
 Assert "absent research_default → empty array" ($rdEmpty.Count -eq 0)
 Remove-Item $noRdFixture -ErrorAction SilentlyContinue
 
 # ===== models-as-tools: inline lists, top-level hardening, keep_list =====
-$tmp = Join-Path $env:TEMP "baton-mat-$(Get-Random)"
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) "baton-mat-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
     $matYaml = @"
@@ -277,8 +277,8 @@ $rBad = Get-FleetTokenUsage -Provider $badProvider -Prompt 'ab' -Stdout 'cd'
 Assert "token invalid regex: estimate fallback" ($rBad.tokens_basis -eq 'estimate' -and $rBad.tokens -eq 1)
 
 # ===== token threading: journal tok: field + Invoke-Fleet return =====
-$tokJournal = Join-Path $env:TEMP "fleet-tok-$(Get-Random).md"
-$env:CAO_STATE_PATH = (Join-Path $env:TEMP "notok-$(Get-Random).json")
+$tokJournal = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-tok-$(Get-Random).md"
+$env:CAO_STATE_PATH = (Join-Path ([System.IO.Path]::GetTempPath()) "notok-$(Get-Random).json")
 try {
     Write-FleetJournalLine -Provider 'stub-cli' -DurationS 1 -ExitCode 0 -Prompt 'p' `
         -JournalPath $tokJournal -Tokens 4242 -TokensBasis 'exact' -Tier 'high'
@@ -290,8 +290,8 @@ Assert "journal tier field before tok" ($tline -match '\| tier:high \| tok:')
 Remove-Item $tokJournal -ErrorAction SilentlyContinue
 
 # journal sanitizes evil TokensBasis / negative tokens (no field injection)
-$evilJournal = Join-Path $env:TEMP "fleet-tok-evil-$(Get-Random).md"
-$env:CAO_STATE_PATH = (Join-Path $env:TEMP "notok2-$(Get-Random).json")
+$evilJournal = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-tok-evil-$(Get-Random).md"
+$env:CAO_STATE_PATH = (Join-Path ([System.IO.Path]::GetTempPath()) "notok2-$(Get-Random).json")
 try {
     Write-FleetJournalLine -Provider 'stub-cli' -DurationS 1 -ExitCode 0 -Prompt 'p' `
         -JournalPath $evilJournal -Tokens -5 -TokensBasis 'exact) | pwn:1'
@@ -302,7 +302,7 @@ Assert "journal refuses basis injection" ($eline -notmatch 'pwn:')
 Remove-Item $evilJournal -ErrorAction SilentlyContinue
 
 # Invoke-Fleet threads tokens/basis into its return (stub-cli has no regex -> estimate)
-$tokState = Join-Path $env:TEMP "fleet-tokret-$(Get-Random).json"
+$tokState = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-tokret-$(Get-Random).json"
 $env:CAO_STATE_PATH = $tokState
 try {
     $tr = Invoke-Fleet -Name 'stub-cli' -Prompt 'hello' -Path $fixture -NoJournal
@@ -341,7 +341,7 @@ $rcNone = Resolve-FleetCommand -Provider $noTierP -Prompt 'x'
 Assert "no tiers -> {{tier_args}} empty" ($rcNone -eq 'run  "x"')
 
 # dispatch through a temp fleet.yaml with a tier provider (stdin-promoted stub)
-$tierDir = Join-Path $env:TEMP "baton-tier-$(Get-Random)"
+$tierDir = Join-Path ([System.IO.Path]::GetTempPath()) "baton-tier-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $tierDir | Out-Null
 $tierYaml = Join-Path $tierDir 'fleet.yaml'
 Set-Content -Path $tierYaml -Encoding utf8NoBOM -Value @'
@@ -361,7 +361,7 @@ Assert "tier fragment reaches dispatch" (($td.stdout | Out-String) -match 'tier-
 Remove-Item $tierDir -Recurse -Force -ErrorAction SilentlyContinue
 
 # ===== reactive usage classification threads through every fleet result =====
-$classifyDir = Join-Path $env:TEMP "baton-fleet-classify-$(Get-Random)"
+$classifyDir = Join-Path ([System.IO.Path]::GetTempPath()) "baton-fleet-classify-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $classifyDir | Out-Null
 try {
     $failScript = Join-Path $classifyDir 'quota-fail.ps1'

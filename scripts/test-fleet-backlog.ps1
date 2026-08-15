@@ -18,7 +18,7 @@ function Assert($cond, $msg) {
 $realRunsRoot   = Get-RunsRoot
 $realRunsBefore = @(if (Test-Path $realRunsRoot) { Get-ChildItem $realRunsRoot -Name })
 $prevRunsRoot   = $env:ROUTING_RUNS_ROOT
-$tmpRunsRoot    = Join-Path $env:TEMP ("cao-bkruns-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$tmpRunsRoot    = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-bkruns-" + [guid]::NewGuid().ToString('N').Substring(0,8))
 $env:ROUTING_RUNS_ROOT = $tmpRunsRoot
 try {
 # (body intentionally not re-indented under the isolation try)
@@ -73,9 +73,9 @@ Assert ((Get-EffectiveMaxParallel -MaxParallel 3 -Capacity @{ surge=$true;  conc
 
 # --- end-to-end driver test on a throwaway repo ---
 Write-Host "`n[backlog driver e2e]" -ForegroundColor Cyan
-$root = Join-Path $env:TEMP ("cao-bk-" + [guid]::NewGuid().ToString('N').Substring(0,8))
-$wtRoot = Join-Path $env:TEMP ("cao-bkwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
-$out = Join-Path $env:TEMP ("cao-bkout-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$root = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-bk-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$wtRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-bkwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$out = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-bkout-" + [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Force -Path $root, $out | Out-Null
 Push-Location $root
 try {
@@ -136,9 +136,9 @@ Assert ($dLive.state -eq 'blocked') "D.live.json state == blocked"
 # No real model/clock dependence: injected dispatcher records calls, injected paid
 # provider via a fixture fleet.yaml, all-day peak prime-hours.yaml + a fixed GateNow.
 Write-Host "`n[prime-hours gate]" -ForegroundColor Cyan
-$groot  = Join-Path $env:TEMP ("cao-gk-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
-$gwtRoot= Join-Path $env:TEMP ("cao-gkwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
-$gout   = Join-Path $env:TEMP ("cao-gkout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
+$groot  = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-gk-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
+$gwtRoot= Join-Path ([System.IO.Path]::GetTempPath()) ("cao-gkwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$gout   = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-gkout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Force -Path $groot, $gout | Out-Null
 Push-Location $groot
 try {
@@ -203,9 +203,9 @@ Remove-Item -Recurse -Force $root, $wtRoot, $out -ErrorAction SilentlyContinue
 
 # ===== Slice C: serial driver cascade modes =====
 Write-Host "`n[serial cascade]" -ForegroundColor Cyan
-$croot  = Join-Path $env:TEMP ("cao-sc-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
-$cwt    = Join-Path $env:TEMP ("cao-scwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
-$cout   = Join-Path $env:TEMP ("cao-scout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
+$croot  = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-sc-"   + [guid]::NewGuid().ToString('N').Substring(0,8))
+$cwt    = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-scwt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$cout   = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-scout-"+ [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Force -Path $croot, $cout | Out-Null
 Push-Location $croot
 try {

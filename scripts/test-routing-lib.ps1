@@ -406,4 +406,67 @@ providers:
     Remove-Item -LiteralPath $tmpDA -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# ---- Invoke-CapabilityFailover: the code-factory cost-ordered walk (#code-factory) ----
+$fovRoster = @('cheap', 'mid', 'rich') | ForEach-Object { [pscustomobject]@{ name = $_ } }
+$dead = { param($p) @{ exit_code = 1; stdout = ''; stderr = 'You have hit your weekly limit' } }
+$live = { param($p) @{ exit_code = 0; stdout = 'answer'; stderr = '' } }
+
+$fovA = Invoke-CapabilityFailover -Candidates ([object[]]$fovRoster) -Phase 'unit' -Attempt $live
+Check 'FOV1 first healthy candidate wins with no hops' ($fovA.ok -and $fovA.chose -eq 'cheap' -and $fovA.hops -eq 0)
+
+$fovSeen = [System.Collections.ArrayList]@()
+$fovB = Invoke-CapabilityFailover -Candidates ([object[]]$fovRoster) -Phase 'unit' -Attempt {
+    param($p) [void]$fovSeen.Add($p.name); if ($p.name -eq 'rich') { & $live $p } else { & $dead $p } }
+Check 'FOV2 walks past capped providers to a live one' ($fovB.ok -and $fovB.chose -eq 'rich' -and $fovB.hops -eq 2)
+Check 'FOV3 walk order is the caller-supplied cost order' ((@($fovSeen) -join ',') -eq 'cheap,mid,rich')
+Check 'FOV4 quota death is classified, not just counted' (
+    @($fovB.exclusions).Count -eq 2 -and @($fovB.exclusions)[0].classification -eq 'quota_exhausted')
+
+$fovC = Invoke-CapabilityFailover -Candidates ([object[]]$fovRoster) -Phase 'unit' -Attempt $dead
+Check 'FOV5 every candidate dead -> ok=false naming all three' (
+    -not $fovC.ok -and @($fovC.attempts).Count -eq 3 -and $fovC.why -match 'cheap' -and $fovC.why -match 'rich')
+
+$fovD = Invoke-CapabilityFailover -Candidates @() -Phase 'unit' -Attempt $live
+Check 'FOV6 empty roster is a clean no-candidate result, not a throw' (
+    -not $fovD.ok -and $fovD.why -match 'no candidate available')
+
+$fovE = Invoke-CapabilityFailover -Candidates ([object[]]$fovRoster) -Phase 'unit' -MaxAttempts 2 -Attempt $dead
+Check 'FOV7 MaxAttempts caps the walk and says what it skipped' (
+    @($fovE.attempts).Count -eq 2 -and $fovE.why -match 'not tried')
+
+# Exit 0 with an unusable body must hop: an empty reply is not an answer.
+$fovF = Invoke-CapabilityFailover -Candidates ([object[]]$fovRoster) -Phase 'unit' `
+    -Attempt { param($p) if ($p.name -eq 'mid') { @{ exit_code = 0; stdout = 'good'; stderr = '' } }
+               else { @{ exit_code = 0; stdout = ''; stderr = '' } } } `
+    -IsUsable { param($r) (Test-FailoverResultUsable -Result $r) -and -not [string]::IsNullOrWhiteSpace([string]$r.stdout) }
+Check 'FOV8 custom IsUsable hops an exit-0 empty reply' ($fovF.ok -and $fovF.chose -eq 'mid')
+
+$fovThrow = Invoke-CapabilityFailover -Candidates ([object[]]$fovRoster) -Phase 'unit' `
+    -Attempt { param($p) if ($p.name -eq 'rich') { & $live $p } else { throw 'provider exploded' } }
+Check 'FOV9 a throwing provider is a failed candidate, not a failed walk' ($fovThrow.ok -and $fovThrow.chose -eq 'rich')
+
+$fovHops = [System.Collections.ArrayList]@()
+[void](Invoke-CapabilityFailover -Candidates ([object[]]$fovRoster) -Phase 'unit' -Attempt $dead `
+    -OnHop { param($from, $to, $why) [void]$fovHops.Add("$from>$to") })
+Check 'FOV10 OnHop fires once per hop, never past the last candidate' ((@($fovHops) -join ',') -eq 'cheap>mid,mid>rich')
+
+# REGRESSION GUARD — the scoping trap that made the planner walk spin forever.
+# Every phase lib keeps a local seam named `$dispatch`. PowerShell resolves a
+# scriptblock's free variables dynamically and case-insensitively, so naming this
+# function's scriptblock parameter `-Dispatch` made a caller's `& $dispatch ...`
+# resolve to the callback itself and recurse. Same for a caller reading `$cand`,
+# `$name`, `$res` or `$prompt` — hence the fov* prefix on every local. This test
+# reproduces the exact caller shape.
+$dispatch = { param($cand, $prompt) @{ exit_code = 1; stdout = ''; stderr = 'quota exceeded' } }
+$prompt = 'p'
+$fovCalls = 0
+$fovRec = Invoke-CapabilityFailover -Candidates ([object[]]$fovRoster) -Phase 'unit' -Attempt {
+    param($c)
+    $script:fovCalls++
+    if ($script:fovCalls -gt 10) { throw 'RUNAWAY: callback recursed into itself' }
+    & $dispatch $c $prompt
+}
+Check 'FOV11 caller-local $dispatch/$prompt are not shadowed (no callback recursion)' (
+    $script:fovCalls -eq 3 -and -not $fovRec.ok -and (@($fovRec.attempts) -join ',') -eq 'cheap,mid,rich')
+
 if ($fail -gt 0) { Write-Host "`n$fail FAILED"; exit 1 } else { Write-Host "`nALL PASS"; exit 0 }

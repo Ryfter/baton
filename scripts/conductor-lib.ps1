@@ -366,6 +366,21 @@ function Format-AcceptanceSection {
     if ($Gate.reason) { [void]$sb.AppendLine("**Reason:** $($Gate.reason)") }
     $c = $Gate.counts
     if ($c) { [void]$sb.AppendLine("**Findings:** $($c.critical) critical, $($c.important) important, $($c.minor) minor") }
+    # #code-factory: a panel that lost a review lens, paid above its requested tier, or
+    # failed a provider over must SAY SO in the operator-facing report. These used to be
+    # discoverable only by reading acceptance.json — which is how the shipped roster's
+    # two cheap roles went missing from every run without anyone noticing.
+    $lostRoles = @($Gate.degraded_roles | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($lostRoles.Count -gt 0) {
+        [void]$sb.AppendLine("**DEGRADED — review lens(es) NOT run:** $($lostRoles -join ', ')")
+    }
+    $relaxed = @($Gate.tier_relaxed_roles | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($relaxed.Count -gt 0) {
+        [void]$sb.AppendLine("**Cost note — role(s) run above their requested cheap tier:** $($relaxed -join ', ')")
+    }
+    foreach ($note in @($Gate.failover_notes)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$note)) { [void]$sb.AppendLine("**Provider failover:** $note") }
+    }
     if (($Gate.verdict -ne 'accept') -and $Gate.polish_brief) {
         [void]$sb.AppendLine('')
         [void]$sb.AppendLine('### Polish brief')
@@ -662,8 +677,31 @@ function Invoke-PlanPhase {
     if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $promptParams.RepoPath = $RepoPath }
     if (-not [string]::IsNullOrWhiteSpace($FleetPath)) { $promptParams.FleetPath = $FleetPath }
     $prompt = Build-PlannerPrompt @promptParams
-    $res = & $dispatch $cands[0] $prompt
-    if ([int]$res.exit_code -ne 0) { return $null }
+    # Code factory (#code-factory): walk the cost-ordered roster instead of binding to
+    # $cands[0]. A planner that hit its cap — or exited 0 with an unparseable reply —
+    # hands off to the next-cheapest reasoning provider rather than killing the run.
+    $walk = Invoke-CapabilityFailover -Candidates ([object[]]$cands) -Phase 'planner' `
+        -Attempt { param($c) & $dispatch $c $prompt } `
+        -IsUsable { param($r)
+            if (-not (Test-FailoverResultUsable -Result $r)) { return $false }
+            return ($null -ne (ConvertTo-PlanObject -RawStdout ([string]$r.stdout)))
+        } `
+        -OnHop {
+            param($from, $to, $why)
+            if (-not [string]::IsNullOrWhiteSpace($RunDir)) {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'provider-failover' -Level 'warn' -Message "planner: $from -> $to ($why)")
+            }
+        }
+    if (-not $walk.ok) {
+        if (-not [string]::IsNullOrWhiteSpace($RunDir)) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'provider-failover' -Level 'error' -Message ([string]$walk.why))
+        }
+        return $null
+    }
+    if ($walk.hops -gt 0 -and -not [string]::IsNullOrWhiteSpace($RunDir)) {
+        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'provider-failover' -Message ([string]$walk.why))
+    }
+    $res = $walk.result
     $plan = ConvertTo-PlanObject -RawStdout ([string]$res.stdout)
     if ($null -eq $plan) { return $null }
     if ($RunId) { $plan.run_id = $RunId }
@@ -688,11 +726,26 @@ function Invoke-TaskViaFleet {
     if ($null -eq $cands -or @($cands | Where-Object { $null -ne $_ }).Count -lt 1) {
         return @{ ok = $false; spend = 0.0; chose = ''; why = "no candidate for capability '$cap'"; alternatives = @() }
     }
-    $pick = $cands[0]
     $prompt = "Task: $($Task.desc)"
-    $res = if ($Dispatcher) { & $Dispatcher $pick $prompt } else { Invoke-Fleet -Name $pick.name -Prompt $prompt -Path $FleetPath -NoJournal }
-    $alts = @($cands | Select-Object -Skip 1 | ForEach-Object { $_.name })
-    return @{ ok = ([int]$res.exit_code -eq 0); spend = 0.0; chose = $pick.name; why = "routed $cap -> $($pick.name)"; alternatives = $alts }
+    # Code factory (#code-factory): the non-agentic labor phase walks the cost-ordered
+    # roster too. This executor never touches the repo (see the summary above), so a
+    # failed candidate can be retried on the next-cheapest peer with no cleanup.
+    $walk = Invoke-CapabilityFailover -Candidates ([object[]]$cands) -Phase "labor ($cap)" `
+        -Attempt {
+            param($c)
+            if ($Dispatcher) { return (& $Dispatcher $c $prompt) }
+            return Invoke-Fleet -Name $c.name -Prompt $prompt -Path $FleetPath -NoJournal
+        }
+    $alts = @($cands | Where-Object { $null -ne $_ -and [string]$_.name -ne [string]$walk.chose } | ForEach-Object { [string]$_.name })
+    if (-not $walk.ok) {
+        # Every eligible provider is out — that is a labor-AVAILABILITY halt (#124),
+        # not an implementation defect, so report.md says so via the Labor section.
+        return @{
+            ok = $false; spend = 0.0; chose = ([string]@($walk.attempts)[-1]); why = [string]$walk.why
+            alternatives = $alts; labor = 'unavailable'; exclusions = @($walk.exclusions)
+        }
+    }
+    return @{ ok = $true; spend = 0.0; chose = [string]$walk.chose; why = [string]$walk.why; alternatives = $alts }
 }
 
 function Complete-Run {
@@ -840,6 +893,11 @@ function Invoke-PlanRevise {
         $prompt = $base + "`n`n## Prior plan (JSON)`n" + $PlanJson +
                   "`n`n## Peer review findings — revise the plan to address these`n" + $ReviseBrief +
                   "`n`nEmit the FULL revised plan as JSON in the same schema. Address every finding you can without expanding scope."
+        # NO provider failover here, deliberately. The revise pass is a documented
+        # ONE-SHOT (see the summary above) and it already fails open to the original
+        # plan, so a capped provider here cannot stall a run — the code-factory
+        # guarantee is not at stake, and walking the roster would burn a second
+        # planner-sized call to buy nothing.
         $res = & $dispatch $cands[0] $prompt
         if ([int]$res.exit_code -eq 0) { $revised = ConvertTo-PlanObject -RawStdout ([string]$res.stdout) }
     } catch {

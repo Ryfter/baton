@@ -70,7 +70,7 @@ Assert-True (-not [string]::IsNullOrWhiteSpace($rec.why)) 'unknown status -> has
 
 # --- Project record R/W ---
 Write-Host "=== Project record R/W ===" -ForegroundColor Cyan
-$projRoot = Join-Path $env:TEMP "cao-start-proj-$(Get-Random)"
+$projRoot = Join-Path ([System.IO.Path]::GetTempPath()) "cao-start-proj-$(Get-Random)"
 
 # Read when missing -> $null, no throw
 $rec = Read-ProjectRecord -ProjectId 'acme-api' -ProjectsRoot $projRoot
@@ -99,7 +99,7 @@ Remove-Item $projRoot -Recurse -Force
 
 # --- User profile R/W ---
 Write-Host "=== User profile R/W ===" -ForegroundColor Cyan
-$profTmp = Join-Path $env:TEMP "cao-start-profile-$(Get-Random)"
+$profTmp = Join-Path ([System.IO.Path]::GetTempPath()) "cao-start-profile-$(Get-Random)"
 $profilePath = Join-Path $profTmp 'user-profile.json'
 
 # Read when missing -> $null, no throw

@@ -10,12 +10,12 @@ function Assert($label, $cond) {
     else { Write-Host "FAIL  $label" -ForegroundColor Red; $script:failures++ }
 }
 
-$noState = Join-Path $env:TEMP "ens-nostate-$(Get-Random).json"
+$noState = Join-Path ([System.IO.Path]::GetTempPath()) "ens-nostate-$(Get-Random).json"
 $env:CAO_STATE_PATH = $noState   # no active job → untagged journal lines
 
 # --- Test 1: basic concurrent success (2 providers) ---
-$out1 = Join-Path $env:TEMP "ens-out1-$(Get-Random)"
-$jrn1 = Join-Path $env:TEMP "ens-jrn1-$(Get-Random).md"
+$out1 = Join-Path ([System.IO.Path]::GetTempPath()) "ens-out1-$(Get-Random)"
+$jrn1 = Join-Path ([System.IO.Path]::GetTempPath()) "ens-jrn1-$(Get-Random).md"
 $m1 = Invoke-FleetEnsemble -Providers @('stub-cli','stub-with-model') -Prompt 'Q1' `
         -OutputDir $out1 -FleetPath $fixture -JournalPath $jrn1 -TimeoutS 60
 Assert "T1 manifest has 2 entries" ($m1.Count -eq 2)
@@ -31,8 +31,8 @@ Remove-Item $out1 -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $jrn1 -ErrorAction SilentlyContinue
 
 # --- Test 2: partial failure (stub-fail) doesn't sink the ensemble ---
-$out2 = Join-Path $env:TEMP "ens-out2-$(Get-Random)"
-$jrn2 = Join-Path $env:TEMP "ens-jrn2-$(Get-Random).md"
+$out2 = Join-Path ([System.IO.Path]::GetTempPath()) "ens-out2-$(Get-Random)"
+$jrn2 = Join-Path ([System.IO.Path]::GetTempPath()) "ens-jrn2-$(Get-Random).md"
 $m2 = Invoke-FleetEnsemble -Providers @('stub-cli','stub-fail') -Prompt 'Q2' `
         -OutputDir $out2 -FleetPath $fixture -JournalPath $jrn2 -TimeoutS 60
 Assert "T2 manifest has 2 entries" ($m2.Count -eq 2)
@@ -43,8 +43,8 @@ Remove-Item $out2 -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $jrn2 -ErrorAction SilentlyContinue
 
 # --- Test 3: timeout (stub-slow sleeps 10s, timeout 2s) ---
-$out3 = Join-Path $env:TEMP "ens-out3-$(Get-Random)"
-$jrn3 = Join-Path $env:TEMP "ens-jrn3-$(Get-Random).md"
+$out3 = Join-Path ([System.IO.Path]::GetTempPath()) "ens-out3-$(Get-Random)"
+$jrn3 = Join-Path ([System.IO.Path]::GetTempPath()) "ens-jrn3-$(Get-Random).md"
 $t0 = Get-Date
 $m3 = Invoke-FleetEnsemble -Providers @('stub-slow') -Prompt 'Q3' `
         -OutputDir $out3 -FleetPath $fixture -JournalPath $jrn3 -TimeoutS 2
@@ -56,8 +56,8 @@ Remove-Item $out3 -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $jrn3 -ErrorAction SilentlyContinue
 
 # --- Test 4: Invoke-FleetEnsembleTasks — heterogeneous tasks (different prompts) ---
-$out4 = Join-Path $env:TEMP "ens-out4-$(Get-Random)"
-$jrn4 = Join-Path $env:TEMP "ens-jrn4-$(Get-Random).md"
+$out4 = Join-Path ([System.IO.Path]::GetTempPath()) "ens-out4-$(Get-Random)"
+$jrn4 = Join-Path ([System.IO.Path]::GetTempPath()) "ens-jrn4-$(Get-Random).md"
 $tasks4 = @(
     @{ label = 'alpha'; provider = 'stub-cli'; prompt = 'Pa' },
     @{ label = 'beta';  provider = 'stub-cli'; prompt = 'Pb' }
@@ -78,8 +78,8 @@ Remove-Item $out4 -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $jrn4 -ErrorAction SilentlyContinue
 
 # --- Test 5: Invoke-FleetEnsembleTasks — same provider, multiple labels, partial fail ---
-$out5 = Join-Path $env:TEMP "ens-out5-$(Get-Random)"
-$jrn5 = Join-Path $env:TEMP "ens-jrn5-$(Get-Random).md"
+$out5 = Join-Path ([System.IO.Path]::GetTempPath()) "ens-out5-$(Get-Random)"
+$jrn5 = Join-Path ([System.IO.Path]::GetTempPath()) "ens-jrn5-$(Get-Random).md"
 $tasks5 = @(
     @{ label = 'good'; provider = 'stub-cli';  prompt = 'X1' },
     @{ label = 'bad';  provider = 'stub-fail'; prompt = 'X2' },
@@ -98,8 +98,8 @@ Remove-Item $jrn5 -ErrorAction SilentlyContinue
 # --- Test 6: Invoke-FleetEnsembleTasks — empty/invalid task throws ---
 $threw = $false
 try {
-    Invoke-FleetEnsembleTasks -Tasks @(@{ label='x'; prompt='p' }) -OutputDir (Join-Path $env:TEMP "ens-bad-$(Get-Random)") `
-        -FleetPath $fixture -JournalPath (Join-Path $env:TEMP "ens-bad-jrn-$(Get-Random).md")
+    Invoke-FleetEnsembleTasks -Tasks @(@{ label='x'; prompt='p' }) -OutputDir (Join-Path ([System.IO.Path]::GetTempPath()) "ens-bad-$(Get-Random)") `
+        -FleetPath $fixture -JournalPath (Join-Path ([System.IO.Path]::GetTempPath()) "ens-bad-jrn-$(Get-Random).md")
 } catch { $threw = $true }
 Assert "T6 missing provider throws" $threw
 

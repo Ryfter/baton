@@ -12,7 +12,7 @@ function Assert($label, $cond) {
     else { Write-Host "FAIL  $label" -ForegroundColor Red; $script:failures++ }
 }
 
-$noState = Join-Path $env:TEMP "council-nostate-$(Get-Random).json"
+$noState = Join-Path ([System.IO.Path]::GetTempPath()) "council-nostate-$(Get-Random).json"
 $env:CAO_STATE_PATH = $noState
 
 # --- T1: Limits sanity ---
@@ -37,7 +37,7 @@ Assert "T4 caps at 5"  ($big.Count -eq 5)
 Assert "T4 keeps first 5" ((($big | ForEach-Object { $_.label }) -join ',') -eq 'a,b,c,d,e')
 
 # --- T5: R2 task stitching — peer-only content (self excluded), --- separator ---
-$workR1 = Join-Path $env:TEMP "council-r1-$(Get-Random)"
+$workR1 = Join-Path ([System.IO.Path]::GetTempPath()) "council-r1-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $workR1 | Out-Null
 Set-Content -Path (Join-Path $workR1 'a.md') -Value 'Answer-from-A' -Encoding utf8NoBOM
 Set-Content -Path (Join-Path $workR1 'b.md') -Value 'Answer-from-B' -Encoding utf8NoBOM
@@ -71,8 +71,8 @@ Assert "T7 two survivors" ($surv.Count -eq 2)
 Assert "T7 a + c survive" (($surv -join ',') -eq 'a,c')
 
 # --- T8: Integration — R1+R2 run end-to-end with stub providers ---
-$out = Join-Path $env:TEMP "council-out-$(Get-Random)"
-$jrn = Join-Path $env:TEMP "council-jrn-$(Get-Random).md"
+$out = Join-Path ([System.IO.Path]::GetTempPath()) "council-out-$(Get-Random)"
+$jrn = Join-Path ([System.IO.Path]::GetTempPath()) "council-jrn-$(Get-Random).md"
 $r1Dir = Join-Path $out 'round1'
 $r2Dir = Join-Path $out 'round2'
 $roster = @('stub-cli','stub-with-model')
@@ -95,8 +95,8 @@ Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $jrn -ErrorAction SilentlyContinue
 
 # --- T9: Partial R1 failure — 1 of 2 stub-fail, quorum below 2 ---
-$out9 = Join-Path $env:TEMP "council-out9-$(Get-Random)"
-$jrn9 = Join-Path $env:TEMP "council-jrn9-$(Get-Random).md"
+$out9 = Join-Path ([System.IO.Path]::GetTempPath()) "council-out9-$(Get-Random)"
+$jrn9 = Join-Path ([System.IO.Path]::GetTempPath()) "council-jrn9-$(Get-Random).md"
 $roster9 = @('stub-cli','stub-fail')
 $r1t9 = Build-CouncilR1Tasks -Question 'Q' -Providers $roster9
 $m9 = Invoke-FleetEnsembleTasks -Tasks $r1t9 -OutputDir (Join-Path $out9 'round1') `

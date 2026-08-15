@@ -19,7 +19,7 @@ function Assert-Equal($expected, $actual, $msg) {
 }
 
 # Isolate everything under a temp dir.
-$root = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "cao-e2e-$(Get-Random)") -Force
+$root = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) "cao-e2e-$(Get-Random)") -Force
 $jobsRoot  = Join-Path $root 'jobs'
 $statePath = Join-Path $root 'current-job.json'
 New-Item -ItemType Directory -Path $jobsRoot | Out-Null

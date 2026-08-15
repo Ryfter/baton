@@ -238,11 +238,20 @@ function Invoke-ResearchGate {
         return (New-GateFallback -Reason 'no research-capable worker available')
     }
     $prompt = Build-GatePrompt -TaskText $Task -RegistryLines $registry -EnsembleText $ensemble -KbHits $kb -SearchEvidence $search
-    $pick = $cands[0]
-    $res  = & $dispatch $pick $prompt
-    if ([int]$res.exit_code -ne 0) { return (New-GateFallback -Reason "dispatch exit $([int]$res.exit_code)") }
-    $verdict = ConvertTo-GateHashtable -RawStdout ([string]$res.stdout)
+    # Code factory (#code-factory): walk the cost-ordered research roster rather than
+    # binding to $cands[0]. Synthesis is read-only, so a capped or non-JSON-emitting
+    # provider yields to the next-cheapest peer instead of collapsing to the fallback.
+    $walk = Invoke-CapabilityFailover -Candidates ([object[]]$cands) -Phase 'research-synthesis' `
+        -Attempt { param($c) & $dispatch $c $prompt } `
+        -IsUsable { param($r)
+            if (-not (Test-FailoverResultUsable -Result $r)) { return $false }
+            return ($null -ne (ConvertTo-GateHashtable -RawStdout ([string]$r.stdout)))
+        }
+    if (-not $walk.ok) { return (New-GateFallback -Reason ([string]$walk.why)) }
+    $pick = $walk.candidate
+    $verdict = ConvertTo-GateHashtable -RawStdout ([string]$walk.result.stdout)
     if ($null -eq $verdict) { return (New-GateFallback -Reason 'model returned no valid JSON') }
+    if ($walk.hops -gt 0) { $verdict['failover'] = [string]$walk.why }
 
     # 3. Escalate on low confidence / high risk / inconclusive.
     if (Test-GateEscalationNeeded -Verdict $verdict) {

@@ -7,10 +7,10 @@ $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $parser = Join-Path $here 'parse-otel.ps1'
 $fixture = Join-Path $here 'fixtures\otel-sample.jsonl'
-$tmpEvents = Join-Path $env:TEMP "otel-test-events-$(Get-Random).jsonl"
-$tmpJournal = Join-Path $env:TEMP "otel-test-journal-$(Get-Random).md"
-$tmpMarker = Join-Path $env:TEMP "otel-test-marker-$(Get-Random).txt"
-$tmpState = Join-Path $env:TEMP "otel-test-state-$(Get-Random).json"
+$tmpEvents = Join-Path ([System.IO.Path]::GetTempPath()) "otel-test-events-$(Get-Random).jsonl"
+$tmpJournal = Join-Path ([System.IO.Path]::GetTempPath()) "otel-test-journal-$(Get-Random).md"
+$tmpMarker = Join-Path ([System.IO.Path]::GetTempPath()) "otel-test-marker-$(Get-Random).txt"
+$tmpState = Join-Path ([System.IO.Path]::GetTempPath()) "otel-test-state-$(Get-Random).json"
 $catalog = Join-Path (Split-Path $here -Parent) 'references\model-routing.md'
 
 Copy-Item $fixture $tmpEvents
@@ -151,7 +151,7 @@ Remove-Item $tmpEvents, $tmpJournal, $tmpMarker, $tmpState -ErrorAction Silently
 Write-Host ""
 Write-Host "=== Plan 3: OTel events tagged with current job/phase ===" -ForegroundColor Cyan
 
-$otelTmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "cao-otel-tag-$(Get-Random)") -Force
+$otelTmp = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) "cao-otel-tag-$(Get-Random)") -Force
 $otelEvents  = Join-Path $otelTmp 'events.jsonl'
 $otelJournal = Join-Path $otelTmp 'log.md'
 $otelMarker  = Join-Path $otelTmp '.parse-marker'

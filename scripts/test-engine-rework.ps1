@@ -124,7 +124,7 @@ providers:
     Set-Content -LiteralPath $hookFailPass -Encoding utf8NoBOM -Value @'
 function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     if ($Attempt -ge 2) { return @{ verdict='pass'; ok=$true; grade='bounded'; failure_category=''; proves='hooked pass'; output_path=''; duration_ms=5 } }
-    $out = Join-Path $env:TEMP "rework-check-$([guid]::NewGuid()).txt"
+    $out = Join-Path ([System.IO.Path]::GetTempPath()) "rework-check-$([guid]::NewGuid()).txt"
     Set-Content -LiteralPath $out -Value 'ASSERT failed: expected 2 got 1' -Encoding utf8NoBOM
     return @{ verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'; proves='hooked'; output_path=$out; duration_ms=5 }
 }
@@ -208,7 +208,7 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     $hookFailFail = Join-Path $tmpRoot 'hook-fail-fail.ps1'
     Set-Content -LiteralPath $hookFailFail -Encoding utf8NoBOM -Value @'
 function Invoke-TestVerify { param($Task, $Attempt, $Grew)
-    $out = Join-Path $env:TEMP "rework-ff-$Attempt-$([guid]::NewGuid()).txt"
+    $out = Join-Path ([System.IO.Path]::GetTempPath()) "rework-ff-$Attempt-$([guid]::NewGuid()).txt"
     Set-Content -LiteralPath $out -Value "fail attempt $Attempt detail" -Encoding utf8NoBOM
     return @{ verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'; proves='hooked'; output_path=$out; duration_ms=5 }
 }
@@ -320,7 +320,7 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     Set-Content -LiteralPath $hookVol -Encoding utf8NoBOM -Value @'
 function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     $ts = if ($Attempt -eq 1) { '2026-07-24T10:00:00Z' } else { '2026-07-24T11:22:33Z' }
-    $tmpFile = Join-Path $env:TEMP ("rework-vol-$Attempt-" + [guid]::NewGuid().ToString() + ".txt")
+    $tmpFile = Join-Path ([System.IO.Path]::GetTempPath()) ("rework-vol-$Attempt-" + [guid]::NewGuid().ToString() + ".txt")
     Set-Content -LiteralPath $tmpFile -Value "ASSERT failed: expected 2 got 1 at $ts file=$tmpFile" -Encoding utf8NoBOM
     return @{
         verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'
@@ -374,7 +374,7 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     if ($Attempt -ge 2) {
         return @{ verdict='scope-violation'; ok=$false; grade='invalid'; failure_category='scope-violation'; proves='hooked'; output_path=''; duration_ms=5 }
     }
-    $out = Join-Path $env:TEMP "rework-fts-$([guid]::NewGuid()).txt"
+    $out = Join-Path ([System.IO.Path]::GetTempPath()) "rework-fts-$([guid]::NewGuid()).txt"
     Set-Content -LiteralPath $out -Value 'ASSERT fail first' -Encoding utf8NoBOM
     return @{ verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'; proves='hooked'; output_path=$out; duration_ms=5 }
 }

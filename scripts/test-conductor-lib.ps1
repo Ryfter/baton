@@ -1104,7 +1104,7 @@ ERROR: You have hit your usage limit. Try again later.
     # ---- VF2-VF7: Conductor -Verify preflight + event/status seam (d082 V2) ----
     # Hermetic: stub -Spawner returns canned verification metadata, stub -VerifyPreflight
     # short-circuits the real freeze. No worktree, no real runner.
-    function New-VfRun { $d = Join-Path $env:TEMP "vf-$([guid]::NewGuid())"; New-Item -ItemType Directory -Force $d | Out-Null; $d }
+    function New-VfRun { $d = Join-Path ([System.IO.Path]::GetTempPath()) "vf-$([guid]::NewGuid())"; New-Item -ItemType Directory -Force $d | Out-Null; $d }
     $vfPlan = { param($g) @{ goal=$g; budget_cap=$null; tasks=@([pscustomobject]@{ id='t1'; desc='edit'; command=''; capability='code-gen'; depends_on=@(); est_cost_tier='free'; reversible=$true; verify_profile='unit'; allowed_paths=@() }) } }
 
     # VF2: -Verify pass -> completed + task-verification-passed event

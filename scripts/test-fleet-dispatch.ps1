@@ -10,8 +10,8 @@ function Assert($label, $cond) {
     else { Write-Host "FAIL  $label" -ForegroundColor Red; $script:failures++ }
 }
 
-$tmpJournal = Join-Path $env:TEMP "fleet-disp-journal-$(Get-Random).md"
-$noState    = Join-Path $env:TEMP "fleet-disp-nostate-$(Get-Random).json"
+$tmpJournal = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-disp-journal-$(Get-Random).md"
+$noState    = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-disp-nostate-$(Get-Random).json"
 
 # --- cli dispatch ---
 $env:CAO_STATE_PATH = $noState
@@ -52,8 +52,8 @@ Assert "unknown provider refused" ($threw2)
 Remove-Item $tmpJournal -ErrorAction SilentlyContinue
 
 # --- http dispatch via stub escape hatch ---
-$tmpJournal2 = Join-Path $env:TEMP "fleet-http-journal-$(Get-Random).md"
-$noState2    = Join-Path $env:TEMP "fleet-http-nostate-$(Get-Random).json"
+$tmpJournal2 = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-http-journal-$(Get-Random).md"
+$noState2    = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-http-nostate-$(Get-Random).json"
 $env:CAO_STATE_PATH = $noState2
 try {
     $rh = Invoke-Fleet -Name 'stub-http' -Prompt 'ping' -Path $fixture -JournalPath $tmpJournal2
@@ -98,14 +98,14 @@ $pfPrompt = $pfCore + ' ' + $pfSentinel
 # Journal to a .md path (not New-TemporaryFile) so it is not itself a *.tmp the
 # cleanup scan below would mistake for a leaked prompt temp file — the sentinel
 # rides the journal's prompt summary too.
-$tmpJpf = Join-Path $env:TEMP "fleet-disp-pf-journal-$(Get-Random).md"
+$tmpJpf = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-disp-pf-journal-$(Get-Random).md"
 $rPf = Invoke-Fleet -Name 'stub-promptfile' -Prompt $pfPrompt -Path $fixture -JournalPath $tmpJpf
 $pfOut = ($rPf.stdout | Out-String)
 Assert "prompt_file round-trips quote-heavy text intact" ($pfOut.Contains($pfCore))
 Assert "prompt_file dispatch exit 0" ($rPf.exit_code -eq 0)
 # Temp cleanup: the finally in Invoke-Fleet-Cli deletes the temp file, so no *.tmp
 # in $env:TEMP should still hold the unique sentinel after dispatch.
-$pfLingering = @(Get-ChildItem -Path $env:TEMP -Filter '*.tmp' -File -ErrorAction SilentlyContinue |
+$pfLingering = @(Get-ChildItem -Path ([System.IO.Path]::GetTempPath()) -Filter '*.tmp' -File -ErrorAction SilentlyContinue |
     Where-Object { try { (Get-Content -LiteralPath $_.FullName -Raw -ErrorAction Stop).Contains($pfSentinel) } catch { $false } })
 Assert "prompt_file temp file cleaned up (no lingering sentinel)" ($pfLingering.Count -eq 0)
 Remove-Item $tmpJpf -ErrorAction SilentlyContinue
@@ -116,7 +116,7 @@ Remove-Item $tmpJpf -ErrorAction SilentlyContinue
 # stay literal in PS; the fixture echoes the temp file's raw content back, so a
 # verbatim match proves nothing was evaluated en route.
 $pfEvilCore = 'sub:$(Get-Date) tick:`whoami` end'
-$tmpJpf2 = Join-Path $env:TEMP "fleet-disp-pf2-journal-$(Get-Random).md"
+$tmpJpf2 = Join-Path ([System.IO.Path]::GetTempPath()) "fleet-disp-pf2-journal-$(Get-Random).md"
 $rPf2 = Invoke-Fleet -Name 'stub-promptfile' -Prompt $pfEvilCore -Path $fixture -JournalPath $tmpJpf2
 $pfOut2 = ($rPf2.stdout | Out-String)
 Assert "prompt_file argv path: subexpression/backticks round-trip verbatim (no reparse)" ($pfOut2.Contains($pfEvilCore))

@@ -12,7 +12,7 @@ function Assert($label, $cond) {
 }
 
 # stub-cli echoes 'hello-<prompt>'; isolate state so no job/phase tags leak.
-$env:CAO_STATE_PATH = (Join-Path $env:TEMP "ask-nostate-$(Get-Random).json")
+$env:CAO_STATE_PATH = (Join-Path ([System.IO.Path]::GetTempPath()) "ask-nostate-$(Get-Random).json")
 $env:CAO_FLEET_HOST = 'testbox'
 try {
     $out = & pwsh -NoProfile -File $runner -Provider 'stub-cli' -Prompt 'world' -FleetPath $fixture 2>&1 | Out-String
@@ -32,18 +32,18 @@ try {
     Assert "missing prompt exits 2" ($LASTEXITCODE -eq 2)
 
     # -PromptFile is read (965-byte escape hatch)
-    $pf = Join-Path $env:TEMP "ask-prompt-$(Get-Random).txt"
+    $pf = Join-Path ([System.IO.Path]::GetTempPath()) "ask-prompt-$(Get-Random).txt"
     Set-Content -Path $pf -Value 'fromfile' -Encoding utf8NoBOM
     $out2 = & pwsh -NoProfile -File $runner -Provider 'stub-cli' -PromptFile $pf -FleetPath $fixture 2>&1 | Out-String
     Assert "-PromptFile is honored" ($out2 -match 'hello-fromfile')
     Remove-Item $pf -ErrorAction SilentlyContinue
 
     # missing PromptFile path -> exit 2
-    & pwsh -NoProfile -File $runner -Provider 'stub-cli' -PromptFile (Join-Path $env:TEMP "ask-missing-$(Get-Random).txt") -FleetPath $fixture 2>$null | Out-Null
+    & pwsh -NoProfile -File $runner -Provider 'stub-cli' -PromptFile (Join-Path ([System.IO.Path]::GetTempPath()) "ask-missing-$(Get-Random).txt") -FleetPath $fixture 2>$null | Out-Null
     Assert "missing PromptFile exits 2" ($LASTEXITCODE -eq 2)
 
     # unknown tier hard-fail (design §3.3) — use a temp fleet with named tiers
-    $tierDir = Join-Path $env:TEMP "ask-tier-$(Get-Random)"
+    $tierDir = Join-Path ([System.IO.Path]::GetTempPath()) "ask-tier-$(Get-Random)"
     New-Item -ItemType Directory -Force -Path $tierDir | Out-Null
     $tierYaml = Join-Path $tierDir 'fleet.yaml'
     Set-Content -Path $tierYaml -Encoding utf8NoBOM -Value @'

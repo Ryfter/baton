@@ -82,7 +82,7 @@ try {
         (Build-ReviewPrompt -Task 'do x' -Artifact 'fn foo') -match 'fn foo')
 
     # ---- Named review panel: roster, prompt, routing, provenance, degradation ----
-    $roleTmp = Join-Path $env:TEMP "gate-role-test-$([guid]::NewGuid().ToString('N'))"
+    $roleTmp = Join-Path ([System.IO.Path]::GetTempPath()) "gate-role-test-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Force -Path $roleTmp | Out-Null
     $rolesFixture = Join-Path $roleTmp 'review-roles.yaml'
     Set-Content -LiteralPath $rolesFixture -Encoding utf8NoBOM -Value @'
@@ -177,21 +177,45 @@ roles:
         Check 'GP7 strong and cheap roles constrain Select-Capability to paid and free' (
             @($script:selectorCalls) -contains 'paid' -and @($script:selectorCalls) -contains 'free')
 
+        # GP8/GP9 (#code-factory): the cheap-tier clamp is a PREFERENCE, not a wall.
+        # No free review provider exists in the shipped roster, so the old code clamped
+        # the cheap roles to free, got zero candidates, and dropped them — silently,
+        # unless -FailLoud was passed. Now the role falls back to the caller's ceiling
+        # and the relaxation is REPORTED. The lens survives; only its price changes.
         $script:skipCheap = $true
         $emptyDispatcher = { param($providerName, $reviewPrompt); return @{ stdout='[]'; stderr=''; exit_code=0 } }
         $loudResult = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Panel -FailLoud `
             -RolesPath $rolesFixture -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
             -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $emptyDispatcher
-        Check 'GP8 skipped role is degraded under FailLoud and named in result' (
-            $loudResult.degraded -and @($loudResult.degraded_roles) -contains 'simplicity' -and
-            $loudResult.reason -match 'simplicity')
+        Check 'GP8 no cheap provider -> cheap role runs at the relaxed tier, not skipped' (
+            @($loudResult.tier_relaxed_roles) -contains 'simplicity' -and
+            @($loudResult.degraded_roles) -notcontains 'simplicity' -and
+            @($loudResult.reviews.reviewer) -contains 'simplicity')
+        Check 'GP8b tier relaxation is reported in the result notes' (
+            (@($loudResult.notes) -join ' ') -match "simplicity.*above their 'cheap' tier")
 
         $advisoryResult = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Panel `
             -RolesPath $rolesFixture -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
             -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $emptyDispatcher
-        Check 'GP9 skipped role remains advisory fail-open without FailLoud' (
+        Check 'GP9 tier relaxation alone is not degradation (advisory panel still accepts)' (
             -not $advisoryResult.degraded -and $advisoryResult.verdict -eq 'accept' -and
-            @($advisoryResult.degraded_roles) -contains 'simplicity')
+            @($advisoryResult.tier_relaxed_roles) -contains 'simplicity')
+
+        # A role that has NO provider at ANY allowed tier is a genuinely lost lens.
+        # That is degradation whether or not the caller asked for -FailLoud — the old
+        # code reported it only under -FailLoud, which is how every shipped run quietly
+        # lost its cheap roles.
+        $script:skipCheap = $false
+        $script:skipAll = $true
+        $noProviderResult = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Panel `
+            -RolesPath $rolesFixture -FleetPath (Join-Path $roleTmp 'unused-fleet.yaml') `
+            -ToolsPath (Join-Path $roleTmp 'unused-tools.yaml') -Dispatcher $emptyDispatcher
+        Check 'GP9b skipped role is LOUD without FailLoud' ($noProviderResult.degraded)
+        Check 'GP9c skipped roles are named in degraded_roles and counted in the reason' (
+            @($noProviderResult.degraded_roles) -contains 'simplicity' -and
+            @($noProviderResult.degraded_roles) -contains 'correctness' -and
+            $noProviderResult.reason -match 'roles skipped')
+        $script:skipAll = $false
 
         $script:skipCheap = $false
         $badPanelDispatcher = { param($providerName, $reviewPrompt); return @{ stdout='not json'; stderr=''; exit_code=0 } }
@@ -279,7 +303,7 @@ roles:
     Check 'G34 all-unparsed -> accept, flagged' ($g3.verdict -eq 'accept' -and $g3.reason -match 'no usable review')
 
     # zero reviewers + a fleet with no review-capable provider -> throws
-    $tmpDir = Join-Path $env:TEMP "gate-test-$([System.IO.Path]::GetRandomFileName())"
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "gate-test-$([System.IO.Path]::GetRandomFileName())"
     New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
     $emptyFleet = Join-Path $tmpDir 'fleet.yaml'
     Set-Content -LiteralPath $emptyFleet -Encoding utf8NoBOM -Value @'

@@ -9,7 +9,7 @@ function Assert($label, $cond) {
     else { Write-Host "FAIL  $label" -ForegroundColor Red; $script:failures++ }
 }
 
-$tmpKb = Join-Path $env:TEMP "dec-kb-$(Get-Random)"
+$tmpKb = Join-Path ([System.IO.Path]::GetTempPath()) "dec-kb-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $tmpKb | Out-Null
 
 # --- Get-NextDecisionId: empty dir → d001 ---
@@ -75,7 +75,7 @@ Remove-Item $projOptOut
 Remove-Item $tmpKb -Recurse -Force
 
 # --- Append-DecisionFeedback + Read-Decisions ---
-$tmpKb2 = Join-Path $env:TEMP "dec-kb2-$(Get-Random)"
+$tmpKb2 = Join-Path ([System.IO.Path]::GetTempPath()) "dec-kb2-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $tmpKb2 | Out-Null
 
 $r1 = Add-DecisionRecord `
