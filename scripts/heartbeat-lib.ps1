@@ -79,6 +79,18 @@ function Resolve-HeartbeatAnchor {
     )
     $text = $Anchor.Trim()
     if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    # A bare clock time carries no date, and [datetimeoffset]::TryParse fills the missing
+    # one from the SYSTEM clock -- which ignored -Now entirely and returned the right hour
+    # on the wrong day. Build it from $Now instead, so "TODAY's occurrence" means today
+    # relative to the caller's clock. Anything not a bare HH:mm[:ss] still passes through
+    # TryParse, which is correct for a full timestamp (it carries its own date and offset).
+    if ($text -match '^([01]?\d|2[0-3]):([0-5]\d)(:([0-5]\d))?$') {
+        $anchorHour = [int]$Matches[1]
+        $anchorMinute = [int]$Matches[2]
+        $anchorSecond = if ($Matches[4]) { [int]$Matches[4] } else { 0 }
+        return [datetimeoffset]::new($Now.Year, $Now.Month, $Now.Day,
+            $anchorHour, $anchorMinute, $anchorSecond, $Now.Offset)
+    }
     $full = [datetimeoffset]::MinValue
     if ([datetimeoffset]::TryParse($text, [ref]$full)) { return $full }
     return $null
