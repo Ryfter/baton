@@ -695,6 +695,12 @@ function Invoke-PlanPhase {
     # which is the point of #code-factory) and passed #186's bound through as
     # -MaxAttempts, so neither the consistency nor the safety property was dropped.
     # Events use the 'provider-failover' kind other phases use, not 'plan'.
+    # Invoke-CapabilityFailover treats a NONPOSITIVE -MaxAttempts as "no limit", but the
+    # bounded loop this replaced treated MaxPlannerAttempts=0 as "no attempts at all"
+    # (`if ($attempts -ge $MaxPlannerAttempts) { break }` fired immediately). Passing 0
+    # straight through would silently invert the safest possible setting into the most
+    # expensive one -- walking the entire roster. Preserve the original meaning.
+    if ($MaxPlannerAttempts -le 0) { return $null }
     $walk = Invoke-CapabilityFailover -Candidates ([object[]]$cands) -Phase 'planner' `
         -MaxAttempts $MaxPlannerAttempts `
         -Attempt { param($c) & $dispatch $c $prompt } `

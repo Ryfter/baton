@@ -89,7 +89,14 @@ function Restore-WorktreeTreeSnapshot {
         if ($LASTEXITCODE -ne 0) { return $false }
         & git -C $resolved restore --source=$TreeSha --staged --worktree -- . 2>$null
         if ($LASTEXITCODE -ne 0) { return $false }
-        & git -C $resolved clean -fd -- . 2>$null | Out-Null
+        # -x (ignored files too) is load-bearing for failover isolation: a failed attempt
+        # can leave build output, caches, or a written .env behind, and plain `clean -fd`
+        # keeps every one of them. The next provider in the walk would then start on a
+        # worktree the previous provider dirtied -- and Get-WorktreeTreeSha only hashes
+        # TRACKED files, so the restore would report success while the contamination
+        # survived. Re-fetching an ignored dependency dir costs time; inheriting a dead
+        # provider's leftovers costs correctness.
+        & git -C $resolved clean -fdx -- . 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) { return $false }
         return ((Get-WorktreeTreeSha -Worktree $resolved) -eq $TreeSha)
     } catch {
