@@ -1417,6 +1417,81 @@ providers:
                 Check 'CD1 the denial stays visible in the why chain' (
                     $denyResult.why -match 'worker-substitute' -and $denyResult.why -match 'box busy' -and
                     $denyResult.why -notmatch "`r|`n")
+
+                # Round-3 review: the failover journal is written BEFORE the coordination
+                # gate, so a denied peer was recorded as a completed failover that never
+                # ran -- and the next hop journaled a second failover from the same origin.
+                # The usage journal is routing training data; a hop that did not happen
+                # must not appear in it.
+                $cdJournal = Join-Path $env:BATON_HOME 'usage-coord-deny-journal.jsonl'
+                $cdjSeen = @{ names = @() }
+                $cdjSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                    -MaxCostTier free -UsagePath $cdJournal `
+                    -Dispatcher {
+                        param($pick,$prompt,$depthTier)
+                        $cdjSeen.names += [string]$pick.name
+                        if ([string]$pick.name -eq 'worker-third') {
+                            Set-Content -LiteralPath (Join-Path (Get-Location).Path 'coord-deny-journal.txt') -Value 'done' -Encoding utf8NoBOM
+                            return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 }
+                        }
+                        return @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 }
+                    }.GetNewClosure()
+                $cdjResult = & $cdjSpawner $preflightTask
+                $cdjRows = @(Get-Content -LiteralPath $cdJournal | ForEach-Object { $_ | ConvertFrom-Json })
+                $cdjFailovers = @($cdjRows | Where-Object { $_.event -eq 'failover' })
+                Check 'CD2 a denied peer is never journaled as a failover that ran' (
+                    $cdjResult.ok -and @($cdjFailovers | Where-Object { $_.substitute -eq 'worker-substitute' }).Count -eq 0)
+                Check 'CD2 exactly one failover row, for the hop that actually dispatched' (
+                    $cdjFailovers.Count -eq 1 -and [string]$cdjFailovers[0].substitute -eq 'worker-third')
+            } finally { . "$PSScriptRoot/fleet-executor-lib.ps1" }
+
+            # Round-3 review: the FIRST dispatch's coordination denial still aborted the
+            # task outright, so after a preflight walk a busy landing provider ended the
+            # run with untried peers and hop budget both remaining -- the exact behaviour
+            # finding 6 removed from the retry path, left in place one branch over.
+            function Request-LocalDispatchClaim {
+                param($Candidate, [string]$FleetPath = '', [string]$Worktree = '', [string]$RunDir = '', [int]$TtlSec = 0)
+                if ([string]$Candidate.name -eq 'worker-primary') {
+                    return [ordered]@{ gated=$true; granted=$false; reason='box busy: stack-a held'; claim_id=''; ttl_sec=0; host='host-a'; stack='stack-a'; load_profile='' }
+                }
+                return [ordered]@{ gated=$false; granted=$true; reason='not_local'; claim_id=''; ttl_sec=0; host=''; stack=''; load_profile='' }
+            }
+            try {
+                $firstDenySeen = @{ names = @() }
+                $firstDenySpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                    -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-coord-deny-first.jsonl') `
+                    -Dispatcher {
+                        param($pick,$prompt,$depthTier)
+                        $firstDenySeen.names += [string]$pick.name
+                        Set-Content -LiteralPath (Join-Path (Get-Location).Path 'coord-deny-first.txt') -Value 'done' -Encoding utf8NoBOM
+                        return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 }
+                    }.GetNewClosure()
+                $firstDenyResult = & $firstDenySpawner $preflightTask
+                Check 'CD3 a denied FIRST provider walks to an untried peer' (
+                    $firstDenyResult.ok -and $firstDenyResult.chose -eq 'worker-substitute' -and
+                    ($firstDenySeen.names -join ',') -eq 'worker-substitute')
+                Check 'CD3 the first-dispatch denial stays in the why chain' (
+                    $firstDenyResult.why -match 'worker-primary' -and $firstDenyResult.why -match 'box busy')
+            } finally { . "$PSScriptRoot/fleet-executor-lib.ps1" }
+
+            # Every peer busy is still a real outcome and must never read as success. With
+            # no dispatch at all $res stays null, and `[int]$null -ne 0` is FALSE -- so the
+            # walk fell straight through to the "no changes" success return.
+            function Request-LocalDispatchClaim {
+                param($Candidate, [string]$FleetPath = '', [string]$Worktree = '', [string]$RunDir = '', [int]$TtlSec = 0)
+                return [ordered]@{ gated=$true; granted=$false; reason='box busy: stack-a held'; claim_id=''; ttl_sec=0; host='host-a'; stack='stack-a'; load_profile='' }
+            }
+            try {
+                $allDenySeen = @{ calls = 0 }
+                $allDenySpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                    -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-coord-deny-all.jsonl') `
+                    -Dispatcher { param($pick,$prompt,$depthTier) $allDenySeen.calls++; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure()
+                $allDenyResult = & $allDenySpawner $preflightTask
+                Check 'CD4 every peer busy is a failure, never a silent success' (
+                    -not $allDenyResult.ok -and $allDenySeen.calls -eq 0)
+                Check 'CD4 total denial is labor-unavailable with the denials audited' (
+                    [string]$allDenyResult.labor -eq 'unavailable' -and
+                    @($allDenyResult.exclusions | Where-Object { $_.reason -match 'coordination denied' }).Count -ge 1)
             } finally { . "$PSScriptRoot/fleet-executor-lib.ps1" }
 
             # High stakes remains champion/high when preflight selects a peer.

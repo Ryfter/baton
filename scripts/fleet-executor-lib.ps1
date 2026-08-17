@@ -1504,6 +1504,9 @@ function New-AgenticSpawner {
         # its hops come out of the same $MaxFailoverHops budget the dispatch walk spends.
         $preflightHops = 0
         $preflightHopLines = [System.Collections.Generic.List[string]]::new()
+        # Reroute rows the preflight walk has EARNED but not yet written. They are flushed
+        # only once a provider actually gets dispatched — see the flush sites below.
+        $pendingPreflightHops = @()
         $hopLine = ''
         $advisoryLines = [System.Collections.Generic.List[string]]::new()
 
@@ -1545,9 +1548,10 @@ function New-AgenticSpawner {
                     #     ended the task while untried peers were sitting right there —
                     #     the common shape of a quota storm.
                     $preflightCapped = [System.Collections.Generic.List[string]]::new()
-                    # Reroute journaling is DEFERRED until the walk settles on someone who
-                    # will actually be dispatched. A 'rerouted' row for a hop that ended in
-                    # a hold claims labor that never happened.
+                    # Reroute journaling is DEFERRED until a provider is actually dispatched.
+                    # A 'rerouted' row for a hop that ended in a hold — or whose target the
+                    # coordination gate then denied — claims labor that never happened, and
+                    # this journal is routing training data.
                     $pendingHops = [System.Collections.Generic.List[hashtable]]::new()
                     $hopWindows = $crossings
                     $heldOnBudget = $false
@@ -1612,13 +1616,13 @@ function New-AgenticSpawner {
                         }
                     }
 
+                    # The why-chain shows the walk immediately — it is narration, and it is
+                    # true either way. The JOURNAL rows wait for a real dispatch.
                     foreach ($hop in $pendingHops) {
-                        Add-UsagePreflightEvent -Worker ([string]$hop.from) -Outcome rerouted `
-                            -WindowDecision $hop.windows -Substitute ([string]$hop.to) -UsagePath $UsagePath `
-                            -Reason 'soft_cap' -Timestamp $preflightNow.ToString('o')
                         [void]$preflightHopLines.Add((Format-UsagePreflightLine -Worker ([string]$hop.from) `
                             -WindowDecision $hop.windows -Outcome rerouted -Substitute ([string]$hop.to)))
                     }
+                    $pendingPreflightHops = @($pendingHops)
                     $resultBase = New-AgenticResultBase -Candidate $pick -Policy $policy -FleetPath $FleetPath
                 } else {
                     $preflightReason = if ([string]$pick.usage_preference_reason) { [string]$pick.usage_preference_reason } else { 'under_soft_cap' }
@@ -1651,29 +1655,56 @@ function New-AgenticSpawner {
                     -Worktree $Worktree -FleetPath $FleetPath -UsagePath $UsagePath -Dispatcher $Dispatcher
             }
         }
+        # Walk state is declared BEFORE the first dispatch, because the first dispatch can
+        # itself be denied and become the walk's first hop.
+        $hopLines = [System.Collections.Generic.List[string]]::new()
+        foreach ($preflightLine in $preflightHopLines) { [void]$hopLines.Add([string]$preflightLine) }
+        # EVERY preflight hop counts, not just "did one happen": a two-hop preflight walk
+        # has already spent two hops of the same budget the dispatch walk draws down.
+        $hops = $preflightHops
+        # Peers the walk stepped over because the box was busy. Carried to whichever exit
+        # the walk takes so a denial is never silently dropped from the audit.
+        $coordExclusions = [System.Collections.Generic.List[object]]::new()
+        # Set whenever the CURRENT provider never got to run because its box was busy. It
+        # is a distinct walk trigger from a usage failure: there is no result and no
+        # observation to classify, so the ordinary $res/$observation test cannot see it.
+        $coordDenied = $false
+
         $firstCoord = Invoke-CoordinatedDispatch -Candidate $pick -Dispatch $firstDispatch `
             -FleetPath $FleetPath -Worktree $Worktree -RunDir $RunDir
         if (-not $firstCoord.dispatched) {
-            # Visible re-route, never a silent stall: the pool emptied at the admission
-            # seam, which is the same labor-unavailable flavor as a preflight hold.
-            return $resultBase + @{
-                ok=$false; spend=0.0; chose=$pick.name; alternatives=$alts
-                why=(Format-CoordinationDenialWhy -Provider ([string]$pick.name) -Gate $firstCoord.gate)
-                labor='unavailable'
-                exclusions=@([ordered]@{ name=[string]$pick.name; stage='usage'; reason=("coordination denied: " + [string]$firstCoord.gate.reason); reset_at=$null; eta=$null })
+            # Round-3 review: this used to abort the task outright, which is the behaviour
+            # finding 6 removed from the RETRY path and left in place one branch over — so
+            # after a preflight walk, a busy landing provider ended the run with untried
+            # peers and hop budget both still available. A denial is a fact about one box.
+            [void]$hopLines.Add([string](Format-CoordinationDenialWhy -Provider ([string]$pick.name) -Gate $firstCoord.gate))
+            [void]$coordExclusions.Add([ordered]@{ name=[string]$pick.name; stage='usage'; reason=("coordination denied: " + [string]$firstCoord.gate.reason); reset_at=$null; eta=$null })
+            $coordDenied = $true
+            $hops++
+            $firstAttempt = $null
+            $res = $null
+            $observation = $null
+        } else {
+            # A dispatch really happened: the preflight's earned reroute rows are now true
+            # and can be written. Self-clearing, so the retry site below is a no-op.
+            foreach ($hop in $pendingPreflightHops) {
+                Add-UsagePreflightEvent -Worker ([string]$hop.from) -Outcome rerouted `
+                    -WindowDecision $hop.windows -Substitute ([string]$hop.to) -UsagePath $UsagePath `
+                    -Reason 'soft_cap' -Timestamp $preflightNow.ToString('o')
             }
+            $pendingPreflightHops = @()
+            $firstAttempt = $firstCoord.attempt
+            $res = $firstAttempt.result
+            # Measure the prompt that was ACTUALLY dispatched. On a diff-apply dispatch
+            # $prompt (the agentic prompt) was built but never sent; reporting its size
+            # would feed a wrong prompt_bytes into context-overflow detection, which is
+            # what decides whether to fail over to a larger-context peer.
+            $dispatchedPrompt = if ($isDiffApply) { [string]$firstAttempt.prompt_sent } else { $prompt }
+            # Capture on success AND failure — a failed attempt's residue is what rework needs.
+            Write-TaskBusOutput -RunDir $RunDir -TaskId ([string]$task.id) -Stdout $(if ($null -ne $res) { [string]$res.stdout } else { '' })
+            $observation = Get-AgenticUsageObservation -Result $res -Worker ([string]$pick.name) -UsagePath $UsagePath `
+                -PromptBytes (Get-Utf8ByteCount -Text $dispatchedPrompt)
         }
-        $firstAttempt = $firstCoord.attempt
-        $res = $firstAttempt.result
-        # Measure the prompt that was ACTUALLY dispatched. On a diff-apply dispatch
-        # $prompt (the agentic prompt) was built but never sent; reporting its size
-        # would feed a wrong prompt_bytes into context-overflow detection, which is
-        # what decides whether to fail over to a larger-context peer.
-        $dispatchedPrompt = if ($isDiffApply) { [string]$firstAttempt.prompt_sent } else { $prompt }
-        # Capture on success AND failure — a failed attempt's residue is what rework needs.
-        Write-TaskBusOutput -RunDir $RunDir -TaskId ([string]$task.id) -Stdout $(if ($null -ne $res) { [string]$res.stdout } else { '' })
-        $observation = Get-AgenticUsageObservation -Result $res -Worker ([string]$pick.name) -UsagePath $UsagePath `
-            -PromptBytes (Get-Utf8ByteCount -Text $dispatchedPrompt)
         # (partial-diff detection now happens per hop inside the failover walk below,
         # since any attempt in the walk -- not only the first -- can dirty the worktree)
 
@@ -1691,20 +1722,18 @@ function New-AgenticSpawner {
         # hard_failover = quota/burst usage hop. context_overflow is NOT a usage lockout
         # (provider stays routable) but still earns a quality_first peer retry with a soft
         # preference for larger declared max_prompt_bytes.
-        $hopLines = [System.Collections.Generic.List[string]]::new()
-        foreach ($preflightLine in $preflightHopLines) { [void]$hopLines.Add([string]$preflightLine) }
-        # EVERY preflight hop counts, not just "did one happen": a two-hop preflight walk
-        # has already spent two hops of the same budget the dispatch walk draws down.
-        $hops = $preflightHops
-        # Peers the walk stepped over because the box was busy. Carried to whichever exit
-        # the walk takes so a denial is never silently dropped from the audit.
-        $coordExclusions = [System.Collections.Generic.List[object]]::new()
         while ($true) {
             $isContextOverflow = $observation -and ([string]$observation.classification -eq 'context_overflow')
-            $shouldSubstitute = [int]$res.exit_code -ne 0 -and $observation -and
+            # A coordination denial is its own trigger: there is no result to classify.
+            $shouldSubstitute = $coordDenied -or (
+                [int]$res.exit_code -ne 0 -and $observation -and
                 $FailoverPolicy -eq 'quality_first' -and
-                ($observation.hard_failover -or $isContextOverflow)
+                ($observation.hard_failover -or $isContextOverflow))
             if (-not $shouldSubstitute) { break }
+            # Named once so every null-unsafe $observation read below has one answer.
+            $stallReason = if ($coordDenied) { 'coordination_denied' }
+                           elseif ($observation) { [string]$observation.classification }
+                           else { 'unknown' }
             if ($hops -ge $MaxFailoverHops) {
                 $advisoryLines.Add("failover budget spent ($hops hop(s)); $($pick.name) left holding the task")
                 break
@@ -1728,17 +1757,25 @@ function New-AgenticSpawner {
                     $pb = if ($null -ne $observation.prompt_bytes) { [Nullable[long]][long]$observation.prompt_bytes } else { [Nullable[long]]$null }
                     $fb = if ($null -ne $observation.overflow_floor_bytes) { [long]$observation.overflow_floor_bytes } else { 35000 }
                     $why = Format-ContextOverflowLine -Provider ([string]$pick.name) -PromptBytes $pb -FloorBytes $fb
-                    return $resultBase + @{ ok=$false; spend=0.0; chose=$pick.name; why=$why; alternatives=$alts }
+                    # The chain and the denials belong on THIS exit too — a context-overflow
+                    # stall reached after a preflight walk and a busy box is a different
+                    # story from one reached on the first try.
+                    if ($hopLines.Count -gt 0) { $why = (($hopLines -join '; ') + "; " + $why) }
+                    if ($advisoryLines.Count -gt 0) { $why += '; ' + ($advisoryLines -join '; ') }
+                    $coRet = @{ ok=$false; spend=0.0; chose=$pick.name; why=$why; alternatives=$alts }
+                    if ($coordExclusions.Count -gt 0) { $coRet['exclusions'] = @($coordExclusions) }
+                    return $resultBase + $coRet
                 }
                 # #124: quota-death emptied the pool mid-dispatch (no peer) — the
                 # labor-unavailable flavor. Context overflow above is NOT: the roster
                 # simply has no larger-context peer (config-shaped, not availability).
-                $why = "usage failover: $($pick.name) -> no peer available (quality_first; $($observation.classification))"
+                $why = "usage failover: $($pick.name) -> no peer available (quality_first; $stallReason)"
                 # Denied peers ride out on the same audit: "no peer available" with a busy
                 # box behind it is a different operational story from an empty roster.
                 if ($hopLines.Count -gt 0) { $why = (($hopLines -join '; ') + "; " + $why) }
+                if ($advisoryLines.Count -gt 0) { $why += '; ' + ($advisoryLines -join '; ') }
                 $noPeerExclusions = [System.Collections.Generic.List[object]]::new()
-                [void]$noPeerExclusions.Add([ordered]@{ name=[string]$pick.name; stage='usage'; reason="$($observation.classification) (no peer available)"; reset_at=[string]$observation.reset_at; eta=$null })
+                [void]$noPeerExclusions.Add([ordered]@{ name=[string]$pick.name; stage='usage'; reason="$stallReason (no peer available)"; reset_at=$(if ($observation) { [string]$observation.reset_at } else { '' }); eta=$null })
                 foreach ($cx in $coordExclusions) { [void]$noPeerExclusions.Add($cx) }
                 return $resultBase + @{
                     ok=$false; spend=0.0; chose=$pick.name; why=$why; alternatives=$alts
@@ -1753,24 +1790,30 @@ function New-AgenticSpawner {
                     $why = (Format-ContextOverflowLine -Provider ([string]$pick.name) -PromptBytes $pb -FloorBytes $fb) +
                         ' (clean worktree restore failed; no retry)'
                 } else {
-                    $why = "usage failover: $($pick.name) -> no retry (clean worktree restore failed; $($observation.classification))"
+                    $why = "usage failover: $($pick.name) -> no retry (clean worktree restore failed; $stallReason)"
                 }
-                return $resultBase + @{ ok=$false; spend=0.0; chose=$pick.name; why=$why; alternatives=$alts }
+                if ($hopLines.Count -gt 0) { $why = (($hopLines -join '; ') + "; " + $why) }
+                if ($advisoryLines.Count -gt 0) { $why += '; ' + ($advisoryLines -join '; ') }
+                $rfRet = @{ ok=$false; spend=0.0; chose=$pick.name; why=$why; alternatives=$alts }
+                if ($coordExclusions.Count -gt 0) { $rfRet['exclusions'] = @($coordExclusions) }
+                return $resultBase + $rfRet
             }
 
             $substitute = $retryCandidates[0]
             [void]$attemptedProviders.Add([string]$substitute.name)
             $retryAlts = @($retryCandidates | Select-Object -Skip 1 | ForEach-Object { $_.name })
-            Add-UsageFailoverEvent -OriginalWorker ([string]$pick.name) -Substitute ([string]$substitute.name) `
-                -Reason ([string]$observation.classification) -ResetAt ([string]$observation.reset_at) `
-                -HadPartialDiff $hadPartialDiff -UsagePath $UsagePath
-            if ($isContextOverflow) {
+            # Round-3 review: the hop line and the journal row are built here but neither is
+            # COMMITTED until the coordination gate grants. Writing them first recorded a
+            # completed failover for a peer that never ran — and, once a denial continued
+            # the walk, a second failover row from the same origin.
+            if ($coordDenied) {
+                $hopLine = "coordination failover: $($pick.name) -> $($substitute.name) (box busy)"
+            } elseif ($isContextOverflow) {
                 $hopLine = "context_overflow: $($pick.name) -> $($substitute.name) (prefer larger context)"
             } else {
                 $resetText = if ($observation.reset_at) { "reset $($observation.reset_at)" } else { 'reset unknown' }
                 $hopLine = "usage failover: $($pick.name) -> $($substitute.name) ($($observation.classification); $resetText)"
             }
-            [void]$hopLines.Add([string]$hopLine)
 
             # A failover target may be a diff-apply provider too — same branch, and the
             # same "measure what was actually sent" rule.
@@ -1796,11 +1839,25 @@ function New-AgenticSpawner {
                 # Returning labor-unavailable here turned "that box is busy" into "nobody
                 # can do this work" while untried peers and hop budget both remained. The
                 # denial costs a hop, stays visible in the chain, and the walk continues.
+                # No hop line and no failover row: this hop did not happen.
                 [void]$hopLines.Add([string](Format-CoordinationDenialWhy -Provider ([string]$substitute.name) -Gate $retryCoord.gate))
                 [void]$coordExclusions.Add([ordered]@{ name=[string]$substitute.name; stage='usage'; reason=("coordination denied: " + [string]$retryCoord.gate.reason); reset_at=$null; eta=$null })
+                $coordDenied = $true
                 $hops++
                 continue
             }
+            # The gate granted, so the hop is real: commit the line and the journal row.
+            [void]$hopLines.Add([string]$hopLine)
+            Add-UsageFailoverEvent -OriginalWorker ([string]$pick.name) -Substitute ([string]$substitute.name) `
+                -Reason $stallReason -ResetAt $(if ($observation) { [string]$observation.reset_at } else { '' }) `
+                -HadPartialDiff $hadPartialDiff -UsagePath $UsagePath
+            foreach ($hop in $pendingPreflightHops) {
+                Add-UsagePreflightEvent -Worker ([string]$hop.from) -Outcome rerouted `
+                    -WindowDecision $hop.windows -Substitute ([string]$hop.to) -UsagePath $UsagePath `
+                    -Reason 'soft_cap' -Timestamp $preflightNow.ToString('o')
+            }
+            $pendingPreflightHops = @()
+            $coordDenied = $false
             $retryAttempt = $retryCoord.attempt
             $res = $retryAttempt.result
             $retryPrompt = if ($subIsDiffApply) { [string]$retryAttempt.prompt_sent } else { $prompt }
@@ -1816,6 +1873,19 @@ function New-AgenticSpawner {
             $resultBase = New-AgenticResultBase -Candidate $pick -Policy $policy -FleetPath $FleetPath
             $firstAttempt = $retryAttempt
             $hops++
+        }
+
+        if ($coordDenied) {
+            # The walk ended without ANY provider running — budget spent or peers exhausted
+            # while every box stayed busy. With no dispatch there is no $res, and
+            # `[int]$null -ne 0` is FALSE, so this used to fall straight through to the
+            # "no changes" SUCCESS return below. A task nobody ran is never a success.
+            $deniedWhy = if ($hopLines.Count -gt 0) { ($hopLines -join '; ') } else { "$($pick.name): coordination denied" }
+            if ($advisoryLines.Count -gt 0) { $deniedWhy += '; ' + ($advisoryLines -join '; ') }
+            return $resultBase + @{
+                ok=$false; spend=0.0; chose=$pick.name; why=$deniedWhy; alternatives=$alts
+                labor='unavailable'; exclusions=@($coordExclusions)
+            }
         }
 
         $postTree = Get-WorktreeTreeSha -Worktree $Worktree
@@ -1845,16 +1915,25 @@ function New-AgenticSpawner {
                 $failureWhy = "$($pick.name): exit $($res.exit_code) ($($observation.classification))"
             }
             if ($advisoryLines.Count -gt 0) { $failureWhy += '; ' + ($advisoryLines -join '; ') }
-            return $resultBase + @{ ok = $false; spend = 0.0; chose = $pick.name; why = $failureWhy; alternatives = $alts }
+            $failRet = @{ ok = $false; spend = 0.0; chose = $pick.name; why = $failureWhy; alternatives = $alts }
+            # A box the walk stepped over belongs in the audit on EVERY exit, including the
+            # ones where the walk went on to run somewhere: it is why this task cost what
+            # it cost, and coordination pressure is invisible unless it is recorded.
+            if ($coordExclusions.Count -gt 0) { $failRet['exclusions'] = @($coordExclusions) }
+            return $resultBase + $failRet
         }
         if ($grew) {
             $successWhy = if ($hopChain) { "$hopChain; worktree diff grew" } else { "routed $cap -> $($pick.name); worktree diff grew" }
             if ($advisoryLines.Count -gt 0) { $successWhy += '; ' + ($advisoryLines -join '; ') }
-            return $resultBase + @{ ok = $true; spend = 0.0; chose = $pick.name; why = $successWhy; alternatives = $alts }
+            $grewRet = @{ ok = $true; spend = 0.0; chose = $pick.name; why = $successWhy; alternatives = $alts }
+            if ($coordExclusions.Count -gt 0) { $grewRet['exclusions'] = @($coordExclusions) }
+            return $resultBase + $grewRet
         }
         $noChangeWhy = if ($hopChain) { "$hopChain; no changes" } else { "$($pick.name): no changes" }
         if ($advisoryLines.Count -gt 0) { $noChangeWhy += '; ' + ($advisoryLines -join '; ') }
-        return $resultBase + @{ ok = $true; spend = 0.0; chose = $pick.name; why = $noChangeWhy; alternatives = $alts }
+        $noChangeRet = @{ ok = $true; spend = 0.0; chose = $pick.name; why = $noChangeWhy; alternatives = $alts }
+        if ($coordExclusions.Count -gt 0) { $noChangeRet['exclusions'] = @($coordExclusions) }
+        return $resultBase + $noChangeRet
     }.GetNewClosure()
 }
 

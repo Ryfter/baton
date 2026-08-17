@@ -658,6 +658,13 @@ ERROR: You have hit your usage limit. Try again later.
     $rClean = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-clean-advisory') -Planner $gPlanner -Spawner $gSpawner `
         -GateArtifact 'work' -Gater $gaterCleanAccept -AcceptanceGate
     Check 'T79i advisory clean accept still completes' ($rClean.status -eq 'completed')
+    # A degraded panel that still produced a REJECT has said something actionable. Both
+    # statuses are non-clean, so ordering is not about the fail-open — it is about which
+    # one tells the operator what to go fix.
+    $gaterRejectDegraded = { param($art,$goal) @{ verdict='reject'; reason='1 critical'; counts=@{critical=1;important=0;minor=0}; polish_brief='[critical] broken'; findings=@(); reviews=@(); unparsed=@(); degraded=$true } }
+    $rRejDeg = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-reject-degraded') -Planner $gPlanner -Spawner $gSpawner `
+        -GateArtifact 'work' -Gater $gaterRejectDegraded -AcceptanceGate
+    Check 'T79j a real reject outranks a degraded panel' ($rRejDeg.status -eq 'rejected')
 
     # Explicit policy must reach the real acceptance-gate call, while a library
     # caller that merely supplies an artifact remains default-on for compatibility.

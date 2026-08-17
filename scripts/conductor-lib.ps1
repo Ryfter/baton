@@ -1383,11 +1383,16 @@ function Invoke-Conductor {
             $finalStatus = 'acceptance-degraded'
         } else {
             Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Message "acceptance verdict: $($gate.verdict) — $($gate.reason)")
-            # 'unreviewed' (d114) is checked alongside `degraded` rather than trusting one
-            # of them: they are set together today, and a consumer that keys on only one
-            # is exactly the fail-open this finding is about.
-            if ($gate.degraded -or $gate.verdict -eq 'unreviewed') { $finalStatus = 'acceptance-degraded' }
-            elseif ($gate.verdict -eq 'reject') { $finalStatus = 'rejected' }
+            # ORDER MATTERS. A reject is checked FIRST: a panel that lost a role but whose
+            # surviving reviewers still found a critical has produced an actionable verdict,
+            # and 'acceptance-degraded' would bury it. Both are non-clean, so this is not
+            # about the fail-open — it is about which status tells the operator what to fix.
+            # ('unreviewed' cannot collide: it means no usable review existed at all.)
+            # 'unreviewed' (d114) is then checked alongside `degraded` rather than trusting
+            # one of them: they are set together today, and a consumer keying on only one is
+            # exactly the fail-open this finding is about.
+            if ($gate.verdict -eq 'reject') { $finalStatus = 'rejected' }
+            elseif ($gate.degraded -or $gate.verdict -eq 'unreviewed') { $finalStatus = 'acceptance-degraded' }
             elseif ($AcceptanceFailLoud -and $gate.verdict -eq 'polish') { $finalStatus = 'needs-polish' }
         }
 
@@ -1645,7 +1650,11 @@ function Invoke-Conductor {
                         $gate | Add-Member -NotePropertyName prior_acceptance -NotePropertyValue $priorSnap -Force
                         $gate | Add-Member -NotePropertyName rework -NotePropertyValue @{ attempted = $true; evidence_path = $accEvidPath; outcome = 'failed' } -Force
                     }
-                    $finalStatus = 'needs-polish'
+                    # Round-3 review: a LOST re-panel signal is degraded, not needs-polish.
+                    # The re-run is the same acceptance signal as the first gate — nobody
+                    # looked at the reworked artifact, so 'needs-polish' would report a
+                    # verdict that was never produced.
+                    $finalStatus = 'acceptance-degraded'
                 } else {
                     Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Message "acceptance re-panel verdict: $($gate2.verdict) — $($gate2.reason)")
                     if ($gate2 -is [System.Collections.IDictionary]) {
@@ -1663,17 +1672,18 @@ function Invoke-Conductor {
                         } -Force
                     }
                     $gate = $gate2
-                    # Same C3 rule on the rework re-run: a degraded or unreviewed second
-                    # panel cannot promote the run to 'completed' on either path.
-                    if ($gate2.degraded -or [string]$gate2.verdict -eq 'unreviewed') {
+                    # Same C3 rule on the rework re-run, and the same ordering as the first
+                    # gate: a reject the surviving reviewers actually produced outranks the
+                    # fact that the panel was short a role.
+                    if ([string]$gate2.verdict -eq 'reject') {
+                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message 'acceptance rework failed — panel reject')
+                        $finalStatus = 'rejected'
+                    } elseif ($gate2.degraded -or [string]$gate2.verdict -eq 'unreviewed') {
                         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message "acceptance rework panel degraded — verdict $($gate2.verdict)")
                         $finalStatus = 'acceptance-degraded'
                     } elseif ([string]$gate2.verdict -eq 'accept') {
                         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-passed' -Message 'acceptance rework passed — panel accept')
                         $finalStatus = 'completed'
-                    } elseif ([string]$gate2.verdict -eq 'reject') {
-                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message 'acceptance rework failed — panel reject')
-                        $finalStatus = 'rejected'
                     } else {
                         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message "acceptance rework failed — panel $($gate2.verdict)")
                         $finalStatus = if ($AcceptanceFailLoud) { 'needs-polish' } else { $finalStatus }
