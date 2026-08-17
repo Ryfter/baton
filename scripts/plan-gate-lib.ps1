@@ -219,14 +219,20 @@ function Invoke-PlanGate {
     # peer instead of dropping out of the panel. A competitive plan review needs two
     # DISTINCT opinions, so a peer that already spoke is never reused here — unlike the
     # acceptance panel, doubling up would defeat the whole point of the gate.
-    $usedReviewers = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    # Round-2 finding 5: the filter has to cover the slot's OWN name too. It used to sit
+    # at the head of the roster unfiltered, so slot 1 hopping a->b was followed by slot 2
+    # opening with b — the same model answering twice and counting as two usable reviews.
+    # Providers that already FAILED are excluded on the same list: re-dispatching a
+    # quota-dead reviewer buys nothing and costs a call.
+    $spentReviewers = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $failoverNotes = [System.Collections.ArrayList]@()
     foreach ($r in $Reviewers) {
         $pf = @{ reviewer = $r; parsed = $false; findings = @() }
         # An operator-supplied roster is an explicit contract — no substitution.
         $roster = if ($reviewersExplicit) { @([pscustomobject]@{ name = [string]$r }) }
                   else {
-                      @(@([string]$r) + @($Reviewers | Where-Object { [string]$_ -ne [string]$r -and -not $usedReviewers.Contains([string]$_) }) |
+                      @(@(@([string]$r) + @($Reviewers | Where-Object { [string]$_ -ne [string]$r })) |
+                          Where-Object { -not $spentReviewers.Contains([string]$_) } |
                           ForEach-Object { [pscustomobject]@{ name = [string]$_ } })
                   }
         $walk = Invoke-CapabilityFailover -Candidates ([object[]]$roster) -Phase "plan-review ($r)" `
@@ -236,11 +242,15 @@ function Invoke-PlanGate {
                 return [bool](Get-ReviewFindings -Output ([string]$res.stdout)).parsed
             }
         $pf.provider = [string]$walk.chose
+        # EVERY provider this slot touched is spent for the rest of the panel — the one
+        # that answered and the ones that failed on the way to it.
+        foreach ($attempted in @($walk.attempts)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$attempted)) { [void]$spentReviewers.Add([string]$attempted) }
+        }
         if ($walk.ok) {
             $parsed = Get-ReviewFindings -Output ([string]$walk.result.stdout)
             $pf.parsed   = $parsed.parsed
             $pf.findings = $parsed.findings
-            [void]$usedReviewers.Add([string]$walk.chose)
             if ($walk.hops -gt 0) { [void]$failoverNotes.Add([string]$walk.why) }
         } else {
             [void]$failoverNotes.Add([string]$walk.why)

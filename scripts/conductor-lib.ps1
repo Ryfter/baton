@@ -1367,18 +1367,26 @@ function Invoke-Conductor {
                         Invoke-AcceptanceGate @gateArgs
                     }
         } catch { $gate = $null; $gateErr = $_.Exception.Message }
+        # Round-2 C3: a LOST acceptance signal degrades the run status on BOTH paths.
+        # -AcceptanceFailLoud decides whether the run HALTS; it must not decide whether
+        # the run is allowed to call itself clean. Gating the degrade on fail-loud meant
+        # d114's 'unreviewed' verdict died at the gate object and the run still reported
+        # 'completed' — #190 gate 2, re-opened one layer up. Advisory still never blocks
+        # the labor: the branch and worktree survive exactly as before.
         if ($null -eq $gate -or -not $gate.verdict) {
-            # Fail-loud consumes this as acceptance-degraded (below); narrate the halt,
-            # not 'fail-open'. Only the advisory (non-fail-loud) path truly fails open.
             $noVerdictBase = if ($gateErr) { "acceptance gate failed: $gateErr" } else { 'acceptance gate produced no verdict' }
-            $msg = if ($AcceptanceFailLoud) { "$noVerdictBase (acceptance-degraded — run halts)" } else { "$noVerdictBase (fail-open)" }
+            $msg = if ($AcceptanceFailLoud) { "$noVerdictBase (acceptance-degraded — run halts)" }
+                   else { "$noVerdictBase (acceptance-degraded — advisory, run not blocked)" }
             $gateLevel = if ($AcceptanceFailLoud) { 'error' } else { 'warn' }
             Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Level $gateLevel -Message $msg)
             $gate = $null
-            if ($AcceptanceFailLoud) { $finalStatus = 'acceptance-degraded' }
+            $finalStatus = 'acceptance-degraded'
         } else {
             Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Message "acceptance verdict: $($gate.verdict) — $($gate.reason)")
-            if ($AcceptanceFailLoud -and $gate.degraded) { $finalStatus = 'acceptance-degraded' }
+            # 'unreviewed' (d114) is checked alongside `degraded` rather than trusting one
+            # of them: they are set together today, and a consumer that keys on only one
+            # is exactly the fail-open this finding is about.
+            if ($gate.degraded -or $gate.verdict -eq 'unreviewed') { $finalStatus = 'acceptance-degraded' }
             elseif ($gate.verdict -eq 'reject') { $finalStatus = 'rejected' }
             elseif ($AcceptanceFailLoud -and $gate.verdict -eq 'polish') { $finalStatus = 'needs-polish' }
         }
@@ -1655,7 +1663,12 @@ function Invoke-Conductor {
                         } -Force
                     }
                     $gate = $gate2
-                    if ([string]$gate2.verdict -eq 'accept') {
+                    # Same C3 rule on the rework re-run: a degraded or unreviewed second
+                    # panel cannot promote the run to 'completed' on either path.
+                    if ($gate2.degraded -or [string]$gate2.verdict -eq 'unreviewed') {
+                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message "acceptance rework panel degraded — verdict $($gate2.verdict)")
+                        $finalStatus = 'acceptance-degraded'
+                    } elseif ([string]$gate2.verdict -eq 'accept') {
                         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-passed' -Message 'acceptance rework passed — panel accept')
                         $finalStatus = 'completed'
                     } elseif ([string]$gate2.verdict -eq 'reject') {
@@ -1663,9 +1676,7 @@ function Invoke-Conductor {
                         $finalStatus = 'rejected'
                     } else {
                         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message "acceptance rework failed — panel $($gate2.verdict)")
-                        $finalStatus = if ($AcceptanceFailLoud -and $gate2.degraded) { 'acceptance-degraded' }
-                                       elseif ($AcceptanceFailLoud) { 'needs-polish' }
-                                       else { $finalStatus }
+                        $finalStatus = if ($AcceptanceFailLoud) { 'needs-polish' } else { $finalStatus }
                     }
                 }
             }

@@ -1263,6 +1263,162 @@ providers:
                 $walkOkResult.ok -and $walkOkResult.chose -eq 'worker-third' -and
                 $walkOkSeen.calls -eq 2 -and $walkOkResult.why -match 'worker-substitute -> worker-third')
 
+            # Round-2 C1: the PREFLIGHT reroute must honour the same budget the dispatch
+            # walk does. At MaxFailoverHops=0 the task may not hop at all -- it holds on
+            # the capped primary. Before this, the preflight rerouted unconditionally, so
+            # the "no failover" setting still burned a peer.
+            $pfZeroSeen = @{ calls = 0; names = @() }
+            $pfZeroUsage = Join-Path $env:BATON_HOME 'usage-pf-zero-budget.jsonl'
+            $pfZeroSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -MaxFailoverHops 0 -UsagePath $pfZeroUsage `
+                -Dispatcher { param($pick,$prompt,$depthTier) $pfZeroSeen.calls++; $pfZeroSeen.names += [string]$pick.name; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 20 -At $probeNow }.GetNewClosure() `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-zero-budget.jsonl') -ProbeClock $probeClock
+            $pfZeroResult = & $pfZeroSpawner $preflightTask
+            Check 'PF6d MaxFailoverHops=0 forbids the preflight reroute (holds, dispatches nobody)' (
+                -not $pfZeroResult.ok -and $pfZeroSeen.calls -eq 0 -and $pfZeroResult.chose -eq 'worker-primary')
+            Check 'PF6d zero-budget hold names the budget, not a missing peer' (
+                $pfZeroResult.why -match 'failover budget spent' -and $pfZeroResult.why -notmatch "`r|`n" -and
+                [string]$pfZeroResult.labor -eq 'unavailable')
+            $pfZeroRows = @(Get-Content -LiteralPath $pfZeroUsage | ForEach-Object { $_ | ConvertFrom-Json })
+            Check 'PF6d zero-budget journals held, never rerouted' (
+                @($pfZeroRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'held' }).Count -eq 1 -and
+                @($pfZeroRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'rerouted' }).Count -eq 0)
+
+            # Round-2 C1: the preflight is a WALK too. Three probe-eligible providers, the
+            # first two over cap: the task must reach the third rather than holding after
+            # a single hop. worker-fourth exists only so the dispatch-stage budget test
+            # below has somewhere left to go.
+            $pfWalkFleet = Join-Path $env:BATON_HOME 'fleet-preflight-walk.yaml'
+            # Names are deliberately a<b<c<d: equal-quality free peers tie-break by name,
+            # so this fixes the walk order (a capped -> b capped -> c clean, d untried).
+            Set-Content -LiteralPath $pfWalkFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: walk-a
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+  - name: walk-b
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+  - name: walk-c
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+  - name: walk-d
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+'@
+            # Probes answer in walk order: a capped, b capped, c clean.
+            $pfWalkProbeState = @{ n = 0 }
+            $pfWalkProbe = {
+                param($clientVersion, $timeoutSeconds)
+                $pfWalkProbeState.n++
+                $five = if ($pfWalkProbeState.n -le 2) { [double]80 } else { [double]40 }
+                return (New-ExecutorProbeResponse -FiveHourUsed $five -WeeklyUsed 20 -At $probeNow)
+            }.GetNewClosure()
+            $pfWalkSeen = @{ calls = 0; names = @() }
+            $pfWalkUsage = Join-Path $env:BATON_HOME 'usage-pf-walk.jsonl'
+            $pfWalkSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $pfWalkFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath $pfWalkUsage `
+                -Dispatcher { param($pick,$prompt,$depthTier) $pfWalkSeen.calls++; $pfWalkSeen.names += [string]$pick.name; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport $pfWalkProbe -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-walk.jsonl') -ProbeClock $probeClock
+            $pfWalkResult = & $pfWalkSpawner $preflightTask
+            Check 'PF6e preflight walks past a second capped provider to a clean one' (
+                $pfWalkResult.ok -and $pfWalkSeen.calls -eq 1 -and
+                ($pfWalkSeen.names -join ',') -eq 'walk-c')
+            Check 'PF6e preflight walk narrates every hop in order' (
+                $pfWalkResult.why -match 'walk-a' -and
+                $pfWalkResult.why -match 'rerouting to walk-b' -and
+                $pfWalkResult.why -match 'rerouting to walk-c' -and
+                $pfWalkResult.why -notmatch "`r|`n")
+            $pfWalkRows = @(Get-Content -LiteralPath $pfWalkUsage | ForEach-Object { $_ | ConvertFrom-Json })
+            Check 'PF6e preflight walk journals one rerouted row per hop' (
+                @($pfWalkRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'rerouted' }).Count -eq 2)
+
+            # Round-2 C1: preflight hops count against the SHARED budget. Two preflight
+            # hops with MaxFailoverHops=2 leaves the dispatch walk nothing, even though
+            # walk-d is an untried equal-quality peer.
+            $pfSharedProbeState = @{ n = 0 }
+            $pfSharedProbe = {
+                param($clientVersion, $timeoutSeconds)
+                $pfSharedProbeState.n++
+                $five = if ($pfSharedProbeState.n -le 2) { [double]80 } else { [double]40 }
+                return (New-ExecutorProbeResponse -FiveHourUsed $five -WeeklyUsed 20 -At $probeNow)
+            }.GetNewClosure()
+            $pfSharedSeen = @{ calls = 0; names = @() }
+            $pfSharedSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $pfWalkFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -MaxFailoverHops 2 -UsagePath (Join-Path $env:BATON_HOME 'usage-pf-shared-budget.jsonl') `
+                -Dispatcher { param($pick,$prompt,$depthTier) $pfSharedSeen.calls++; $pfSharedSeen.names += [string]$pick.name; @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport $pfSharedProbe -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-shared-budget.jsonl') -ProbeClock $probeClock
+            $pfSharedResult = & $pfSharedSpawner $preflightTask
+            Check 'PF6f preflight hops spend the shared failover budget' (
+                -not $pfSharedResult.ok -and $pfSharedSeen.calls -eq 1 -and
+                ($pfSharedSeen.names -join ',') -eq 'walk-c')
+
+            # Round-2 finding 6: a coordination denial ended the whole walk. A busy box is
+            # a fact about ONE peer -- the others are still available, and the budget was
+            # not spent -- so the denial costs a hop and the walk carries on.
+            function Request-LocalDispatchClaim {
+                param($Candidate, [string]$FleetPath = '', [string]$Worktree = '', [string]$RunDir = '', [int]$TtlSec = 0)
+                if ([string]$Candidate.name -eq 'worker-substitute') {
+                    return [ordered]@{ gated=$true; granted=$false; reason='box busy: stack-a held'; claim_id=''; ttl_sec=0; host='host-a'; stack='stack-a'; load_profile='' }
+                }
+                return [ordered]@{ gated=$false; granted=$true; reason='not_local'; claim_id=''; ttl_sec=0; host=''; stack=''; load_profile='' }
+            }
+            try {
+                $denySeen = @{ calls = 0; names = @() }
+                $denySpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                    -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-coord-deny-walk.jsonl') `
+                    -Dispatcher {
+                        param($pick,$prompt,$depthTier)
+                        $denySeen.calls++; $denySeen.names += [string]$pick.name
+                        if ([string]$pick.name -eq 'worker-third') {
+                            Set-Content -LiteralPath (Join-Path (Get-Location).Path 'coord-deny-walk.txt') -Value 'done' -Encoding utf8NoBOM
+                            return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 }
+                        }
+                        return @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 }
+                    }.GetNewClosure()
+                $denyResult = & $denySpawner $preflightTask
+                Check 'CD1 a coordination-denied peer costs a hop, it does not end the walk' (
+                    $denyResult.ok -and $denyResult.chose -eq 'worker-third' -and
+                    ($denySeen.names -join ',') -eq 'worker-primary,worker-third')
+                Check 'CD1 the denial stays visible in the why chain' (
+                    $denyResult.why -match 'worker-substitute' -and $denyResult.why -match 'box busy' -and
+                    $denyResult.why -notmatch "`r|`n")
+            } finally { . "$PSScriptRoot/fleet-executor-lib.ps1" }
+
             # High stakes remains champion/high when preflight selects a peer.
             $pfHighSeen = @{ calls = 0; depths = @() }
             $pfHighTask = [pscustomobject]@{ id='pf-high'; desc='synthetic high'; capability='code-gen'; est_cost_tier='free'; stakes='high'; stakes_basis='security boundary' }

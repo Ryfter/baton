@@ -119,6 +119,22 @@ try {
     Check '6a resolves exactly the 2 plan-review claimants' (@($g6.reviewers).Count -eq 2 -and (@($g6.reviewers) -contains 'plan-rev-a') -and (@($g6.reviewers) -contains 'plan-rev-b'))
     Check '6b empty findings from both -> accept' ($g6.verdict -eq 'accept' -and -not $g6.fail_open)
 
+    # ---- Case 6.5 (round-2 finding 5): no reviewer works two slots ----
+    # The failover roster put the slot's OWN name at the head unfiltered, so an a->b hop
+    # in slot 1 was followed by b again in slot 2: one model, two "usable" reviews, and a
+    # panel that only looked competitive. Both reviewers found this independently.
+    $script:pgDouble = @{ a = 0; b = 0 }
+    $disp65 = {
+        param($n,$p)
+        if ($n -eq 'plan-rev-a') { $script:pgDouble.a++; return @{ stdout=''; stderr='quota exhausted'; exit_code=1 } }
+        $script:pgDouble.b++
+        return @{ stdout='[{"severity":"minor","area":"cost","summary":"nit"}]'; stderr=''; exit_code=0 }
+    }
+    $g65 = Invoke-PlanGate -Goal 'g' -PlanJson '{}' -FleetPath $fixtureFleet -ToolsPath $fixtureTools -Dispatcher $disp65 -FailLoud
+    Check '6.5a a reviewer that already spoke is never re-dispatched for the next slot' ($script:pgDouble.b -eq 1)
+    Check '6.5b a reviewer that already failed is not re-tried for the next slot' ($script:pgDouble.a -eq 1)
+    Check '6.5c one model cannot staff a two-slot panel -> degraded' ($g65.degraded -eq $true)
+
     # ---- Case 7: nonzero exit_code from a reviewer -> treated unparsed ----
     $disp7 = {
         param($n,$p)

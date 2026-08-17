@@ -609,16 +609,19 @@ ERROR: You have hit your usage limit. Try again later.
     $rr = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-reject') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'work' -Gater $gaterReject
     Check 'T74 reject verdict -> rejected status' ($rr.status -eq 'rejected')
 
-    # gate throws -> fail-open completed + warn event
+    # Round-2 C3: a lost acceptance signal must NOT report a clean run, on either path.
+    # The gate is advisory -- it never blocks the labor -- but "advisory" was being read
+    # as "the run may still call itself completed", which re-opened #190 gate 2 one layer
+    # above the gate: d114 stopped the fail-open at the verdict and it leaked out through
+    # the run status instead. The run does not halt here; it just stops claiming clean.
     $gaterThrow = { param($art,$goal) throw 'reviewer exploded' }
     $rt = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-throw') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'work' -Gater $gaterThrow
-    Check 'T75 gate throw -> completed (fail-open)' ($rt.status -eq 'completed')
+    Check 'T75 advisory gate throw -> acceptance-degraded, never completed' ($rt.status -eq 'acceptance-degraded')
     Check 'T76 gate throw logs warn event' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-throw/events.jsonl') -Raw) -match 'acceptance gate failed')
 
-    # gater returns a result with NO verdict -> fail-open completed + 'no verdict' warn event
     $gaterNoVerdict = { param($art,$goal) @{ reason='x' } }
     $rnv = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-noverdict') -Planner $gPlanner -Spawner $gSpawner -GateArtifact 'work' -Gater $gaterNoVerdict
-    Check 'T77 gate no-verdict -> completed (fail-open)' ($rnv.status -eq 'completed')
+    Check 'T77 advisory gate no-verdict -> acceptance-degraded, never completed' ($rnv.status -eq 'acceptance-degraded')
     Check 'T78 gate no-verdict logs produced-no-verdict warn' ((Get-Content -LiteralPath (Join-Path $gtHome 'r-noverdict/events.jsonl') -Raw) -match 'produced no verdict')
     Check 'T79 gate no-verdict -> no acceptance.json' (-not (Test-Path (Join-Path $gtHome 'r-noverdict/acceptance.json')))
 
@@ -638,6 +641,23 @@ ERROR: You have hit your usage limit. Try again later.
     $rdf = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-degraded-loud') -Planner $gPlanner -Spawner $gSpawner `
         -GateArtifact 'work' -Gater $gaterDegraded -AcceptanceGate -AcceptanceFailLoud
     Check 'T79d fail-loud degraded panel -> acceptance-degraded' ($rdf.status -eq 'acceptance-degraded')
+
+    # Round-2 C3, the other two shapes of a lost signal on the ADVISORY path. d114 made
+    # total review failure return verdict='unreviewed' + degraded=true; both must survive
+    # into the run status, or the fix stops at the gate object nobody reads.
+    $rdAdvisory = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-degraded-advisory') -Planner $gPlanner -Spawner $gSpawner `
+        -GateArtifact 'work' -Gater $gaterDegraded -AcceptanceGate
+    Check 'T79g advisory degraded gate -> acceptance-degraded' ($rdAdvisory.status -eq 'acceptance-degraded')
+    $gaterUnreviewed = { param($art,$goal) @{ verdict='unreviewed'; reason='every reviewer failed'; counts=@{critical=0;important=0;minor=0}; polish_brief=''; findings=@(); reviews=@(); unparsed=@(); degraded=$true } }
+    $rUnrev = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-unreviewed-advisory') -Planner $gPlanner -Spawner $gSpawner `
+        -GateArtifact 'work' -Gater $gaterUnreviewed -AcceptanceGate
+    Check 'T79h advisory unreviewed verdict -> acceptance-degraded' ($rUnrev.status -eq 'acceptance-degraded')
+    Check 'T79h unreviewed run keeps its verdict on the record' ($rUnrev.acceptance.verdict -eq 'unreviewed')
+    # Guard against over-reach: a gate that actually ran and accepted still completes.
+    $gaterCleanAccept = { param($art,$goal) @{ verdict='accept'; reason='clean'; counts=@{critical=0;important=0;minor=0}; polish_brief=''; findings=@(); reviews=@(); unparsed=@(); degraded=$false } }
+    $rClean = Invoke-Conductor -Goal 'g' -RunDir (Join-Path $gtHome 'r-clean-advisory') -Planner $gPlanner -Spawner $gSpawner `
+        -GateArtifact 'work' -Gater $gaterCleanAccept -AcceptanceGate
+    Check 'T79i advisory clean accept still completes' ($rClean.status -eq 'completed')
 
     # Explicit policy must reach the real acceptance-gate call, while a library
     # caller that merely supplies an artifact remains default-on for compatibility.

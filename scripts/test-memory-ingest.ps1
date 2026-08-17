@@ -84,6 +84,13 @@ try {
     Check 'M4 completed + accept -> pass' ((ConvertTo-MemoryOutcomeFromRun -Status 'completed' -Acceptance ([pscustomobject]@{ verdict = 'accept' })) -eq 'pass')
     Check 'M5 needs-polish -> partial' ((ConvertTo-MemoryOutcomeFromRun -Status 'needs-polish') -eq 'partial')
     Check 'M6 polish acceptance -> partial' ((ConvertTo-MemoryOutcomeFromRun -Status 'completed' -Acceptance ([pscustomobject]@{ verdict = 'polish' })) -eq 'partial')
+    # Round-2 finding 4: 'completed' used to win outright, so a run whose reviewers all
+    # failed (d114 'unreviewed') trained the memory as a clean pass. Nobody looked at
+    # this work — the honest label is 'unknown', not 'pass'.
+    Check 'M6a completed + unreviewed -> unknown, never pass' (
+        (ConvertTo-MemoryOutcomeFromRun -Status 'completed' -Acceptance ([pscustomobject]@{ verdict = 'unreviewed' })) -eq 'unknown')
+    Check 'M6b acceptance-degraded + unreviewed -> unknown' (
+        (ConvertTo-MemoryOutcomeFromRun -Status 'acceptance-degraded' -Acceptance ([pscustomobject]@{ verdict = 'unreviewed' })) -eq 'unknown')
 
     # ---- (1) reject-gate fixture -> >=1 failed row with expected signature tokens ----
     $rejectId = 'go-reject-gate-1'
