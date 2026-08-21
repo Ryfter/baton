@@ -53,9 +53,6 @@ function Test-ChoiceSchemaVersion {
     if ($Value -is [int] -or $Value -is [long]) {
         return ($Value -eq $script:ChoiceSchemaVersion)
     }
-    if ($Value -is [string]) {
-        return ($Value -eq '1')
-    }
     return $false
 }
 

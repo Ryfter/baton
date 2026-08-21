@@ -73,6 +73,15 @@ try {
         Test-ChoiceSchema -Choice $badVerFloat
     } catch { $threw3 = $true }
     Assert 'T8 coercible schema_version 1.1 throws' $threw3
+
+    $threw4 = $false
+    try {
+        $badVerStr = [ordered]@{}
+        foreach ($p in $good.Keys) { $badVerStr[$p] = $good[$p] }
+        $badVerStr.schema_version = '1'
+        Test-ChoiceSchema -Choice $badVerStr
+    } catch { $threw4 = $true }
+    Assert 'T9 string schema_version "1" throws' $threw4
 }
 finally {
     if ($null -eq $prev) { Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue }
