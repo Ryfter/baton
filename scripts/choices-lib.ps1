@@ -115,3 +115,71 @@ function Read-Choice {
     Test-ChoiceSchema -Choice $obj
     return $obj
 }
+
+function New-ChoiceDraft {
+    param(
+        [Parameter(Mandatory)][string]$Project,
+        [Parameter(Mandatory)][string]$Title,
+        [Parameter(Mandatory)][string]$Question,
+        [Parameter(Mandatory)][object[]]$Options,
+        [Parameter(Mandatory)][string]$RecommendationOptionId,
+        [Parameter(Mandatory)][string]$RecommendationWhy,
+        [object[]]$Evidence = @(),
+        [string]$Blocks,
+        [string]$BatonHome = (Get-BatonHome)
+    )
+    $now = (Get-Date).ToUniversalTime().ToString('o')
+    $id = New-ChoiceId
+    $choice = [ordered]@{
+        schema_version = $script:ChoiceSchemaVersion
+        id             = $id
+        status         = 'draft'
+        project        = $Project
+        title          = $Title
+        question       = $Question
+        options        = @($Options)
+        recommendation = @{ option_id = $RecommendationOptionId; why = $RecommendationWhy }
+        evidence       = @($Evidence)
+        created_at     = $now
+        updated_at     = $now
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Blocks)) { $choice.blocks = $Blocks }
+    [void](Write-Choice -Choice $choice -BatonHome $BatonHome)
+    return (Read-Choice -Id $id -BatonHome $BatonHome)
+}
+
+function Set-ChoiceAdmitted {
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [ValidateSet('P0','P1','P2')][string]$Priority = 'P1',
+        [string]$BatonHome = (Get-BatonHome)
+    )
+    $c = Read-Choice -Id $Id -BatonHome $BatonHome
+    if ([string]$c.status -ne 'draft') { throw "admit requires draft; got $($c.status)" }
+    $now = (Get-Date).ToUniversalTime().ToString('o')
+    $c | Add-Member -NotePropertyName status -NotePropertyValue 'admitted' -Force
+    $c | Add-Member -NotePropertyName priority -NotePropertyValue $Priority -Force
+    $c | Add-Member -NotePropertyName admitted_at -NotePropertyValue $now -Force
+    $c | Add-Member -NotePropertyName updated_at -NotePropertyValue $now -Force
+    [void](Write-Choice -Choice $c -BatonHome $BatonHome)
+    return (Read-Choice -Id $Id -BatonHome $BatonHome)
+}
+
+function Set-ChoiceRejected {
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [string]$BatonHome = (Get-BatonHome)
+    )
+    $c = Read-Choice -Id $Id -BatonHome $BatonHome
+    if ([string]$c.status -notin @('draft', 'admitted')) {
+        throw "reject requires draft|admitted; got $($c.status)"
+    }
+    $now = (Get-Date).ToUniversalTime().ToString('o')
+    if ([string]::IsNullOrWhiteSpace([string]$c.priority)) {
+        $c | Add-Member -NotePropertyName priority -NotePropertyValue 'P1' -Force
+    }
+    $c | Add-Member -NotePropertyName status -NotePropertyValue 'rejected' -Force
+    $c | Add-Member -NotePropertyName updated_at -NotePropertyValue $now -Force
+    [void](Write-Choice -Choice $c -BatonHome $BatonHome)
+    return (Read-Choice -Id $Id -BatonHome $BatonHome)
+}

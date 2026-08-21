@@ -82,6 +82,38 @@ try {
         Test-ChoiceSchema -Choice $badVerStr
     } catch { $threw4 = $true }
     Assert 'T9 string schema_version "1" throws' $threw4
+
+    $d = New-ChoiceDraft `
+        -Project 'bookprofile' `
+        -Title 'A/B/C surface' `
+        -Question 'Public, personal, or hybrid?' `
+        -Options @(
+            @{ id = 'a'; label = 'Public'; summary = 'Static only' }
+            @{ id = 'b'; label = 'Personal'; summary = 'Local only' }
+            @{ id = 'c'; label = 'Hybrid'; summary = 'Local then publish' }
+        ) `
+        -RecommendationOptionId 'c' `
+        -RecommendationWhy 'Match free stack + share later' `
+        -Evidence @('BookProfile/docs/...') `
+        -Blocks 'bp-scaffold' `
+        -BatonHome $tmp
+    Assert 'T10 draft status' ($d.status -eq 'draft')
+    Assert 'T10b blocks set' ($d.blocks -eq 'bp-scaffold')
+
+    $a = Set-ChoiceAdmitted -Id $d.id -Priority 'P0' -BatonHome $tmp
+    Assert 'T11 admitted' ($a.status -eq 'admitted')
+    Assert 'T11b priority P0' ($a.priority -eq 'P0')
+    Assert 'T11c admitted_at set' (-not [string]::IsNullOrWhiteSpace([string]$a.admitted_at))
+
+    $threwAdmit = $false
+    try { Set-ChoiceAdmitted -Id $d.id -BatonHome $tmp } catch { $threwAdmit = $true }
+    Assert 'T12 double admit throws' $threwAdmit
+
+    $d2 = New-ChoiceDraft -Project 'x' -Title 't' -Question 'q' `
+        -Options @(@{id='a';label='A';summary='a'},@{id='b';label='B';summary='b'}) `
+        -RecommendationOptionId 'a' -RecommendationWhy 'w' -Evidence @() -BatonHome $tmp
+    $r = Set-ChoiceRejected -Id $d2.id -BatonHome $tmp
+    Assert 'T13 rejected' ($r.status -eq 'rejected')
 }
 finally {
     if ($null -eq $prev) { Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue }
