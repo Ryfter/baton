@@ -10,7 +10,7 @@ function Assert($label, $cond) {
 }
 
 # Build a KB with 2 projects, each having one positive-feedback record for the same pattern.
-$kb = Join-Path $env:TEMP "dec-cons-$(Get-Random)"
+$kb = Join-Path ([System.IO.Path]::GetTempPath()) "dec-cons-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $kb | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $kb 'universal') | Out-Null
 

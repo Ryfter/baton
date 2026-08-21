@@ -384,21 +384,54 @@ function Invoke-AcceptanceGate {
         [switch]$FailLoud,
         [scriptblock]$Dispatcher
     )
+    # Two DIFFERENT questions, previously answered by one flag:
+    #   $reviewersExplicit — did the operator engage the -Reviewers contract at all?
+    #                        Governs panel suppression. -Reviewers @() still counts:
+    #                        it means "not the roles panel", and the empty roster is
+    #                        then resolved or thrown on below.
+    #   $reviewersNamed    — did they name at least one REAL reviewer? Governs
+    #                        substitution. Only a named roster is a no-substitute
+    #                        contract; an auto-resolved one must keep its failover
+    #                        peers. Conflating the two meant an empty/splatted-null
+    #                        -Reviewers auto-resolved the roster and then denied every
+    #                        reviewer a peer, making the walk below dead code.
+    # Counting @($Reviewers).Count would not distinguish them: @($null).Count is 1.
     $reviewersExplicit = $PSBoundParameters.ContainsKey('Reviewers')
+    $reviewersNamed = @($Reviewers | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -ge 1
     $panelRequested = $Panel -or ((Test-Path -LiteralPath $RolesPath) -and -not $reviewersExplicit)
     $roles = if ($panelRequested) { @(Get-ReviewRoles -Path $RolesPath) } else { @() }
     $panelActive = $panelRequested
     $degradedRoles = [System.Collections.ArrayList]@()
     $reviewWork = [System.Collections.ArrayList]@()
 
+    # Roles that had to run ABOVE their preferred cheap tier because no cheap
+    # review-capable provider exists. Not a skip — the review still happened — but it
+    # costs more than the roster asked for, so it is surfaced, never swallowed.
+    $tierRelaxedRoles = [System.Collections.ArrayList]@()
     if ($panelActive) {
         foreach ($roleEntry in $roles) {
+            # The cheap-tier CLAMP is a PREFERENCE, not a wall (#code-factory). It used to
+            # be a wall: a `tier: cheap` role was clamped to free, and since no shipped
+            # fleet row claims `review` at local/free tier, Select-Capability returned zero
+            # candidates and the role was silently dropped into $degradedRoles — with
+            # `degraded` staying $false unless -FailLoud was passed. Every panel run
+            # therefore lost its cheap roles (simplicity, framework-style) without a word.
+            # Now: prefer the cheap tier, fall back to the caller's ceiling, and say so.
+            $roleCandidates = @()
             $roleMaxCostTier = $MaxCostTier
-            if ($roleEntry.tier -eq 'cheap' -and (Get-CostTierRank $roleMaxCostTier) -gt (Get-CostTierRank 'free')) {
-                $roleMaxCostTier = 'free'
+            $preferCheap = ($roleEntry.tier -eq 'cheap' -and (Get-CostTierRank $MaxCostTier) -gt (Get-CostTierRank 'free'))
+            if ($preferCheap) {
+                $roleCandidates = @(Select-Capability -Capability review -MaxCostTier 'free' -FleetPath $FleetPath -ToolsPath $ToolsPath |
+                    Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_.name) })
+                if ($roleCandidates.Count -gt 0) { $roleMaxCostTier = 'free' }
             }
-            $roleCandidates = @(Select-Capability -Capability review -MaxCostTier $roleMaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath |
-                Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_.name) })
+            if ($roleCandidates.Count -lt 1) {
+                $roleCandidates = @(Select-Capability -Capability review -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath |
+                    Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_.name) })
+                if ($preferCheap -and $roleCandidates.Count -gt 0) {
+                    [void]$tierRelaxedRoles.Add([string]$roleEntry.name)
+                }
+            }
             if ($roleCandidates.Count -lt 1) {
                 [void]$degradedRoles.Add([string]$roleEntry.name)
                 continue
@@ -406,6 +439,10 @@ function Invoke-AcceptanceGate {
             [void]$reviewWork.Add(@{
                 reviewer = [string]$roleEntry.name
                 provider = [string]$roleCandidates[0].name
+                # Full cost-ordered roster, not just the winner: the dispatch loop below
+                # walks it so one capped reviewer never silently drops a review lens.
+                candidates = $roleCandidates
+                tier = [string]$roleMaxCostTier
                 role = $roleEntry
             })
         }
@@ -418,7 +455,12 @@ function Invoke-AcceptanceGate {
             throw "Invoke-AcceptanceGate: no reviewers configured (grant the 'review' capability to >=1 provider, or pass -Reviewers)."
         }
         foreach ($reviewerName in $Reviewers) {
-            [void]$reviewWork.Add(@{ reviewer = $reviewerName; provider = $reviewerName; role = $null })
+            # An operator-supplied -Reviewers list is an explicit contract: substituting a
+            # different model behind their back would change what the panel MEANS. Only an
+            # auto-resolved roster gets failover peers.
+            $peers = if ($reviewersNamed) { @([pscustomobject]@{ name = $reviewerName }) }
+                     else { @($Reviewers | ForEach-Object { [pscustomobject]@{ name = [string]$_ } }) }
+            [void]$reviewWork.Add(@{ reviewer = $reviewerName; provider = $reviewerName; candidates = $peers; role = $null })
         }
     }
     $dispatch = {
@@ -427,23 +469,43 @@ function Invoke-AcceptanceGate {
         return Invoke-Fleet -Name $name -Prompt $prompt -Path $FleetPath -NoJournal
     }
     $reviews = [System.Collections.ArrayList]@()
+    # Providers that produced a usable review already this panel — a failover hop must not
+    # hand the SAME model two lenses while an untried peer sits idle (that would quietly
+    # collapse a competitive panel into one opinion wearing several hats).
+    $usedProviders = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $failoverNotes = [System.Collections.ArrayList]@()
     foreach ($workItem in $reviewWork) {
         $reviewerName = [string]$workItem.reviewer
-        $providerName = [string]$workItem.provider
         $prompt = Build-ReviewPrompt -Task $Task -Artifact $Artifact -Role $workItem.role
         $pf = @{ reviewer = $reviewerName; parsed = $false; findings = @() }
-        try {
-            $res = & $dispatch $providerName $prompt
-            if ([int]$res.exit_code -eq 0) {
-                $parsed = Get-ReviewFindings -Output ([string]$res.stdout)
-                $pf.parsed   = $parsed.parsed
-                $pf.findings = $parsed.findings
-                if ($null -ne $workItem.role) {
-                    foreach ($finding in @($pf.findings)) { $finding.area = $reviewerName }
-                }
+        # Cost-ordered walk (#code-factory): prefer this reviewer's own pick, then any
+        # untried peer, then — rather than lose the lens entirely — a peer already used.
+        $roster = @($workItem.candidates | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_.name) })
+        if ($roster.Count -lt 1) { $roster = @([pscustomobject]@{ name = [string]$workItem.provider }) }
+        $primary = [string]$workItem.provider
+        $ordered = @($roster | Where-Object { [string]$_.name -eq $primary }) +
+                   @($roster | Where-Object { [string]$_.name -ne $primary -and -not $usedProviders.Contains([string]$_.name) }) +
+                   @($roster | Where-Object { [string]$_.name -ne $primary -and $usedProviders.Contains([string]$_.name) })
+        $walk = Invoke-CapabilityFailover -Candidates ([object[]]$ordered) -Phase "review ($reviewerName)" `
+            -Attempt { param($c) & $dispatch ([string]$c.name) $prompt } `
+            -IsUsable { param($r)
+                if (-not (Test-FailoverResultUsable -Result $r)) { return $false }
+                # An exit-0 reply that yields no parseable findings is not a review —
+                # hop rather than bank an empty lens as if the reviewer had spoken.
+                return [bool](Get-ReviewFindings -Output ([string]$r.stdout)).parsed
             }
-        } catch {
-            Write-Debug "reviewer $reviewerName failed: $($_.Exception.Message)"
+        $pf.provider = [string]$walk.chose
+        if ($walk.ok) {
+            $parsed = Get-ReviewFindings -Output ([string]$walk.result.stdout)
+            $pf.parsed   = $parsed.parsed
+            $pf.findings = $parsed.findings
+            if ($null -ne $workItem.role) {
+                foreach ($finding in @($pf.findings)) { $finding.area = $reviewerName }
+            }
+            [void]$usedProviders.Add([string]$walk.chose)
+            if ($walk.hops -gt 0) { [void]$failoverNotes.Add("${reviewerName}: $($walk.why)") }
+        } else {
+            [void]$failoverNotes.Add([string]$walk.why)
         }
         [void]$reviews.Add($pf)
     }
@@ -452,8 +514,15 @@ function Invoke-AcceptanceGate {
     $noUsableRoles = $panelActive -and $roles.Count -eq 0
     $noReviewerRan = $panelActive -and $roles.Count -gt 0 -and $reviews.Count -eq 0
     $allUnparsed = $reviews.Count -gt 0 -and @($merge.unparsed).Count -ge $reviews.Count
-    if ($allUnparsed) {
-        $verdict.reason = 'no usable review obtained (fail-open accept)'
+    # NO usable review is not an acceptance (#190 gate 2). This used to leave
+    # verdict='accept' and only reword the reason, so every caller keying on
+    # `verdict` -- the conductor does -- sailed through a quota storm with no
+    # effective review at all. 'unreviewed' is deliberately neither accept nor
+    # reject: nothing was judged, so callers must handle it rather than infer.
+    $noUsableReview = ($reviews.Count -lt 1) -or $allUnparsed
+    if ($noUsableReview) {
+        $verdict.verdict = 'unreviewed'
+        $verdict.reason  = 'no usable review obtained — artifact was NOT reviewed'
     }
     $degradationReasons = [System.Collections.ArrayList]@()
     if ($noUsableRoles) {
@@ -461,10 +530,18 @@ function Invoke-AcceptanceGate {
     } elseif ($noReviewerRan) {
         [void]$degradationReasons.Add("no reviewer ran ($($degradedRoles.Count) roles skipped)")
     } elseif ($degradedRoles.Count -gt 0) {
-        [void]$degradationReasons.Add("skipped role(s): $($degradedRoles -join ', ')")
+        [void]$degradationReasons.Add("skipped role(s): $($degradedRoles -join ', ') — no review-capable provider at any allowed tier")
     }
     if ($panelActive -and $allUnparsed) {
         [void]$degradationReasons.Add('all reviewers returned no usable review')
+    }
+    if ($failoverNotes.Count -gt 0) {
+        [void]$degradationReasons.Add("provider failover: $($failoverNotes -join '; ')")
+    }
+    # Running above the roster's requested tier is a COST surprise, not a lost lens, so
+    # it is reported but never sets `degraded` on its own.
+    if ($tierRelaxedRoles.Count -gt 0) {
+        [void]$degradationReasons.Add("role(s) $($tierRelaxedRoles -join ', ') ran above their 'cheap' tier at '$MaxCostTier' — no review-capable provider exists at local/free tier")
     }
     $unparsedRoles = @($reviews | Where-Object { -not $_.parsed } | ForEach-Object { [string]$_.reviewer })
     if ($FailLoud -and $unparsedRoles.Count -gt 0) {
@@ -473,17 +550,44 @@ function Invoke-AcceptanceGate {
             if (-not @($degradedRoles).Contains($unparsedRole)) { [void]$degradedRoles.Add($unparsedRole) }
         }
     }
-    $degraded = $panelActive -and (
-        $noUsableRoles -or $noReviewerRan -or ($FailLoud -and $degradationReasons.Count -gt 0)
-    )
-    if ($degraded) { $verdict.reason = "acceptance panel degraded: $($degradationReasons -join '; ')" }
+    # LOUD by default (#code-factory): a skipped role means a review lens the operator
+    # asked for did not happen. That used to require -FailLoud to surface, so the shipped
+    # roster's two cheap roles vanished from every run in silence. A lost lens is now
+    # degradation whether or not the caller opted into fail-loud.
+    # A total review failure is degradation on EVERY path. It was previously gated
+    # behind $panelActive (so the explicit-reviewer path never reported it) and, for
+    # dispatch-time death where the roster existed but every hop failed, behind
+    # -FailLoud (nothing added the role to $degradedRoles). Both let a run with zero
+    # effective review report degraded=false.
+    $degraded = $noUsableReview -or ($panelActive -and (
+        $noUsableRoles -or $noReviewerRan -or $degradedRoles.Count -gt 0 -or
+        ($FailLoud -and $degradationReasons.Count -gt 0)
+    ))
+    if ($noUsableReview) {
+        # Lead with the fact that matters. This reason is what a human reads in the
+        # report and what the run event records, so "artifact was NOT reviewed" must
+        # survive the degradation summary rather than be replaced by a failover note.
+        [void]$degradationReasons.Insert(0, 'artifact was NOT reviewed — no usable review obtained')
+    }
+    if ($degraded) {
+        # "panel degraded" is a lie when no panel was active (explicit-reviewer path).
+        $degradedLabel = if ($panelActive) { 'acceptance panel degraded' } else { 'acceptance review degraded' }
+        $verdict.reason = "${degradedLabel}: $($degradationReasons -join '; ')"
+    }
+    # Tier relaxation and failover hops are reported even on a healthy panel — the
+    # operator paid more, or a provider died, and neither should be discoverable only
+    # by reading a journal.
+    $panelNotes = @($degradationReasons.ToArray())
     $brief = Format-PolishBrief -Verdict $verdict -MergedFindings $merge.merged
     return [ordered]@{
         verdict = $verdict.verdict; reason = $verdict.reason; counts = $verdict.counts
         findings = $merge.merged; polish_brief = $brief
-        reviews = @($reviews | ForEach-Object { @{ reviewer = $_.reviewer; parsed = $_.parsed; count = @($_.findings).Count } })
+        reviews = @($reviews | ForEach-Object { @{ reviewer = $_.reviewer; provider = $_.provider; parsed = $_.parsed; count = @($_.findings).Count } })
         unparsed = $merge.unparsed
         degraded = [bool]$degraded
         degraded_roles = @($degradedRoles.ToArray())
+        tier_relaxed_roles = @($tierRelaxedRoles.ToArray())
+        failover_notes = @($failoverNotes.ToArray())
+        notes = @($panelNotes)
     }
 }

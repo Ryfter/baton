@@ -17,7 +17,7 @@ function Assert-True($cond, $msg) {
 
 Write-Host "`n=== F-series: Idea Injection ===" -ForegroundColor Cyan
 
-$tmpF = Join-Path $env:TEMP "baton-s3-test-F-$(Get-Random)"
+$tmpF = Join-Path ([System.IO.Path]::GetTempPath()) "baton-s3-test-F-$(Get-Random)"
 New-Item -ItemType Directory -Path $tmpF -Force > $null
 $charterF = Join-Path $tmpF 'CHARTER.md'
 

@@ -2,17 +2,42 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
-## ⚑ RESUME HERE — 2026-08-15 (Maestro front-door design LOCKED)
+## ⚑ RESUME HERE — 2026-08-21 (Layer LM seating LOCKED — `baton-d124`)
+
+**Architecture is seated.** Do not reopen the four-layer scope split (`baton-d108`) or the one front door (`baton-d111`). Build against seating, not against inventing new layers.
+
+| Layer | Seat |
+|---|---|
+| Maestro (admission) | deterministic code |
+| Mouth / Composer / Conductor | **Ox Alpha** (`converse`, free) |
+| Orchestrator (per project) | **Opus** |
+| Plan + sprint-review | **Fable** (after Cursor data-policy ack) |
+| Instruments | **Ox Alpha** bulk + Codex/Grok/Kiro/Cursor |
+
+- Spec: [`docs/superpowers/specs/2026-08-21-layer-lm-seating-design.md`](superpowers/specs/2026-08-21-layer-lm-seating-design.md)
+- Decision: **`baton-d124`** (Grimdex). Extends `d108` / `d111` / `d119`.
+- Mouth ops: Cursor skills `.cursor/skills/baton-{fleet,go,layers}/` + `/baton:fleet` (`dispatch|status|stop`).
+- Overnight: `~/.baton/overnight/` — seats wired; `LAYER-SEATING.md`.
+- **Conduct Grimlore (goal 05):** Grimlore project registered; lane `~/.baton/overnight/goals/05-grimlore.md`.
+  - Read `Grimlore/projects/<id>/` + `universal/environment` + `universal/models` before planning.
+  - **Ask First** before verifying agent drafts; mark `generated:` / `status: draft`.
+  - Never paste private Grimlore bodies into Ox Alpha / OpenRouter prompts.
+  - Ship: environment card, models cards, answerbot bundle, propose-grimlore-fold, report.
+  - Repo: `/Users/kev/Dev/Grimlore` — Grimlore explains; Grimdex decides.
+
+**Still open:** Fable policy ack in Cursor before `cursor-fable` can run; portal is still a viewer (`portal-gaps.md`); rotate OpenRouter key if it was pasted in chat. Never merge without Kevin's word.
+
+---
+
+## Prior — 2026-08-15 (Maestro front-door design LOCKED)
 
 **Design is closed.** Do not reopen layers, Buzz-as-brain, two-seat chat, Gantt, or durability 3–4 unless Kevin asks.
 
 - Spec: [`docs/superpowers/specs/2026-08-15-maestro-front-door-design.md`](superpowers/specs/2026-08-15-maestro-front-door-design.md)
 - Decision: **`baton-d111`** (one Baton front door; Maestro fires; Conductor talks). Extends `baton-d108` / `baton-d109`.
-- Slice: factory first, just enough client (C biased hard toward A). **Not authorized to build** until an implementation plan exists.
+- Slice: factory first, just enough client (C biased hard toward A). Seating now authorized via `baton-d124`.
 
-**What to do next (when Kevin says implement):** writing-plans off that spec. First plan must include the `#190` fire-path unblocks and `diff_apply: true` on `lm-studio` (Kevin flips fleet.yaml). Scheduler is Task Scheduler now, `launchd` on the Mac mini later.
-
-**One-line reminder:** Kevin starts Baton (CLI / Buzz member already on the Mac / later one web page). He talks. Conductor answers. Maestro only admits and fires. One factory host. Never merge without his word.
+**One-line reminder:** Kevin starts Baton. He talks (Ox Alpha mouth). Conductor answers (Ox Alpha). Maestro only admits and fires. Opus orchestrates in-project; Fable plans/sprint-reviews. Never merge without his word.
 
 ---
 

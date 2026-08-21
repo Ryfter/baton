@@ -11,7 +11,7 @@ function Assert($label, $cond) {
 }
 
 # --- T1: subtasks round-trip ---
-$tmp1 = Join-Path $env:TEMP "code-st-$(Get-Random).json"
+$tmp1 = Join-Path ([System.IO.Path]::GetTempPath()) "code-st-$(Get-Random).json"
 $tasks1 = @(
     @{ id='t1'; title='Backend'; description='api+tests'; files_touched=@('src/api.ts'); depends_on=@() },
     @{ id='t2'; title='Frontend'; description='component+tests'; files_touched=@('src/ui.tsx'); depends_on=@('t1') }
@@ -28,7 +28,7 @@ Assert "T1 t2 depends on t1"  (($rd.tasks[1].depends_on -join ',') -eq 't1')
 Remove-Item $tmp1 -Force -ErrorAction SilentlyContinue
 
 # --- T2: duplicate ids rejected ---
-$tmp2 = Join-Path $env:TEMP "code-st2-$(Get-Random).json"
+$tmp2 = Join-Path ([System.IO.Path]::GetTempPath()) "code-st2-$(Get-Random).json"
 $dup = @(
     @{ id='t1'; title='A'; depends_on=@() },
     @{ id='t1'; title='B'; depends_on=@() }
@@ -81,7 +81,7 @@ $od = Get-CodeOutputDir -JobId 'j042' -Sprint 'code.sprint-1' -Stamp '2026-05-30
 Assert "T7 output dir shape" ($od -like "*$([IO.Path]::DirectorySeparatorChar).baton$([IO.Path]::DirectorySeparatorChar)jobs$([IO.Path]::DirectorySeparatorChar)j042$([IO.Path]::DirectorySeparatorChar)phases$([IO.Path]::DirectorySeparatorChar)code.sprint-1$([IO.Path]::DirectorySeparatorChar)parallel-2026-05-30T05-30-00")
 
 # --- T8: parallel manifest round-trip ---
-$mp = Join-Path $env:TEMP "code-mf-$(Get-Random).json"
+$mp = Join-Path ([System.IO.Path]::GetTempPath()) "code-mf-$(Get-Random).json"
 $results = @(
     @{ task_id='t1'; worktree='/tmp/wt1'; branch='j042/t1'; summary='did api'; status='ok'; commits_ahead=3; files_changed=4 },
     @{ task_id='t2'; worktree='/tmp/wt2'; branch='j042/t2'; summary='did ui'; status='ok'; commits_ahead=2; files_changed=2 }
@@ -94,7 +94,7 @@ Assert "T8 t1 status ok" ($rmf.results[0].status -eq 'ok')
 Remove-Item $mp -Force -ErrorAction SilentlyContinue
 
 # --- T9: worktree status against a temp git repo ---
-$repo = Join-Path $env:TEMP "code-repo-$(Get-Random)"
+$repo = Join-Path ([System.IO.Path]::GetTempPath()) "code-repo-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $repo | Out-Null
 & git -C $repo init -b master 2>&1 | Out-Null
 & git -C $repo config user.email test@example.com 2>&1 | Out-Null
@@ -120,8 +120,8 @@ Assert "T9 dirty after untracked" ($st2.dirty)
 Remove-Item $repo -Recurse -Force -ErrorAction SilentlyContinue
 
 # --- T10: journal append ---
-$jrn = Join-Path $env:TEMP "code-jrn-$(Get-Random).md"
-$noState = Join-Path $env:TEMP "code-nostate-$(Get-Random).json"
+$jrn = Join-Path ([System.IO.Path]::GetTempPath()) "code-jrn-$(Get-Random).md"
+$noState = Join-Path ([System.IO.Path]::GetTempPath()) "code-nostate-$(Get-Random).json"
 $env:CAO_STATE_PATH = $noState
 Write-CodeJournalLine -JobId 'j042' -Sprint 'code.sprint-1' -TaskCount 3 -OkCount 2 -ErrCount 1 -JournalPath $jrn
 $lines = @(Get-Content $jrn | Where-Object { $_ -match '\| code \|' })

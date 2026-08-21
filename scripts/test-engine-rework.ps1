@@ -124,7 +124,7 @@ providers:
     Set-Content -LiteralPath $hookFailPass -Encoding utf8NoBOM -Value @'
 function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     if ($Attempt -ge 2) { return @{ verdict='pass'; ok=$true; grade='bounded'; failure_category=''; proves='hooked pass'; output_path=''; duration_ms=5 } }
-    $out = Join-Path $env:TEMP "rework-check-$([guid]::NewGuid()).txt"
+    $out = Join-Path ([System.IO.Path]::GetTempPath()) "rework-check-$([guid]::NewGuid()).txt"
     Set-Content -LiteralPath $out -Value 'ASSERT failed: expected 2 got 1' -Encoding utf8NoBOM
     return @{ verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'; proves='hooked'; output_path=$out; duration_ms=5 }
 }
@@ -208,7 +208,7 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     $hookFailFail = Join-Path $tmpRoot 'hook-fail-fail.ps1'
     Set-Content -LiteralPath $hookFailFail -Encoding utf8NoBOM -Value @'
 function Invoke-TestVerify { param($Task, $Attempt, $Grew)
-    $out = Join-Path $env:TEMP "rework-ff-$Attempt-$([guid]::NewGuid()).txt"
+    $out = Join-Path ([System.IO.Path]::GetTempPath()) "rework-ff-$Attempt-$([guid]::NewGuid()).txt"
     Set-Content -LiteralPath $out -Value "fail attempt $Attempt detail" -Encoding utf8NoBOM
     return @{ verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'; proves='hooked'; output_path=$out; duration_ms=5 }
 }
@@ -320,7 +320,7 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     Set-Content -LiteralPath $hookVol -Encoding utf8NoBOM -Value @'
 function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     $ts = if ($Attempt -eq 1) { '2026-07-24T10:00:00Z' } else { '2026-07-24T11:22:33Z' }
-    $tmpFile = Join-Path $env:TEMP ("rework-vol-$Attempt-" + [guid]::NewGuid().ToString() + ".txt")
+    $tmpFile = Join-Path ([System.IO.Path]::GetTempPath()) ("rework-vol-$Attempt-" + [guid]::NewGuid().ToString() + ".txt")
     Set-Content -LiteralPath $tmpFile -Value "ASSERT failed: expected 2 got 1 at $ts file=$tmpFile" -Encoding utf8NoBOM
     return @{
         verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'
@@ -374,7 +374,7 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     if ($Attempt -ge 2) {
         return @{ verdict='scope-violation'; ok=$false; grade='invalid'; failure_category='scope-violation'; proves='hooked'; output_path=''; duration_ms=5 }
     }
-    $out = Join-Path $env:TEMP "rework-fts-$([guid]::NewGuid()).txt"
+    $out = Join-Path ([System.IO.Path]::GetTempPath()) "rework-fts-$([guid]::NewGuid()).txt"
     Set-Content -LiteralPath $out -Value 'ASSERT fail first' -Encoding utf8NoBOM
     return @{ verdict='fail'; ok=$false; grade='invalid'; failure_category='check-failed'; proves='hooked'; output_path=$out; duration_ms=5 }
 }
@@ -456,6 +456,57 @@ function Invoke-TestVerify { param($Task, $Attempt, $Grew)
     $priorH = Get-Content -LiteralPath (Join-Path $runH 'acceptance-prior.json') -Raw | ConvertFrom-Json
     Check 'H-acc8 prior verdict was polish' ([string]$priorH.verdict -eq 'polish')
     Check 'H-acc9 final acceptance is accept' ([string]$resH.acceptance.verdict -eq 'accept')
+
+    # ---- (h1b) round-3 review: a LOST re-panel signal is degraded, not needs-polish ----
+    # The rework re-run is the same acceptance signal as the first gate. When the re-panel
+    # throws or returns no verdict, nobody looked at the reworked artifact -- reporting
+    # 'needs-polish' claims a verdict that was never produced.
+    $runHd = Join-Path $tmpRoot 'run-h-degraded'; New-Item -ItemType Directory -Force -Path $runHd | Out-Null
+    $gateCallsHd = [ref]0
+    $gaterHd = {
+        param($art, $goal)
+        $gateCallsHd.Value++
+        if ($gateCallsHd.Value -eq 1) {
+            return [ordered]@{
+                verdict = 'polish'; reason = '1 important finding'
+                counts = @{ critical = 0; important = 1; minor = 0 }
+                findings = @(@{ severity = 'important'; area = 'tests'; summary = 'missing coverage for edge case'; agreed = $true })
+                polish_brief = 'POLISH BRIEF — fix missing coverage for edge case'; degraded = $false
+            }
+        }
+        throw 'every re-panel reviewer exploded'
+    }.GetNewClosure()
+    $resHd = Invoke-Conductor -Goal 'g' -RunDir $runHd -Planner $planH -Spawner $spH `
+        -Gater $gaterHd -GateArtifact 'diff body' -AcceptanceGate:$true -AcceptanceFailLoud
+    Check 'H-acc10 thrown re-panel -> acceptance-degraded, never needs-polish' ($resHd.status -eq 'acceptance-degraded')
+
+    # ---- (h1c) round-3 review: a real reject outranks a degraded panel ----
+    # A panel that lost a role but whose surviving reviewers still found a critical has
+    # produced an actionable verdict. Reporting 'acceptance-degraded' would bury it: both
+    # statuses are non-clean, but only one tells the operator what to fix.
+    $runHr = Join-Path $tmpRoot 'run-h-reject'; New-Item -ItemType Directory -Force -Path $runHr | Out-Null
+    $gateCallsHr = [ref]0
+    $gaterHr = {
+        param($art, $goal)
+        $gateCallsHr.Value++
+        if ($gateCallsHr.Value -eq 1) {
+            return [ordered]@{
+                verdict = 'polish'; reason = '1 important finding'
+                counts = @{ critical = 0; important = 1; minor = 0 }
+                findings = @(@{ severity = 'important'; area = 'tests'; summary = 'missing coverage for edge case'; agreed = $true })
+                polish_brief = 'POLISH BRIEF — fix missing coverage for edge case'; degraded = $false
+            }
+        }
+        return [ordered]@{
+            verdict = 'reject'; reason = '1 critical finding'
+            counts = @{ critical = 1; important = 0; minor = 0 }
+            findings = @(@{ severity = 'critical'; area = 'risk'; summary = 'the rework broke the auth boundary'; agreed = $true })
+            polish_brief = ''; degraded = $true
+        }
+    }.GetNewClosure()
+    $resHr = Invoke-Conductor -Goal 'g' -RunDir $runHr -Planner $planH -Spawner $spH `
+        -Gater $gaterHr -GateArtifact 'diff body' -AcceptanceGate:$true -AcceptanceFailLoud
+    Check 'H-acc11 degraded re-panel that still rejects reports rejected' ($resHr.status -eq 'rejected')
 
     # (h2) needs-polish rework that still polishes -> halt, both verdicts retained
     $runH2 = Join-Path $tmpRoot 'run-h2'; New-Item -ItemType Directory -Force -Path $runH2 | Out-Null

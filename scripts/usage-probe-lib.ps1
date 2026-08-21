@@ -1232,7 +1232,13 @@ function Format-UsagePreflightLine {
         [Parameter(Mandatory)]$WindowDecision,
         [Parameter(Mandatory)][ValidateSet('rerouted','held')][string]$Outcome,
         [string]$Substitute,
-        [string]$AlsoOverCap
+        # A preflight WALK can find several peers over cap before it gives up, so this
+        # names every one of them, not just the first substitute.
+        [string[]]$AlsoOverCap,
+        # Distinguishes "the peer pool ran out" from "the hop budget ran out" — the second
+        # is a policy choice the operator made, and reading it as the first sends people
+        # hunting for providers that are there.
+        [switch]$BudgetSpent
     )
     $windowList = Get-UsageWindowDecisionList -WindowDecision $WindowDecision
     $evidenceParts = foreach ($wd in $windowList) {
@@ -1246,8 +1252,10 @@ function Format-UsagePreflightLine {
     $evidence = ($evidenceParts -join '; ')
     $line = "usage preflight: $Worker is $evidence"
     if ($Outcome -eq 'rerouted') { return "$line; rerouting to $Substitute" }
-    if ($AlsoOverCap) {
-        return "$line; $AlsoOverCap also over soft cap; held (no further hop)"
+    $tail = if ($BudgetSpent) { 'held (failover budget spent)' } else { 'held (no further hop)' }
+    if ($AlsoOverCap -and @($AlsoOverCap).Count -gt 0) {
+        return "$line; $(@($AlsoOverCap) -join ', ') also over soft cap; $tail"
     }
+    if ($BudgetSpent) { return "$line; $tail" }
     return "$line; no peer available + $Worker over soft cap"
 }

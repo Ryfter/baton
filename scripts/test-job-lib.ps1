@@ -19,7 +19,7 @@ function Assert-Null($actual, $msg) {
 
 # --- State file R/W ---
 Write-Host "=== State file R/W ===" -ForegroundColor Cyan
-$tmpDir = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "cao-test-$(Get-Random)") -Force
+$tmpDir = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) "cao-test-$(Get-Random)") -Force
 $statePath = Join-Path $tmpDir 'current-job.json'
 
 # Read when file missing → returns $null
@@ -58,7 +58,7 @@ if ($long.Length -gt 40) { throw "FAIL: slug length exceeded 40: $long ($($long.
 
 # --- Project detection ---
 Write-Host "=== Project detection ===" -ForegroundColor Cyan
-$projTmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "cao-proj-$(Get-Random)") -Force
+$projTmp = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) "cao-proj-$(Get-Random)") -Force
 Push-Location $projTmp
 try {
     # cwd-folder fallback (no git remote)
@@ -83,7 +83,7 @@ Assert-Null  (Get-PrevPhase 'research' 0) 'no back from research'
 
 # --- Manifest R/W ---
 Write-Host "=== Manifest R/W ===" -ForegroundColor Cyan
-$manifestTmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "cao-mani-$(Get-Random)") -Force
+$manifestTmp = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) "cao-mani-$(Get-Random)") -Force
 $jobDir = Join-Path $manifestTmp 'j-test-123'
 New-Item -ItemType Directory -Path $jobDir | Out-Null
 

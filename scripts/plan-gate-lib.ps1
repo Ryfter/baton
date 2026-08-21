@@ -172,7 +172,15 @@ function Invoke-PlanGate {
         [switch]$FailLoud,
         [scriptblock]$Dispatcher
     )
-    if (-not $Reviewers -or $Reviewers.Count -lt 1) {
+    # "Explicit" must mean the caller named at least one REAL reviewer. Testing
+    # @($Reviewers).Count is the classic PowerShell null-array trap: @($null).Count
+    # is 1, so a caller that always splats -Reviewers $x (Invoke-Conductor does)
+    # marked an unset roster as explicit, which auto-resolved the reviewers and then
+    # denied every one of them a failover peer -- making the walk below unreachable
+    # on the normal path. Count only non-blank entries.
+    $namedReviewers = @($Reviewers | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $reviewersExplicit = $PSBoundParameters.ContainsKey('Reviewers') -and $namedReviewers.Count -ge 1
+    if ($namedReviewers.Count -lt 1) {
         $cands = Select-Capability -Capability plan-review -MaxCostTier $MaxCostTier -FleetPath $FleetPath -ToolsPath $ToolsPath
         $Reviewers = @($cands | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.name })
     }
@@ -207,17 +215,45 @@ function Invoke-PlanGate {
     }
     $prompt  = Build-PlanReviewPrompt -Goal $Goal -PlanJson $PlanJson
     $reviews = [System.Collections.ArrayList]@()
+    # Code factory (#code-factory): a capped plan reviewer hands its lens to an untried
+    # peer instead of dropping out of the panel. A competitive plan review needs two
+    # DISTINCT opinions, so a peer that already spoke is never reused here — unlike the
+    # acceptance panel, doubling up would defeat the whole point of the gate.
+    # Round-2 finding 5: the filter has to cover the slot's OWN name too. It used to sit
+    # at the head of the roster unfiltered, so slot 1 hopping a->b was followed by slot 2
+    # opening with b — the same model answering twice and counting as two usable reviews.
+    # Providers that already FAILED are excluded on the same list: re-dispatching a
+    # quota-dead reviewer buys nothing and costs a call.
+    $spentReviewers = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $failoverNotes = [System.Collections.ArrayList]@()
     foreach ($r in $Reviewers) {
         $pf = @{ reviewer = $r; parsed = $false; findings = @() }
-        try {
-            $res = & $dispatch $r $prompt
-            if ([int]$res.exit_code -eq 0) {
-                $parsed = Get-ReviewFindings -Output ([string]$res.stdout)
-                $pf.parsed   = $parsed.parsed
-                $pf.findings = $parsed.findings
+        # An operator-supplied roster is an explicit contract — no substitution.
+        $roster = if ($reviewersExplicit) { @([pscustomobject]@{ name = [string]$r }) }
+                  else {
+                      @(@(@([string]$r) + @($Reviewers | Where-Object { [string]$_ -ne [string]$r })) |
+                          Where-Object { -not $spentReviewers.Contains([string]$_) } |
+                          ForEach-Object { [pscustomobject]@{ name = [string]$_ } })
+                  }
+        $walk = Invoke-CapabilityFailover -Candidates ([object[]]$roster) -Phase "plan-review ($r)" `
+            -Attempt { param($c) & $dispatch ([string]$c.name) $prompt } `
+            -IsUsable { param($res)
+                if (-not (Test-FailoverResultUsable -Result $res)) { return $false }
+                return [bool](Get-ReviewFindings -Output ([string]$res.stdout)).parsed
             }
-        } catch {
-            Write-Debug "reviewer $r failed: $($_.Exception.Message)"
+        $pf.provider = [string]$walk.chose
+        # EVERY provider this slot touched is spent for the rest of the panel — the one
+        # that answered and the ones that failed on the way to it.
+        foreach ($attempted in @($walk.attempts)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$attempted)) { [void]$spentReviewers.Add([string]$attempted) }
+        }
+        if ($walk.ok) {
+            $parsed = Get-ReviewFindings -Output ([string]$walk.result.stdout)
+            $pf.parsed   = $parsed.parsed
+            $pf.findings = $parsed.findings
+            if ($walk.hops -gt 0) { [void]$failoverNotes.Add([string]$walk.why) }
+        } else {
+            [void]$failoverNotes.Add([string]$walk.why)
         }
         [void]$reviews.Add($pf)
     }
@@ -241,8 +277,9 @@ function Invoke-PlanGate {
     $result = [ordered]@{
         verdict = $verdict.verdict; reason = $verdict.reason; counts = $verdict.counts
         findings = $merge.merged; revise_brief = $brief
-        reviews = @($reviews | ForEach-Object { @{ reviewer = $_.reviewer; parsed = $_.parsed; count = @($_.findings).Count } })
+        reviews = @($reviews | ForEach-Object { @{ reviewer = $_.reviewer; provider = $_.provider; parsed = $_.parsed; count = @($_.findings).Count } })
         unparsed = $merge.unparsed; fail_open = $failOpen; reviewers = @($Reviewers)
+        failover_notes = @($failoverNotes.ToArray())
     }
     if ($FailLoud) {
         $result['degraded'] = [bool]$degraded

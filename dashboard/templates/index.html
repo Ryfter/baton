@@ -25,7 +25,7 @@
 <!-- Portfolio panel — polls every 60s -->
 <div class="card" style="grid-column: 1 / -1;"
      hx-get="/partials/projects"
-     hx-trigger="every 60s"
+     hx-trigger="load, every 60s"
      hx-swap="innerHTML">
   {% include "partials/projects_list.html" %}
 </div>
@@ -33,7 +33,7 @@
 <!-- Jobs panel — polls every 30s -->
 <div class="card"
      hx-get="/partials/jobs"
-     hx-trigger="every 30s"
+     hx-trigger="load, every 30s"
      hx-swap="innerHTML">
   {% include "partials/jobs_list.html" %}
 </div>

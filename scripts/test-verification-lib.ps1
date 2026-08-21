@@ -10,7 +10,7 @@ function Assert($label, $cond) {
     else { Write-Host "FAIL  $label" -ForegroundColor Red; $script:failures++ }
 }
 
-$tmpRoot = Join-Path $env:TEMP "verify-lib-test-$(Get-Random)"
+$tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) "verify-lib-test-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $tmpRoot | Out-Null
 $savedPresetsEnv = $env:BATON_VERIFY_PRESETS
 try {

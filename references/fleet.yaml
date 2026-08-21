@@ -246,12 +246,20 @@ providers:
     command_template: 'claude -p --model claude-sonnet-4-6'
     # budget: 0   # example only — set a real per-window budget in live ~/.baton/fleet.yaml
 
+  # opencode: agentic: true is explicit because there is no platform field —
+  # outside the d078 auto-infer set {claude, codex, gemini}, absence would mean
+  # NOT agentic. capabilities claims only code-gen + reasoning; review and
+  # plan-review are NOT claimed yet — they emit strict-JSON findings that break
+  # if opencode's headless output carries ANSI color codes or a thinking
+  # preamble, so claiming them is gated on a verified ANSI/JSON strip step.
   - name: opencode
     kind: cli
-    enabled: false
+    enabled: true
     cost_tier: free
     role: draft
+    agentic: true
     command_template: 'opencode -p "{{prompt}}"'
+    capabilities: [code-gen, reasoning]
 
   - name: ollama-local
     kind: cli
@@ -386,3 +394,9 @@ providers:
     #                           in your live ~/.baton/fleet.yaml, never in this seed.
     saturate: false           # opt-in: set true (with a real budget) in live ~/.baton/fleet.yaml
     # saturation_target: 99.9 # optional; default is 99.9
+
+# ── Layer seating (baton-d124) — BOX-PRIVATE live values live in ~/.baton/fleet.yaml ──
+# Mouth/Conductor/Instruments bulk: Ox Alpha (openrouter stealth/ox-alpha) — converse + diff_apply
+# Orchestrator: Opus class (cursor-opus) — orchestrate
+# Plan + sprint-review: Fable (cursor-fable) — sprint-review, plan-review
+# Do not put real API keys or enabled:true promo rows in this shared seed.

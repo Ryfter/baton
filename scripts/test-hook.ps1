@@ -5,8 +5,8 @@
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $hook = Join-Path $here 'hooks\log-tool-call.ps1'
-$tmpLog = Join-Path $env:TEMP "test-journal-$(Get-Random).md"
-$tmpErr = Join-Path $env:TEMP "test-journal-err-$(Get-Random).log"
+$tmpLog = Join-Path ([System.IO.Path]::GetTempPath()) "test-journal-$(Get-Random).md"
+$tmpErr = Join-Path ([System.IO.Path]::GetTempPath()) "test-journal-err-$(Get-Random).log"
 
 $failures = 0
 function Assert-Match($label, $actual, $pattern) {
@@ -20,7 +20,7 @@ function Assert-Match($label, $actual, $pattern) {
     }
 }
 
-$env:CAO_STATE_PATH = Join-Path $env:TEMP "test-hook-nostate-$(Get-Random).json"
+$env:CAO_STATE_PATH = Join-Path ([System.IO.Path]::GetTempPath()) "test-hook-nostate-$(Get-Random).json"
 try {
     # Test 1: Bash tool calling ollama → hook records it
     $event1 = @{
@@ -124,7 +124,7 @@ try {
 Write-Host ""
 Write-Host "=== Plan 3: state-file-driven job/phase tagging ===" -ForegroundColor Cyan
 
-$tagTmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "cao-hook-tag-$(Get-Random)") -Force
+$tagTmp = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) "cao-hook-tag-$(Get-Random)") -Force
 $tagJournal = Join-Path $tagTmp 'journal.md'
 $tagErr     = Join-Path $tagTmp 'err.log'
 $tagState   = Join-Path $tagTmp 'current-job.json'

@@ -9,11 +9,11 @@ function Assert($label, $cond) {
     else { Write-Host "FAIL  $label" -ForegroundColor Red; $script:failures++ }
 }
 
-$tmpKb = Join-Path $env:TEMP "dec-fromfile-kb-$(Get-Random)"
+$tmpKb = Join-Path ([System.IO.Path]::GetTempPath()) "dec-fromfile-kb-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $tmpKb | Out-Null
 
 # --- T1: happy path ---
-$draft1 = Join-Path $env:TEMP "draft1-$(Get-Random).md"
+$draft1 = Join-Path ([System.IO.Path]::GetTempPath()) "draft1-$(Get-Random).md"
 @'
 ---
 title: Plan X foo bar
@@ -48,7 +48,7 @@ Assert "T1 rationale preserved"    ($final -match '\*\*Rationale:\*\* Option A b
 Assert "T1 feedback section added" ($final -match '(?m)^## Feedback')
 
 # --- T2: second call yields d002 ---
-$draft2 = Join-Path $env:TEMP "draft2-$(Get-Random).md"
+$draft2 = Join-Path ([System.IO.Path]::GetTempPath()) "draft2-$(Get-Random).md"
 @'
 ---
 title: Another decision
@@ -68,7 +68,7 @@ $r2 = Add-DecisionRecordFromFile -Path $draft2 -KbRoot $tmpKb
 Assert "T2 next id is d002" ($r2.id -eq 'testproj-d002')
 
 # --- T3: KeepDraft retains the draft file ---
-$draft3 = Join-Path $env:TEMP "draft3-$(Get-Random).md"
+$draft3 = Join-Path ([System.IO.Path]::GetTempPath()) "draft3-$(Get-Random).md"
 @'
 ---
 title: Keep me
@@ -90,7 +90,7 @@ Assert "T3 draft preserved"   (Test-Path $draft3)
 Remove-Item $draft3 -Force -ErrorAction SilentlyContinue
 
 # --- T4: missing required front-matter rejected ---
-$bad = Join-Path $env:TEMP "draft-bad-$(Get-Random).md"
+$bad = Join-Path ([System.IO.Path]::GetTempPath()) "draft-bad-$(Get-Random).md"
 @'
 ---
 title: Missing confidence
@@ -111,7 +111,7 @@ Assert "T4 missing confidence throws" $threw
 Remove-Item $bad -Force -ErrorAction SilentlyContinue
 
 # --- T5: invalid confidence value rejected ---
-$bad2 = Join-Path $env:TEMP "draft-bad2-$(Get-Random).md"
+$bad2 = Join-Path ([System.IO.Path]::GetTempPath()) "draft-bad2-$(Get-Random).md"
 @'
 ---
 title: Bad confidence
@@ -133,7 +133,7 @@ Assert "T5 invalid confidence throws" $threw
 Remove-Item $bad2 -Force -ErrorAction SilentlyContinue
 
 # --- T6: missing **Rationale:** section rejected ---
-$bad3 = Join-Path $env:TEMP "draft-bad3-$(Get-Random).md"
+$bad3 = Join-Path ([System.IO.Path]::GetTempPath()) "draft-bad3-$(Get-Random).md"
 @'
 ---
 title: No rationale
@@ -153,7 +153,7 @@ Assert "T6 missing Rationale section throws" $threw
 Remove-Item $bad3 -Force -ErrorAction SilentlyContinue
 
 # --- T7: missing front-matter fence entirely rejected ---
-$bad4 = Join-Path $env:TEMP "draft-bad4-$(Get-Random).md"
+$bad4 = Join-Path ([System.IO.Path]::GetTempPath()) "draft-bad4-$(Get-Random).md"
 "# Just a title" | Set-Content -Path $bad4 -Encoding utf8NoBOM
 $threw = $false
 try { Add-DecisionRecordFromFile -Path $bad4 -KbRoot $tmpKb | Out-Null } catch { $threw = $true }
@@ -161,9 +161,9 @@ Assert "T7 no front-matter throws" $threw
 Remove-Item $bad4 -Force -ErrorAction SilentlyContinue
 
 # --- T8: opt-out — global opt-out file ---
-$tmpOptOut = Join-Path $env:TEMP "decisions-off-$(Get-Random)"
+$tmpOptOut = Join-Path ([System.IO.Path]::GetTempPath()) "decisions-off-$(Get-Random)"
 Set-Content -Path $tmpOptOut -Value '' -Encoding utf8NoBOM
-$draft5 = Join-Path $env:TEMP "draft5-$(Get-Random).md"
+$draft5 = Join-Path ([System.IO.Path]::GetTempPath()) "draft5-$(Get-Random).md"
 @'
 ---
 title: Should not save

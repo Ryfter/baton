@@ -10,7 +10,7 @@ function Assert-NotMatch($pattern, $actual, $msg) {
     if ($actual -match $pattern) { throw "FAIL: $msg`n  pattern: $pattern`n  actual:`n$actual" }
 }
 
-$root      = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "cao-consol-$(Get-Random)") -Force
+$root      = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) "cao-consol-$(Get-Random)") -Force
 $jobsRoot  = Join-Path $root 'jobs'
 $kbRoot    = Join-Path $root 'knowledge'
 New-Item -ItemType Directory -Force -Path $jobsRoot, "$kbRoot/universal", "$kbRoot/projects" | Out-Null

@@ -1210,7 +1210,16 @@ providers:
             $staleResult = & $staleSpawner $preflightTask
             Check 'PF5 stale cache re-probes exactly once then dispatches' ($staleResult.ok -and $staleSeen.probes -eq 1 -and $staleSeen.dispatches -eq 1)
 
-            # A proactive reroute consumes the one-hop budget; peer quota failure cannot cascade.
+            # Failover WALK past a proactive reroute (#code-factory C1). This used to assert
+            # calls -eq 1: a preflight reroute consumed the whole budget, so a substitute that
+            # was ALSO capped ended the task. That is the factory stall -- during a quota storm
+            # the preflight almost always hops first, which disabled dispatch failover exactly
+            # when it was needed. The cascade concern is now handled by a BOUND, not a ban.
+            # Every provider here answers 'quota exhausted'. The walk goes preflight
+            # primary->substitute (hop 1), then substitute->third (hop 2), and then stops:
+            # worker-lower is quality 0.8 and quality_first refuses to fail over BELOW the
+            # current provider, so the walk ends on an empty peer pool rather than the hop
+            # budget. Degrading quality to keep a task moving is never the trade made here.
             $oneHopSeen = @{ calls = 0; names = @() }
             $oneHopSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
                 -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-pf-one-hop.jsonl') `
@@ -1218,7 +1227,272 @@ providers:
                 -ProbeTransport { param($clientVersion,$timeoutSeconds) New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 20 -At $probeNow }.GetNewClosure() `
                 -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-one-hop.jsonl') -ProbeClock $probeClock
             $oneHopResult = & $oneHopSpawner $preflightTask
-            Check 'PF6 proactive reroute consumes the one-hop budget' (-not $oneHopResult.ok -and $oneHopSeen.calls -eq 1 -and ($oneHopSeen.names -join ',') -eq 'worker-substitute')
+            Check 'PF6 reroute then walk: dispatch failover continues past a preflight hop' (
+                -not $oneHopResult.ok -and $oneHopSeen.calls -eq 2 -and
+                ($oneHopSeen.names -join ',') -eq 'worker-substitute,worker-third' -and
+                $oneHopResult.why -match 'no peer available' -and $oneHopResult.labor -eq 'unavailable')
+
+            # The budget is what stops the cascade, and a preflight reroute counts against it:
+            # with MaxFailoverHops=1 the old "one hop total" guarantee still holds exactly.
+            $budgetSeen = @{ calls = 0; names = @() }
+            $budgetSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -MaxFailoverHops 1 -UsagePath (Join-Path $env:BATON_HOME 'usage-pf-budget.jsonl') `
+                -Dispatcher { param($pick,$prompt,$depthTier) $budgetSeen.calls++; $budgetSeen.names += [string]$pick.name; @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 20 -At $probeNow }.GetNewClosure() `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-budget.jsonl') -ProbeClock $probeClock
+            $budgetResult = & $budgetSpawner $preflightTask
+            Check 'PF6b MaxFailoverHops bounds the walk; preflight reroute counts as a hop' (
+                -not $budgetResult.ok -and $budgetSeen.calls -eq 1 -and
+                ($budgetSeen.names -join ',') -eq 'worker-substitute')
+
+            # A walk that finds a healthy peer must actually finish the task, not just stop
+            # hopping -- the whole point of the walk is labor completing during a quota storm.
+            $walkOkSeen = @{ calls = 0; names = @() }
+            $walkOkSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-pf-walk-ok.jsonl') `
+                -Dispatcher {
+                    param($pick,$prompt,$depthTier)
+                    $walkOkSeen.calls++; $walkOkSeen.names += [string]$pick.name
+                    if ([string]$pick.name -eq 'worker-third') { return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }
+                    return @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 }
+                }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 20 -At $probeNow }.GetNewClosure() `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-walk-ok.jsonl') -ProbeClock $probeClock
+            $walkOkResult = & $walkOkSpawner $preflightTask
+            Check 'PF6c walk reaching a healthy peer completes the task and names the chain' (
+                $walkOkResult.ok -and $walkOkResult.chose -eq 'worker-third' -and
+                $walkOkSeen.calls -eq 2 -and $walkOkResult.why -match 'worker-substitute -> worker-third')
+
+            # Round-2 C1: the PREFLIGHT reroute must honour the same budget the dispatch
+            # walk does. At MaxFailoverHops=0 the task may not hop at all -- it holds on
+            # the capped primary. Before this, the preflight rerouted unconditionally, so
+            # the "no failover" setting still burned a peer.
+            $pfZeroSeen = @{ calls = 0; names = @() }
+            $pfZeroUsage = Join-Path $env:BATON_HOME 'usage-pf-zero-budget.jsonl'
+            $pfZeroSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -MaxFailoverHops 0 -UsagePath $pfZeroUsage `
+                -Dispatcher { param($pick,$prompt,$depthTier) $pfZeroSeen.calls++; $pfZeroSeen.names += [string]$pick.name; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport { param($clientVersion,$timeoutSeconds) New-ExecutorProbeResponse -FiveHourUsed 80 -WeeklyUsed 20 -At $probeNow }.GetNewClosure() `
+                -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-zero-budget.jsonl') -ProbeClock $probeClock
+            $pfZeroResult = & $pfZeroSpawner $preflightTask
+            Check 'PF6d MaxFailoverHops=0 forbids the preflight reroute (holds, dispatches nobody)' (
+                -not $pfZeroResult.ok -and $pfZeroSeen.calls -eq 0 -and $pfZeroResult.chose -eq 'worker-primary')
+            Check 'PF6d zero-budget hold names the budget, not a missing peer' (
+                $pfZeroResult.why -match 'failover budget spent' -and $pfZeroResult.why -notmatch "`r|`n" -and
+                [string]$pfZeroResult.labor -eq 'unavailable')
+            $pfZeroRows = @(Get-Content -LiteralPath $pfZeroUsage | ForEach-Object { $_ | ConvertFrom-Json })
+            Check 'PF6d zero-budget journals held, never rerouted' (
+                @($pfZeroRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'held' }).Count -eq 1 -and
+                @($pfZeroRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'rerouted' }).Count -eq 0)
+
+            # Round-2 C1: the preflight is a WALK too. Three probe-eligible providers, the
+            # first two over cap: the task must reach the third rather than holding after
+            # a single hop. worker-fourth exists only so the dispatch-stage budget test
+            # below has somewhere left to go.
+            $pfWalkFleet = Join-Path $env:BATON_HOME 'fleet-preflight-walk.yaml'
+            # Names are deliberately a<b<c<d: equal-quality free peers tie-break by name,
+            # so this fixes the walk order (a capped -> b capped -> c clean, d untried).
+            Set-Content -LiteralPath $pfWalkFleet -Encoding utf8NoBOM -Value @'
+general_capabilities: []
+providers:
+  - name: walk-a
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+  - name: walk-b
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+  - name: walk-c
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: codex
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+    usage_policy:
+      probe: true
+      soft_cap_5h: 75
+      soft_cap_weekly: 85
+  - name: walk-d
+    kind: cli
+    enabled: true
+    cost_tier: free
+    platform: claude
+    quality: 0.9
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+'@
+            # Probes answer in walk order: a capped, b capped, c clean.
+            $pfWalkProbeState = @{ n = 0 }
+            $pfWalkProbe = {
+                param($clientVersion, $timeoutSeconds)
+                $pfWalkProbeState.n++
+                $five = if ($pfWalkProbeState.n -le 2) { [double]80 } else { [double]40 }
+                return (New-ExecutorProbeResponse -FiveHourUsed $five -WeeklyUsed 20 -At $probeNow)
+            }.GetNewClosure()
+            $pfWalkSeen = @{ calls = 0; names = @() }
+            $pfWalkUsage = Join-Path $env:BATON_HOME 'usage-pf-walk.jsonl'
+            $pfWalkSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $pfWalkFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -UsagePath $pfWalkUsage `
+                -Dispatcher { param($pick,$prompt,$depthTier) $pfWalkSeen.calls++; $pfWalkSeen.names += [string]$pick.name; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport $pfWalkProbe -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-walk.jsonl') -ProbeClock $probeClock
+            $pfWalkResult = & $pfWalkSpawner $preflightTask
+            Check 'PF6e preflight walks past a second capped provider to a clean one' (
+                $pfWalkResult.ok -and $pfWalkSeen.calls -eq 1 -and
+                ($pfWalkSeen.names -join ',') -eq 'walk-c')
+            Check 'PF6e preflight walk narrates every hop in order' (
+                $pfWalkResult.why -match 'walk-a' -and
+                $pfWalkResult.why -match 'rerouting to walk-b' -and
+                $pfWalkResult.why -match 'rerouting to walk-c' -and
+                $pfWalkResult.why -notmatch "`r|`n")
+            $pfWalkRows = @(Get-Content -LiteralPath $pfWalkUsage | ForEach-Object { $_ | ConvertFrom-Json })
+            Check 'PF6e preflight walk journals one rerouted row per hop' (
+                @($pfWalkRows | Where-Object { $_.event -eq 'preflight' -and $_.outcome -eq 'rerouted' }).Count -eq 2)
+
+            # Round-2 C1: preflight hops count against the SHARED budget. Two preflight
+            # hops with MaxFailoverHops=2 leaves the dispatch walk nothing, even though
+            # walk-d is an untried equal-quality peer.
+            $pfSharedProbeState = @{ n = 0 }
+            $pfSharedProbe = {
+                param($clientVersion, $timeoutSeconds)
+                $pfSharedProbeState.n++
+                $five = if ($pfSharedProbeState.n -le 2) { [double]80 } else { [double]40 }
+                return (New-ExecutorProbeResponse -FiveHourUsed $five -WeeklyUsed 20 -At $probeNow)
+            }.GetNewClosure()
+            $pfSharedSeen = @{ calls = 0; names = @() }
+            $pfSharedSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $pfWalkFleet -ToolsPath $toolsPath `
+                -MaxCostTier free -MaxFailoverHops 2 -UsagePath (Join-Path $env:BATON_HOME 'usage-pf-shared-budget.jsonl') `
+                -Dispatcher { param($pick,$prompt,$depthTier) $pfSharedSeen.calls++; $pfSharedSeen.names += [string]$pick.name; @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 } }.GetNewClosure() `
+                -ProbeTransport $pfSharedProbe -ProbeCachePath (Join-Path $env:BATON_HOME 'cache-pf-shared-budget.jsonl') -ProbeClock $probeClock
+            $pfSharedResult = & $pfSharedSpawner $preflightTask
+            Check 'PF6f preflight hops spend the shared failover budget' (
+                -not $pfSharedResult.ok -and $pfSharedSeen.calls -eq 1 -and
+                ($pfSharedSeen.names -join ',') -eq 'walk-c')
+
+            # Round-2 finding 6: a coordination denial ended the whole walk. A busy box is
+            # a fact about ONE peer -- the others are still available, and the budget was
+            # not spent -- so the denial costs a hop and the walk carries on.
+            function Request-LocalDispatchClaim {
+                param($Candidate, [string]$FleetPath = '', [string]$Worktree = '', [string]$RunDir = '', [int]$TtlSec = 0)
+                if ([string]$Candidate.name -eq 'worker-substitute') {
+                    return [ordered]@{ gated=$true; granted=$false; reason='box busy: stack-a held'; claim_id=''; ttl_sec=0; host='host-a'; stack='stack-a'; load_profile='' }
+                }
+                return [ordered]@{ gated=$false; granted=$true; reason='not_local'; claim_id=''; ttl_sec=0; host=''; stack=''; load_profile='' }
+            }
+            try {
+                $denySeen = @{ calls = 0; names = @() }
+                $denySpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                    -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-coord-deny-walk.jsonl') `
+                    -Dispatcher {
+                        param($pick,$prompt,$depthTier)
+                        $denySeen.calls++; $denySeen.names += [string]$pick.name
+                        if ([string]$pick.name -eq 'worker-third') {
+                            Set-Content -LiteralPath (Join-Path (Get-Location).Path 'coord-deny-walk.txt') -Value 'done' -Encoding utf8NoBOM
+                            return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 }
+                        }
+                        return @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 }
+                    }.GetNewClosure()
+                $denyResult = & $denySpawner $preflightTask
+                Check 'CD1 a coordination-denied peer costs a hop, it does not end the walk' (
+                    $denyResult.ok -and $denyResult.chose -eq 'worker-third' -and
+                    ($denySeen.names -join ',') -eq 'worker-primary,worker-third')
+                Check 'CD1 the denial stays visible in the why chain' (
+                    $denyResult.why -match 'worker-substitute' -and $denyResult.why -match 'box busy' -and
+                    $denyResult.why -notmatch "`r|`n")
+
+                # Round-3 review: the failover journal is written BEFORE the coordination
+                # gate, so a denied peer was recorded as a completed failover that never
+                # ran -- and the next hop journaled a second failover from the same origin.
+                # The usage journal is routing training data; a hop that did not happen
+                # must not appear in it.
+                $cdJournal = Join-Path $env:BATON_HOME 'usage-coord-deny-journal.jsonl'
+                $cdjSeen = @{ names = @() }
+                $cdjSpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                    -MaxCostTier free -UsagePath $cdJournal `
+                    -Dispatcher {
+                        param($pick,$prompt,$depthTier)
+                        $cdjSeen.names += [string]$pick.name
+                        if ([string]$pick.name -eq 'worker-third') {
+                            Set-Content -LiteralPath (Join-Path (Get-Location).Path 'coord-deny-journal.txt') -Value 'done' -Encoding utf8NoBOM
+                            return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 }
+                        }
+                        return @{ stdout=''; stderr='quota exhausted'; exit_code=1; duration_s=0 }
+                    }.GetNewClosure()
+                $cdjResult = & $cdjSpawner $preflightTask
+                $cdjRows = @(Get-Content -LiteralPath $cdJournal | ForEach-Object { $_ | ConvertFrom-Json })
+                $cdjFailovers = @($cdjRows | Where-Object { $_.event -eq 'failover' })
+                Check 'CD2 a denied peer is never journaled as a failover that ran' (
+                    $cdjResult.ok -and @($cdjFailovers | Where-Object { $_.substitute -eq 'worker-substitute' }).Count -eq 0)
+                Check 'CD2 exactly one failover row, for the hop that actually dispatched' (
+                    $cdjFailovers.Count -eq 1 -and [string]$cdjFailovers[0].substitute -eq 'worker-third')
+            } finally { . "$PSScriptRoot/fleet-executor-lib.ps1" }
+
+            # Round-3 review: the FIRST dispatch's coordination denial still aborted the
+            # task outright, so after a preflight walk a busy landing provider ended the
+            # run with untried peers and hop budget both remaining -- the exact behaviour
+            # finding 6 removed from the retry path, left in place one branch over.
+            function Request-LocalDispatchClaim {
+                param($Candidate, [string]$FleetPath = '', [string]$Worktree = '', [string]$RunDir = '', [int]$TtlSec = 0)
+                if ([string]$Candidate.name -eq 'worker-primary') {
+                    return [ordered]@{ gated=$true; granted=$false; reason='box busy: stack-a held'; claim_id=''; ttl_sec=0; host='host-a'; stack='stack-a'; load_profile='' }
+                }
+                return [ordered]@{ gated=$false; granted=$true; reason='not_local'; claim_id=''; ttl_sec=0; host=''; stack=''; load_profile='' }
+            }
+            try {
+                $firstDenySeen = @{ names = @() }
+                $firstDenySpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                    -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-coord-deny-first.jsonl') `
+                    -Dispatcher {
+                        param($pick,$prompt,$depthTier)
+                        $firstDenySeen.names += [string]$pick.name
+                        Set-Content -LiteralPath (Join-Path (Get-Location).Path 'coord-deny-first.txt') -Value 'done' -Encoding utf8NoBOM
+                        return @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 }
+                    }.GetNewClosure()
+                $firstDenyResult = & $firstDenySpawner $preflightTask
+                Check 'CD3 a denied FIRST provider walks to an untried peer' (
+                    $firstDenyResult.ok -and $firstDenyResult.chose -eq 'worker-substitute' -and
+                    ($firstDenySeen.names -join ',') -eq 'worker-substitute')
+                Check 'CD3 the first-dispatch denial stays in the why chain' (
+                    $firstDenyResult.why -match 'worker-primary' -and $firstDenyResult.why -match 'box busy')
+            } finally { . "$PSScriptRoot/fleet-executor-lib.ps1" }
+
+            # Every peer busy is still a real outcome and must never read as success. With
+            # no dispatch at all $res stays null, and `[int]$null -ne 0` is FALSE -- so the
+            # walk fell straight through to the "no changes" success return.
+            function Request-LocalDispatchClaim {
+                param($Candidate, [string]$FleetPath = '', [string]$Worktree = '', [string]$RunDir = '', [int]$TtlSec = 0)
+                return [ordered]@{ gated=$true; granted=$false; reason='box busy: stack-a held'; claim_id=''; ttl_sec=0; host='host-a'; stack='stack-a'; load_profile='' }
+            }
+            try {
+                $allDenySeen = @{ calls = 0 }
+                $allDenySpawner = New-AgenticSpawner -Worktree $wt2.worktree -FleetPath $preflightFleet -ToolsPath $toolsPath `
+                    -MaxCostTier free -UsagePath (Join-Path $env:BATON_HOME 'usage-coord-deny-all.jsonl') `
+                    -Dispatcher { param($pick,$prompt,$depthTier) $allDenySeen.calls++; @{ stdout='ok'; stderr=''; exit_code=0; duration_s=0 } }.GetNewClosure()
+                $allDenyResult = & $allDenySpawner $preflightTask
+                Check 'CD4 every peer busy is a failure, never a silent success' (
+                    -not $allDenyResult.ok -and $allDenySeen.calls -eq 0)
+                Check 'CD4 total denial is labor-unavailable with the denials audited' (
+                    [string]$allDenyResult.labor -eq 'unavailable' -and
+                    @($allDenyResult.exclusions | Where-Object { $_.reason -match 'coordination denied' }).Count -ge 1)
+            } finally { . "$PSScriptRoot/fleet-executor-lib.ps1" }
 
             # High stakes remains champion/high when preflight selects a peer.
             $pfHighSeen = @{ calls = 0; depths = @() }

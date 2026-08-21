@@ -24,7 +24,7 @@ function Assert-True($cond, $msg) {
 # ============================================================================
 Write-Host "`n=== A-series: Observation writer ===" -ForegroundColor Cyan
 
-$tmpA = Join-Path $env:TEMP "baton-s2-test-A-$(Get-Random)"
+$tmpA = Join-Path ([System.IO.Path]::GetTempPath()) "baton-s2-test-A-$(Get-Random)"
 $journalA = Join-Path $tmpA 'style-journal.jsonl'
 
 # A1: append + round-trip
@@ -48,7 +48,7 @@ Assert-Equal 2 $rows.Count 'A2: two observations, no overwrite'
 Assert-Equal 'beta-app' $rows[1].project_id 'A2: second row has correct project_id'
 
 # A3: missing dir → created
-$tmpA3 = Join-Path $env:TEMP "baton-s2-test-A3-$(Get-Random)"
+$tmpA3 = Join-Path ([System.IO.Path]::GetTempPath()) "baton-s2-test-A3-$(Get-Random)"
 $journalA3 = Join-Path $tmpA3 'sub' 'style-journal.jsonl'
 Add-StyleObservation -JournalPath $journalA3 -ProjectId 'gamma' `
     -DepthUsed 'adaptive' -DepthExplicit $false `
@@ -57,7 +57,7 @@ Assert-True (Test-Path $journalA3) 'A3: missing dir created, file written'
 Remove-Item $tmpA3 -Recurse -Force -ErrorAction SilentlyContinue
 
 # A4: Read-StyleJournal on missing path → @()
-$missingJ = Join-Path $env:TEMP "baton-s2-missing-$(Get-Random).jsonl"
+$missingJ = Join-Path ([System.IO.Path]::GetTempPath()) "baton-s2-missing-$(Get-Random).jsonl"
 $rows = Read-StyleJournal -JournalPath $missingJ
 Assert-Equal 0 $rows.Count 'A4: missing journal returns empty array, no throw'
 
@@ -189,7 +189,7 @@ Assert-Equal 0.0 $d.teaching_confidence 'B10: zero rows → teaching confidence 
 # ============================================================================
 Write-Host "`n=== C-series: Fold invoke ===" -ForegroundColor Cyan
 
-$tmpC = Join-Path $env:TEMP "baton-s2-test-C-$(Get-Random)"
+$tmpC = Join-Path ([System.IO.Path]::GetTempPath()) "baton-s2-test-C-$(Get-Random)"
 $journalC = Join-Path $tmpC 'style-journal.jsonl'
 $profileC = Join-Path $tmpC 'user-profile.json'
 
@@ -264,7 +264,7 @@ Assert-Equal $true $fr.teaching_changed 'C7: both teaching changed'
 Assert-Equal $true $fr.updated 'C7: updated'
 
 # C8: journal write failure → no throw (fail-open)
-$readOnlyDir = Join-Path $env:TEMP "baton-s2-ro-$(Get-Random)"
+$readOnlyDir = Join-Path ([System.IO.Path]::GetTempPath()) "baton-s2-ro-$(Get-Random)"
 New-Item -ItemType Directory -Path $readOnlyDir -Force | Out-Null
 $readOnlyJournal = Join-Path $readOnlyDir 'readonly.jsonl'
 Set-Content -Path $readOnlyJournal -Value '{}' -Encoding utf8NoBOM

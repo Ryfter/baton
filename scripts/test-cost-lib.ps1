@@ -9,7 +9,7 @@ function Assert($label, $cond) {
     else { Write-Host "FAIL  $label" -ForegroundColor Red; $script:failures++ }
 }
 
-$tmpKb = Join-Path $env:TEMP "cost-kb-$(Get-Random)"
+$tmpKb = Join-Path ([System.IO.Path]::GetTempPath()) "cost-kb-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $tmpKb | Out-Null
 
 # --- First entry creates the file ---
@@ -53,7 +53,7 @@ Add-CostEntry -Total 25.00 -Source 'Test' -Project 'p2' -KbRoot $tmpKb | Out-Nul
 Assert "p2 cost.md created" (Test-Path (Join-Path $tmpKb 'projects/p2/cost.md'))
 
 # --- Read-CostState on missing file → empty state ---
-$empty = Read-CostState -Path (Join-Path $env:TEMP "nope-$(Get-Random).md")
+$empty = Read-CostState -Path (Join-Path ([System.IO.Path]::GetTempPath()) "nope-$(Get-Random).md")
 Assert "missing file → current = 0" ($empty.current -eq [decimal]0)
 Assert "missing file → no entries" ($empty.entries.Count -eq 0)
 

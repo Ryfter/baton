@@ -1,0 +1,91 @@
+{
+  "run_id": "baton-d124-memory-arch",
+  "goal": "Research Grimlore + Baton ecosystem and propose then implement small persistent-memory wiring",
+  "budget_cap": null,
+  "tasks": [
+    {
+      "id": "t1",
+      "desc": "Read Grimlore front door and Baton landscape cards to understand durable-memory model",
+      "command": "",
+      "capability": "research",
+      "model_pick": "ox-alpha",
+      "depends_on": [],
+      "est_cost_tier": "free",
+      "reversible": true,
+      "stakes": "low",
+      "stakes_basis": "Read-only research on existing docs; no code changes.",
+      "verify_profile": "",
+      "allowed_paths": []
+    },
+    {
+      "id": "t2",
+      "desc": "Read Baton ecosystem-boundaries.md and scan for existing memory-ingest / recall commands",
+      "command": "",
+      "capability": "research",
+      "model_pick": "ox-alpha",
+      "depends_on": [],
+      "est_cost_tier": "free",
+      "reversible": true,
+      "stakes": "low",
+      "stakes_basis": "Read-only scan of docs and commands directories.",
+      "verify_profile": "",
+      "allowed_paths": ["docs/", "commands/"]
+    },
+    {
+      "id": "t3",
+      "desc": "Synthesize research into memory-architecture.md covering Grimlore vs Grimdex vs Caura vs run-ledger, with default for 7-day uptime",
+      "command": "",
+      "capability": "reasoning",
+      "model_pick": "",
+      "depends_on": ["t1", "t2"],
+      "est_cost_tier": "free",
+      "reversible": true,
+      "stakes": "low",
+      "stakes_basis": "Writing a new doc to ~/.baton/overnight/; no repo changes.",
+      "verify_profile": "",
+      "allowed_paths": ["~/.baton/overnight/memory-architecture.md"]
+    },
+    {
+      "id": "t4",
+      "desc": "Triage whether any tiny reversible code hook is warranted (memory-ingest path, pointer stanza, or recall-command doc)",
+      "command": "",
+      "capability": "triage",
+      "model_pick": "",
+      "depends_on": ["t3"],
+      "est_cost_tier": "free",
+      "reversible": true,
+      "stakes": "low",
+      "stakes_basis": "Decision gate only; no files modified.",
+      "verify_profile": "",
+      "allowed_paths": []
+    },
+    {
+      "id": "t5",
+      "desc": "If triage approves: implement small reversible memory hook in a worktree (e.g. ingest path or recall doc stanza) with tests",
+      "command": "",
+      "capability": "code-gen",
+      "model_pick": "",
+      "depends_on": ["t4"],
+      "est_cost_tier": "paid",
+      "reversible": true,
+      "stakes": "standard",
+      "stakes_basis": "Code change in worktree with tests; small blast radius but touches fleet plumbing.",
+      "verify_profile": "executor",
+      "allowed_paths": ["scripts/", "commands/", "docs/"]
+    },
+    {
+      "id": "t6",
+      "desc": "Append findings to ~/.baton/overnight/report-memory.md",
+      "command": "",
+      "capability": "summarize",
+      "model_pick": "",
+      "depends_on": ["t3", "t4", "t5"],
+      "est_cost_tier": "paid",
+      "reversible": true,
+      "stakes": "low",
+      "stakes_basis": "Appending to a report file; no repo code touched.",
+      "verify_profile": "",
+      "allowed_paths": ["~/.baton/overnight/report-memory.md"]
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "_comment": [
+    "Baton's verification contract FOR BATON ITSELF. Without this file every plan that",
+    "carries a verify_profile is rejected at the -Verify preflight, so Baton could not",
+    "run against its own repo (Get-FrozenVerificationContract returns",
+    "'no-verification-config' from the base revision).",
+    "Profiles are frozen from the BASE COMMIT, never the worktree, so a worker cannot",
+    "edit its own oracle mid-task. Each profile below runs REAL pwsh suites via the",
+    "'pwsh-suite' preset (pwsh -NoProfile -File <script>) — no shell, no eval, which is",
+    "what Test-VerifyArgvSafe requires.",
+    "Pick the narrowest profile that covers the files a task may touch; 'full' is the",
+    "whole-repo gate."
+  ],
+  "profiles": {
+    "conductor": {
+      "preset": "pwsh-suite",
+      "args": ["scripts/test-conductor-lib.ps1"],
+      "timeout_s": 600,
+      "proves": "the conductor engine suite passes: plan parsing, DAG ordering, the guarded walk, the plan/acceptance gate seams, and provider failover in the planner phase",
+      "grade_ceiling": "strong"
+    },
+    "gate": {
+      "preset": "pwsh-suite",
+      "args": ["scripts/test-gate-lib.ps1"],
+      "timeout_s": 600,
+      "proves": "the acceptance/polish gate suite passes: findings parsing, reconciliation, verdicts, role-panel routing, cheap-tier relaxation, and loud degradation",
+      "grade_ceiling": "strong"
+    },
+    "plan-gate": {
+      "preset": "pwsh-suite",
+      "args": ["scripts/test-plan-gate-lib.ps1"],
+      "timeout_s": 600,
+      "proves": "the plan gate suite passes: competitive plan review, revise briefs, understaffed fail-open, and reviewer failover",
+      "grade_ceiling": "strong"
+    },
+    "routing": {
+      "preset": "pwsh-suite",
+      "args": ["scripts/test-routing-lib.ps1"],
+      "timeout_s": 600,
+      "proves": "the capability router suite passes: candidate selection, cost-tier ranking, capability floors, and usage route-around",
+      "grade_ceiling": "strong"
+    },
+    "verification": {
+      "preset": "pwsh-suite",
+      "args": ["scripts/test-verification-lib.ps1"],
+      "timeout_s": 600,
+      "proves": "the verification-contract suite passes: profile normalization, argv safety, path containment, and grading",
+      "grade_ceiling": "strong"
+    },
+    "executor": {
+      "preset": "pwsh-suite",
+      "args": ["scripts/test-fleet-executor-lib.ps1"],
+      "timeout_s": 900,
+      "proves": "the agentic executor suite passes: edit-eligibility, worktree snapshots, usage failover, and the rework loop",
+      "grade_ceiling": "strong"
+    },
+    "full": {
+      "preset": "pwsh-suite",
+      "args": ["scripts/test-all.ps1"],
+      "timeout_s": 1800,
+      "proves": "every scripts/test-*.ps1 suite exits 0",
+      "grade_ceiling": "strong"
+    }
+  }
+}

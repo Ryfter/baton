@@ -110,6 +110,10 @@ function ConvertTo-MemoryOutcomeFromRun {
         return 'fail'
     }
     if ($st -eq 'needs-polish') { return 'partial' }
+    # 'unreviewed' (d114) outranks the terminal status deliberately: no reviewer produced
+    # a usable verdict, so nothing is known about this work. Letting 'completed' win here
+    # fed unreviewed runs to the memory as clean passes — a fail-open in the training data.
+    if ($verdict -eq 'unreviewed') { return 'unknown' }
     if ($verdict -eq 'reject') { return 'fail' }
     if ($verdict -eq 'polish') { return 'partial' }
     if ($st -eq 'completed') {

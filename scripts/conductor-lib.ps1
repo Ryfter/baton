@@ -366,6 +366,21 @@ function Format-AcceptanceSection {
     if ($Gate.reason) { [void]$sb.AppendLine("**Reason:** $($Gate.reason)") }
     $c = $Gate.counts
     if ($c) { [void]$sb.AppendLine("**Findings:** $($c.critical) critical, $($c.important) important, $($c.minor) minor") }
+    # #code-factory: a panel that lost a review lens, paid above its requested tier, or
+    # failed a provider over must SAY SO in the operator-facing report. These used to be
+    # discoverable only by reading acceptance.json — which is how the shipped roster's
+    # two cheap roles went missing from every run without anyone noticing.
+    $lostRoles = @($Gate.degraded_roles | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($lostRoles.Count -gt 0) {
+        [void]$sb.AppendLine("**DEGRADED — review lens(es) NOT run:** $($lostRoles -join ', ')")
+    }
+    $relaxed = @($Gate.tier_relaxed_roles | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($relaxed.Count -gt 0) {
+        [void]$sb.AppendLine("**Cost note — role(s) run above their requested cheap tier:** $($relaxed -join ', ')")
+    }
+    foreach ($note in @($Gate.failover_notes)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$note)) { [void]$sb.AppendLine("**Provider failover:** $note") }
+    }
     if (($Gate.verdict -ne 'accept') -and $Gate.polish_brief) {
         [void]$sb.AppendLine('')
         [void]$sb.AppendLine('### Polish brief')
@@ -664,7 +679,6 @@ function Invoke-PlanPhase {
     if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $promptParams.RepoPath = $RepoPath }
     if (-not [string]::IsNullOrWhiteSpace($FleetPath)) { $promptParams.FleetPath = $FleetPath }
     $prompt = Build-PlannerPrompt @promptParams
-
     # Planning used to be one shot at $cands[0]: a failed dispatch or unparseable
     # answer ended the whole run with plan-failed, even with viable candidates
     # sitting right there in the list. That made the FIRST-RANKED provider a hard
@@ -674,37 +688,45 @@ function Invoke-PlanPhase {
     #
     # Bounded on purpose: candidates are cost-ordered, so walking a few is cheap,
     # but an unbounded walk could fan a broken prompt across the paid fleet.
-    $plan = $null
-    $attempts = 0
-    foreach ($cand in @($cands | Where-Object { $null -ne $_ })) {
-        if ($attempts -ge $MaxPlannerAttempts) { break }
-        $attempts++
-        $res = & $dispatch $cand $prompt
-        $why = $null
-        if ([int]$res.exit_code -ne 0) {
-            $why = "exit $([int]$res.exit_code)"
-        } else {
-            $plan = ConvertTo-PlanObject -RawStdout ([string]$res.stdout)
-            if ($null -eq $plan) { $why = 'unparseable plan' }
-        }
-        if ($null -ne $plan) {
-            if ($attempts -gt 1 -and $RunDir) {
-                try {
-                    Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan' `
-                        -Message "planner failover: $($cand.name) produced the plan after $($attempts - 1) failed candidate(s)")
-                } catch { }
+    #
+    # MERGE NOTE (#186 + #189): both branches fixed this independently — #186 with a
+    # hand-rolled bounded loop, #189 by routing through the shared walk helper. Kept
+    # the shared helper (one failover implementation for every model-calling phase,
+    # which is the point of #code-factory) and passed #186's bound through as
+    # -MaxAttempts, so neither the consistency nor the safety property was dropped.
+    # Events use the 'provider-failover' kind other phases use, not 'plan'.
+    # Invoke-CapabilityFailover treats a NONPOSITIVE -MaxAttempts as "no limit", but the
+    # bounded loop this replaced treated MaxPlannerAttempts=0 as "no attempts at all"
+    # (`if ($attempts -ge $MaxPlannerAttempts) { break }` fired immediately). Passing 0
+    # straight through would silently invert the safest possible setting into the most
+    # expensive one -- walking the entire roster. Preserve the original meaning.
+    if ($MaxPlannerAttempts -le 0) { return $null }
+    $walk = Invoke-CapabilityFailover -Candidates ([object[]]$cands) -Phase 'planner' `
+        -MaxAttempts $MaxPlannerAttempts `
+        -Attempt { param($c) & $dispatch $c $prompt } `
+        -IsUsable { param($r)
+            if (-not (Test-FailoverResultUsable -Result $r)) { return $false }
+            return ($null -ne (ConvertTo-PlanObject -RawStdout ([string]$r.stdout)))
+        } `
+        -OnHop {
+            param($from, $to, $why)
+            # Name the failure: a silent fallback would hide a planner that is broken
+            # for everyone rather than merely unavailable to this shell.
+            if (-not [string]::IsNullOrWhiteSpace($RunDir)) {
+                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'provider-failover' -Level 'warn' -Message "planner: $from -> $to ($why)")
             }
-            break
         }
-        # Name the failure: a silent fallback would hide a planner that is broken
-        # for everyone rather than merely unavailable to this shell.
-        if ($RunDir) {
-            try {
-                Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'plan' `
-                    -Message "planner candidate $($cand.name) failed ($why); trying the next reasoning row")
-            } catch { }
+    if (-not $walk.ok) {
+        if (-not [string]::IsNullOrWhiteSpace($RunDir)) {
+            Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'provider-failover' -Level 'error' -Message ([string]$walk.why))
         }
+        return $null
     }
+    if ($walk.hops -gt 0 -and -not [string]::IsNullOrWhiteSpace($RunDir)) {
+        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'provider-failover' -Message ([string]$walk.why))
+    }
+    $res = $walk.result
+    $plan = ConvertTo-PlanObject -RawStdout ([string]$res.stdout)
     if ($null -eq $plan) { return $null }
     if ($RunId) { $plan.run_id = $RunId }
     $plan.goal = $Goal
@@ -728,11 +750,26 @@ function Invoke-TaskViaFleet {
     if ($null -eq $cands -or @($cands | Where-Object { $null -ne $_ }).Count -lt 1) {
         return @{ ok = $false; spend = 0.0; chose = ''; why = "no candidate for capability '$cap'"; alternatives = @() }
     }
-    $pick = $cands[0]
     $prompt = "Task: $($Task.desc)"
-    $res = if ($Dispatcher) { & $Dispatcher $pick $prompt } else { Invoke-Fleet -Name $pick.name -Prompt $prompt -Path $FleetPath -NoJournal }
-    $alts = @($cands | Select-Object -Skip 1 | ForEach-Object { $_.name })
-    return @{ ok = ([int]$res.exit_code -eq 0); spend = 0.0; chose = $pick.name; why = "routed $cap -> $($pick.name)"; alternatives = $alts }
+    # Code factory (#code-factory): the non-agentic labor phase walks the cost-ordered
+    # roster too. This executor never touches the repo (see the summary above), so a
+    # failed candidate can be retried on the next-cheapest peer with no cleanup.
+    $walk = Invoke-CapabilityFailover -Candidates ([object[]]$cands) -Phase "labor ($cap)" `
+        -Attempt {
+            param($c)
+            if ($Dispatcher) { return (& $Dispatcher $c $prompt) }
+            return Invoke-Fleet -Name $c.name -Prompt $prompt -Path $FleetPath -NoJournal
+        }
+    $alts = @($cands | Where-Object { $null -ne $_ -and [string]$_.name -ne [string]$walk.chose } | ForEach-Object { [string]$_.name })
+    if (-not $walk.ok) {
+        # Every eligible provider is out — that is a labor-AVAILABILITY halt (#124),
+        # not an implementation defect, so report.md says so via the Labor section.
+        return @{
+            ok = $false; spend = 0.0; chose = ([string]@($walk.attempts)[-1]); why = [string]$walk.why
+            alternatives = $alts; labor = 'unavailable'; exclusions = @($walk.exclusions)
+        }
+    }
+    return @{ ok = $true; spend = 0.0; chose = [string]$walk.chose; why = [string]$walk.why; alternatives = $alts }
 }
 
 function Complete-Run {
@@ -880,6 +917,11 @@ function Invoke-PlanRevise {
         $prompt = $base + "`n`n## Prior plan (JSON)`n" + $PlanJson +
                   "`n`n## Peer review findings — revise the plan to address these`n" + $ReviseBrief +
                   "`n`nEmit the FULL revised plan as JSON in the same schema. Address every finding you can without expanding scope."
+        # NO provider failover here, deliberately. The revise pass is a documented
+        # ONE-SHOT (see the summary above) and it already fails open to the original
+        # plan, so a capped provider here cannot stall a run — the code-factory
+        # guarantee is not at stake, and walking the roster would burn a second
+        # planner-sized call to buy nothing.
         $res = & $dispatch $cands[0] $prompt
         if ([int]$res.exit_code -eq 0) { $revised = ConvertTo-PlanObject -RawStdout ([string]$res.stdout) }
     } catch {
@@ -1325,19 +1367,32 @@ function Invoke-Conductor {
                         Invoke-AcceptanceGate @gateArgs
                     }
         } catch { $gate = $null; $gateErr = $_.Exception.Message }
+        # Round-2 C3: a LOST acceptance signal degrades the run status on BOTH paths.
+        # -AcceptanceFailLoud decides whether the run HALTS; it must not decide whether
+        # the run is allowed to call itself clean. Gating the degrade on fail-loud meant
+        # d114's 'unreviewed' verdict died at the gate object and the run still reported
+        # 'completed' — #190 gate 2, re-opened one layer up. Advisory still never blocks
+        # the labor: the branch and worktree survive exactly as before.
         if ($null -eq $gate -or -not $gate.verdict) {
-            # Fail-loud consumes this as acceptance-degraded (below); narrate the halt,
-            # not 'fail-open'. Only the advisory (non-fail-loud) path truly fails open.
             $noVerdictBase = if ($gateErr) { "acceptance gate failed: $gateErr" } else { 'acceptance gate produced no verdict' }
-            $msg = if ($AcceptanceFailLoud) { "$noVerdictBase (acceptance-degraded — run halts)" } else { "$noVerdictBase (fail-open)" }
+            $msg = if ($AcceptanceFailLoud) { "$noVerdictBase (acceptance-degraded — run halts)" }
+                   else { "$noVerdictBase (acceptance-degraded — advisory, run not blocked)" }
             $gateLevel = if ($AcceptanceFailLoud) { 'error' } else { 'warn' }
             Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Level $gateLevel -Message $msg)
             $gate = $null
-            if ($AcceptanceFailLoud) { $finalStatus = 'acceptance-degraded' }
+            $finalStatus = 'acceptance-degraded'
         } else {
             Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Message "acceptance verdict: $($gate.verdict) — $($gate.reason)")
-            if ($AcceptanceFailLoud -and $gate.degraded) { $finalStatus = 'acceptance-degraded' }
-            elseif ($gate.verdict -eq 'reject') { $finalStatus = 'rejected' }
+            # ORDER MATTERS. A reject is checked FIRST: a panel that lost a role but whose
+            # surviving reviewers still found a critical has produced an actionable verdict,
+            # and 'acceptance-degraded' would bury it. Both are non-clean, so this is not
+            # about the fail-open — it is about which status tells the operator what to fix.
+            # ('unreviewed' cannot collide: it means no usable review existed at all.)
+            # 'unreviewed' (d114) is then checked alongside `degraded` rather than trusting
+            # one of them: they are set together today, and a consumer keying on only one is
+            # exactly the fail-open this finding is about.
+            if ($gate.verdict -eq 'reject') { $finalStatus = 'rejected' }
+            elseif ($gate.degraded -or $gate.verdict -eq 'unreviewed') { $finalStatus = 'acceptance-degraded' }
             elseif ($AcceptanceFailLoud -and $gate.verdict -eq 'polish') { $finalStatus = 'needs-polish' }
         }
 
@@ -1595,7 +1650,11 @@ function Invoke-Conductor {
                         $gate | Add-Member -NotePropertyName prior_acceptance -NotePropertyValue $priorSnap -Force
                         $gate | Add-Member -NotePropertyName rework -NotePropertyValue @{ attempted = $true; evidence_path = $accEvidPath; outcome = 'failed' } -Force
                     }
-                    $finalStatus = 'needs-polish'
+                    # Round-3 review: a LOST re-panel signal is degraded, not needs-polish.
+                    # The re-run is the same acceptance signal as the first gate — nobody
+                    # looked at the reworked artifact, so 'needs-polish' would report a
+                    # verdict that was never produced.
+                    $finalStatus = 'acceptance-degraded'
                 } else {
                     Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -Kind 'gate' -Message "acceptance re-panel verdict: $($gate2.verdict) — $($gate2.reason)")
                     if ($gate2 -is [System.Collections.IDictionary]) {
@@ -1613,17 +1672,21 @@ function Invoke-Conductor {
                         } -Force
                     }
                     $gate = $gate2
-                    if ([string]$gate2.verdict -eq 'accept') {
-                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-passed' -Message 'acceptance rework passed — panel accept')
-                        $finalStatus = 'completed'
-                    } elseif ([string]$gate2.verdict -eq 'reject') {
+                    # Same C3 rule on the rework re-run, and the same ordering as the first
+                    # gate: a reject the surviving reviewers actually produced outranks the
+                    # fact that the panel was short a role.
+                    if ([string]$gate2.verdict -eq 'reject') {
                         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message 'acceptance rework failed — panel reject')
                         $finalStatus = 'rejected'
+                    } elseif ($gate2.degraded -or [string]$gate2.verdict -eq 'unreviewed') {
+                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message "acceptance rework panel degraded — verdict $($gate2.verdict)")
+                        $finalStatus = 'acceptance-degraded'
+                    } elseif ([string]$gate2.verdict -eq 'accept') {
+                        Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-passed' -Message 'acceptance rework passed — panel accept')
+                        $finalStatus = 'completed'
                     } else {
                         Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $accTask.id -Kind 'task-rework-failed' -Level 'warn' -Message "acceptance rework failed — panel $($gate2.verdict)")
-                        $finalStatus = if ($AcceptanceFailLoud -and $gate2.degraded) { 'acceptance-degraded' }
-                                       elseif ($AcceptanceFailLoud) { 'needs-polish' }
-                                       else { $finalStatus }
+                        $finalStatus = if ($AcceptanceFailLoud) { 'needs-polish' } else { $finalStatus }
                     }
                 }
             }

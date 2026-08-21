@@ -11,9 +11,20 @@ function Assert($cond, $msg) {
 }
 
 function New-TempRepo {
-    $root = Join-Path $env:TEMP ("cao-gate-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-gate-" + [guid]::NewGuid().ToString('N').Substring(0,8))
     New-Item -ItemType Directory -Force -Path $root | Out-Null
-    Push-Location $root
+    # Hard guard. This function does `git init` + `git commit` + `Set-Content README.md`
+    # inside whatever directory it lands in. It used to build $root from $env:TEMP, which
+    # is UNSET on Linux/macOS: Join-Path then yielded a RELATIVE name, Push-Location fell
+    # back to the current directory, and the fixture committed itself into the real
+    # working repository — truncating README.md to '# repo' and adding scripts/app.ps1.
+    # Refuse to run anywhere that is not an existing absolute path outside a repo we did
+    # not create, so this can never silently overwrite a checkout again.
+    $rootFull = [System.IO.Path]::GetFullPath($root)
+    if (-not [System.IO.Path]::IsPathRooted($root) -or -not (Test-Path -LiteralPath $rootFull -PathType Container)) {
+        throw "New-TempRepo refused to run: '$root' is not an absolute existing directory (temp path unresolved)."
+    }
+    Push-Location $rootFull
     try {
         git init -q -b master 2>&1 | Out-Null
         git config user.email test@example.com; git config user.name test
@@ -30,7 +41,7 @@ function New-TempRepo {
 function Run-Case($name, $mutate, $allowed, $testCmd, $expectMerged, $expectReasonLike) {
     Write-Host "`n[$name]" -ForegroundColor Cyan
     $repo = New-TempRepo
-    $wtRoot = Join-Path $env:TEMP ("cao-gatewt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+    $wtRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-gatewt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
     try {
         Initialize-IntegrationBranch -RepoRoot $repo -Base master | Out-Null
         $wt = New-ItemWorktree -RepoRoot $repo -ItemId 'issue-x' -Model 'codex' -Base 'integration/backlog' -WorktreeRoot $wtRoot
@@ -84,7 +95,7 @@ Run-Case 'reject: over file budget' {
 #    commit body, so GitHub closes the issue when it reaches the default branch.
 Write-Host "`n[auto-close: Closes #N in merge commit]" -ForegroundColor Cyan
 $repo = New-TempRepo
-$wtRoot = Join-Path $env:TEMP ("cao-gatewt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$wtRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("cao-gatewt-" + [guid]::NewGuid().ToString('N').Substring(0,8))
 try {
     Initialize-IntegrationBranch -RepoRoot $repo -Base master | Out-Null
     $wt = New-ItemWorktree -RepoRoot $repo -ItemId 'issue-77' -Model 'codex' -Base 'integration/backlog' -WorktreeRoot $wtRoot
