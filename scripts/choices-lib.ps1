@@ -46,6 +46,12 @@ function Set-ChoiceTimestampsIso {
     param($Choice)
     $Choice.created_at = ConvertTo-ChoiceIsoTimestamp -Value $Choice.created_at
     $Choice.updated_at = ConvertTo-ChoiceIsoTimestamp -Value $Choice.updated_at
+    if ($null -ne $Choice.PSObject.Properties['admitted_at']) {
+        $Choice.admitted_at = ConvertTo-ChoiceIsoTimestamp -Value $Choice.admitted_at
+    }
+    if ($null -ne $Choice.PSObject.Properties['answered_at']) {
+        $Choice.answered_at = ConvertTo-ChoiceIsoTimestamp -Value $Choice.answered_at
+    }
 }
 
 function Test-ChoiceSchemaVersion {

@@ -104,6 +104,7 @@ try {
     Assert 'T11 admitted' ($a.status -eq 'admitted')
     Assert 'T11b priority P0' ($a.priority -eq 'P0')
     Assert 'T11c admitted_at set' (-not [string]::IsNullOrWhiteSpace([string]$a.admitted_at))
+    Assert 'T11d admitted_at stays string' ($a.admitted_at -is [string])
 
     $threwAdmit = $false
     try { Set-ChoiceAdmitted -Id $d.id -BatonHome $tmp } catch { $threwAdmit = $true }
@@ -114,6 +115,7 @@ try {
         -RecommendationOptionId 'a' -RecommendationWhy 'w' -Evidence @() -BatonHome $tmp
     $r = Set-ChoiceRejected -Id $d2.id -BatonHome $tmp
     Assert 'T13 rejected' ($r.status -eq 'rejected')
+    Assert 'T13b reject-from-draft assigns P1' ($r.priority -eq 'P1')
 }
 finally {
     if ($null -eq $prev) { Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue }
