@@ -80,11 +80,28 @@ function Restore-WorktreeTreeSnapshot {
         [Parameter(Mandatory)][string]$TreeSha
     )
     try {
-        $resolved = (Resolve-Path -LiteralPath $Worktree -ErrorAction Stop).Path.Replace('/', '\').TrimEnd('\')
+        # Two jobs, two strings — do not merge them back together. $resolved is a REAL
+        # path handed to `git -C`; $resolvedKey is a separator-normalized copy used ONLY
+        # to compare against git's toplevel.
+        #
+        # This used to normalize in place, to backslashes, and then reuse the mangled
+        # string as the path for every git call below. On Windows that rewrite is a
+        # no-op, so the bug is invisible there — which is why three rounds of adversarial
+        # review did not catch it. On Linux/macOS every `git -C` ran against
+        # '\tmp\run-wt', a path that does not exist, so this ALWAYS returned $false.
+        #
+        # A clean worktree is the gate in front of every usage substitution, so that
+        # silently disabled the whole failover walk off-Windows: the executor took the
+        # "no retry (clean worktree restore failed)" branch every time and a capped
+        # provider still stalled the run — the exact stall #189 was written to remove.
+        # The guard is unchanged: still refuses to `git clean` anywhere but that
+        # repository's top level.
+        $resolved = (Resolve-Path -LiteralPath $Worktree -ErrorAction Stop).Path
+        $resolvedKey = $resolved.Replace('\', '/').TrimEnd('/')
         $top = [string](& git -C $resolved rev-parse --show-toplevel 2>$null)
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($top)) { return $false }
-        $top = $top.Trim().Replace('/', '\').TrimEnd('\')
-        if (-not $top.Equals($resolved, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+        $topKey = $top.Trim().Replace('\', '/').TrimEnd('/')
+        if (-not $topKey.Equals($resolvedKey, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
         & git -C $resolved cat-file -e "$TreeSha`^{tree}" 2>$null
         if ($LASTEXITCODE -ne 0) { return $false }
         & git -C $resolved restore --source=$TreeSha --staged --worktree -- . 2>$null
