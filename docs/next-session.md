@@ -1,3 +1,35 @@
+### UPDATE 2026-08-20 (late) — grok ACP mapped; fleet busy-check shipped
+
+**grok root cause is confirmed and the protocol is mapped, but ONE blocker remains.**
+Full detail in `docs/grok-acp-findings.md`. Short version:
+
+- `grok agent stdio` speaks **ACP** (JSON-RPC 2.0 over NDJSON), *not* Baton's
+  `stdio-json` format. The fix is therefore **an adapter script, not a
+  `command_template` swap** — the earlier handoff note said otherwise and was wrong.
+- **Working live:** `initialize` (0.3-0.4 s) and `authenticate`
+  (`methodId: cached_token`, 0.3 s). No interactive login needed. Models `grok-4.6`
+  (500k ctx) and `grok-4.5`, both with a `reasoningEffort` knob Baton does not model.
+- **Blocked:** `session/new` is received (it fires `_x.ai/models/update` /
+  `_x.ai/settings/update`) but never returns, at 120 s and 150 s. Ruled out: dead
+  stdin, MCP boot cost, client capabilities, auth. Next probes to try are listed in
+  the findings doc (`session/load`, `session/list`, `--leader-socket`).
+- **Harness trap:** do not read child stdout via `[Task]::Run({...})` in PowerShell —
+  no runspace, silently reads nothing. It produced several false negatives here.
+  Use sequential `ReadLineAsync()` on the main thread.
+
+**Shipped this session:** `scripts/lms-device-lib.ps1` + 21 passing tests — a
+fleet-wide "who is busy right now" check across all LM Link boxes. See
+`docs/fleet-box-visibility.md`. Verified live against a real job on the work box.
+
+**Also done:** removed 4 unused MCP servers (clairvoyance x3, ollama-remote) from
+`~/.claude.json` and `~/.cursor/mcp.json`, both backed up as `*.bak-mcp-<stamp>`.
+
+**Correction:** `scripts/test-all.ps1` does NOT exist on master or this branch — it
+lives only on `feat/code-factory-provider-failover` (PR #189, draft). The front-door
+plan's "register the suite" steps depend on #189 landing.
+
+---
+
 # Next-session playbook
 
 How to pick **Baton** back up and use it on its own backlog.
