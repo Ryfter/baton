@@ -116,6 +116,74 @@ try {
     $r = Set-ChoiceRejected -Id $d2.id -BatonHome $tmp
     Assert 'T13 rejected' ($r.status -eq 'rejected')
     Assert 'T13b reject-from-draft assigns P1' ($r.priority -eq 'P1')
+
+    $tmp3 = Join-Path $tmp 'task-3'
+    New-Item -ItemType Directory -Force -Path $tmp3 | Out-Null
+    function New-TestAdmitted([string]$project, [string]$priority, [datetime]$when) {
+        $draft = New-ChoiceDraft -Project $project -Title "$project $priority" -Question 'q' `
+            -Options @(@{id='a';label='A';summary='a'},@{id='b';label='B';summary='b'}) `
+            -RecommendationOptionId 'a' -RecommendationWhy 'w' -Evidence @() -BatonHome $tmp3
+        $choice = Set-ChoiceAdmitted -Id $draft.id -Priority $priority -BatonHome $tmp3
+        $choice.admitted_at = $when.ToUniversalTime().ToString('o')
+        $choice.updated_at = $choice.admitted_at
+        [void](Write-Choice -Choice $choice -BatonHome $tmp3)
+        return $choice
+    }
+
+    $t0 = [datetime]'2026-08-21T10:00:00Z'
+    $t1 = [datetime]'2026-08-21T11:00:00Z'
+    $t2 = [datetime]'2026-08-21T12:00:00Z'
+    $bp = New-TestAdmitted 'bookprofile' 'P1' $t1
+    $ct = New-TestAdmitted 'canvas-toolchain' 'P0' $t2
+    $af = New-TestAdmitted 'atomicforge' 'P0' $t0
+    $afP1 = New-TestAdmitted 'atomicforge' 'P1' ([datetime]'2026-08-20T09:00:00Z')
+    [void](New-ChoiceDraft -Project 'atomicforge' -Title 'draft ignored' -Question 'q' `
+        -Options @(@{id='a';label='A';summary='a'},@{id='b';label='B';summary='b'}) `
+        -RecommendationOptionId 'a' -RecommendationWhy 'w' -Evidence @() -BatonHome $tmp3)
+    Set-Content -LiteralPath (Join-Path (Get-ChoicesDir -BatonHome $tmp3) 'not-a-choice.json') `
+        -Value '{ invalid json' -Encoding utf8NoBOM
+
+    $admitted = @(Get-Choices -BatonHome $tmp3 -Status 'admitted')
+    Assert 'T14 list scans only choice files' ($admitted.Count -eq 4)
+    $atomic = @(Get-Choices -BatonHome $tmp3 -Project 'atomicforge' -Status 'admitted')
+    Assert 'T14b project and status filters apply' ($atomic.Count -eq 2)
+    Assert 'T14c within project priority wins over age' (
+        $atomic[0].id -eq $af.id -and $atomic[1].id -eq $afP1.id
+    )
+
+    $order = @(Get-AdmittedProjectOrder -BatonHome $tmp3)
+    Assert 'T15 P0 projects before P1' ($order[-1] -eq 'bookprofile')
+    Assert 'T15b older best-priority admission breaks project tie' (
+        $order[0] -eq 'atomicforge' -and $order[1] -eq 'canvas-toolchain'
+    )
+
+    $cursor = Reset-ChoicesBriefCursor -BatonHome $tmp3
+    Assert 'T16 reset selects first project and card' (
+        $cursor.active_project -eq 'atomicforge' -and $cursor.current_id -eq $af.id
+    )
+    $cursorBack = Get-Cursor -BatonHome $tmp3
+    Assert 'T16b cursor round trip has integer schema 1' (
+        $cursorBack.schema_version -in @([int]1, [long]1) -and
+        $cursorBack.schema_version -isnot [string]
+    )
+    $next = Get-NextAdmittedChoice -BatonHome $tmp3
+    Assert 'T17 next returns still-admitted current card' ($next.id -eq $af.id)
+
+    $af.status = 'answered'
+    $af.updated_at = (Get-Date).ToUniversalTime().ToString('o')
+    [void](Write-Choice -Choice $af -BatonHome $tmp3)
+    $afterFirst = Move-ChoiceCursorAfterAnswer -BatonHome $tmp3
+    Assert 'T18 cursor stays on project while admitted remain' (
+        $afterFirst.id -eq $afP1.id -and (Get-Cursor -BatonHome $tmp3).active_project -eq 'atomicforge'
+    )
+
+    $afP1.status = 'answered'
+    $afP1.updated_at = (Get-Date).ToUniversalTime().ToString('o')
+    [void](Write-Choice -Choice $afP1 -BatonHome $tmp3)
+    $afterProject = Move-ChoiceCursorAfterAnswer -BatonHome $tmp3
+    Assert 'T19 cursor advances after project clears' (
+        $afterProject.id -eq $ct.id -and (Get-Cursor -BatonHome $tmp3).active_project -eq 'canvas-toolchain'
+    )
 }
 finally {
     if ($null -eq $prev) { Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue }

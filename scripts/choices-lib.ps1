@@ -189,3 +189,204 @@ function Set-ChoiceRejected {
     [void](Write-Choice -Choice $c -BatonHome $BatonHome)
     return (Read-Choice -Id $Id -BatonHome $BatonHome)
 }
+
+function Get-ChoicePriorityRank {
+    param([string]$Priority)
+    switch ($Priority) {
+        'P0' { return 0 }
+        'P1' { return 1 }
+        'P2' { return 2 }
+        default { return 3 }
+    }
+}
+
+function ConvertTo-ChoiceSortTimestamp {
+    param(
+        $Value,
+        [string]$FieldName = 'timestamp'
+    )
+    if ($Value -is [datetimeoffset]) { return [datetimeoffset]$Value }
+    if ($Value -is [datetime]) { return [datetimeoffset]([datetime]$Value) }
+
+    $parsed = [datetimeoffset]::MinValue
+    $ok = [datetimeoffset]::TryParse(
+        [string]$Value,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind,
+        [ref]$parsed
+    )
+    if (-not $ok) { throw "invalid $FieldName timestamp: $Value" }
+    return $parsed
+}
+
+function Get-Choices {
+    param(
+        [string]$BatonHome = (Get-BatonHome),
+        [string]$Project,
+        [string]$Status
+    )
+    $choices = @()
+    $files = @(Get-ChildItem -LiteralPath (Get-ChoicesDir -BatonHome $BatonHome) `
+        -Filter 'ch-*.json' -File)
+    foreach ($file in $files) {
+        $choice = Read-Choice -Id $file.BaseName -BatonHome $BatonHome
+        if (-not [string]::IsNullOrWhiteSpace($Project) -and
+            [string]$choice.project -ne $Project) {
+            continue
+        }
+        if (-not [string]::IsNullOrWhiteSpace($Status) -and
+            [string]$choice.status -ne $Status) {
+            continue
+        }
+        $choices += $choice
+    }
+
+    return @($choices | Sort-Object `
+        @{ Expression = { Get-ChoicePriorityRank -Priority ([string]$_.priority) } }, `
+        @{ Expression = {
+            if ([string]::IsNullOrWhiteSpace([string]$_.admitted_at)) {
+                [datetimeoffset]::MaxValue
+            } else {
+                ConvertTo-ChoiceSortTimestamp -Value $_.admitted_at -FieldName 'admitted_at'
+            }
+        } }, `
+        @{ Expression = { [string]$_.id } })
+}
+
+function Get-AdmittedProjectOrder {
+    param([string]$BatonHome = (Get-BatonHome))
+    $projectRanks = foreach ($group in @(
+        Get-Choices -BatonHome $BatonHome -Status 'admitted' | Group-Object project
+    )) {
+        $bestChoice = @($group.Group | Sort-Object `
+            @{ Expression = { Get-ChoicePriorityRank -Priority ([string]$_.priority) } }, `
+            @{ Expression = {
+                ConvertTo-ChoiceSortTimestamp -Value $_.admitted_at -FieldName 'admitted_at'
+            } })[0]
+        [pscustomobject]@{
+            project     = [string]$group.Name
+            rank        = Get-ChoicePriorityRank -Priority ([string]$bestChoice.priority)
+            admitted_at = ConvertTo-ChoiceSortTimestamp `
+                -Value $bestChoice.admitted_at -FieldName 'admitted_at'
+        }
+    }
+
+    return @($projectRanks | Sort-Object rank, admitted_at, project |
+        ForEach-Object { $_.project })
+}
+
+function Get-ChoicesCursorPath {
+    param([string]$BatonHome = (Get-BatonHome))
+    return (Join-Path (Get-ChoicesDir -BatonHome $BatonHome) '_cursor.json')
+}
+
+function Get-Cursor {
+    param([string]$BatonHome = (Get-BatonHome))
+    $path = Get-ChoicesCursorPath -BatonHome $BatonHome
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+
+    $cursor = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    if (-not (Test-ChoiceSchemaVersion -Value $cursor.schema_version)) {
+        throw "unsupported cursor schema_version: $($cursor.schema_version)"
+    }
+    return $cursor
+}
+
+function Set-Cursor {
+    param(
+        [Parameter(Mandatory)]$Cursor,
+        [string]$BatonHome = (Get-BatonHome)
+    )
+    $stored = [ordered]@{
+        schema_version = [int]$script:ChoiceSchemaVersion
+        active_project = if ($null -eq $Cursor.active_project) {
+            $null
+        } else {
+            [string]$Cursor.active_project
+        }
+        current_id     = if ($null -eq $Cursor.current_id) {
+            $null
+        } else {
+            [string]$Cursor.current_id
+        }
+        project_order  = @($Cursor.project_order | ForEach-Object { [string]$_ })
+    }
+    $path = Get-ChoicesCursorPath -BatonHome $BatonHome
+    $tmp = "$path.tmp"
+    $stored | ConvertTo-Json -Depth 4 |
+        Set-Content -LiteralPath $tmp -Encoding utf8NoBOM
+    Move-Item -LiteralPath $tmp -Destination $path -Force
+}
+
+function Reset-ChoicesBriefCursor {
+    param([string]$BatonHome = (Get-BatonHome))
+    $order = @(Get-AdmittedProjectOrder -BatonHome $BatonHome)
+    $activeProject = if ($order.Count -gt 0) { $order[0] } else { $null }
+    $firstChoice = if ($null -ne $activeProject) {
+        @(Get-Choices -BatonHome $BatonHome -Project $activeProject -Status 'admitted')[0]
+    } else {
+        $null
+    }
+    $cursor = [pscustomobject]@{
+        schema_version = [int]$script:ChoiceSchemaVersion
+        active_project = $activeProject
+        current_id     = if ($null -ne $firstChoice) { $firstChoice.id } else { $null }
+        project_order  = $order
+    }
+    Set-Cursor -Cursor $cursor -BatonHome $BatonHome
+    return (Get-Cursor -BatonHome $BatonHome)
+}
+
+function Get-NextAdmittedChoice {
+    param([string]$BatonHome = (Get-BatonHome))
+    $cursor = Get-Cursor -BatonHome $BatonHome
+    if ($null -eq $cursor) {
+        $cursor = Reset-ChoicesBriefCursor -BatonHome $BatonHome
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace([string]$cursor.current_id)) {
+        $current = @(Get-Choices -BatonHome $BatonHome -Status 'admitted' |
+            Where-Object { $_.id -eq $cursor.current_id })
+        if ($current.Count -gt 0) { return $current[0] }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace([string]$cursor.active_project)) {
+        $inProject = @(Get-Choices -BatonHome $BatonHome `
+            -Project $cursor.active_project -Status 'admitted')
+        if ($inProject.Count -gt 0) {
+            $cursor.current_id = $inProject[0].id
+            Set-Cursor -Cursor $cursor -BatonHome $BatonHome
+            return $inProject[0]
+        }
+    }
+
+    $order = @($cursor.project_order)
+    $activeIndex = [array]::IndexOf($order, [string]$cursor.active_project)
+    for ($index = $activeIndex + 1; $index -lt $order.Count; $index++) {
+        $nextProject = [string]$order[$index]
+        $inProject = @(Get-Choices -BatonHome $BatonHome `
+            -Project $nextProject -Status 'admitted')
+        if ($inProject.Count -gt 0) {
+            $cursor.active_project = $nextProject
+            $cursor.current_id = $inProject[0].id
+            Set-Cursor -Cursor $cursor -BatonHome $BatonHome
+            return $inProject[0]
+        }
+    }
+
+    $cursor.active_project = $null
+    $cursor.current_id = $null
+    Set-Cursor -Cursor $cursor -BatonHome $BatonHome
+    return $null
+}
+
+function Move-ChoiceCursorAfterAnswer {
+    param([string]$BatonHome = (Get-BatonHome))
+    $cursor = Get-Cursor -BatonHome $BatonHome
+    if ($null -eq $cursor) {
+        return (Get-NextAdmittedChoice -BatonHome $BatonHome)
+    }
+    $cursor.current_id = $null
+    Set-Cursor -Cursor $cursor -BatonHome $BatonHome
+    return (Get-NextAdmittedChoice -BatonHome $BatonHome)
+}
