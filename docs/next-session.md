@@ -13,6 +13,23 @@ How to pick **Baton** back up and use it on its own backlog.
   the front door; STT-only voice). Supersedes part of `baton-d108` — its own `revisit-if` fired.
 - **Not authorized to build.** Plan exists; Kevin's word still required.
 
+### UPDATE 2026-08-20 — two blockers resolved
+
+- **grok root cause found.** Not a TTY mystery: **Baton invokes the wrong command.** `grok` is
+  the interactive TUI. The headless path is `grok agent stdio` (nested subcommand; `grok agent`
+  alone rejects `--prompt-file` with exit 2). `~/.grok/bin/agent.exe` is the same TUI binary and
+  hangs identically. `grok agent stdio` speaks an **ACP session protocol**, so the fix is to point
+  the **`stdio-json` transport from the instrument ABI** (`baton-d091`, #92) at it — an
+  integration change, not a flag swap. **Not yet built.** Update #196 when picked up.
+- **OpenRouter is live.** `OPENROUTER_API_KEY` is set at Windows **User** scope. Both rows
+  verified working: `openrouter-free` (2 s, exit 0, tok:190 exact) and `openrouter-gap`
+  (7 s, exit 0, tok:163 exact). `openrouter-gap` is the only enabled `reasoning` claimant
+  outside the subscription CLIs, so a non-Claude offload path now exists.
+  - **Gotcha:** a shell started *before* `setx` will not see the key. Read it explicitly with
+    `[Environment]::GetEnvironmentVariable('OPENROUTER_API_KEY','User')` or restart the session.
+  - Residual: `usage preflight: openrouter-gap balance unknown (probe unavailable)` — a warning,
+    not a failure; it dispatches uncapped. The credit probe is still not wired.
+
 ### Blockers any agent must know before dispatching work
 
 1. **grok is not dispatchable headlessly.** Every invocation that starts the agent runtime
