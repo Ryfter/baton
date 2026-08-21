@@ -2,6 +2,53 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
+## ⚑ RESUME HERE — 2026-08-19 (local front door spec'd + planned; grok is DOWN headless)
+
+**Branch:** `docs/local-front-door-spec` — spec `9b5ade3`, plan `5beb622`. Pushed. Not merged.
+
+- Spec: [`specs/2026-08-18-local-front-door-design.md`](superpowers/specs/2026-08-18-local-front-door-design.md)
+- Plan: [`plans/2026-08-19-local-front-door.md`](superpowers/plans/2026-08-19-local-front-door.md) — 6 TDD tasks, device inventory FIRST
+- Decisions: **`baton-d119`** (the mouth must be unexhaustible), **`baton-d120`** (placement by
+  LM Link identifier, not `base_url`; work box excluded), **`baton-d121`** (bare `baton` starts
+  the front door; STT-only voice). Supersedes part of `baton-d108` — its own `revisit-if` fired.
+- **Not authorized to build.** Plan exists; Kevin's word still required.
+
+### Blockers any agent must know before dispatching work
+
+1. **grok is not dispatchable headlessly.** Every invocation that starts the agent runtime
+   hangs with **zero bytes on stdout AND stderr**; one ran 3,955 s. Ruled out: prompt size,
+   flag form (`-p` and `--prompt-file`), stdin null-vs-pipe, directory trust, auth (`--help`
+   works instantly), tool permissions. Leading cause: the Grok Build **TUI needs a real TTY**.
+   Kevin can run it from his terminal; a harness cannot. Issue **#196**.
+2. **`gemini-antigravity` takes its prompt on the command line** (`agy --print "{{prompt}}"`,
+   `stdin: false`) so anything over the 965-byte ceiling fails silently as `exit:-1 tok:0` in 0 s.
+3. **OpenRouter is keyless** — all three rows enabled, `OPENROUTER_API_KEY` empty, fails in 0 s.
+4. Consequence: on 2026-08-19 there was **no working non-Claude offload path**. The only thing
+   that worked was **local** — `qwen/qwen3.5-35b-a3b` on Firefly drafted the implementation plan
+   (3,470 tokens, 414 s, free). Its `Produces:` fields named existing functions, so local drafts
+   but **the review pass is not optional**.
+
+### Live fixes applied 2026-08-19
+
+- **Judge repaired.** `lm-studio-small` was pinned to `phi-4`, which Firefly does not serve —
+  every judge call dialed a nonexistent model. Re-pinned to `matrixportalx/tulu-3.1-8b-supernova`
+  (Firefly-only by design so it cannot resolve onto the work box; non-reasoning). Verified:
+  `Get-JudgeModel` → score 0.9 in 3 s. **Do not delete that row** — sole live `judge` claimant.
+- **Releases backfilled.** v1.20.0 and v1.21.0 were tagged but had no GitHub Release; the page
+  claimed v1.19.0 while master was 78 commits ahead. v1.20.0/v1.21.0/**v1.22.0** now published.
+- **Project #5** swept: 27 → 43 items; every open issue tracked.
+- **#196 filed**: `Invoke-Fleet-Cli` declares `TimeoutS = 120` that did not cap a 3,955 s run.
+  Proposed fix — measure **silence, not duration**: `idle_timeout_s` (seconds since last byte)
+  plus a hard `max_timeout_s`. A slow provider still emits; a hung one does not.
+
+### Operator actions only Kevin can do (harnesses must not edit `~/.baton/fleet.yaml`)
+
+- Set `OPENROUTER_API_KEY`; consider disabling the `grok-cli` row until #196 lands.
+- `lms link set-preferred-device` — 10 model keys are ambiguous across four LM Link boxes and
+  one of them (`ITSCM-KRANK2`) is a work machine. Until set, a bare key can send repo contents there.
+- Add the `converse` claim to the chosen local row when the front door is built.
+
+
 ## ⚑ RESUME HERE — 2026-08-15 (Maestro front-door design LOCKED)
 
 **Design is closed.** Do not reopen layers, Buzz-as-brain, two-seat chat, Gantt, or durability 3–4 unless Kevin asks.
