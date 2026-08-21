@@ -27,12 +27,43 @@ function Get-ChoicePath {
     return (Join-Path (Get-ChoicesDir -BatonHome $BatonHome) "$Id.json")
 }
 
+function ConvertTo-ChoiceIsoTimestamp {
+    param($Value)
+    if ($Value -is [datetime]) {
+        $dt = [datetime]$Value
+        if ($dt.Kind -eq [System.DateTimeKind]::Unspecified) {
+            $dt = [datetime]::SpecifyKind($dt, [System.DateTimeKind]::Utc)
+        }
+        return $dt.ToUniversalTime().ToString('o')
+    }
+    if ($Value -is [datetimeoffset]) {
+        return ([datetimeoffset]$Value).ToUniversalTime().ToString('o')
+    }
+    return [string]$Value
+}
+
+function Set-ChoiceTimestampsIso {
+    param($Choice)
+    $Choice.created_at = ConvertTo-ChoiceIsoTimestamp -Value $Choice.created_at
+    $Choice.updated_at = ConvertTo-ChoiceIsoTimestamp -Value $Choice.updated_at
+}
+
+function Test-ChoiceSchemaVersion {
+    param($Value)
+    if ($Value -is [int] -or $Value -is [long]) {
+        return ($Value -eq $script:ChoiceSchemaVersion)
+    }
+    if ($Value -is [string]) {
+        return ($Value -eq '1')
+    }
+    return $false
+}
+
 function Test-ChoiceSchema {
     param([Parameter(Mandatory)]$Choice)
     if ($null -eq $Choice) { throw 'choice is null' }
-    $ver = [int]$Choice.schema_version
-    if ($ver -ne $script:ChoiceSchemaVersion) {
-        throw "unsupported schema_version: $ver (want $($script:ChoiceSchemaVersion))"
+    if (-not (Test-ChoiceSchemaVersion -Value $Choice.schema_version)) {
+        throw "unsupported schema_version: $($Choice.schema_version) (want $($script:ChoiceSchemaVersion))"
     }
     $st = [string]$Choice.status
     if ($st -notin $script:ChoiceStatuses) { throw "invalid status: $st" }
@@ -65,6 +96,7 @@ function Write-Choice {
         [Parameter(Mandatory)]$Choice,
         [string]$BatonHome = (Get-BatonHome)
     )
+    Set-ChoiceTimestampsIso -Choice $Choice
     Test-ChoiceSchema -Choice $Choice
     $path = Get-ChoicePath -Id ([string]$Choice.id) -BatonHome $BatonHome
     $tmp = "$path.tmp"
@@ -82,6 +114,7 @@ function Read-Choice {
     $path = Get-ChoicePath -Id $Id -BatonHome $BatonHome
     if (-not (Test-Path -LiteralPath $path)) { throw "choice not found: $Id" }
     $obj = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    Set-ChoiceTimestampsIso -Choice $obj
     Test-ChoiceSchema -Choice $obj
     return $obj
 }

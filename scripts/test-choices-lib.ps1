@@ -44,6 +44,8 @@ try {
     $back = Read-Choice -Id $id -BatonHome $tmp
     Assert 'T4 round-trip id' ($back.id -eq $id)
     Assert 'T5 round-trip status' ($back.status -eq 'draft')
+    Assert 'T5b created_at stays string' ($back.created_at -is [string])
+    Assert 'T5c updated_at stays string' ($back.updated_at -is [string])
 
     $threw = $false
     try {
@@ -62,6 +64,15 @@ try {
         Test-ChoiceSchema -Choice $badVer
     } catch { $threw2 = $true }
     Assert 'T7 bad schema_version throws' $threw2
+
+    $threw3 = $false
+    try {
+        $badVerFloat = [ordered]@{}
+        foreach ($p in $good.Keys) { $badVerFloat[$p] = $good[$p] }
+        $badVerFloat.schema_version = 1.1
+        Test-ChoiceSchema -Choice $badVerFloat
+    } catch { $threw3 = $true }
+    Assert 'T8 coercible schema_version 1.1 throws' $threw3
 }
 finally {
     if ($null -eq $prev) { Remove-Item Env:\BATON_HOME -ErrorAction SilentlyContinue }
