@@ -190,6 +190,42 @@ function Set-ChoiceRejected {
     return (Read-Choice -Id $Id -BatonHome $BatonHome)
 }
 
+function Set-ChoiceAnswered {
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [string]$OptionId,
+        [string]$FreeText,
+        [string]$Note,
+        [string]$BatonHome = (Get-BatonHome)
+    )
+    $choice = Read-Choice -Id $Id -BatonHome $BatonHome
+    if ([string]$choice.status -ne 'admitted') {
+        throw "answer requires admitted; got $($choice.status)"
+    }
+
+    $hasOption = -not [string]::IsNullOrWhiteSpace($OptionId)
+    $hasFreeText = -not [string]::IsNullOrWhiteSpace($FreeText)
+    if (-not $hasOption -and -not $hasFreeText) {
+        throw 'answer requires option_id or non-empty free_text'
+    }
+    if ($hasOption -and $OptionId -notin @($choice.options | ForEach-Object { [string]$_.id })) {
+        throw "unknown option_id for $Id`: $OptionId"
+    }
+
+    $answer = [ordered]@{}
+    if ($hasOption) { $answer.option_id = $OptionId }
+    if ($hasFreeText) { $answer.free_text = $FreeText }
+    if (-not [string]::IsNullOrWhiteSpace($Note)) { $answer.note = $Note }
+
+    $now = ConvertTo-ChoiceIsoTimestamp -Value ([datetime]::UtcNow)
+    $choice | Add-Member -NotePropertyName answer -NotePropertyValue $answer -Force
+    $choice | Add-Member -NotePropertyName status -NotePropertyValue 'answered' -Force
+    $choice | Add-Member -NotePropertyName answered_at -NotePropertyValue $now -Force
+    $choice | Add-Member -NotePropertyName updated_at -NotePropertyValue $now -Force
+    [void](Write-Choice -Choice $choice -BatonHome $BatonHome)
+    return (Read-Choice -Id $Id -BatonHome $BatonHome)
+}
+
 function Get-ChoicePriorityRank {
     param([string]$Priority)
     switch ($Priority) {
@@ -389,4 +425,52 @@ function Move-ChoiceCursorAfterAnswer {
     $cursor.current_id = $null
     Set-Cursor -Cursor $cursor -BatonHome $BatonHome
     return (Get-NextAdmittedChoice -BatonHome $BatonHome)
+}
+
+function Format-ChoiceCard {
+    param([Parameter(Mandatory)]$Choice)
+
+    $evidence = @($Choice.evidence | ForEach-Object { [string]$_ })
+    $evidenceText = if ($evidence.Count -gt 0) { $evidence -join ', ' } else { '(none)' }
+    $blocksText = if ([string]::IsNullOrWhiteSpace([string]$Choice.blocks)) {
+        '(none)'
+    } else {
+        [string]$Choice.blocks
+    }
+
+    $lines = @(
+        "[$($Choice.id)] $($Choice.project) · $($Choice.priority) · $($Choice.status)"
+        [string]$Choice.title
+        [string]$Choice.question
+        ''
+        'Options:'
+    )
+    foreach ($option in @($Choice.options)) {
+        $lines += "  [$($option.id)] $($option.label) — $($option.summary)"
+    }
+    $lines += @(
+        ''
+        "Recommended: $($Choice.recommendation.option_id) — $($Choice.recommendation.why)"
+        "Evidence: $evidenceText"
+        "Blocks: $blocksText"
+    )
+    return ($lines -join "`n")
+}
+
+function Format-ChoicesBrief {
+    param([string]$BatonHome = (Get-BatonHome))
+
+    $lines = @()
+    foreach ($project in @(Get-AdmittedProjectOrder -BatonHome $BatonHome)) {
+        $lines += "## $project"
+        $lines += ''
+        foreach ($choice in @(
+            Get-Choices -BatonHome $BatonHome -Project $project -Status 'admitted'
+        )) {
+            $lines += Format-ChoiceCard -Choice $choice
+            $lines += ''
+        }
+    }
+    if ($lines.Count -eq 0) { return 'No admitted choices.' }
+    return ($lines[0..($lines.Count - 2)] -join "`n")
 }

@@ -169,20 +169,74 @@ try {
     $next = Get-NextAdmittedChoice -BatonHome $tmp3
     Assert 'T17 next returns still-admitted current card' ($next.id -eq $af.id)
 
-    $af.status = 'answered'
-    $af.updated_at = (Get-Date).ToUniversalTime().ToString('o')
-    [void](Write-Choice -Choice $af -BatonHome $tmp3)
+    $cursorBeforeAnswer = (Get-Cursor -BatonHome $tmp3 | ConvertTo-Json -Depth 4 -Compress)
+    $ans = Set-ChoiceAnswered -Id $af.id -OptionId 'a' -Note 'approved' -BatonHome $tmp3
+    Assert 'T18 answer sets status and option' (
+        $ans.status -eq 'answered' -and
+        $ans.answer.option_id -eq 'a' -and
+        $ans.answer.note -eq 'approved'
+    )
+    $answeredAt = [datetimeoffset]::MinValue
+    Assert 'T18b answer timestamps are persisted ISO strings' (
+        $ans.answered_at -is [string] -and
+        [datetimeoffset]::TryParse([string]$ans.answered_at, [ref]$answeredAt) -and
+        $ans.updated_at -eq $ans.answered_at
+    )
+    Assert 'T18c answering does not move cursor' (
+        (Get-Cursor -BatonHome $tmp3 | ConvertTo-Json -Depth 4 -Compress) -eq $cursorBeforeAnswer
+    )
+
+    $threwOpt = $false
+    try { Set-ChoiceAnswered -Id $ct.id -OptionId 'nope' -BatonHome $tmp3 } catch { $threwOpt = $true }
+    Assert 'T19 unknown option throws' $threwOpt
+
+    $threwEmpty = $false
+    try { Set-ChoiceAnswered -Id $ct.id -FreeText '  ' -BatonHome $tmp3 } catch { $threwEmpty = $true }
+    Assert 'T19b empty answer throws' $threwEmpty
+
+    $threwStatus = $false
+    try { Set-ChoiceAnswered -Id $af.id -OptionId 'a' -BatonHome $tmp3 } catch { $threwStatus = $true }
+    Assert 'T19c answer requires admitted status' $threwStatus
+
     $afterFirst = Move-ChoiceCursorAfterAnswer -BatonHome $tmp3
-    Assert 'T18 cursor stays on project while admitted remain' (
+    Assert 'T20 cursor stays on project while admitted remain' (
         $afterFirst.id -eq $afP1.id -and (Get-Cursor -BatonHome $tmp3).active_project -eq 'atomicforge'
     )
 
-    $afP1.status = 'answered'
-    $afP1.updated_at = (Get-Date).ToUniversalTime().ToString('o')
-    [void](Write-Choice -Choice $afP1 -BatonHome $tmp3)
+    $textAnswer = Set-ChoiceAnswered -Id $afP1.id -FreeText 'Use the staged rollout' -BatonHome $tmp3
+    Assert 'T21 free-text answer persists' (
+        $textAnswer.answer.free_text -eq 'Use the staged rollout' -and
+        $null -eq $textAnswer.answer.PSObject.Properties['option_id']
+    )
     $afterProject = Move-ChoiceCursorAfterAnswer -BatonHome $tmp3
-    Assert 'T19 cursor advances after project clears' (
+    Assert 'T22 cursor advances after project clears' (
         $afterProject.id -eq $ct.id -and (Get-Cursor -BatonHome $tmp3).active_project -eq 'canvas-toolchain'
+    )
+
+    $card = Format-ChoiceCard -Choice $a
+    Assert 'T23 card contains header, body, and option detail' (
+        $card -match "\[$([regex]::Escape($a.id))\] bookprofile · P0 · admitted" -and
+        $card -match 'A/B/C surface' -and
+        $card -match '(?m)^  \[a\] Public — Static only$'
+    )
+    Assert 'T23b card contains recommendation, evidence, and blocks' (
+        $card -match '(?m)^Recommended: c — Match free stack \+ share later$' -and
+        $card -match '(?m)^Evidence: BookProfile/docs/\.\.\.$' -and
+        $card -match '(?m)^Blocks: bp-scaffold$'
+    )
+
+    $cursorBeforeBrief = (Get-Cursor -BatonHome $tmp3 | ConvertTo-Json -Depth 4 -Compress)
+    $brief = Format-ChoicesBrief -BatonHome $tmp3
+    Assert 'T24 brief groups admitted projects in queue order' (
+        $brief -match '(?m)^## canvas-toolchain$' -and
+        $brief -match '(?m)^## bookprofile$' -and
+        $brief.IndexOf('## canvas-toolchain') -lt $brief.IndexOf('## bookprofile')
+    )
+    Assert 'T24b brief excludes projects with no admitted cards' (
+        $brief -notmatch '(?m)^## atomicforge$'
+    )
+    Assert 'T24c brief is a pure read of cursor state' (
+        (Get-Cursor -BatonHome $tmp3 | ConvertTo-Json -Depth 4 -Compress) -eq $cursorBeforeBrief
     )
 }
 finally {
