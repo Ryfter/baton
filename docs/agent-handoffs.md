@@ -69,10 +69,18 @@ it — re-copying is how drift starts.
   (≤965 bytes; it rejects stdin); pass `--add-dir <dir>` for context and
   `--dangerously-skip-permissions` to let it edit — large inline prompts hang.
 - **`GROK.md` — Grok = plan once-over peer + second implementer** (decision d080).
-  Claude conducts; Codex + Grok review plans via `plan-review`. Fleet headless:
-  `grok -p` / `--prompt-file` / `--always-approve`. Register with `agentic: true`
-  (platform `grok` is outside d078's auto-infer set). Grimdex pointer stanza is
-  maintained by `grimdex wire-project` alongside CLAUDE/AGENTS/GEMINI.
+  Claude conducts; Codex + Grok review plans via `plan-review`. Register with
+  `agentic: true` (platform `grok` is outside d078's auto-infer set). Grimdex pointer
+  stanza is maintained by `grimdex wire-project` alongside CLAUDE/AGENTS/GEMINI.
+
+  > **Grok is NOT headless-dispatchable today — do not route work to it.**
+  > `grok -p` / `--prompt-file` hang forever: bare `grok` is the interactive TUI and
+  > waits on a terminal (one dispatch ran 3,955 s emitting zero bytes). The headless
+  > entry point is the nested subcommand **`grok agent stdio`**, which speaks **ACP**
+  > (JSON-RPC 2.0 over NDJSON) — a different protocol from Baton's one-shot
+  > `stdio-json`, so it needs an adapter, not a `command_template` swap (baton-d122).
+  > `initialize` and `authenticate` work; `session/new` never returns. Tracking:
+  > **#197** (blocker), #196 (idle-timeout), #183. Detail: `docs/grok-acp-findings.md`.
 
   `agentic` is one of two edit-eligibility fields on a fleet row; the other is
   `diff_apply` (decision d103, `feat/diff-apply-worker-path`). Where `agentic: true`
