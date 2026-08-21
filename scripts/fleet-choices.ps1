@@ -30,6 +30,20 @@ function Get-RequiredId {
     return $Ids[0]
 }
 
+function Get-NormalizedEvidenceList {
+    param(
+        [object[]]$Evidence = @(),
+        [object[]]$Extra = @()
+    )
+    # Accept native arrays (-Evidence a b), comma-joined strings (-Evidence "a,b"),
+    # and recover paths PowerShell bound to $Ids instead of -Evidence (draft has no ids).
+    $list = @()
+    foreach ($r in @($Evidence) + @($Extra)) {
+        $list += (([string]$r) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+    return $list
+}
+
 try {
     switch ($Subcommand) {
         'brief' {
@@ -84,9 +98,10 @@ try {
                 $OptionsJson
             }
             $options = @($optionsSource | ConvertFrom-Json)
+            $evidenceList = Get-NormalizedEvidenceList -Evidence $Evidence -Extra $Ids
             $choice = New-ChoiceDraft -Project $Project -Title $Title -Question $Question `
                 -Options $options -RecommendationOptionId $Rec -RecommendationWhy $RecWhy `
-                -Evidence $Evidence -Blocks $Blocks
+                -Evidence $evidenceList -Blocks $Blocks
             if ($Json) { Write-ChoiceJson $choice } else { Format-ChoiceCard -Choice $choice }
         }
         'admit' {

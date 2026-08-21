@@ -13,6 +13,18 @@ try {
     $draftOut = & pwsh -NoProfile -File $runner draft -Project demo -Title 'T' -Question 'Q' -OptionsJson $optsPath -Rec a -RecWhy 'because' -Json 2>&1 | Out-String
     $d = $draftOut | ConvertFrom-Json
     Assert 'C1 draft json id' ($d.id -match '^ch-')
+    $evDraftOut = & pwsh -NoProfile -File $runner draft -Project demo -Title 'T2' -Question 'Q2' -OptionsJson $optsPath -Rec a -RecWhy 'because' `
+        -Evidence 'docs/a.md' 'docs/b.md' 'docs/c.md' -Json 2>&1 | Out-String
+    $evDraft = $evDraftOut | ConvertFrom-Json
+    Assert 'C7 draft evidence count' (@($evDraft.evidence).Count -eq 3)
+    Assert 'C8 draft evidence paths' (
+        (@($evDraft.evidence) -contains 'docs/a.md') -and
+        (@($evDraft.evidence) -contains 'docs/b.md') -and
+        (@($evDraft.evidence) -contains 'docs/c.md'))
+    $evCommaOut = & pwsh -NoProfile -File $runner draft -Project demo -Title 'T3' -Question 'Q3' -OptionsJson $optsPath -Rec a -RecWhy 'because' `
+        -Evidence 'docs/x.md,docs/y.md' -Json 2>&1 | Out-String
+    $evComma = $evCommaOut | ConvertFrom-Json
+    Assert 'C9 comma evidence count' (@($evComma.evidence).Count -eq 2)
     & pwsh -NoProfile -File $runner admit $d.id -Priority P0
     Assert 'C2 admit exit 0' ($LASTEXITCODE -eq 0)
     $brief = & pwsh -NoProfile -File $runner brief 2>&1 | Out-String
