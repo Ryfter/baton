@@ -1,6 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
 
+<!-- Maestro front door (slice 1) — compose first; viewer panels below -->
+<div class="card maestro-compose-card" style="grid-column: 1 / -1;"
+     hx-get="/maestro/partials/compose"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+  <p class="muted">Loading Baton…</p>
+  <noscript>
+    <p>JavaScript is off — HTMX cannot load the first fold. Open <a href="/maestro/partials/compose">the Baton compose form</a> directly.</p>
+  </noscript>
+</div>
+
 <!-- Fleet Activity cockpit (Plan 10) — polls every 2s so concurrent runs animate live -->
 <div class="card fleet-cockpit-card" style="grid-column: 1 / -1;"
      hx-get="/partials/fleet"
@@ -25,7 +36,7 @@
 <!-- Portfolio panel — polls every 60s -->
 <div class="card" style="grid-column: 1 / -1;"
      hx-get="/partials/projects"
-     hx-trigger="every 60s"
+     hx-trigger="load, every 60s"
      hx-swap="innerHTML">
   {% include "partials/projects_list.html" %}
 </div>
@@ -33,7 +44,7 @@
 <!-- Jobs panel — polls every 30s -->
 <div class="card"
      hx-get="/partials/jobs"
-     hx-trigger="every 30s"
+     hx-trigger="load, every 30s"
      hx-swap="innerHTML">
   {% include "partials/jobs_list.html" %}
 </div>

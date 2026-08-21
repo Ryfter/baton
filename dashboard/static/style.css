@@ -991,3 +991,90 @@ input:focus-visible,
   .activity-row .cmd { grid-column: 1 / -1; white-space: normal; }
 }
 
+
+/* Maestro compose — front-door first fold */
+.maestro-compose-card { border-color: var(--border-color-hover); }
+.maestro-compose__head h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.35rem;
+  letter-spacing: 0.02em;
+}
+.maestro-compose__form {
+  display: grid;
+  grid-template-columns: 1fr 10rem;
+  gap: 0.75rem 1rem;
+  margin-top: 0.75rem;
+}
+.maestro-field { display: flex; flex-direction: column; gap: 0.35rem; }
+.maestro-field span { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.maestro-field__hint { font-size: 0.72rem; color: var(--text-muted); line-height: 1.35; }
+.maestro-field__hint code { font-size: 0.68rem; }
+.maestro-field__hint--warn { color: var(--accent-warning); }
+.maestro-status__empty { margin: 0; line-height: 1.45; }
+.maestro-latest { margin-bottom: 0.35rem; }
+.maestro-field select,
+.maestro-field textarea {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.65rem;
+  font: inherit;
+}
+.maestro-field--goal { grid-column: 1 / -1; }
+.maestro-field textarea { resize: vertical; min-height: 7rem; }
+.maestro-compose__actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; align-items: center; gap: 0.65rem; }
+.maestro-start {
+  background: var(--accent-primary);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.maestro-start:hover { filter: brightness(1.08); }
+.maestro-start:disabled { opacity: 0.55; cursor: wait; filter: none; }
+.maestro-start-spinner { font-size: 0.8rem; color: var(--text-muted); }
+.htmx-indicator { display: none; }
+.htmx-request .htmx-indicator { display: inline; }
+.maestro-status { margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color); }
+.maestro-status__line { margin: 0 0 0.35rem; }
+.maestro-status__error { color: var(--accent-danger); }
+.maestro-status__budget { margin: 0.45rem 0 0; font-size: 0.78rem; }
+.maestro-working { margin-top: 0.5rem; }
+.maestro-working__label { margin: 0 0 0.35rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+.maestro-working__list,
+.maestro-who {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  font-family: var(--font-mono);
+}
+.maestro-working__list li,
+.maestro-who li { color: var(--text-secondary); padding: 0.15rem 0; }
+.maestro-working__list code,
+.maestro-who code { color: var(--text-primary); font-size: 0.78rem; }
+.status-admitted, .status-running { color: var(--accent-success); }
+.status-waiting-quota, .status-held { color: var(--accent-warning); }
+.status-queued { color: var(--text-secondary); }
+.status-done { color: var(--text-muted); }
+@media (max-width: 720px) {
+  .maestro-compose__form { grid-template-columns: 1fr; }
+}
+
+.maestro-hold { margin: 0.4rem 0 0.6rem; }
+.maestro-hold__btn {
+  background: transparent;
+  color: var(--accent-warning);
+  border: 1px solid var(--accent-warning);
+  border-radius: var(--radius-sm);
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.maestro-hold__btn:hover { background: var(--accent-warning); color: #111; }

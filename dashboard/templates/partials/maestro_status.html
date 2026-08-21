@@ -1,0 +1,49 @@
+{# Maestro status strip — framework lines only, not chat.
+   Router currently passes `jobs`; tolerate leftover `recent_jobs`. #}
+{% set queue = jobs|default(recent_jobs, true)|default([]) %}
+{% if job %}
+<div class="maestro-latest">
+  <p class="maestro-working__label">Latest job</p>
+  <p class="maestro-status__line">
+    <strong>{{ job.id }}</strong>
+    · <span class="status-{{ job.status }}">{{ job.status }}</span>
+    · {{ job.project }}
+    {% if job.status == 'admitted' %} · waiting for Conductor{% elif job.provider %} · {{ job.provider }}{% elif job.run_id %} · run {{ job.run_id }}{% elif job.status not in ('held', 'done') %} · instrument pending{% endif %}
+  </p>
+  {% if job.status != 'held' and job.status != 'done' %}
+  <form
+    class="maestro-hold"
+    hx-post="/maestro/jobs/{{ job.id }}/hold"
+    hx-target="#maestro-status"
+    hx-swap="innerHTML"
+  >
+    <button type="submit" class="maestro-hold__btn" title="Pause this job before Conductor fires">Hold job</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if queue %}
+<div class="maestro-working">
+  <p class="maestro-working__label">Job queue{% if queue|length > 1 %} ({{ queue|length }}){% endif %}</p>
+  <ul class="maestro-working__list maestro-who">
+    {% for j in queue[:5] %}
+    <li>
+      <code>{{ j.id }}</code>
+      · <span class="status-{{ j.status }}">{{ j.status }}</span>
+      · {{ j.project }}
+      {% if j.provider %} · {{ j.provider }}{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% elif not job %}
+<p class="maestro-status__empty muted">No jobs yet. Pick a registry project above, paste a goal, and click <strong>Admit job</strong>.</p>
+{% endif %}
+
+{% if budget %}
+<p class="maestro-status__budget muted">
+  usable (stub): {{ budget.usable | join(", ") }}
+  {% if budget.claude_5h %} · Claude 5h: {{ budget.claude_5h }}{% endif %}
+</p>
+{% endif %}
