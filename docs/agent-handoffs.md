@@ -254,3 +254,22 @@ must know:
   the same `BATON_HOME`; bridge shims into existing PS libs via `scripts/mcp-bridge.ps1`.
 - `/baton:usage` shows a Copilot Credits panel (d079) when the `gh-copilot` fleet row has a `budget`; needs `gh` token `user` scope (`gh auth refresh -h github.com -s user`).
 - **Direct-model commands (#2, v1.15.0):** `/baton:codex|grok|gemini|agy "<prompt>" [--tier <name>|all]` → `scripts/fleet-ask.ps1` → `Invoke-Fleet` (journaled + metered). Per-model tokens land as a trailing `tok:N(exact|estimate)` field on the fleet journal line (observe-only). Tiers = flat `tier_<name>` fleet.yaml keys → `{{tier_args}}`.
+- **Memory layer — claude-mem REMOVED (2026-08-21, d126):** the `claude-mem@thedotmack`
+  plugin is gone (it began soliciting $30/mo). Do **not** reinstall it or write to
+  `~/.claude-mem`. Memory is now the two free systems already in place: Claude Code's
+  native file-based auto-memory (`~/.claude/projects/<sanitized-cwd>/memory/`, index in
+  `MEMORY.md`) for per-project facts, and the **Grimdex KB**
+  (`~/.claude/knowledge/projects/baton/`, repo `Ryfter/grimdex-know`) for decisions,
+  design notes, and the append-only `compact-state-log.md`. The KB is the cross-agent
+  tier — Codex/Gemini/Grok read it; the auto-memory dir is Claude-local and NOT
+  GitHub-backed, so anything that must survive a dead drive or be seen by another model
+  goes in the KB. Removal order matters if it ever reappears: uninstall the plugin
+  *before* killing its daemons, or the SessionStart/UserPromptSubmit hooks respawn them.
+- **Ox Alpha = `opencode/big-pickle` (OpenCode Zen, free until ~2026-08-27):** stealth
+  model served under a codename; it is absent from the catalog under any "ox" name.
+  Zero credentials needed, accepts stdin, 1M context. **ZDR is NOT in effect** — the
+  provider retains prompts; keep private-repo and Grimdex KB contents off this path.
+  Measured behavior (2026-08-21): it ignores "do not use tools" and goes agentic, and
+  failed to produce a terse structured verdict twice in ~25min where codex/grok/fable
+  each finished quickly. Seat it on bulk code-gen behind a review gate; do **not** claim
+  `review` / `plan-review` / `judge` / `extract-json` capabilities for it.

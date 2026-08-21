@@ -33,7 +33,9 @@ param(
     [bool]$PlanRevise = $true,
     [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
     [string]$FleetPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'fleet.yaml' } else { Join-Path $HOME '.baton/fleet.yaml' }),
-    [string]$ToolsPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'tools.yaml' } else { Join-Path $HOME '.baton/tools.yaml' })
+    [string]$ToolsPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'tools.yaml' } else { Join-Path $HOME '.baton/tools.yaml' }),
+    # Overnight model-quality fold; pass -RecordQuality:$false in hermetic tests to skip.
+    [bool]$RecordQuality = $true
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'conductor-lib.ps1')
@@ -338,4 +340,38 @@ $executeFailure = $Execute -and $result.status -in @(
     'failed', 'plan-failed', 'plan-invalid', 'plan-gate-degraded', 'plan-rejected',
     'verification-failed', 'acceptance-degraded', 'needs-polish', 'rejected'
 )
+
+if ($RecordQuality) {
+    $mqLib = Join-Path $PSScriptRoot 'model-quality-lib.ps1'
+    if (Test-Path -LiteralPath $mqLib) {
+        try {
+            . $mqLib
+            $mqOutcome = switch -Regex ([string]$result.status) {
+                '^completed$' { 'pass'; break }
+                '^(failed|rejected|verification-failed|acceptance-degraded|needs-polish|plan-failed|plan-invalid|plan-gate-degraded|plan-rejected)$' { 'fail'; break }
+                '^interrupted-' { 'partial'; break }
+                default { 'unknown' }
+            }
+            $mqProvider = 'unknown'
+            $mqModel = 'unknown'
+            $decPath = Join-Path $result.run_dir 'decisions.jsonl'
+            if (Test-Path -LiteralPath $decPath) {
+                $lastDec = @(Get-Content -LiteralPath $decPath -Tail 1 -ErrorAction SilentlyContinue)[0]
+                if ($lastDec) {
+                    $dec = $lastDec | ConvertFrom-Json
+                    if ($dec.chose) {
+                        $mqProvider = [string]$dec.chose
+                        $mqModel = [string]$dec.chose
+                    }
+                }
+            }
+            $mqEvidence = Join-Path $result.run_dir 'report.md'
+            $mqNotes = "status=$($result.status)"
+            if ($result.failure_category) { $mqNotes += "; failure=$($result.failure_category)" }
+            [void](Add-ModelQualityEvent -Provider $mqProvider -Model $mqModel -TaskClass 'fleet-go' `
+                -Outcome $mqOutcome -EvidenceRef $mqEvidence -Notes $mqNotes -Reviewer 'fleet-go')
+        } catch { }
+    }
+}
+
 if ($executeFailure) { exit 1 }
