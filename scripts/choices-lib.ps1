@@ -99,8 +99,8 @@ function Write-Choice {
         [Parameter(Mandatory)]$Choice,
         [string]$BatonHome = (Get-BatonHome)
     )
-    Set-ChoiceTimestampsIso -Choice $Choice
     Test-ChoiceSchema -Choice $Choice
+    Set-ChoiceTimestampsIso -Choice $Choice
     $path = Get-ChoicePath -Id ([string]$Choice.id) -BatonHome $BatonHome
     $tmp = "$path.tmp"
     $json = ($Choice | ConvertTo-Json -Depth 8)
@@ -117,8 +117,8 @@ function Read-Choice {
     $path = Get-ChoicePath -Id $Id -BatonHome $BatonHome
     if (-not (Test-Path -LiteralPath $path)) { throw "choice not found: $Id" }
     $obj = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    Set-ChoiceTimestampsIso -Choice $obj
     Test-ChoiceSchema -Choice $obj
+    Set-ChoiceTimestampsIso -Choice $obj
     return $obj
 }
 
@@ -265,7 +265,12 @@ function Get-Choices {
     $files = @(Get-ChildItem -LiteralPath (Get-ChoicesDir -BatonHome $BatonHome) `
         -Filter 'ch-*.json' -File)
     foreach ($file in $files) {
-        $choice = Read-Choice -Id $file.BaseName -BatonHome $BatonHome
+        try {
+            $choice = Read-Choice -Id $file.BaseName -BatonHome $BatonHome
+        } catch {
+            Write-Warning "Skipping corrupt choice file '$($file.Name)': $($_.Exception.Message)"
+            continue
+        }
         if (-not [string]::IsNullOrWhiteSpace($Project) -and
             [string]$choice.project -ne $Project) {
             continue
@@ -380,34 +385,44 @@ function Get-NextAdmittedChoice {
         $cursor = Reset-ChoicesBriefCursor -BatonHome $BatonHome
     }
 
-    if (-not [string]::IsNullOrWhiteSpace([string]$cursor.current_id)) {
-        $current = @(Get-Choices -BatonHome $BatonHome -Status 'admitted' |
-            Where-Object { $_.id -eq $cursor.current_id })
-        if ($current.Count -gt 0) { return $current[0] }
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace([string]$cursor.active_project)) {
-        $inProject = @(Get-Choices -BatonHome $BatonHome `
-            -Project $cursor.active_project -Status 'admitted')
-        if ($inProject.Count -gt 0) {
-            $cursor.current_id = $inProject[0].id
-            Set-Cursor -Cursor $cursor -BatonHome $BatonHome
-            return $inProject[0]
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$cursor.current_id)) {
+            $current = @(Get-Choices -BatonHome $BatonHome -Status 'admitted' |
+                Where-Object { $_.id -eq $cursor.current_id })
+            if ($current.Count -gt 0) { return $current[0] }
         }
-    }
 
-    $order = @($cursor.project_order)
-    $activeIndex = [array]::IndexOf($order, [string]$cursor.active_project)
-    for ($index = $activeIndex + 1; $index -lt $order.Count; $index++) {
-        $nextProject = [string]$order[$index]
-        $inProject = @(Get-Choices -BatonHome $BatonHome `
-            -Project $nextProject -Status 'admitted')
-        if ($inProject.Count -gt 0) {
-            $cursor.active_project = $nextProject
-            $cursor.current_id = $inProject[0].id
-            Set-Cursor -Cursor $cursor -BatonHome $BatonHome
-            return $inProject[0]
+        if (-not [string]::IsNullOrWhiteSpace([string]$cursor.active_project)) {
+            $inProject = @(Get-Choices -BatonHome $BatonHome `
+                -Project $cursor.active_project -Status 'admitted')
+            if ($inProject.Count -gt 0) {
+                $cursor.current_id = $inProject[0].id
+                Set-Cursor -Cursor $cursor -BatonHome $BatonHome
+                return $inProject[0]
+            }
         }
+
+        $order = @($cursor.project_order)
+        $activeIndex = [array]::IndexOf($order, [string]$cursor.active_project)
+        for ($index = $activeIndex + 1; $index -lt $order.Count; $index++) {
+            $nextProject = [string]$order[$index]
+            $inProject = @(Get-Choices -BatonHome $BatonHome `
+                -Project $nextProject -Status 'admitted')
+            if ($inProject.Count -gt 0) {
+                $cursor.active_project = $nextProject
+                $cursor.current_id = $inProject[0].id
+                Set-Cursor -Cursor $cursor -BatonHome $BatonHome
+                return $inProject[0]
+            }
+        }
+
+        if ($attempt -eq 0 -and
+            @(Get-Choices -BatonHome $BatonHome -Status 'admitted').Count -gt 0) {
+            $cursor = Reset-ChoicesBriefCursor -BatonHome $BatonHome
+            continue
+        }
+
+        break
     }
 
     $cursor.active_project = $null

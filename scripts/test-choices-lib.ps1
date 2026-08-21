@@ -83,6 +83,16 @@ try {
     } catch { $threw4 = $true }
     Assert 'T9 string schema_version "1" throws' $threw4
 
+    $writeSchemaError = ''
+    try {
+        Write-Choice -Choice ([pscustomobject]@{ schema_version = 99 }) -BatonHome $tmp
+    } catch {
+        $writeSchemaError = $_.Exception.Message
+    }
+    Assert 'T9b write validates schema before normalizing missing timestamps' (
+        $writeSchemaError -match '^unsupported schema_version:'
+    )
+
     $d = New-ChoiceDraft `
         -Project 'bookprofile' `
         -Title 'A/B/C surface' `
@@ -143,8 +153,30 @@ try {
     Set-Content -LiteralPath (Join-Path (Get-ChoicesDir -BatonHome $tmp3) 'not-a-choice.json') `
         -Value '{ invalid json' -Encoding utf8NoBOM
 
-    $admitted = @(Get-Choices -BatonHome $tmp3 -Status 'admitted')
+    $corruptName = 'ch-deadbeefcafe.json'
+    $corruptPath = Join-Path (Get-ChoicesDir -BatonHome $tmp3) $corruptName
+    Set-Content -LiteralPath $corruptPath -Value '{"schema_version":99}' -Encoding utf8NoBOM
+    $readSchemaError = ''
+    try {
+        Read-Choice -Id 'ch-deadbeefcafe' -BatonHome $tmp3
+    } catch {
+        $readSchemaError = $_.Exception.Message
+    }
+    Assert 'T13c read validates schema before normalizing missing timestamps' (
+        $readSchemaError -match '^unsupported schema_version:'
+    )
+
+    $listOutput = @(Get-Choices -BatonHome $tmp3 -Status 'admitted' 3>&1)
+    $corruptWarnings = @($listOutput |
+        Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+    $admitted = @($listOutput |
+        Where-Object { $_ -isnot [System.Management.Automation.WarningRecord] })
     Assert 'T14 list scans only choice files' ($admitted.Count -eq 4)
+    Assert 'T14a corrupt choice file is skipped with filename warning' (
+        $corruptWarnings.Count -eq 1 -and
+        [string]$corruptWarnings[0] -match [regex]::Escape($corruptName)
+    )
+    Remove-Item -LiteralPath $corruptPath
     $atomic = @(Get-Choices -BatonHome $tmp3 -Project 'atomicforge' -Status 'admitted')
     Assert 'T14b project and status filters apply' ($atomic.Count -eq 2)
     Assert 'T14c within project priority wins over age' (
@@ -237,6 +269,27 @@ try {
     )
     Assert 'T24c brief is a pure read of cursor state' (
         (Get-Cursor -BatonHome $tmp3 | ConvertTo-Json -Depth 4 -Compress) -eq $cursorBeforeBrief
+    )
+
+    $tmp4 = Join-Path $tmp 'stale-cursor'
+    New-Item -ItemType Directory -Force -Path $tmp4 | Out-Null
+    $oldDraft = New-ChoiceDraft -Project 'old-project' -Title 'old' -Question 'q' `
+        -Options @(@{id='a';label='A';summary='a'},@{id='b';label='B';summary='b'}) `
+        -RecommendationOptionId 'a' -RecommendationWhy 'w' -Evidence @() -BatonHome $tmp4
+    $oldChoice = Set-ChoiceAdmitted -Id $oldDraft.id -Priority 'P1' -BatonHome $tmp4
+    [void](Reset-ChoicesBriefCursor -BatonHome $tmp4)
+    [void](Set-ChoiceAnswered -Id $oldChoice.id -OptionId 'a' -BatonHome $tmp4)
+
+    $newDraft = New-ChoiceDraft -Project 'new-project' -Title 'new' -Question 'q' `
+        -Options @(@{id='a';label='A';summary='a'},@{id='b';label='B';summary='b'}) `
+        -RecommendationOptionId 'a' -RecommendationWhy 'w' -Evidence @() -BatonHome $tmp4
+    $newChoice = Set-ChoiceAdmitted -Id $newDraft.id -Priority 'P0' -BatonHome $tmp4
+    $fromStaleCursor = Get-NextAdmittedChoice -BatonHome $tmp4
+    $refreshedCursor = Get-Cursor -BatonHome $tmp4
+    Assert 'T25 stale cursor refresh finds newly admitted project' (
+        $fromStaleCursor.id -eq $newChoice.id -and
+        $refreshedCursor.active_project -eq 'new-project' -and
+        $refreshedCursor.current_id -eq $newChoice.id
     )
 }
 finally {
