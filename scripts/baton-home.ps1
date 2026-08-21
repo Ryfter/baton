@@ -22,7 +22,7 @@ function Initialize-BatonHome {
        Idempotent: never overwrites an existing config. Returns seeded file names. #>
     param([Parameter(Mandatory)][string]$ReferencesDir)
     $root = Get-BatonHome
-    foreach ($d in @($root, (Join-Path $root 'jobs'), (Join-Path $root 'runs'), (Join-Path $root 'logs'))) {
+    foreach ($d in @($root, (Join-Path $root 'jobs'), (Join-Path $root 'runs'), (Join-Path $root 'logs'), (Join-Path $root 'choices'))) {
         if (-not (Test-Path $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
     }
     $seeded = [System.Collections.ArrayList]@()

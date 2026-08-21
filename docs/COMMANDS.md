@@ -114,6 +114,20 @@ Presets available: `pytest`, `pwsh-suite`, `node-test`, `file-exists-nonempty`. 
 name a raw `argv` instead of a preset. A repo with no recognizable test toolchain gets the schema and the
 preset list rather than an auto-written config — Baton won't quietly hand you a weak oracle.
 
+### /baton:choices
+- **One-liner:** Cycle through admitted product decisions one project at a time — brief, next card, answer.
+- **When you'd use it:** Overnight or daytime factory work surfaced blocking A/B/C forks across projects and you need to clear them in priority order.
+- **Syntax:** `/baton:choices brief` → `/baton:choices next` → Kevin picks → `/baton:choices answer <id> <option>` → repeat.
+- **Arguments & flags:**
+  - `brief` — multi-project writeup; refreshes project order and cursor.
+  - `next` — show the current admitted card (`ch-<id>`, question, options, recommendation).
+  - `answer <id> <option_id>` — persist Kevin's pick; use `--text` for free-form answers.
+  - `list`, `draft`, `admit`, `reject` — inspect and manage the queue (Orchestrator drafts; Conductor admits).
+- **Under the hood:** One JSON file per choice under `$BATON_HOME/choices/`; project-at-a-time cursor; soft-park only the blocked slice.
+- **Where results land:** `$BATON_HOME/choices/ch-<id>.json` and `$BATON_HOME/choices/_cursor.json`.
+- **Plain example:** `/baton:choices brief` then `/baton:choices next` → Kevin says "B" → `/baton:choices answer ch-abc123 opt-b`.
+- **Gotchas:** Kevin only sees `admitted` cards. Every chat answer must call `answer` with the card id — no hand-editing status.
+
 ### /baton:idea
 - **One-liner:** Turn a raw idea into board-ready GitHub Issues, with one human gate.
 - **When you'd use it:** At the very start — you have a spark, not a spec.

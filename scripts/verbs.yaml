@@ -132,3 +132,21 @@ verbs:
       --json: -Json
       --runs-root: -RunsRoot
       --ratings: -RatingsPath
+  - name: choices
+    summary: Conductor needs-you queue — brief, next, answer, draft, admit, reject.
+    class: engine
+    runner: fleet-choices.ps1
+    json: true
+    flag_aliases:
+      --json: -Json
+      --project: -Project
+      --status: -Status
+      --priority: -Priority
+      --text: -Text
+      --title: -Title
+      --question: -Question
+      --blocks: -Blocks
+      --evidence: -Evidence
+      --options-json: -OptionsJson
+      --rec: -Rec
+      --rec-why: -RecWhy
