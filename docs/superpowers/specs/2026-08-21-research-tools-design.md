@@ -38,12 +38,17 @@ inherits it, and adding one becomes a YAML edit rather than a script.
               ├─ rank     cost_tier, then priority
               └─ execute  by kind, first success wins, failures fall through
                      │
-        ┌────────────┼─────────────┬──────────────┐
-        ▼            ▼             ▼              ▼
-     python         cli           http        (row disabled)
-     docling      wtm/whisper   n8n webhook      skipped
-                  yt-dlp        gemini
+     ┌───────────┬───┴───────┬───────────────┬──────────────┐
+     ▼           ▼           ▼               ▼              ▼
+   python       cli         http            mcp        (row disabled)
+   docling    wtm/mlx    n8n webhook    Pi containers     skipped
+              yt-dlp     5090 ollama
+                         gemini
 ```
+
+Three boxes, three jobs: the **M4** runs local MLX work, the **Pi** hosts
+services (n8n, database, Docker/MCP containers), the **5090** serves GPU
+inference through ollama. See "The compute topology".
 
 ## Layer 1 — `tools/invoke.py`
 
@@ -97,6 +102,7 @@ behave identically. Placeholders available to tool rows: `{{input}}`,
 | `python` | import `entrypoint` and call it as `fn(payload) -> ToolResult` |
 | `cli` | render `command_template`, exec, capture stdout (or read `{{output}}`) |
 | `http` | POST to `base_url` + `endpoint`; auth header from `api_key_env` |
+| `mcp` | call `tool_name` on the MCP server at `base_url` |
 
 **`kind: python` needs an adapter, not just a module.** A library's real API is
 rarely a one-liner — docling's is
@@ -173,11 +179,17 @@ sheet costs more context than it saves. So:
 
 | capability | rows, in rank order | notes |
 |---|---|---|
-| `pdf-extract` | `n8n-pdf-extract` → `docling` | n8n row disabled in the shared seed |
-| `transcribe` | `wtm` → `mlx-whisper` (`host: darwin-arm64`) → `whisper-cpp` (`host: any`) | all pin large-v3-turbo |
+| `pdf-extract` | `mcp-docling` → `n8n-pdf-extract` → `docling` | first two disabled in the shared seed |
+| `transcribe` | `wtm` → `mlx-whisper` (`host: darwin-arm64`) → `whisper-5090` → `whisper-cpp` (`host: any`) | all pin large-v3-turbo |
 | `fetch-media` | `yt-dlp` | URL → local media |
-| `ocr` | `deepseek-ocr` → `gemini-ocr` | local first, Gemini on failure or hard pages |
+| `ocr` | `ocr-5090` → `gemini-ocr` | GPU box first, Gemini on failure or hard pages |
 | `video-understand` | `gemini-video` | rare; behind `--visual` |
+
+⚠️ **`deepseek-ocr` is retargeted, not reused.** The existing row is
+`ollama run deepseek-ocr`, which means *local* ollama — and local ollama on the
+M4 holds exactly one model (`devstral:24b`). The same is true of the `nuextract`
+and `git-commit-message` rows. All three are pointed at a machine that cannot
+serve them. See "The compute topology" below.
 
 ### Transcription seating
 
@@ -238,21 +250,85 @@ unreachable — and the runner falls through to calling docling directly.
 and mirrors how the seed already ships disabled OpenRouter rows. Make and Zapier
 drop in identically; they are webhooks too.
 
-### Two constraints specific to Kevin's instance
+### One constraint specific to Kevin's instance
 
-The host is a Raspberry Pi on his tailnet (also published at
-`https://n8n.3dmkf.com/` — verified reachable, HTTP 200 in 178ms, `/healthz` OK).
+The n8n host is a Raspberry Pi on his tailnet, also published at
+`https://n8n.3dmkf.com/` (verified reachable — HTTP 200 in 178ms, `/healthz` OK).
 
-1. **Documents yes, media no.** The Pi has no GPU and no MLX, so transcription
-   there would be far slower than on the local M4. Tailscale removes the
-   *bandwidth* objection to sending it large files; the *compute* objection
-   stands on its own. n8n rows are therefore seated under document capabilities
-   only, never in the media chain. `priority:` is the knob if that proves wrong.
-2. **Use the tailnet address, and authenticate.** The public hostname resolves
-   from anywhere, which makes an unauthenticated `/webhook/...` path an open
-   door. Pointing `base_url` at the tailnet keeps traffic off the public
-   internet, and the `api_key_env` header is defense in depth rather than the
-   only control. The token stays box-private and never enters the shared seed.
+**Use the tailnet address, and authenticate.** The public hostname resolves from
+anywhere, which makes an unauthenticated `/webhook/...` path an open door.
+Pointing `base_url` at the tailnet keeps traffic off the public internet, and the
+`api_key_env` header becomes defense in depth rather than the only control. The
+token stays box-private and never enters the shared seed.
+
+## The MCP tier — one container, two consumers
+
+Capabilities also deploy as **MCP servers in Docker on the Pi**, reachable by
+every box on the tailnet. This is strictly better reach than the webhook path:
+no local install, and *every* agent — Claude, Codex, Gemini, Kiro — gets the
+capability natively.
+
+The design choice is to serve **both** consumers from one deployment:
+
+- **Agents** reach the container natively through `.mcp.json`.
+- **Baton's runner** reaches the *same* container through `kind: mcp`.
+
+```yaml
+- name: mcp-docling
+  kind: mcp
+  enabled: false            # seed default; enabled in the live box-private tools.yaml
+  cost_tier: local
+  capability: pdf-extract
+  base_url: 'http://<tailnet-host>:<port>'
+  tool_name: convert_document
+```
+
+This is the n8n insight applied a second time: a new integration surface becomes
+a transport, not a subsystem. It matters because the two consumers want different
+things — an agent calling MCP directly is convenient but burns tokens per call
+and is invisible to Baton's journal, while the runner calling the same server
+keeps ingest chains cost-ranked, journaled, and runnable with no agent in the
+loop. Serving both from one container means never choosing.
+
+## The compute topology
+
+The lab is three machines with distinct jobs, and seating follows the jobs:
+
+| box | role | serves |
+|---|---|---|
+| **M4 (this box)** | local agent work | MLX transcription, ffmpeg, always available |
+| **Raspberry Pi** | services — n8n, database, Docker, Open WebUI | n8n webhooks, MCP containers |
+| **RTX 5090** | GPU inference — ollama behind Open WebUI | vision/OCR models, GPU transcription |
+
+The Pi is **not** compute and is never seated for model work; hosting flows,
+the database and containers is its job. The 5090 is where GPU-class model work
+belongs, and it is reachable on the tailnet.
+
+Two consequences:
+
+1. **The ollama-backed rows move to the 5090.** `deepseek-ocr`, `nuextract` and
+   `git-commit-message` all read as `ollama run <model>`, which resolves to
+   *local* ollama. On the M4 that is a single-model install (`devstral:24b`), so
+   those rows cannot run as written. They become `kind: http` rows against the
+   5090's ollama endpoint.
+2. **GPU transcription is a real row, and the only benchmarked one.**
+   `asr-bench`'s headline numbers — large-v3-turbo at 8.9% WER and ~65× realtime
+   — were measured on that exact GPU. It seats *below* the MLX rows on the M4 for
+   availability rather than speed (the local box is always awake; the 5090 may
+   not be), and above `whisper-cpp` everywhere. `priority:` re-seats it if
+   measurement later contradicts that ordering.
+
+## A doctor bug this work must fix
+
+`doctor.py` probes `kind: cli` rows by checking the executable is on `PATH`.
+`ollama` is on PATH, so `deepseek-ocr`, `nuextract` and `git-commit-message` all
+report **`ok`** today while being unrunnable — the models were never pulled.
+
+A cli row that invokes a *model* needs a model-level probe, not a binary-level
+one. Rows gain an optional `probe_args` (e.g. `ollama list | grep <model>`), and
+`kind: mcp` rows probe by listing the server's tools and confirming `tool_name`
+is among them. Until this lands, `doctor` reports a comfortable lie about three
+existing rows — and the runner would inherit that lie as a runtime failure.
 
 ## Installs required
 
@@ -282,6 +358,10 @@ the rules are testable without the toolchain.
 Live execution gets a separate integration test, skipped unless the tool is
 present. The spreadsheet threshold branch is unit-tested at 200 rows either side.
 
+The doctor fix gets a regression test asserting that a cli row naming an
+unavailable model reports `err`, not `ok` — the exact case that is silently
+wrong today.
+
 ## Build order
 
 Sequenced by Kevin's stated usage frequency, not by architectural tidiness:
@@ -292,7 +372,14 @@ Sequenced by Kevin's stated usage frequency, not by architectural tidiness:
 4. `pdf-extract` rows + docling install; `/baton:ingest` document chain.
 5. Spreadsheet branch.
 6. `video-understand` — rarest, ships last.
-7. n8n rows — additive, once the direct paths are proven.
+7. `kind: mcp` transport + Pi containers — additive, once the direct paths prove
+   the capability contracts are right. Deploying a container around an unproven
+   contract is how you end up redeploying it.
+8. n8n rows — additive, same reasoning.
+
+The doctor probe fix rides with step 1: the runner would otherwise inherit
+`doctor`'s false `ok` as a runtime failure, and step 3 (`ocr`) is the first step
+that depends on a row `doctor` currently lies about.
 
 ## Delegation
 
@@ -308,8 +395,15 @@ not opencode, on review.
 
 ## Open items
 
-- The n8n webhook workflows themselves must be authored on the Pi; this spec
-  covers only Baton's side of the contract.
+- **The 5090's ollama endpoint is not yet known to Baton.** `OLLAMA_HOST` is
+  unset here and Open WebUI does not expose an unauthenticated ollama proxy
+  (`/ollama/api/tags` → 404). The tailnet address and any auth are box-private
+  config Kevin supplies; the rows are written against it, not blocked on it.
+- Which OCR and vision models are pulled on the 5090 is likewise unconfirmed —
+  the `ocr-5090` row names one, and `doctor`'s new model-level probe is what
+  will tell the truth about it.
+- The n8n webhook workflows and MCP containers must be authored/deployed on the
+  Pi; this spec covers only Baton's side of both contracts.
 - `asr-bench` is faster-whisper/CUDA-based and cannot currently score MLX
   engines. Adding MLX engines to it would let Kevin verify the `wtm` seating
   empirically rather than by reputation. Separate repo, separate work, noted
