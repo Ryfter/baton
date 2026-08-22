@@ -12,12 +12,12 @@ $tmp = Join-Path ([IO.Path]::GetTempPath()) ("bmk-" + [guid]::NewGuid().ToString
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
     # write → read back active
-    Write-SessionMarker -Agent 'claude' -SessionId 'sess-1' -Cwd 'D:\dev\Whittle' -BatonHome $tmp
+    Write-SessionMarker -Agent 'claude' -SessionId 'sess-1' -Cwd "$HOME/dev/Whittle" -BatonHome $tmp
     $act = @(Get-ActiveSessions -BatonHome $tmp)
     Assert 'M1 one active marker after write' (@($act).Count -eq 1)
-    Assert 'M2 marker carries agent+cwd' ($act[0].agent -eq 'claude' -and $act[0].cwd -eq 'D:\dev\Whittle')
-    Assert 'M3 Test-FolderActive matches case-insensitively' (Test-FolderActive -Folder 'd:\dev\whittle' -Sessions $act)
-    Assert 'M4 Test-FolderActive no false match' (-not (Test-FolderActive -Folder 'D:\dev\Other' -Sessions $act))
+    Assert 'M2 marker carries agent+cwd' ($act[0].agent -eq 'claude' -and $act[0].cwd -eq "$HOME/dev/Whittle")
+    Assert 'M3 Test-FolderActive matches case-insensitively' (Test-FolderActive -Folder "$($HOME.ToLower())/dev/whittle" -Sessions $act)
+    Assert 'M4 Test-FolderActive no false match' (-not (Test-FolderActive -Folder "$HOME/dev/Other" -Sessions $act))
 
     # clear → returns record, no longer active
     $rec = Clear-SessionMarker -SessionId 'sess-1' -BatonHome $tmp
@@ -26,7 +26,7 @@ try {
 
     # TTL age-out: hand-write a stale marker
     $sdir = Get-SessionsDir -BatonHome $tmp
-    $stale = @{ agent='claude'; session_id='old'; cwd='D:\dev\Old'; started_at=(Get-Date).AddHours(-48).ToString('o') }
+    $stale = @{ agent='claude'; session_id='old'; cwd="$HOME/dev/Old"; started_at=(Get-Date).AddHours(-48).ToString('o') }
     $stale | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sdir 'old.json') -Encoding utf8NoBOM
     Assert 'M7 stale marker aged out' (@(Get-ActiveSessions -TtlHours 24 -BatonHome $tmp).Count -eq 0)
 

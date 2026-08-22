@@ -19,7 +19,7 @@ $env:BATON_HOME = $tmp
 
 try {
     # --- kind is recorded ---
-    Write-SessionMarker -Agent 'claude' -SessionId 'sess-kind' -Cwd 'D:\dev\A' -Kind 'resume' -BatonHome $tmp
+    Write-SessionMarker -Agent 'claude' -SessionId 'sess-kind' -Cwd "$HOME/dev/A" -Kind 'resume' -BatonHome $tmp
     $act = @(Get-ActiveSessions -BatonHome $tmp)
     $kRec = $act | Where-Object { $_.session_id -eq 'sess-kind' } | Select-Object -First 1
     Check 'kind is recorded on marker' ($null -ne $kRec -and [string]$kRec.kind -eq 'resume')
@@ -32,14 +32,14 @@ try {
     $hand = [ordered]@{
         agent        = 'claude'
         session_id   = 'sess-restamp'
-        cwd          = 'D:\dev\B'
+        cwd          = "$HOME/dev/B"
         started_at   = $fixedStart
         last_seen_at = $oldSeen
         kind         = 'startup'
     }
     $hand | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sdir 'sess-restamp.json') -Encoding utf8NoBOM
     Start-Sleep -Milliseconds 50
-    Write-SessionMarker -Agent 'claude' -SessionId 'sess-restamp' -Cwd 'D:\dev\B' -Kind 'resume' -BatonHome $tmp
+    Write-SessionMarker -Agent 'claude' -SessionId 'sess-restamp' -Cwd "$HOME/dev/B" -Kind 'resume' -BatonHome $tmp
     $re = Get-Content -Raw -LiteralPath (Join-Path $sdir 'sess-restamp.json') | ConvertFrom-Json
     $reStart = ([datetime]$re.started_at).ToUniversalTime().ToString('o')
     $reSeen = ([datetime]$re.last_seen_at).ToUniversalTime()
@@ -53,7 +53,7 @@ try {
     $staleSeen = [ordered]@{
         agent        = 'claude'
         session_id   = 'sess-stale-seen'
-        cwd          = 'D:\dev\C'
+        cwd          = "$HOME/dev/C"
         started_at   = (Get-Date).ToUniversalTime().AddHours(-1).ToString('o')  # recent start
         last_seen_at = (Get-Date).ToUniversalTime().AddHours(-48).ToString('o') # stale last-seen
         kind         = 'startup'
@@ -66,7 +66,7 @@ try {
     $freshSeen = [ordered]@{
         agent        = 'claude'
         session_id   = 'sess-fresh-seen'
-        cwd          = 'D:\dev\D'
+        cwd          = "$HOME/dev/D"
         started_at   = (Get-Date).ToUniversalTime().AddHours(-48).ToString('o') # old start
         last_seen_at = (Get-Date).ToUniversalTime().ToString('o')              # fresh last-seen
         kind         = 'refresh'
@@ -80,7 +80,7 @@ try {
     $legacy = @{
         agent      = 'claude'
         session_id = 'sess-legacy'
-        cwd        = 'D:\dev\Legacy'
+        cwd        = "$HOME/dev/Legacy"
         started_at = (Get-Date).ToUniversalTime().ToString('o')
     }
     $legacy | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sdir 'sess-legacy.json') -Encoding utf8NoBOM
@@ -91,7 +91,7 @@ try {
     $legacyStale = @{
         agent      = 'claude'
         session_id = 'sess-legacy-old'
-        cwd        = 'D:\dev\Old'
+        cwd        = "$HOME/dev/Old"
         started_at = (Get-Date).ToUniversalTime().AddHours(-48).ToString('o')
     }
     $legacyStale | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sdir 'sess-legacy-old.json') -Encoding utf8NoBOM
@@ -109,7 +109,7 @@ try {
     Check 'corrupt marker JSON skipped without throwing' (-not $threw)
 
     # --- throttle: no rewrite within window; does rewrite after ---
-    Write-SessionMarker -Agent 'claude' -SessionId 'sess-throttle' -Cwd 'D:\dev\T' -Kind 'startup' -BatonHome $tmp
+    Write-SessionMarker -Agent 'claude' -SessionId 'sess-throttle' -Cwd "$HOME/dev/T" -Kind 'startup' -BatonHome $tmp
     $beforePath = Join-Path $sdir 'sess-throttle.json'
     $before = Get-Content -Raw -LiteralPath $beforePath | ConvertFrom-Json
     $beforeSeen = ([datetime]$before.last_seen_at).ToUniversalTime().ToString('o')
@@ -123,7 +123,7 @@ try {
     $aged = [ordered]@{
         agent        = 'claude'
         session_id   = 'sess-throttle'
-        cwd          = 'D:\dev\T'
+        cwd          = "$HOME/dev/T"
         started_at   = ([datetime]$before.started_at).ToUniversalTime().ToString('o')
         last_seen_at = (Get-Date).ToUniversalTime().AddMinutes(-10).ToString('o')
         kind         = 'startup'

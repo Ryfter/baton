@@ -22,9 +22,9 @@
 #>
 param(
     [Parameter(Mandatory)][string]$TasksPath,
-    [string]$RepoRoot = 'D:\Dev\baton',
+    [string]$RepoRoot = $(if ($env:BATON_REPO_ROOT) { $env:BATON_REPO_ROOT } else { Join-Path $HOME 'dev' 'baton' }),
     [string]$Target = 'master',
-    [string]$WorktreeRoot = 'D:\Dev\cao-worktrees',
+    [string]$WorktreeRoot = $(if ($env:BATON_WORKTREE_ROOT) { $env:BATON_WORKTREE_ROOT } else { Join-Path $HOME 'dev' 'worktrees' }),
     [string]$OutputRoot,
     [int]$TimeoutS = 900,
     [int]$MaxParallel = 0,

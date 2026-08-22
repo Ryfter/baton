@@ -12,7 +12,11 @@
 
 function Get-ProjectHomeRoot {
     if ($env:BATON_PROJECTS_ROOT) { return [string]$env:BATON_PROJECTS_ROOT }
-    return 'D:\dev'
+    $homeDevPath = Join-Path $HOME 'dev'
+    if (Test-Path $homeDevPath) { return $homeDevPath }
+    $homeDevCapPath = Join-Path $HOME 'Dev'
+    if (Test-Path $homeDevCapPath) { return $homeDevCapPath }
+    return (Join-Path $HOME 'projects')
 }
 
 function Get-FolderSlug {
