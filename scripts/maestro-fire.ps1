@@ -23,15 +23,15 @@ if (-not (Test-Path -LiteralPath $jobsDir)) {
 
 $records = @(Get-MaestroJobRecords -JobsDir $jobsDir)
 $runningProjects = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$runningSlots = 0
 foreach ($rec in @($records)) {
-    if ([string]$rec.Job.status -eq 'running') {
-        $p = [string]$rec.Job.project
-        if ($p) { [void]$runningProjects.Add($p) }
-    }
+    if (-not (Test-MaestroJobConsumesParallelSlot -Job $rec.Job)) { continue }
+    $runningSlots++
+    $p = [string]$rec.Job.project
+    if ($p) { [void]$runningProjects.Add($p) }
 }
 
-$runningCount = $runningProjects.Count
-$slots = [Math]::Max(0, $MaxParallel - $runningCount)
+$slots = [Math]::Max(0, $MaxParallel - $runningSlots)
 if ($slots -lt 1) {
     Write-Verbose 'Parallel cap reached — skip fire tick.'
     exit 0

@@ -57,6 +57,14 @@ function Get-MaestroUsableInstruments {
     return @($usable)
 }
 
+function Test-MaestroJobConsumesParallelSlot {
+    param([Parameter(Mandatory)]$Job)
+    if ([string]$Job.status -ne 'running') { return $false }
+    if ([string]$Job.source -eq 'ensure-conductors') { return $false }
+    if ([string]$Job.goal -match 'Conductor auto-admitted') { return $false }
+    return $true
+}
+
 function Get-MaestroProjectBlocks {
     param([Parameter(Mandatory)]$JobRecords)
     $held = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -66,7 +74,10 @@ function Get-MaestroProjectBlocks {
         if (-not $proj) { continue }
         $st = [string]$rec.Job.status
         if ($st -eq 'held') { [void]$held.Add($proj) }
-        if ($st -in @('running', 'admitted')) { [void]$running.Add($proj) }
+        if ($st -eq 'admitted') { [void]$running.Add($proj) }
+        if ($st -eq 'running' -and (Test-MaestroJobConsumesParallelSlot -Job $rec.Job)) {
+            [void]$running.Add($proj)
+        }
     }
     return [pscustomobject]@{ Held = $held; Running = $running }
 }
