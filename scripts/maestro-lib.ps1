@@ -150,6 +150,61 @@ function Update-MaestroJobFile {
     $job | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $Path -Encoding utf8NoBOM
 }
 
+function Test-MaestroJobId {
+    param([Parameter(Mandatory)][string]$JobId)
+    return ($JobId -match '^mj-[0-9a-f]{12}$')
+}
+
+function Invoke-MaestroHoldJob {
+    param(
+        [Parameter(Mandatory)][string]$JobsDir,
+        [Parameter(Mandatory)][string]$JobId
+    )
+    if (-not (Test-MaestroJobId -JobId $JobId)) {
+        throw "invalid job id: $JobId"
+    }
+    $path = Join-Path $JobsDir "$JobId.json"
+    if (-not (Test-Path -LiteralPath $path)) {
+        throw "no such job: $JobId"
+    }
+    $job = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    $prev = [string]$job.status
+    $job | Add-Member -NotePropertyName held_from -NotePropertyValue $prev -Force
+    $job.status = 'held'
+    $job | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $path -Encoding utf8NoBOM
+    Write-MaestroEvent -Root $JobsDir -JobId $JobId -Kind 'hold' -Status 'held'
+    return $job
+}
+
+function Invoke-MaestroReleaseJob {
+    param(
+        [Parameter(Mandatory)][string]$JobsDir,
+        [Parameter(Mandatory)][string]$JobId
+    )
+    if (-not (Test-MaestroJobId -JobId $JobId)) {
+        throw "invalid job id: $JobId"
+    }
+    $path = Join-Path $JobsDir "$JobId.json"
+    if (-not (Test-Path -LiteralPath $path)) {
+        throw "no such job: $JobId"
+    }
+    $job = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    if ([string]$job.status -ne 'held') {
+        throw "job is not held: $($job.status)"
+    }
+    $restore = 'admitted'
+    if ($job.PSObject.Properties['held_from'] -and -not [string]::IsNullOrWhiteSpace([string]$job.held_from)) {
+        $restore = ([string]$job.held_from).Trim().ToLowerInvariant()
+    }
+    $valid = @('queued', 'admitted', 'running', 'waiting-quota', 'done')
+    if ($restore -notin $valid -or $restore -eq 'held') { $restore = 'admitted' }
+    if ($job.PSObject.Properties['held_from']) { $job.PSObject.Properties.Remove('held_from') }
+    $job.status = $restore
+    $job | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $path -Encoding utf8NoBOM
+    Write-MaestroEvent -Root $JobsDir -JobId $JobId -Kind 'release' -Status $restore
+    return $job
+}
+
 function Write-MaestroEvent {
     param(
         [Parameter(Mandatory)][string]$Root,

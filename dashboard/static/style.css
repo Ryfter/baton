@@ -1063,6 +1063,9 @@ input:focus-visible,
 .status-waiting-quota, .status-held { color: var(--accent-warning); }
 .status-queued { color: var(--text-secondary); }
 .status-done { color: var(--text-muted); }
+.maestro-queue__hint { color: var(--text-muted); font-family: var(--font-sans); font-size: 0.78rem; }
+.maestro-queue__item .status-queued::after { content: " →"; color: var(--text-muted); font-weight: 400; }
+.maestro-queue__item .status-admitted::after { content: " → fire"; color: var(--accent-success); font-weight: 500; font-family: var(--font-sans); font-size: 0.72rem; }
 @media (max-width: 720px) {
   .maestro-compose__form { grid-template-columns: 1fr; }
 }

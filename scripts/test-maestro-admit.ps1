@@ -13,7 +13,7 @@ $env:BATON_HOME = $tmp
 
 try {
     function Write-TestJob {
-        param([string]$Id, [string]$Project, [string]$Status, [string]$Created)
+        param([string]$Id, [string]$Project, [string]$Status, [string]$Created, [string]$HeldFrom)
         $job = [ordered]@{
             id          = $Id
             project     = $Project
@@ -26,12 +26,13 @@ try {
             provider    = $null
             created_at  = $Created
         }
+        if ($HeldFrom) { $job.held_from = $HeldFrom }
         ($job | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath (Join-Path $jobsDir "$Id.json") -Encoding utf8NoBOM
     }
 
     Write-TestJob -Id 'mj-aaaaaaaaaaaa' -Project 'baton' -Status 'queued' -Created '2026-08-21T01:00:00Z'
     Write-TestJob -Id 'mj-bbbbbbbbbbbb' -Project 'canvas-toolchain' -Status 'queued' -Created '2026-08-21T01:01:00Z'
-    Write-TestJob -Id 'mj-cccccccccccc' -Project 'baton' -Status 'held' -Created '2026-08-21T00:59:00Z'
+    Write-TestJob -Id 'mj-cccccccccccc' -Project 'baton' -Status 'held' -Created '2026-08-21T00:59:00Z' -HeldFrom 'queued'
 
     & (Join-Path $PSScriptRoot 'maestro-admit.ps1') -BatonHome $tmp -MaxParallel 8 -Json | Out-Null
 
@@ -42,6 +43,11 @@ try {
     Check 'baton blocked by held sibling stays queued' ([string]$j1.status -eq 'queued')
     Check 'canvas-toolchain admitted' ([string]$j2.status -eq 'admitted')
     Check 'held job untouched' ([string]$j3.status -eq 'held')
+
+    & (Join-Path $PSScriptRoot 'maestro-release.ps1') -BatonHome $tmp -JobId 'mj-cccccccccccc' -Json | Out-Null
+    $j3 = Get-Content -LiteralPath (Join-Path $jobsDir 'mj-cccccccccccc.json') -Raw | ConvertFrom-Json
+    Check 'release restores held job to queued' ([string]$j3.status -eq 'queued')
+    Check 'held_from cleared after release' (-not ($j3.PSObject.Properties.Name -contains 'held_from'))
 } finally {
     $env:BATON_HOME = $prevHome
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

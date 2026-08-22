@@ -37,11 +37,11 @@
   <p class="maestro-working__label">Job queue{% if queue|length > 1 %} ({{ queue|length }}){% endif %}</p>
   <ul class="maestro-working__list maestro-who">
     {% for j in queue[:5] %}
-    <li>
+    <li class="maestro-queue__item">
       <code>{{ j.id }}</code>
       · <span class="status-{{ j.status }}">{{ j.status }}</span>
       · {{ j.project }}
-      {% if j.provider %} · {{ j.provider }}{% endif %}
+      {% if j.status == 'admitted' %}<span class="maestro-queue__hint"> · waiting for Conductor</span>{% elif j.status == 'queued' %}<span class="maestro-queue__hint"> · next tick admits</span>{% elif j.provider %} · {{ j.provider }}{% endif %}
     </li>
     {% endfor %}
   </ul>

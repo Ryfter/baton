@@ -242,10 +242,14 @@ def board_status(root: Path, *, usable: Optional[Iterable[str]] = None) -> dict[
             f"{len(running)} running: "
             + ", ".join(f"{j['project']} ({j['id']})" for j in running[:4])
         )
+    if counts.get("admitted"):
+        lines.append(f"{counts['admitted']} admitted — next tick fires")
     if counts.get("queued"):
-        lines.append(f"{counts['queued']} queued")
+        lines.append(f"{counts['queued']} queued — admit on next tick")
     if counts.get("waiting-quota"):
         lines.append(f"{counts['waiting-quota']} waiting on quota")
+    if counts.get("held"):
+        lines.append(f"{counts['held']} held")
     if not lines:
         lines.append("idle — no active jobs")
     return {
