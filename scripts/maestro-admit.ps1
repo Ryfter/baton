@@ -26,7 +26,7 @@ if (-not (Test-Path -LiteralPath $jobsDir)) {
 
 $records = @(Get-MaestroJobRecords -JobsDir $jobsDir)
 $blocks = Get-MaestroProjectBlocks -JobRecords $records
-$runningCount = @($records | Where-Object { [string]$_.Job.status -eq 'running' }).Count
+$runningCount = @($records | Where-Object { Test-MaestroJobConsumesParallelSlot -Job $_.Job }).Count
 $admittedCount = @($records | Where-Object { [string]$_.Job.status -eq 'admitted' }).Count
 $slots = [Math]::Max(0, $MaxParallel - $runningCount - $admittedCount)
 
