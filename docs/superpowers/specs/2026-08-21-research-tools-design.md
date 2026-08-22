@@ -283,6 +283,37 @@ The design choice is to serve **both** consumers from one deployment:
   tool_name: convert_document
 ```
 
+### Context budget — the runner is the DEFAULT consumer
+
+MCP sprawl is a real cost: every server wired into `.mcp.json` puts its tool
+schemas in the agent's context on every turn, forever. Six new servers is not a
+free win.
+
+The two-consumer design contains its own mitigation, and it is the reason the
+default is what it is:
+
+**The `kind: mcp` runner path costs ZERO agent context.** The runner is Python.
+It reads `base_url` and `tool_name` from a YAML row and makes a call. No schema
+is ever loaded into any agent's window.
+
+So the default is **deploy the container, wire the runner row, and do NOT add it
+to `.mcp.json`.** The agent gets the capability through `/baton:ingest` — *one*
+slash command standing in for an entire tool surface — while the capability
+itself lives behind the runner where it costs nothing to have available.
+
+Rules that follow:
+
+1. **`.mcp.json` wiring is opt-in per server, justified case by case** — never
+   automatic, and never "while we're here."
+2. **A server earns agent-facing wiring only if an agent needs to call it
+   interactively**, with judgment mid-chain that `/baton:ingest` cannot express.
+   Document conversion does not qualify: it is a pipeline step, not a
+   conversation.
+3. **Prefer narrow servers.** A docling server exposing one `convert_document`
+   tool is cheap. A kitchen-sink server exposing forty is how sprawl starts.
+4. Where a harness supports deferred tool loading (Claude Code loads MCP tool
+   *names* and fetches schemas on demand), that is a mitigation, not a licence.
+
 This is the n8n insight applied a second time: a new integration surface becomes
 a transport, not a subsystem. It matters because the two consumers want different
 things — an agent calling MCP directly is convenient but burns tokens per call
