@@ -1,0 +1,63 @@
+{# Maestro compose — first-fold front door (baton-d111 / baton-d124) #}
+<section class="maestro-compose" id="maestro-compose" aria-label="Start Baton">
+  <header class="maestro-compose__head">
+    <h2>Baton</h2>
+    <p class="muted">Pick a registry project, paste a goal, then <strong>Admit job</strong>. Maestro writes the job record; Conductor talks after admission.</p>
+  </header>
+
+  <form
+    class="maestro-compose__form"
+    hx-post="/maestro/jobs"
+    hx-target="#maestro-status"
+    hx-swap="innerHTML"
+    hx-disabled-elt="#maestro-start"
+    hx-on::before-swap="if(event.detail.xhr.status===400){event.detail.shouldSwap=true;event.detail.isError=false}"
+  >
+    <input type="hidden" name="source" value="web" />
+
+    <label class="maestro-field" for="maestro-project">
+      <span>Registry project</span>
+      <select id="maestro-project" name="project" required {% if not projects %}disabled{% endif %}>
+        <option value="" disabled {% if not projects %}selected{% endif %}>Select a project…</option>
+        {% for p in projects %}
+        <option value="{{ p.id }}">{% if p.name and p.name != p.id %}{{ p.name }} ({{ p.id }}){% else %}{{ p.name or p.id }}{% endif %}</option>
+        {% endfor %}
+      </select>
+      {% if projects %}
+      <span class="maestro-field__hint">From <code>$BATON_HOME/projects</code> — each folder needs a <code>project.json</code>.</span>
+      {% else %}
+      <span class="maestro-field__hint maestro-field__hint--warn" role="status">No registry projects yet. Add one under <code>$BATON_HOME/projects/&lt;id&gt;/project.json</code> to admit jobs.</span>
+      {% endif %}
+    </label>
+
+    <label class="maestro-field" for="maestro-stakes">
+      <span>Stakes</span>
+      <select id="maestro-stakes" name="stakes">
+        <option value="low">low</option>
+        <option value="standard" selected>standard</option>
+        <option value="high">high</option>
+      </select>
+    </label>
+
+    <label class="maestro-field maestro-field--goal" for="maestro-goal">
+      <span>Goal</span>
+      <textarea id="maestro-goal" name="goal" rows="6" required placeholder="Short ask or a long dump — this text is the goal."></textarea>
+    </label>
+
+    <div class="maestro-compose__actions">
+      <button type="submit" class="maestro-start" id="maestro-start" {% if not projects %}disabled{% endif %} aria-label="Admit job to Maestro">Admit job</button>
+      <span class="htmx-indicator maestro-start-spinner" aria-hidden="true">Working…</span>
+    </div>
+  </form>
+
+  <div
+    id="maestro-status"
+    class="maestro-status"
+    aria-live="polite"
+    hx-get="/maestro/partials/status"
+    hx-trigger="load, every 5s"
+    hx-swap="innerHTML"
+  >
+    {% include "partials/maestro_status.html" %}
+  </div>
+</section>

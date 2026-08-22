@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Maestro factory watch — macOS LaunchAgent template (Slice 3).
+
+  Install (edit __HOME__ and __BATON_REPO__ first):
+    sed -e "s|__HOME__|$HOME|g" -e "s|__BATON_REPO__|/path/to/Baton|g" \
+      references/launchd/com.baton.maestro-watch.plist \
+      > ~/Library/LaunchAgents/com.baton.maestro-watch.plist
+    launchctl load ~/Library/LaunchAgents/com.baton.maestro-watch.plist
+
+  Runs maestro-tick every 20s (admit queued → fire admitted). Logs append to
+  ~/.baton/overnight/lanes/maestro-watch.log. Stop the factory with:
+    touch ~/.baton/overnight/STOP
+    launchctl unload ~/Library/LaunchAgents/com.baton.maestro-watch.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.baton.maestro-watch</string>
+
+  <key>StartInterval</key>
+  <integer>20</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>mkdir -p __HOME__/.baton/overnight/lanes &amp;&amp; if [[ ! -f __HOME__/.baton/overnight/STOP ]]; then echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] maestro-tick start" >> __HOME__/.baton/overnight/lanes/maestro-watch.log; pwsh -NoProfile -File __BATON_REPO__/scripts/maestro-tick.ps1 >> __HOME__/.baton/overnight/lanes/maestro-watch.log 2>&1; echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] maestro-tick exit=$?" >> __HOME__/.baton/overnight/lanes/maestro-watch.log; fi</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>BATON_HOME</key>
+    <string>__HOME__/.baton</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/.baton/overnight/lanes/maestro-watch.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.baton/overnight/lanes/maestro-watch.stderr.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

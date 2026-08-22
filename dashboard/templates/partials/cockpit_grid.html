@@ -1,0 +1,40 @@
+{# Active sessions grid — OctoAlly-shaped hero (slice 4). WS updates via cockpit.js #}
+{% set g = grid | default({"cells": [], "live_count": 0, "updated_at": ""}) %}
+<section class="cockpit-grid" id="cockpit-grid" aria-label="Active sessions"
+         data-ws-url="{{ request.url.scheme == 'https' and 'wss' or 'ws' }}://{{ request.url.netloc }}/ws/cockpit">
+  <header class="cockpit-grid__head">
+    <div>
+      <p class="cockpit-label">ACTIVE SESSIONS</p>
+      <h2 class="cockpit-grid__title">Factory floor</h2>
+    </div>
+    <div class="cockpit-grid__meta">
+      <span class="cockpit-live-count"><span class="pulse-dot"></span> {{ g.live_count }} live</span>
+      <span class="cockpit-updated muted" id="cockpit-updated">{{ g.updated_at or "—" }}</span>
+    </div>
+  </header>
+
+  <div class="cockpit-grid__cells" id="cockpit-cells">
+    {% for cell in g.cells %}
+    <article class="cockpit-cell status-{{ cell.status }}{% if cell.live %} cockpit-cell--live{% endif %}"
+             data-project-id="{{ cell.project_id }}">
+      <header class="cockpit-cell__head">
+        <span class="cockpit-cell__name">{{ cell.name }}</span>
+        <span class="cockpit-cell__status status-{{ cell.status }}">{{ cell.status }}</span>
+      </header>
+      {% if cell.goal %}
+      <p class="cockpit-cell__goal">{{ cell.goal }}</p>
+      {% endif %}
+      <dl class="cockpit-cell__meta">
+        {% if cell.job_id %}<div><dt>job</dt><dd><code>{{ cell.job_id }}</code></dd></div>{% endif %}
+        {% if cell.run_id %}<div><dt>run</dt><dd><code>{{ cell.run_id }}</code></dd></div>{% endif %}
+        {% if cell.provider %}<div><dt>instrument</dt><dd>{{ cell.provider }}</dd></div>{% endif %}
+        {% if cell.current_step %}<div><dt>step</dt><dd>{{ cell.current_step }}</dd></div>{% endif %}
+      </dl>
+      <pre class="cockpit-cell__tail" data-tail>{% for line in cell.tail %}{{ line }}
+{% endfor %}{% if not cell.tail %}<span class="muted">— waiting for activity —</span>{% endif %}</pre>
+    </article>
+    {% else %}
+    <p class="muted cockpit-grid__empty">No registry projects. Add <code>$BATON_HOME/projects/&lt;id&gt;/project.json</code>.</p>
+    {% endfor %}
+  </div>
+</section>
