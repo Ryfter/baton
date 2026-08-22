@@ -80,9 +80,9 @@ Fixes in `feat/maestro-front-door-slice1`:
 
 ## Next Baton moves
 
-1. **Herdr integration spike** — `scripts/maestro-herdr.ps1` start/wait/prompt wrapper
+1. ~~**Herdr integration spike**~~ — `scripts/maestro-herdr.ps1` + `HERDR=1` path in `Invoke-MaestroFireOne` (slice 6)
 2. **Default Maestro labor to grok-cli/codex** for `--stakes high` (agentic), ox-alpha for bulk
-3. **Choices queue** (conductor-choices-queue plan) — unblock `needs-you` without Kevin hunting panes
+3. ~~**Choices queue**~~ — merged on `feat/maestro-front-door-slice1` (`baton choices brief/next/answer`)
 4. **launchd plist** install for `maestro-watch` on Mac mini
 
 ---

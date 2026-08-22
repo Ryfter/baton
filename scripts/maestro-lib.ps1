@@ -314,52 +314,67 @@ function Invoke-MaestroFireOne {
     $repoPath = Resolve-MaestroRepoPath -BatonHome $BatonHome -ProjectId ([string]$job.project) -DefaultRepo $DefaultRepo
     $stakes = if ($job.stakes) { [string]$job.stakes } else { 'standard' }
 
-    $goArgs = @{
-        Goal       = [string]$job.goal
-        RepoPath   = $repoPath
-        FleetPath  = $FleetPath
-        Execute    = $true
-        NoPlanGate = $true
-        NoVerify   = $true
-        Stakes     = $stakes
-        Json       = $true
-    }
-
-    $raw = ''
-    $exit = 0
-    try {
-        $raw = (& pwsh -NoProfile -File $FleetGo @goArgs | Out-String).Trim()
-        $exit = $LASTEXITCODE
-    } catch {
-        $raw = $_.Exception.Message
-        $exit = 1
-    }
-
     $patch = @{
         run_id   = $null
         provider = $null
         status   = 'done'
     }
+    $exit = 0
 
-    if ($raw) {
+    if ($env:HERDR -eq '1') {
+        . (Join-Path $PSScriptRoot 'maestro-herdr.ps1')
         try {
-            $out = $raw | ConvertFrom-Json
-            if ($out.run_id) { $patch.run_id = [string]$out.run_id }
-            $prov = Get-GoProvider -Out $out
-            if ($prov) { $patch.provider = $prov }
-            $patch.status = Resolve-MaestroStatusFromGo -GoStatus ([string]$out.status) -GoWhy ([string]$out.report)
+            $hf = Invoke-MaestroHerdrFire -Goal ([string]$job.goal)
+            $patch.run_id = [string]$hf.run_id
+            $patch.provider = [string]$hf.provider
+            $patch.status = [string]$hf.status
+            $exit = [int]$hf.exit
         } catch {
+            $patch.status = 'done'
+            $patch.provider = 'herdr:error'
+            $exit = 1
+        }
+    } else {
+        $goArgs = @{
+            Goal       = [string]$job.goal
+            RepoPath   = $repoPath
+            FleetPath  = $FleetPath
+            Execute    = $true
+            NoPlanGate = $true
+            NoVerify   = $true
+            Stakes     = $stakes
+            Json       = $true
+        }
+
+        $raw = ''
+        try {
+            $raw = (& pwsh -NoProfile -File $FleetGo @goArgs | Out-String).Trim()
+            $exit = $LASTEXITCODE
+        } catch {
+            $raw = $_.Exception.Message
+            $exit = 1
+        }
+
+        if ($raw) {
+            try {
+                $out = $raw | ConvertFrom-Json
+                if ($out.run_id) { $patch.run_id = [string]$out.run_id }
+                $prov = Get-GoProvider -Out $out
+                if ($prov) { $patch.provider = $prov }
+                $patch.status = Resolve-MaestroStatusFromGo -GoStatus ([string]$out.status) -GoWhy ([string]$out.report)
+            } catch {
+                if ($raw -match 'quota|rate.?limit|labor-unavailable|no candidate') {
+                    $patch.status = 'waiting-quota'
+                } else {
+                    $patch.status = 'done'
+                }
+            }
+        } elseif ($exit -ne 0) {
             if ($raw -match 'quota|rate.?limit|labor-unavailable|no candidate') {
                 $patch.status = 'waiting-quota'
             } else {
                 $patch.status = 'done'
             }
-        }
-    } elseif ($exit -ne 0) {
-        if ($raw -match 'quota|rate.?limit|labor-unavailable|no candidate') {
-            $patch.status = 'waiting-quota'
-        } else {
-            $patch.status = 'done'
         }
     }
 
