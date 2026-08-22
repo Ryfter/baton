@@ -8,9 +8,18 @@
     <strong>{{ job.id }}</strong>
     · <span class="status-{{ job.status }}">{{ job.status }}</span>
     · {{ job.project }}
-    {% if job.status == 'admitted' %} · waiting for Conductor{% elif job.provider %} · {{ job.provider }}{% elif job.run_id %} · run {{ job.run_id }}{% elif job.status not in ('held', 'done') %} · instrument pending{% endif %}
+    {% if job.status == 'admitted' %} · waiting for Conductor{% elif job.status == 'queued' %} · queued — next tick admits{% elif job.provider %} · {{ job.provider }}{% elif job.run_id %} · run {{ job.run_id }}{% elif job.status not in ('held', 'done') %} · instrument pending{% endif %}
   </p>
-  {% if job.status != 'held' and job.status != 'done' %}
+  {% if job.status == 'held' %}
+  <form
+    class="maestro-hold"
+    hx-post="/maestro/jobs/{{ job.id }}/release"
+    hx-target="#maestro-status"
+    hx-swap="innerHTML"
+  >
+    <button type="submit" class="maestro-hold__btn" title="Release hold and re-admit">Release hold</button>
+  </form>
+  {% elif job.status != 'done' %}
   <form
     class="maestro-hold"
     hx-post="/maestro/jobs/{{ job.id }}/hold"
@@ -39,6 +48,10 @@
 </div>
 {% elif not job %}
 <p class="maestro-status__empty muted">No jobs yet. Pick a registry project above, paste a goal, and click <strong>Admit job</strong>.</p>
+{% endif %}
+
+{% if status_line %}
+<p class="maestro-status__rollup muted">{{ status_line }}</p>
 {% endif %}
 
 {% if budget %}

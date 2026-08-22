@@ -1,36 +1,45 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-  Admit one Maestro job: oldest status=admitted → running → fleet-go → patch job JSON.
-
-.NOTES
-  Jobs live at $BATON_HOME/maestro/jobs/*.json. Invokes the box-local fleet-go runner;
-  does not merge branches or touch master.
+  Fire admitted Maestro jobs via fleet-go — parallel fan-out across disjoint projects.
 #>
 [CmdletBinding()]
 param(
     [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }),
     [string]$FleetGo = '/Users/kev/Dev/Baton/scripts/fleet-go.ps1',
     [string]$DefaultRepo = '/Users/kev/Dev/Baton',
-    [string]$FleetPath = $(Join-Path $HOME '.baton/overnight/fleet.yaml')
+    [string]$FleetPath = $(Join-Path $HOME '.baton/overnight/fleet.yaml'),
+    [int]$MaxParallel = 8
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'maestro-lib.ps1')
 
-$jobsDir = Join-Path $BatonHome 'maestro/jobs'
+$jobsDir = Get-MaestroJobsDir -BatonHome $BatonHome
 if (-not (Test-Path -LiteralPath $jobsDir)) {
     Write-Verbose "No jobs dir: $jobsDir"
     exit 0
 }
 
-$admitted = @(Get-ChildItem -LiteralPath $jobsDir -Filter 'mj-*.json' -File | ForEach-Object {
-    try {
-        $j = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json
-        if ([string]$j.status -eq 'admitted') {
-            [pscustomobject]@{ Path = $_.FullName; Job = $j; Created = [string]$j.created_at }
-        }
-    } catch { }
+$records = @(Get-MaestroJobRecords -JobsDir $jobsDir)
+$runningProjects = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($rec in @($records)) {
+    if ([string]$rec.Job.status -eq 'running') {
+        $p = [string]$rec.Job.project
+        if ($p) { [void]$runningProjects.Add($p) }
+    }
+}
+
+$runningCount = $runningProjects.Count
+$slots = [Math]::Max(0, $MaxParallel - $runningCount)
+if ($slots -lt 1) {
+    Write-Verbose 'Parallel cap reached — skip fire tick.'
+    exit 0
+}
+
+$admitted = @($records | Where-Object {
+    [string]$_.Job.status -eq 'admitted' -and
+    -not $runningProjects.Contains([string]$_.Job.project)
 } | Sort-Object Created)
 
 if ($admitted.Count -lt 1) {
@@ -38,63 +47,51 @@ if ($admitted.Count -lt 1) {
     exit 0
 }
 
-$pick = $admitted[0]
-$job = $pick.Job
-$jobPath = $pick.Path
-
-if ([string]$job.status -ne 'admitted') { exit 0 }
-
-$job.status = 'running'
-$job | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $jobPath -Encoding utf8NoBOM
-Write-MaestroEvent -Root $jobsDir -JobId ([string]$job.id) -Kind 'firing'
-
-$repoPath = Resolve-MaestroRepoPath -BatonHome $BatonHome -ProjectId ([string]$job.project) -DefaultRepo $DefaultRepo
-$stakes = if ($job.stakes) { [string]$job.stakes } else { 'standard' }
-
-$goArgs = @{
-    Goal       = [string]$job.goal
-    RepoPath   = $repoPath
-    FleetPath  = $FleetPath
-    Execute    = $true
-    NoPlanGate = $true
-    NoVerify   = $true
-    Stakes     = $stakes
-    Json       = $true
+$toFire = @()
+$claimed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($rec in $admitted) {
+    $proj = [string]$rec.Job.project
+    if ($claimed.Contains($proj)) { continue }
+    $toFire += $rec
+    [void]$claimed.Add($proj)
+    if ($toFire.Count -ge $slots) { break }
 }
 
-$raw = ''
-$exit = 0
-try {
-    $raw = (& pwsh -NoProfile -File $FleetGo @goArgs | Out-String).Trim()
-    $exit = $LASTEXITCODE
-} catch {
-    $raw = $_.Exception.Message
-    $exit = 1
-}
+$libPath = Join-Path $PSScriptRoot 'maestro-lib.ps1'
+$results = @()
 
-$patch = @{
-    run_id   = $null
-    provider = $null
-    status   = 'done'
-}
-
-if ($raw) {
-    try {
-        $out = $raw | ConvertFrom-Json
-        if ($out.run_id) { $patch.run_id = [string]$out.run_id }
-        $prov = Get-GoProvider -Out $out
-        if ($prov) { $patch.provider = $prov }
-        $patch.status = Resolve-MaestroStatusFromGo -GoStatus ([string]$out.status) -GoWhy ([string]$out.report)
-    } catch {
-        if ($exit -ne 0 -and ($raw -match 'quota|rate.?limit|labor-unavailable|no candidate')) {
-            $patch.status = 'waiting-quota'
-        }
+if ($toFire.Count -eq 1) {
+    $results += Invoke-MaestroFireOne -Pick $toFire[0] -JobsDir $jobsDir -BatonHome $BatonHome `
+        -FleetGo $FleetGo -DefaultRepo $DefaultRepo -FleetPath $FleetPath
+} else {
+    $jobs = foreach ($pick in $toFire) {
+        Start-Job -ScriptBlock {
+            param($PickPath, $PickJobJson, $JobsDir, $BatonHome, $FleetGo, $DefaultRepo, $FleetPath, $LibPath)
+            . $LibPath
+            $pickObj = [pscustomobject]@{
+                Path = $PickPath
+                Job  = ($PickJobJson | ConvertFrom-Json)
+            }
+            Invoke-MaestroFireOne -Pick $pickObj -JobsDir $JobsDir -BatonHome $BatonHome `
+                -FleetGo $FleetGo -DefaultRepo $DefaultRepo -FleetPath $FleetPath
+        } -ArgumentList (
+            $pick.Path,
+            ($pick.Job | ConvertTo-Json -Depth 10 -Compress),
+            $jobsDir,
+            $BatonHome,
+            $FleetGo,
+            $DefaultRepo,
+            $FleetPath,
+            $libPath
+        )
     }
-} elseif ($exit -ne 0) {
-    $patch.status = 'waiting-quota'
+    $results = @($jobs | Wait-Job | Receive-Job)
+    $jobs | Remove-Job -Force
 }
 
-Update-MaestroJobFile -Path $jobPath -Patch $patch
-Write-MaestroEvent -Root $jobsDir -JobId ([string]$job.id) -Kind 'fired' -Status $patch.status -RunId $patch.run_id -Provider $patch.provider
-Write-Host ("maestro-fire: {0} -> {1} run_id={2} provider={3}" -f $job.id, $patch.status, $patch.run_id, $patch.provider)
-exit $exit
+$worst = 0
+foreach ($r in $results) {
+    Write-Host ("maestro-fire: {0} -> {1} run_id={2} provider={3}" -f $r.id, $r.status, $r.run_id, $r.provider)
+    if ($r.exit -ne 0) { $worst = $r.exit }
+}
+exit $worst

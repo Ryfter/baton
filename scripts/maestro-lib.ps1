@@ -1,4 +1,85 @@
-# Shared helpers for maestro-fire.ps1 (Slice 1 — no Go, no Fable).
+# Shared helpers for maestro-admit.ps1, maestro-fire.ps1, maestro-tick.ps1.
+
+$script:MaestroDefaultUsable = @(
+    'openrouter-ox-alpha',
+    'grok-cli',
+    'cursor-agent',
+    'codex',
+    'kiro',
+    'lm-studio'
+)
+
+function Get-MaestroJobsDir {
+    param([Parameter(Mandatory)][string]$BatonHome)
+    return (Join-Path $BatonHome 'maestro/jobs')
+}
+
+function Get-MaestroJobRecords {
+    param([Parameter(Mandatory)][string]$JobsDir)
+    if (-not (Test-Path -LiteralPath $JobsDir)) { return @() }
+    $out = @()
+    foreach ($f in Get-ChildItem -LiteralPath $JobsDir -Filter 'mj-*.json' -File) {
+        try {
+            $j = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json
+            $out += [pscustomobject]@{
+                Path    = $f.FullName
+                Job     = $j
+                Created = [string]$j.created_at
+            }
+        } catch { }
+    }
+    return $out
+}
+
+function Get-MaestroUsableInstruments {
+    param(
+        [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }),
+        [string[]]$Prefer = $script:MaestroDefaultUsable
+    )
+    $usable = [System.Collections.Generic.List[string]]::new()
+    $budgetLib = Join-Path $PSScriptRoot 'window-budget-lib.ps1'
+    if (Test-Path -LiteralPath $budgetLib) {
+        try {
+            . $budgetLib
+            $status = Get-WindowBudgetStatus -Window '5h' -BatonHome $BatonHome
+            foreach ($row in @($status.models)) {
+                if ($row.lockout) { continue }
+                $p = [string]$row.pressure
+                if ($p -eq 'hard') { continue }
+                $m = [string]$row.model
+                if ($m -and -not $usable.Contains($m)) { [void]$usable.Add($m) }
+            }
+        } catch { }
+    }
+    foreach ($name in $Prefer) {
+        if (-not $usable.Contains($name)) { [void]$usable.Add($name) }
+    }
+    return @($usable)
+}
+
+function Get-MaestroProjectBlocks {
+    param([Parameter(Mandatory)]$JobRecords)
+    $held = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $running = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($rec in @($JobRecords)) {
+        $proj = [string]$rec.Job.project
+        if (-not $proj) { continue }
+        $st = [string]$rec.Job.status
+        if ($st -eq 'held') { [void]$held.Add($proj) }
+        if ($st -in @('running', 'admitted')) { [void]$running.Add($proj) }
+    }
+    return [pscustomobject]@{ Held = $held; Running = $running }
+}
+
+function Test-MaestroProjectAdmittable {
+    param(
+        [Parameter(Mandatory)][string]$Project,
+        $Blocks
+    )
+    if ($Blocks.Held.Contains($Project)) { return $false }
+    if ($Blocks.Running.Contains($Project)) { return $false }
+    return $true
+}
 
 function Resolve-MaestroRepoPath {
     param(
@@ -88,4 +169,77 @@ function Write-MaestroEvent {
     if ($Provider) { $row.provider = $Provider }
     $eventsPath = Join-Path $Root 'events.jsonl'
     ($row | ConvertTo-Json -Compress) + "`n" | Add-Content -LiteralPath $eventsPath -Encoding utf8NoBOM
+}
+
+function Invoke-MaestroFireOne {
+    param(
+        [Parameter(Mandatory)]$Pick,
+        [Parameter(Mandatory)][string]$JobsDir,
+        [Parameter(Mandatory)][string]$BatonHome,
+        [Parameter(Mandatory)][string]$FleetGo,
+        [Parameter(Mandatory)][string]$DefaultRepo,
+        [Parameter(Mandatory)][string]$FleetPath
+    )
+    $job = $Pick.Job
+    $jobPath = $Pick.Path
+    $job.status = 'running'
+    $job | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $jobPath -Encoding utf8NoBOM
+    Write-MaestroEvent -Root $JobsDir -JobId ([string]$job.id) -Kind 'firing'
+
+    $repoPath = Resolve-MaestroRepoPath -BatonHome $BatonHome -ProjectId ([string]$job.project) -DefaultRepo $DefaultRepo
+    $stakes = if ($job.stakes) { [string]$job.stakes } else { 'standard' }
+
+    $goArgs = @{
+        Goal       = [string]$job.goal
+        RepoPath   = $repoPath
+        FleetPath  = $FleetPath
+        Execute    = $true
+        NoPlanGate = $true
+        NoVerify   = $true
+        Stakes     = $stakes
+        Json       = $true
+    }
+
+    $raw = ''
+    $exit = 0
+    try {
+        $raw = (& pwsh -NoProfile -File $FleetGo @goArgs | Out-String).Trim()
+        $exit = $LASTEXITCODE
+    } catch {
+        $raw = $_.Exception.Message
+        $exit = 1
+    }
+
+    $patch = @{
+        run_id   = $null
+        provider = $null
+        status   = 'done'
+    }
+
+    if ($raw) {
+        try {
+            $out = $raw | ConvertFrom-Json
+            if ($out.run_id) { $patch.run_id = [string]$out.run_id }
+            $prov = Get-GoProvider -Out $out
+            if ($prov) { $patch.provider = $prov }
+            $patch.status = Resolve-MaestroStatusFromGo -GoStatus ([string]$out.status) -GoWhy ([string]$out.report)
+        } catch {
+            if ($exit -ne 0 -and ($raw -match 'quota|rate.?limit|labor-unavailable|no candidate')) {
+                $patch.status = 'waiting-quota'
+            }
+        }
+    } elseif ($exit -ne 0) {
+        $patch.status = 'waiting-quota'
+    }
+
+    Update-MaestroJobFile -Path $jobPath -Patch $patch
+    Write-MaestroEvent -Root $JobsDir -JobId ([string]$job.id) -Kind 'fired' -Status $patch.status -RunId $patch.run_id -Provider $patch.provider
+
+    return [pscustomobject]@{
+        id       = [string]$job.id
+        status   = $patch.status
+        run_id   = $patch.run_id
+        provider = $patch.provider
+        exit     = $exit
+    }
 }

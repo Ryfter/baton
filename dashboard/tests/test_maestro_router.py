@@ -24,7 +24,7 @@ def test_create_list_hold(tmp_path: Path):
     root = tmp_path / "maestro" / "jobs"
     job = mj.create_job(root, project="baton", goal="ship slice 1", stakes="standard")
     assert job["id"].startswith("mj-")
-    assert job["status"] == "admitted"
+    assert job["status"] == "queued"
     assert job["source"] == "web"
     listed = mj.list_jobs(root)
     assert len(listed) == 1
@@ -69,6 +69,30 @@ def test_job_id_rejects_traversal(tmp_path: Path):
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_release_job(tmp_path: Path):
+    root = tmp_path / "maestro" / "jobs"
+    job = mj.create_job(root, project="baton", goal="hold me")
+    held = mj.hold_job(root, job["id"])
+    assert held["status"] == "held"
+    assert held.get("held_from") == "queued"
+    released = mj.release_job(root, job["id"])
+    assert released["status"] == "queued"
+    try:
+        mj.release_job(root, job["id"])
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_board_status(tmp_path: Path):
+    root = tmp_path / "maestro" / "jobs"
+    mj.create_job(root, project="baton", goal="one")
+    mj.create_job(root, project="baton", goal="two")
+    board = mj.board_status(root)
+    assert board["counts"]["queued"] == 2
+    assert "status_line" in board
 
 
 def test_registry_list(tmp_path: Path):
@@ -123,7 +147,11 @@ def test_maestro_http_create_and_list(tmp_path: Path):
     body = r.json()
     assert body["project"] == "baton"
     assert body["stakes"] == "high"
-    assert body["status"] == "admitted"
+    assert body["status"] == "queued"
+
+    status_board = client.get("/maestro/status")
+    assert status_board.status_code == 200
+    assert status_board.json()["counts"]["queued"] >= 1
 
     listed = client.get("/maestro/jobs")
     assert listed.status_code == 200
@@ -142,6 +170,10 @@ def test_maestro_http_create_and_list(tmp_path: Path):
     held = client.post(f"/maestro/jobs/{body['id']}/hold")
     assert held.status_code == 200
     assert held.json()["status"] == "held"
+
+    released = client.post(f"/maestro/jobs/{body['id']}/release")
+    assert released.status_code == 200
+    assert released.json()["status"] == "queued"
 
     status = client.get("/maestro/partials/status")
     assert status.status_code == 200

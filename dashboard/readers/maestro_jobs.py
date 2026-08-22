@@ -1,7 +1,7 @@
 """Maestro job store — $BATON_HOME/maestro/jobs/<id>.json + events.jsonl.
 
 Slice 1 of docs/superpowers/specs/2026-08-15-maestro-front-door-design.md §5.
-Admission math stays stubbed (queued → admitted); Conductor fire is later.
+Slice 2: queued → admitted via maestro-admit.ps1; Conductor fire via maestro-fire.ps1.
 """
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def create_job(
     stakes: str = "standard",
     missed_fire: str = "catch-up",
     source: str = "web",
-    status: str = "admitted",
+    status: str = "queued",
     provider: Optional[str] = None,
 ) -> dict[str, Any]:
     project = (project or "").strip()
@@ -205,14 +205,61 @@ def update_job_fields(
 def hold_job(root: Path, job_id: str) -> dict[str, Any]:
     job = read_job(root, job_id)
     prev = job.get("status")
+    job["held_from"] = prev
     job["status"] = "held"
     write_job(root, job)
     append_event(root, job_id, "hold", previous_status=prev)
     return job
 
 
+def release_job(root: Path, job_id: str) -> dict[str, Any]:
+    job = read_job(root, job_id)
+    if job.get("status") != "held":
+        raise ValueError(f"job is not held: {job.get('status')}")
+    restore = (job.pop("held_from", None) or "admitted").strip().lower()
+    if restore not in VALID_STATUSES or restore == "held":
+        restore = "admitted"
+    job["status"] = restore
+    write_job(root, job)
+    append_event(root, job_id, "release", status=restore)
+    return job
+
+
+def board_status(root: Path, *, usable: Optional[Iterable[str]] = None) -> dict[str, Any]:
+    """Aggregate queue + counts for GET /maestro/status."""
+    jobs = list_jobs(root)
+    counts: dict[str, int] = {}
+    for j in jobs:
+        st = str(j.get("status") or "unknown")
+        counts[st] = counts.get(st, 0) + 1
+    running = [j for j in jobs if j.get("status") == "running"]
+    held_projects = sorted({str(j["project"]) for j in jobs if j.get("status") == "held"})
+    budget = budget_stub(usable=usable)
+    budget["held_projects"] = held_projects
+    lines: list[str] = []
+    if running:
+        lines.append(
+            f"{len(running)} running: "
+            + ", ".join(f"{j['project']} ({j['id']})" for j in running[:4])
+        )
+    if counts.get("queued"):
+        lines.append(f"{counts['queued']} queued")
+    if counts.get("waiting-quota"):
+        lines.append(f"{counts['waiting-quota']} waiting on quota")
+    if not lines:
+        lines.append("idle — no active jobs")
+    return {
+        "schema": 1,
+        "counts": counts,
+        "running": running,
+        "jobs": jobs[:12],
+        "budget": budget,
+        "status_line": " · ".join(lines),
+    }
+
+
 def budget_stub(usable: Optional[Iterable[str]] = None) -> dict[str, Any]:
-    """Slice-1 budget placeholder — real meters land with Maestro admission."""
+    """Budget placeholder — maestro-admit.ps1 reads window-budget-lib for real meters."""
     names = list(usable) if usable is not None else [
         "openrouter-ox-alpha",
         "codex",
@@ -222,7 +269,7 @@ def budget_stub(usable: Optional[Iterable[str]] = None) -> dict[str, Any]:
     ]
     return {
         "schema": 1,
-        "note": "stub — wire window-budget-lib / CodexBar later",
+        "note": "stub — maestro-admit uses window-budget-lib on tick",
         "usable": names,
         "held_projects": [],
         "claude_5h": "empty-until-reset",

@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 
 from dashboard.paths import baton_home
 from dashboard.readers.maestro_jobs import (
+    board_status,
     budget_stub,
     create_job,
     hold_job,
@@ -17,6 +18,7 @@ from dashboard.readers.maestro_jobs import (
     maestro_root,
     project_in_registry,
     read_job,
+    release_job,
 )
 
 
@@ -30,6 +32,10 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
         override = getattr(req.app.state, "maestro_jobs_root", None)
         return Path(override) if override else maestro_root(_home(req))
 
+    @router.get("/status")
+    async def get_status(request: Request) -> JSONResponse:
+        return JSONResponse(board_status(_root(request)))
+
     @router.get("/jobs")
     async def get_jobs(request: Request) -> JSONResponse:
         return JSONResponse({"jobs": list_jobs(_root(request))})
@@ -40,16 +46,41 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
 
     @router.get("/partials/status", response_class=HTMLResponse)
     async def partial_status(request: Request) -> HTMLResponse:
-        jobs = list_jobs(_root(request))[:8]
+        board = board_status(_root(request))
+        jobs = board["jobs"]
         return templates.TemplateResponse(
             request,
             "partials/maestro_status.html",
             {
                 "jobs": jobs,
                 "job": jobs[0] if jobs else None,
-                "budget": budget_stub(),
+                "budget": board["budget"],
+                "status_line": board.get("status_line"),
             },
         )
+
+    @router.post("/jobs/{job_id}/release")
+    async def post_release(job_id: str, request: Request):
+        try:
+            job = release_job(_root(request), job_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"no such job: {job_id}")
+
+        hx = request.headers.get("hx-request")
+        if hx:
+            jobs = list_jobs(_root(request))[:8]
+            return templates.TemplateResponse(
+                request,
+                "partials/maestro_status.html",
+                {
+                    "jobs": jobs,
+                    "job": job,
+                    "budget": budget_stub(),
+                },
+            )
+        return JSONResponse(job)
 
     @router.post("/jobs/{job_id}/hold")
     async def post_hold(job_id: str, request: Request):
@@ -104,7 +135,7 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
                 goal=goal,
                 stakes=stakes,
                 source=source,
-                status="admitted",
+                status="queued",
                 provider=None,
             )
         except ValueError as exc:
