@@ -1,5 +1,7 @@
 # Shared helpers for maestro-admit.ps1, maestro-fire.ps1, maestro-tick.ps1.
 
+. (Join-Path $PSScriptRoot 'maestro-session-lib.ps1')
+
 $script:MaestroDefaultUsable = @(
     'openrouter-ox-alpha',
     'grok-cli',
@@ -313,6 +315,8 @@ function Invoke-MaestroFireOne {
 
     $repoPath = Resolve-MaestroRepoPath -BatonHome $BatonHome -ProjectId ([string]$job.project) -DefaultRepo $DefaultRepo
     $stakes = if ($job.stakes) { [string]$job.stakes } else { 'standard' }
+    $proj = [string]$job.project
+    $goalText = Expand-MaestroGoalWithHandoff -Goal ([string]$job.goal) -JobId ([string]$job.id) -BatonHome $BatonHome
 
     $patch = @{
         run_id   = $null
@@ -321,22 +325,28 @@ function Invoke-MaestroFireOne {
     }
     $exit = 0
 
-    if ($env:HERDR -eq '1') {
+    if (Test-MaestroUseHerdr -Project $proj) {
         . (Join-Path $PSScriptRoot 'maestro-herdr.ps1')
+        $prevTarget = $env:HERDR_TARGET
         try {
-            $hf = Invoke-MaestroHerdrFire -Goal ([string]$job.goal)
+            $env:HERDR_TARGET = Resolve-MaestroHerdrTarget -Project $proj -BatonHome $BatonHome
+            $hf = Invoke-MaestroHerdrFire -Goal $goalText -Target $env:HERDR_TARGET
             $patch.run_id = [string]$hf.run_id
             $patch.provider = [string]$hf.provider
             $patch.status = [string]$hf.status
             $exit = [int]$hf.exit
+            Update-MaestroSessionAfterFire -Project $proj -Provider $patch.provider -BatonHome $BatonHome
         } catch {
             $patch.status = 'done'
             $patch.provider = 'herdr:error'
             $exit = 1
+        } finally {
+            if ($null -eq $prevTarget) { Remove-Item Env:\HERDR_TARGET -ErrorAction SilentlyContinue }
+            else { $env:HERDR_TARGET = $prevTarget }
         }
     } else {
         $goArgs = @{
-            Goal       = [string]$job.goal
+            Goal       = $goalText
             RepoPath   = $repoPath
             FleetPath  = $FleetPath
             Execute    = $true

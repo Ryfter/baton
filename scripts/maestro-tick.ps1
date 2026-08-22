@@ -17,9 +17,11 @@ $ErrorActionPreference = 'Stop'
 Import-MaestroEnv | Out-Null
 
 $reconcileScript = Join-Path $PSScriptRoot 'maestro-reconcile.ps1'
+$foldScript = Join-Path $PSScriptRoot 'maestro-fold-stale.ps1'
 $admitScript = Join-Path $PSScriptRoot 'maestro-admit.ps1'
 $fireScript = Join-Path $PSScriptRoot 'maestro-fire.ps1'
 
+& pwsh -NoProfile -File $foldScript -BatonHome $BatonHome | Out-Null
 & pwsh -NoProfile -File $reconcileScript -BatonHome $BatonHome | Out-Null
 & pwsh -NoProfile -File $admitScript -BatonHome $BatonHome -MaxParallel $MaxParallel | Out-Null
 & pwsh -NoProfile -File $fireScript `

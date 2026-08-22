@@ -132,6 +132,24 @@ verbs:
       --json: -Json
       --runs-root: -RunsRoot
       --ratings: -RatingsPath
+  - name: context-select
+    summary: Select bounded context passages without a model call (token-saver).
+    class: engine
+    runner: fleet-context-select.ps1
+    json: true
+    flag_aliases:
+      --json: -Json
+      --root: -Root
+      --output: -Output
+      --report: -Report
+  - name: state-delta
+    summary: Accepted-result plus delta packet for cache-friendly follow-ups (token-saver).
+    class: engine
+    runner: fleet-state-delta.ps1
+    json: true
+    flag_aliases:
+      --json: -Json
+      --output: -Output
   - name: choices
     summary: Conductor needs-you queue — brief, next, answer, draft, admit, reject.
     class: engine

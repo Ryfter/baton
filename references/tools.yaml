@@ -51,3 +51,19 @@ tools:
     platform: local
     capability: ocr
     command_template: 'ollama run deepseek-ocr'
+  - name: token-saver-select
+    kind: cli
+    enabled: true
+    cost_tier: local
+    role: draft
+    platform: local
+    capability: context-select
+    command_template: 'python3 {{repo_root}}/tools/token_saver/select_context.py --request {{request}} --root {{root}} --max-packet-bytes {{max_bytes}} --output {{output}}'
+  - name: token-saver-delta
+    kind: cli
+    enabled: true
+    cost_tier: local
+    role: draft
+    platform: local
+    capability: state-delta
+    command_template: 'python3 {{repo_root}}/tools/token_saver/state_delta.py {{subcommand}} --state {{state}}'

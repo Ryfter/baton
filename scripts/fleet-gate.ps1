@@ -15,13 +15,27 @@ param(
     [switch]$Panel,
     [switch]$FailLoud,
     [switch]$Json,
-    [string]$FleetPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'fleet.yaml' } else { Join-Path $HOME '.baton/fleet.yaml' })
+    [string]$FleetPath = $(if ($env:BATON_HOME) { Join-Path $env:BATON_HOME 'fleet.yaml' } else { Join-Path $HOME '.baton/fleet.yaml' }),
+    [string]$RepoPath,
+    [string]$BaseSha = 'HEAD',
+    [string]$Worktree
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'gate-lib.ps1')
+. (Join-Path $PSScriptRoot 'holdout-lib.ps1')
 try { . (Join-Path $PSScriptRoot 'coach-lib.ps1') } catch { }
 
 switch ($Subcommand) {
+    'holdout' {
+        if (-not $RepoPath) { [Console]::Error.WriteLine('holdout requires -RepoPath'); exit 2 }
+        $wt = if ($Worktree) { $Worktree } else { $RepoPath }
+        $base = (& git -C $RepoPath rev-parse $BaseSha 2>$null)
+        if ($LASTEXITCODE -ne 0) { [Console]::Error.WriteLine("holdout: invalid BaseSha $BaseSha"); exit 2 }
+        $suite = Invoke-HoldoutSuite -RepoPath $RepoPath -BaseSha $base.Trim() -WorktreeRoot $wt
+        if ($Json) { $suite | ConvertTo-Json -Depth 6 }
+        else { Write-Host (Format-HoldoutReport -SuiteResult $suite) }
+        exit $(if ($suite.ok) { 0 } else { 1 })
+    }
     'run' {
         if (-not $Task) { [Console]::Error.WriteLine('run requires --task (what the artifact was supposed to do)'); exit 2 }
         $art = $null
@@ -47,5 +61,5 @@ switch ($Subcommand) {
         }
         return
     }
-    default { [Console]::Error.WriteLine("unknown subcommand: $Subcommand (use run)"); exit 2 }
+    default { [Console]::Error.WriteLine("unknown subcommand: $Subcommand (use run|holdout)"); exit 2 }
 }

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "id": "baton-scripts-parse",
+      "title": "Core Baton scripts dot-source without syntax error",
+      "argv": [
+        "pwsh",
+        "-NoProfile",
+        "-Command",
+        ". ./scripts/baton-home.ps1; . ./scripts/holdout-lib.ps1; 'ok'"
+      ]
+    }
+  ]
+}

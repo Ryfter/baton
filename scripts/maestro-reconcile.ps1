@@ -31,7 +31,8 @@ $foldPatterns = @(
     @{ match = 'Boss wave 8'; note = 'TD boss wave shipped — folded by reconcile' },
     @{ match = 'POST /ask 500'; note = 'AnswerBot /ask fixed — folded by reconcile' },
     @{ match = 'shell-edit-doctor'; note = 'canvas install.sh shipped — folded by reconcile' },
-    @{ match = 'toc_scheduler tests'; note = 'bench-gauntlet ToC tests shipped — folded by reconcile' }
+    @{ match = 'toc_scheduler tests'; note = 'bench-gauntlet ToC tests shipped — folded by reconcile' },
+    @{ match = 'Maestro slice 6'; note = 'slice 6 Herdr spike shipped — folded by reconcile' }
 )
 
 foreach ($f in Get-ChildItem -LiteralPath $jobsDir -Filter 'mj-*.json' -File) {
