@@ -14,8 +14,8 @@ $savedHome = $env:BATON_HOME
 $savedClaude = $env:BATON_CLAUDE_DIR
 try {
     # --- Get-BatonHome ---
-    $env:BATON_HOME = 'X:\custom\baton'
-    Assert "Get-BatonHome honors env var" ((Get-BatonHome) -eq 'X:\custom\baton')
+    $env:BATON_HOME = '/custom/baton'
+    Assert "Get-BatonHome honors env var" ((Get-BatonHome) -eq '/custom/baton')
     $env:BATON_HOME = $null
     Assert "Get-BatonHome defaults to ~/.baton" ((Get-BatonHome) -eq (Join-Path $HOME '.baton'))
 

@@ -4,7 +4,7 @@ description: Project registry command center — list projects by lifecycle and 
 
 # /baton:project
 
-The multi-project command center. From the `D:\dev` home base, see every
+The multi-project command center. From the home base (default `~/dev`), see every
 project grouped **Active / Inactive / Archived** and edit its registry entry.
 
 Run the CLI:
@@ -23,7 +23,7 @@ Subcommands:
 - `hide <slug>` — drop a `.git` folder that isn't really a project.
 - `set-blurb <slug> "<text>"` — hand-write the one-line description.
 
-Projects are discovered by scanning `D:\dev` (override with
+Projects are discovered by scanning the home base (default `~/dev`, override with
 `$env:BATON_PROJECTS_ROOT`); a folder counts if it has a `.git` dir or a
 `CHARTER.md`. To start work on one, use `/baton:go --<slug> <goal>`.
 

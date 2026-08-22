@@ -59,8 +59,8 @@ claude plugin marketplace add https://github.com/nyldn/plugins.git
 claude plugin install octo@nyldn-plugins
 
 # 2. Get this repo
-git clone https://github.com/Ryfter/baton.git D:\Dev\baton
-cd D:\Dev\baton
+git clone https://github.com/Ryfter/baton.git ~/dev/baton
+cd ~/dev/baton
 
 # 3. Bootstrap — deploys scripts into ~/.claude/ and seeds state into ~/.baton/
 pwsh -NoProfile -File scripts\bootstrap.ps1
@@ -77,7 +77,7 @@ safe to re-run any time (e.g. after `git pull`) to re-sync. It also prints a
 **version-drift line** at the top so you can see whether `~/.claude/` is behind the repo,
 and finishes with a "Next steps" list.
 
-> Re-running later: `pwsh -NoProfile -File scripts\bootstrap.ps1 -Force` overwrites
+> Re-running later: `pwsh -NoProfile -File scripts/bootstrap.ps1 -Force` overwrites
 > deployed copies with the latest from the repo. Add `-NonInteractive` for unattended runs.
 
 ### Turn on cost tracking (optional)
@@ -267,8 +267,8 @@ lessons learned in one project quietly improve your defaults everywhere.
 |---|---|
 | A model shows as unreachable | `/baton:fleet doctor` to re-probe; check the CLI is installed / the machine is on |
 | Search returns nothing | `/baton:kb-index --full` (and `ollama pull nomic-embed-text` if needed) |
-| `~/.claude/` looks out of date | re-run `pwsh scripts\bootstrap.ps1 -Force` (idempotent) |
-| Want to confirm nothing's broken | `python -m pytest dashboard kb -q` + the `scripts\test-*.ps1` suites |
+| `~/.claude/` looks out of date | re-run `pwsh scripts/bootstrap.ps1 -Force` (idempotent) |
+| Want to confirm nothing's broken | `python -m pytest dashboard kb -q` + the `scripts/test-*.ps1` suites |
 | Stop auto-capturing decisions | create `~/.claude/decisions-off` (global) or a per-project `decisions-off` |
 
 ---

@@ -22,9 +22,9 @@
 #>
 param(
     [Parameter(Mandatory)][string]$TasksPath,
-    [string]$RepoRoot = 'D:\Dev\baton',
+    [string]$RepoRoot = (Join-Path $HOME 'dev' 'baton'),
     [string]$Target = 'master',
-    [string]$WorktreeRoot = 'D:\Dev\cao-worktrees',
+    [string]$WorktreeRoot = (Join-Path $HOME 'dev' 'cao-worktrees'),
     [string]$OutputRoot,
     [int]$TimeoutS = 900,
     [int]$MaxParallel = 0,

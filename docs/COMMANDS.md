@@ -15,7 +15,7 @@ options for *this* command?"
 - **`[square brackets]`** = optional.
 - **`--flag`** = an option; some take a value (`--k 5`), some are on/off (`--apply`).
 - **"Where results land"** tells you which file on disk changed. State lives under
-  `$BATON_HOME` (default `~/.baton/`, Windows: `C:\Users\<you>\.baton\`); set the
+  `$BATON_HOME` (default `~/.baton/`); set the
   `BATON_HOME` environment variable to use a custom location.
 
 ## Shared idea: the "fleet", providers, and tiers

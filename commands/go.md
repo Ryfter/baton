@@ -81,15 +81,16 @@ let the engine and the fleet do the work.
 - When a prompt challenger is live (see `/baton:optimize-prompt`), the run log
   carries a `shadow` event naming which prompt variant planned this run.
 
-## Running from the D:\dev home base
+## Running from the home base
 
 You can launch a run against any registered project without `cd`-ing into it:
 
-- `/baton:go --<slug> <goal>` — resolve `<slug>` (a project under `D:\dev`)
+- `/baton:go --<slug> <goal>` — resolve `<slug>` (a project under your home base, 
+  default `~/dev`)
   to its folder and run there. `--<slug>` is shorthand for `--project <slug>`.
 - `/baton:go <goal>` from inside a project folder — runs against that folder
   (the default).
-- From `D:\dev` itself with no `--project`, use `/baton:start` to pick a
+- From the home base with no `--project`, use `/baton:start` to pick a
   project.
 
 See `/baton:project list` for the roster.

@@ -90,12 +90,12 @@ for EVERY agent touching it:
 
 **Ownership (Grimdex decision d003):** Grimdex-side execution — the Grimdex audit, the split
 itself, the Grimdex README — runs from the **Grimdex home thread** (sessions in
-`D:\Dev\Grimdex`); this project's thread owns only the orchestrator repo's own audit + README.
+`$BATON_GRIMDEX_ROOT` or `~/Grimdex`); this project's thread owns only the orchestrator repo's own audit + README.
 Cross-thread decisions flow as context syncs; cross-thread operations don't.
 
 **Status: the SPLIT IS EXECUTED (2026-06-10, Grimdex d004 — via rename, not migration).**
 The combined private repo was renamed `Ryfter/Grimdex` → **`Ryfter/grimdex-know`** (data +
-full history + `pre-split-backup` tag; the `D:\Dev\Grimdex` working dir, the
+full history + `pre-split-backup` tag; the Grimdex working dir (default `~/Grimdex`), the
 `~/.claude/knowledge` junction, and the scheduled routines are all UNCHANGED — only the
 remote URL changed, already updated in the shared tree). A NEW public-destined
 **`Ryfter/Grimdex`** = the engine, rebuilt from zero history (1 commit, audited: no data
@@ -120,7 +120,7 @@ baton. Conduct the fleet.") and packaged as a Claude Code plugin. What every age
 must know:
 
 - **Repo:** `Ryfter/baton` (GitHub rename; old URLs redirect). Local working dir:
-  **`D:\Dev\baton`** (renamed from `D:\Dev\coding-agent-orchestrator`).
+  **`~/dev/baton`** (renamed from `coding-agent-orchestrator`).
 - **Install (Claude Code):** `claude plugin marketplace add Ryfter/baton` +
   `claude plugin install baton@ryfter`. The repo is its own marketplace
   (`.claude-plugin/plugin.json` + `marketplace.json`).

@@ -245,7 +245,7 @@ This is the same class of bug as codex silent no-op (empty diff) — **proof mus
 ### Slice R0 — Box readiness (no Baton code)
 
 1. Confirm Python 3.11+ (native Windows or WSL decision — **this box is Windows; prefer WSL clone or port validation**).
-2. Clone `https://github.com/NateBJones-Projects/ringer` to a stable path (e.g. `D:\Dev\ringer` or `\\wsl$\…`).
+2. Clone `https://github.com/NateBJones-Projects/ringer` to a stable path (e.g. `~/dev/ringer`).
 3. `config.sample.toml` → `~/.config/ringer/config.toml` (or WSL home).
 4. Wire engines already on PATH: `codex`, `grok` (user has both); optional OpenCode.
 5. `./ringer.py demo` → Ringside + three PASSes.

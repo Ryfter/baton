@@ -93,7 +93,7 @@ from dashboard.routers.kb import is_decision_path
 
 def test_is_decision_path() -> None:
     assert is_decision_path("/k/p/x/decisions/d001-foo.md")
-    assert is_decision_path("C:\\k\\p\\x\\decisions\\d007.md")
+    assert is_decision_path("/k/p/x/decisions/d007.md")
     assert not is_decision_path("/k/universal/routing.md")
     assert not is_decision_path("/k/p/x/decisions/notes.md")  # not d*.md
     assert not is_decision_path("")

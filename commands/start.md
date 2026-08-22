@@ -165,7 +165,7 @@ happens next, and why.
         $grimdexNote = Get-GrimdexStyleNote -Profile $updatedProfile
         # Show the user: "Your preferences have stabilised. Want me to save
         # this to Grimdex so any machine knows your style?"
-        # If yes: write $grimdexNote to D:\Dev\Grimdex\projects\baton\notes\working-style.md
+        # If yes: write $grimdexNote to $BATON_GRIMDEX_ROOT/projects/baton/notes/working-style.md
         # (check path exists first — if Grimdex is absent, skip silently)
     }
     ```
@@ -227,7 +227,7 @@ happens next, and why.
 
 ## Picking a project from the home base
 
-Run from `D:\dev` to choose among your projects. `/baton:project list` shows
+Run from the home base (default `~/dev`) to choose among your projects. `/baton:project list` shows
 them grouped **Active / Inactive / Archived**. Pick an **inactive** project
 and either start fresh (`/baton:go --<slug> <goal>`) or, if it is
 `[resumable]`, resume where you left off with the saved command

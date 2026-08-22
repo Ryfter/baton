@@ -11,7 +11,7 @@
 
   Locating the repo: honors $env:BATON_REPO_ROOT (preferred) or the legacy
   $env:CAO_REPO_ROOT, then searches upward from PSScriptRoot for a folder
-  containing a `kb/` directory. Falls back to D:\Dev\baton.
+  containing a `kb/` directory. Falls back to $HOME/dev/baton.
 #>
 
 function Get-CaoRepoRoot {
@@ -32,7 +32,7 @@ function Get-CaoRepoRoot {
         $dir = $parent
     }
     # Common dev path
-    $candidate = 'D:\Dev\baton'
+    $candidate = Join-Path $HOME 'dev' 'baton'
     if (Test-Path (Join-Path $candidate 'kb')) { return $candidate }
     throw "Could not locate the baton repo (no kb/ found). Set `$env:BATON_REPO_ROOT to the repo root."
 }

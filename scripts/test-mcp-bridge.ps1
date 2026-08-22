@@ -173,7 +173,7 @@ last_updated: $now
     Check 'null args no crash: ok present'  ($r -and $null -ne $r.ok)
 
     # Test with a nonexistent path passed explicitly
-    $out2 = (& pwsh -NoProfile -File $bridge -Op 'capabilities' -ArgsPath 'C:\nonexistent\path\args.json' 2>&1 | Out-String).Trim()
+    $out2 = (& pwsh -NoProfile -File $bridge -Op 'capabilities' -ArgsPath '/nonexistent/path/args.json' 2>&1 | Out-String).Trim()
     $lastLine2 = ($out2 -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Last 1)
     $r2 = try { $lastLine2 | ConvertFrom-Json } catch { $null }
     Check 'garbage ArgsPath no crash: ok present' ($r2 -and $null -ne $r2.ok)
