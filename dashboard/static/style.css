@@ -1081,3 +1081,143 @@ input:focus-visible,
   font-size: 0.85rem;
 }
 .maestro-hold__btn:hover { background: var(--accent-warning); color: #111; }
+
+/* ── Cockpit grid (Maestro slice 4 — OctoAlly / Live Fleet Ops) ── */
+.cockpit-layout__hero { min-width: 0; }
+.cockpit-grid {
+  background: linear-gradient(180deg, rgba(15, 20, 32, 0.95) 0%, rgba(9, 12, 18, 0.98) 100%);
+  border: 1px solid rgba(74, 222, 128, 0.18);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.35rem 1.4rem;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.cockpit-grid__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(74, 222, 128, 0.12);
+}
+.cockpit-label {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  color: #4ade80;
+  opacity: 0.85;
+}
+.cockpit-grid__title {
+  margin: 0.15rem 0 0;
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.cockpit-grid__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+.cockpit-live-count {
+  color: #4ade80;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.8);
+  animation: cockpit-pulse 1.6s ease-in-out infinite;
+}
+@keyframes cockpit-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.85); }
+}
+.cockpit-grid__cells {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.85rem;
+}
+.cockpit-cell {
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 0.85rem 0.95rem;
+  min-width: 0;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.cockpit-cell--live {
+  border-color: rgba(74, 222, 128, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.08), 0 0 18px rgba(74, 222, 128, 0.06);
+}
+.cockpit-cell__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+.cockpit-cell__name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+.cockpit-cell__status {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.cockpit-cell__goal {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+.cockpit-cell__meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.25rem 0.75rem;
+  margin: 0 0 0.55rem;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+}
+.cockpit-cell__meta div { display: contents; }
+.cockpit-cell__meta dt {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.cockpit-cell__meta dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cockpit-cell__tail {
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: #86efac;
+  max-height: 7.5rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.cockpit-grid__empty { grid-column: 1 / -1; padding: 1rem 0; }
+@media (max-width: 900px) {
+  .cockpit-layout__secondary { grid-column: 1 / -1 !important; }
+}
