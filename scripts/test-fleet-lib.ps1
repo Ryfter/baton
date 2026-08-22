@@ -130,6 +130,26 @@ providers:
     Remove-Item -LiteralPath $policyDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# ===== seed roster pins (references/fleet.yaml) =====
+$seedProviders = Read-Fleet -Path (Join-Path $PSScriptRoot '..\references\fleet.yaml')
+$ghCopilot = $seedProviders | Where-Object { $_.name -eq 'gh-copilot' }
+$opencode = $seedProviders | Where-Object { $_.name -eq 'opencode' }
+Assert "seed parses and contains gh-copilot and opencode" ($null -ne $ghCopilot -and $null -ne $opencode)
+# gh-copilot is pinned to its CURRENT seed value ('paid'). Issue #188 argues the
+# tier belongs on 'free' (the row runs gh models, a free product) — flip the
+# seed and this pin together in one commit.
+Assert "seed gh-copilot cost_tier is paid" ($ghCopilot.cost_tier -eq 'paid')
+Assert "seed opencode enabled is boolean true" ($opencode.enabled -eq $true)
+Assert "seed opencode agentic is boolean true" ($opencode.agentic -eq $true)
+Assert "seed opencode cost_tier is free" ($opencode.cost_tier -eq 'free')
+Assert "seed opencode role is draft" ($opencode.role -eq 'draft')
+Assert "seed opencode claims exactly code-gen and reasoning" (
+    @($opencode.capabilities).Count -eq 2 -and
+    @($opencode.capabilities) -contains 'code-gen' -and
+    @($opencode.capabilities) -contains 'reasoning')
+Assert "seed opencode does not claim review" (@($opencode.capabilities) -notcontains 'review')
+Assert "seed opencode does not claim plan-review" (@($opencode.capabilities) -notcontains 'plan-review')
+
 # --- Get-FleetProvider ---
 $p = Get-FleetProvider -Name 'stub-cli' -Path $fixture
 Assert "Get-FleetProvider finds stub-cli" ($p.name -eq 'stub-cli')

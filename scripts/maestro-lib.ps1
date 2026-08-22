@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Shared helpers for maestro-admit.ps1, maestro-fire.ps1, maestro-tick.ps1.
 
 . (Join-Path $PSScriptRoot 'maestro-session-lib.ps1')
@@ -151,6 +152,9 @@ function Test-MaestroProjectAdmittable {
     if ($Blocks.Running.Contains($Project)) { return $false }
     return $true
 }
+=======
+# Shared helpers for maestro-fire.ps1 (Slice 1 — no Go, no Fable).
+>>>>>>> origin/master
 
 function Resolve-MaestroRepoPath {
     param(
@@ -205,8 +209,12 @@ function Resolve-MaestroStatusFromGo {
     if ($s -match 'quota|rate.?limit|limited') { return 'waiting-quota' }
     if ($why -match 'quota|rate.?limit|no candidate|labor-unavailable|usage limit') { return 'waiting-quota' }
     if ($s -like 'interrupted-*') { return 'running' }
+<<<<<<< HEAD
     if ($s -in @('completed', 'accepted', 'failed', 'done')) { return 'done' }
     if ($s -eq 'waiting-quota' -or $s -eq 'labor-unavailable') { return 'waiting-quota' }
+=======
+    if ($s -in @('completed', 'accepted')) { return 'done' }
+>>>>>>> origin/master
     return 'done'
 }
 
@@ -222,6 +230,7 @@ function Update-MaestroJobFile {
     $job | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $Path -Encoding utf8NoBOM
 }
 
+<<<<<<< HEAD
 function Test-MaestroJobId {
     param([Parameter(Mandatory)][string]$JobId)
     return ($JobId -match '^mj-[0-9a-f]{12}$')
@@ -277,6 +286,8 @@ function Invoke-MaestroReleaseJob {
     return $job
 }
 
+=======
+>>>>>>> origin/master
 function Write-MaestroEvent {
     param(
         [Parameter(Mandatory)][string]$Root,
@@ -297,6 +308,7 @@ function Write-MaestroEvent {
     $eventsPath = Join-Path $Root 'events.jsonl'
     ($row | ConvertTo-Json -Compress) + "`n" | Add-Content -LiteralPath $eventsPath -Encoding utf8NoBOM
 }
+<<<<<<< HEAD
 
 function Invoke-MaestroFireOne {
     param(
@@ -399,3 +411,5 @@ function Invoke-MaestroFireOne {
         exit     = $exit
     }
 }
+=======
+>>>>>>> origin/master

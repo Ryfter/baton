@@ -2,19 +2,27 @@
 <#
 .SYNOPSIS
   Fire admitted Maestro jobs via fleet-go — parallel fan-out across disjoint projects.
+
+.NOTES
+  Jobs live at $BATON_HOME/maestro/jobs/*.json. Invokes the box-local fleet-go runner;
+  does not merge branches or touch master.
 #>
 [CmdletBinding()]
 param(
     [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }),
-    [string]$FleetGo = '/Users/kev/Dev/Baton/scripts/fleet-go.ps1',
-    [string]$DefaultRepo = '/Users/kev/Dev/Baton',
-    [string]$FleetPath = $(Join-Path $HOME '.baton/overnight/fleet.yaml'),
+    [string]$FleetGo = $(Join-Path $PSScriptRoot 'fleet-go.ps1'),
+    [string]$DefaultRepo = $(Split-Path $PSScriptRoot -Parent),
+    [string]$FleetPath = '',
     [int]$MaxParallel = 8
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'maestro-lib.ps1')
 Import-MaestroEnv | Out-Null
+
+if ([string]::IsNullOrWhiteSpace($FleetPath)) {
+    $FleetPath = Join-Path $BatonHome 'overnight/fleet.yaml'
+}
 
 $jobsDir = Get-MaestroJobsDir -BatonHome $BatonHome
 if (-not (Test-Path -LiteralPath $jobsDir)) {

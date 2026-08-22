@@ -167,14 +167,32 @@ function Get-FindingKey {
 
 function Merge-ReviewFindings {
     <# Reconcile per-reviewer parse results into one deduped set. Input items:
-       @{reviewer;parsed;findings}. Same key from >=2 reviewers -> one merged finding,
-       higher severity kept, agreed=$true. Unparsed reviewers collected by name. #>
+       @{reviewer;provider;parsed;findings}. Same key from >=2 DISTINCT PROVIDERS -> one
+       merged finding, higher severity kept, agreed=$true. Unparsed reviewers collected
+       by name.
+
+       `agreed` counts PROVIDERS, not reviewer slots. Failover can hand one provider two
+       slots (roles, or a walk landing on a peer that already spoke), and counting slots
+       let a single model corroborate itself -- turning one opinion wearing two hats into
+       the panel's strongest signal. raised_by still lists the slots, because that is what
+       an operator reading the report recognises; raised_by_providers is what the
+       agreement claim rests on.
+
+       Under-detection is a DIFFERENT matter and is deliberate: Get-FindingKey matches
+       area|summary text exactly, so two reviewers wording the same bug differently stay
+       separate. That is the conservative direction -- do not "fix" it with fuzzy matching
+       without a decision, because false agreement is far more damaging than a missed one:
+       it is the signal used to rank what a human reads first. #>
     param([array]$Reviews)
     $unparsed = [System.Collections.ArrayList]@()
     $byKey = [ordered]@{}
     foreach ($rv in @($Reviews)) {
         if ($null -eq $rv) { continue }
         if (-not $rv.parsed) { [void]$unparsed.Add([string]$rv.reviewer); continue }
+        # The model that actually answered. Falls back to the slot name when no provider
+        # was recorded (older callers, and tests that build reviews by hand).
+        $rvProvider = if (-not [string]::IsNullOrWhiteSpace([string]$rv.provider)) { [string]$rv.provider }
+                      else { [string]$rv.reviewer }
         foreach ($f in @($rv.findings)) {
             $key = Get-FindingKey -Finding $f
             if ($byKey.Contains($key)) {
@@ -183,11 +201,13 @@ function Merge-ReviewFindings {
                     $m.severity = $f.severity
                 }
                 if ($m.raised_by -notcontains $rv.reviewer) { $m.raised_by += [string]$rv.reviewer }
-                $m.agreed = ($m.raised_by.Count -ge 2)
+                if ($m.raised_by_providers -notcontains $rvProvider) { $m.raised_by_providers += $rvProvider }
+                $m.agreed = (@($m.raised_by_providers).Count -ge 2)
             } else {
                 $byKey[$key] = @{
                     severity  = $f.severity; area = $f.area; summary = $f.summary
-                    raised_by = @([string]$rv.reviewer); agreed = $false
+                    raised_by = @([string]$rv.reviewer); raised_by_providers = @($rvProvider)
+                    agreed = $false
                 }
             }
         }

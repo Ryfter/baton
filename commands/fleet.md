@@ -1,64 +1,57 @@
 ---
-description: Manage and invoke the LLM fleet. `doctor` health-checks providers, `test` dispatches a prompt to one provider, `list` shows the registry.
-argument-hint: doctor [--live] [--timeout <s>] | test <name> "<prompt>" [--model <m>] | list
+description: Manage the LLM fleet and overnight multi-lane factory. doctor|list|test|dispatch|status|stop. Layer seating baton-d124.
+argument-hint: doctor [--live] | list | test <name> "<prompt>" | dispatch | status | stop
 ---
 
 # /baton:fleet
 
-Operate the fleet defined in `$BATON_HOME/fleet.yaml` (default `~/.baton/fleet.yaml`).
+Operate the fleet. Prefer **repo scripts** under `/Users/kev/Dev/Baton/scripts/` when present; fall back to `$HOME/.claude/scripts`.
+
+**Layer seating (`baton-d124`):** Mouth/Conductor → Ox Alpha · Orchestrator → Opus · Plan/sprint-review → Fable · Instruments → Ox Alpha + Codex/Grok/Kiro/Cursor.
+
+Live registry: `~/.baton/fleet.yaml`  
+Overnight multi-lane: `~/.baton/overnight/` (`fleet.yaml`, `goals/`, `fleet-dispatch.sh`)
 
 ## Steps
 
-1. **Parse `$ARGUMENTS`.** The first whitespace-delimited token is the
-   subcommand: `doctor`, `test`, or `list`. If it's none of these (or empty),
-   print usage and stop.
+1. **Parse `$ARGUMENTS`.** First token is the subcommand: `doctor`, `test`, `list`, `dispatch`, `status`, or `stop`. Else print usage and stop.
 
-2. **Dispatch by subcommand:**
+2. **Dispatch:**
 
-   **`doctor`** — run (with `--live` to enable canary probes):
+   **`doctor`** — with `--live` for canaries:
 
    ```powershell
-   & pwsh -NoProfile -File "$HOME/.claude/scripts/fleet-doctor.ps1" -Live -TimeoutS 60
+   & pwsh -NoProfile -File "/Users/kev/Dev/Baton/scripts/fleet-doctor.ps1" -Live -TimeoutS 60
    ```
 
-   Echo the table to the user. With `--live`, each enabled provider receives a `PONG` canary and reports `live_ok`, `live_fail(<reason>)`, or `skip`; a `no-canary` reason means the provider ran but didn't answer (often a wrong command template for this box). Plain (no `--live`) performs the fast PATH/reachability check only.
-
-   **`list`** — run:
+   **`list`** — overnight roster if user said overnight/dispatch context, else live:
 
    ```powershell
-   . "$HOME/.claude/scripts/fleet-lib.ps1"
-   Read-Fleet | Select-Object name, kind, enabled, cost_tier | Format-Table -AutoSize
+   . "/Users/kev/Dev/Baton/scripts/fleet-lib.ps1"
+   Read-Fleet -Path "$HOME/.baton/overnight/fleet.yaml" | Select-Object name,kind,enabled,cost_tier | Format-Table -AutoSize
    ```
 
-   **`test`** — the next token is `<name>`, then a quoted string is the prompt,
-   then optional `--model <m>`. Run (substitute the parsed values for `<NAME>`,
-   `<PROMPT>`, `<MODEL_OR_EMPTY>`):
+   **`test`** — next token `<name>`, then quoted prompt, optional `--model <m>`:
 
    ```powershell
-   . "$HOME/.claude/scripts/fleet-lib.ps1"
-   $name   = '<NAME>'
-   $prompt = '<PROMPT>'          # single-quote-escaped
-   $model  = '<MODEL_OR_EMPTY>'
-   $callArgs = @{ Name = $name; Prompt = $prompt }
-   if ($model) { $callArgs['Model'] = $model }
-   $r = Invoke-Fleet @callArgs
-   Write-Host ""
-   Write-Host "> $name" -ForegroundColor Cyan
-   Write-Host ""
-   Write-Host (($r.stdout | Out-String).Trim())
-   Write-Host ""
-   if ($r.exit_code -eq 0) {
-       Write-Host "OK  $($r.duration_s)s exit:$($r.exit_code)" -ForegroundColor Green
-   } else {
-       Write-Host "ERR $($r.duration_s)s exit:$($r.exit_code)" -ForegroundColor Red
-       if ($r.stderr) { Write-Host $r.stderr -ForegroundColor Red }
-   }
+   . "/Users/kev/Dev/Baton/scripts/fleet-lib.ps1"
+   $r = Invoke-Fleet -Name '<NAME>' -Prompt '<PROMPT>' # + Model if set
    ```
 
-   Echo the response to the user.
+   Prefer seats by capability: `converse`/`orchestrate`/`sprint-review`/`code-gen`.
 
-3. **On any error** (unknown/disabled provider, missing fleet.yaml), surface the
-   thrown message clearly and suggest `/baton:fleet list` or `/baton:fleet doctor`.
+   **`dispatch`** — start multi-lane overnight factory:
+
+   ```bash
+   rm -f ~/.baton/overnight/STOP
+   bash ~/.baton/overnight/fleet-dispatch.sh
+   ```
+
+   **`status`** — show `~/.baton/overnight/fleet-status.json` and recent lane logs.
+
+   **`stop`** — `touch ~/.baton/overnight/STOP` (lanes exit between rounds).
+
+3. **On error**, surface the message; suggest `list` or `doctor`. Never print OpenRouter keys from `~/.baton/overnight/.openrouter.env`.
 
 ## Arguments
 

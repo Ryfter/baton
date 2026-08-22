@@ -298,6 +298,34 @@ roles:
     Check 'G30 two reviewers -> polish, 2 findings' ($g.verdict -eq 'polish' -and @($g.findings).Count -eq 2)
     $corrG = @($g.findings | Where-Object { $_.area -eq 'correctness' })[0]
     Check 'G31 shared finding agreed' ($corrG.agreed)
+    Check 'G31a agreement records the distinct providers behind it' (
+        @($corrG.raised_by_providers).Count -eq 2)
+
+    # One provider filling TWO reviewer slots must NOT corroborate itself. Failover can
+    # land a walk on a peer that already spoke (or one provider can serve two roles), and
+    # counting reviewer SLOTS made a single model's opinion look like a two-model
+    # consensus -- inflating exactly the signal used to rank what a human reads first.
+    $selfAgreeReviews = @(
+        @{ reviewer = 'security'; provider = 'same-model'; parsed = $true; findings = @(
+            @{ severity = 'important'; area = 'correctness'; summary = 'off by one' }) }
+        @{ reviewer = 'simplicity'; provider = 'same-model'; parsed = $true; findings = @(
+            @{ severity = 'important'; area = 'correctness'; summary = 'off by one' }) }
+    )
+    $selfMerged = Merge-ReviewFindings -Reviews $selfAgreeReviews
+    $selfFinding = @($selfMerged.merged)[0]
+    Check 'G31b one provider in two slots does not agree with itself' (
+        -not $selfFinding.agreed -and @($selfFinding.raised_by).Count -eq 2 -and
+        @($selfFinding.raised_by_providers).Count -eq 1)
+
+    # Two genuinely different models raising the same finding is still agreement.
+    $twoModelReviews = @(
+        @{ reviewer = 'security'; provider = 'model-a'; parsed = $true; findings = @(
+            @{ severity = 'important'; area = 'correctness'; summary = 'off by one' }) }
+        @{ reviewer = 'simplicity'; provider = 'model-b'; parsed = $true; findings = @(
+            @{ severity = 'important'; area = 'correctness'; summary = 'off by one' }) }
+    )
+    $twoMerged = Merge-ReviewFindings -Reviews $twoModelReviews
+    Check 'G31c two distinct providers on one finding do agree' (@($twoMerged.merged)[0].agreed)
     Check 'G32 result shape' ($g.Contains('polish_brief') -and $g.Contains('reviews') -and @($g.reviews).Count -eq 2)
 
     $g2 = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Reviewers @('r1','r3') -Dispatcher $disp
