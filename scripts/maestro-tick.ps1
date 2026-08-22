@@ -13,9 +13,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'maestro-lib.ps1')
+Import-MaestroEnv | Out-Null
+
+$reconcileScript = Join-Path $PSScriptRoot 'maestro-reconcile.ps1'
 $admitScript = Join-Path $PSScriptRoot 'maestro-admit.ps1'
 $fireScript = Join-Path $PSScriptRoot 'maestro-fire.ps1'
 
+& pwsh -NoProfile -File $reconcileScript -BatonHome $BatonHome | Out-Null
 & pwsh -NoProfile -File $admitScript -BatonHome $BatonHome -MaxParallel $MaxParallel | Out-Null
 & pwsh -NoProfile -File $fireScript `
     -BatonHome $BatonHome `

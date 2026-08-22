@@ -14,6 +14,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'maestro-lib.ps1')
+Import-MaestroEnv | Out-Null
 
 $jobsDir = Get-MaestroJobsDir -BatonHome $BatonHome
 if (-not (Test-Path -LiteralPath $jobsDir)) {
@@ -64,29 +65,12 @@ if ($toFire.Count -eq 1) {
     $results += Invoke-MaestroFireOne -Pick $toFire[0] -JobsDir $jobsDir -BatonHome $BatonHome `
         -FleetGo $FleetGo -DefaultRepo $DefaultRepo -FleetPath $FleetPath
 } else {
-    $jobs = foreach ($pick in $toFire) {
-        Start-Job -ScriptBlock {
-            param($PickPath, $PickJobJson, $JobsDir, $BatonHome, $FleetGo, $DefaultRepo, $FleetPath, $LibPath)
-            . $LibPath
-            $pickObj = [pscustomobject]@{
-                Path = $PickPath
-                Job  = ($PickJobJson | ConvertFrom-Json)
-            }
-            Invoke-MaestroFireOne -Pick $pickObj -JobsDir $JobsDir -BatonHome $BatonHome `
-                -FleetGo $FleetGo -DefaultRepo $DefaultRepo -FleetPath $FleetPath
-        } -ArgumentList (
-            $pick.Path,
-            ($pick.Job | ConvertTo-Json -Depth 10 -Compress),
-            $jobsDir,
-            $BatonHome,
-            $FleetGo,
-            $DefaultRepo,
-            $FleetPath,
-            $libPath
-        )
-    }
-    $results = @($jobs | Wait-Job | Receive-Job)
-    $jobs | Remove-Job -Force
+    $results = @($toFire | ForEach-Object -Parallel {
+        . $using:libPath
+        Import-MaestroEnv | Out-Null
+        Invoke-MaestroFireOne -Pick $_ -JobsDir $using:jobsDir -BatonHome $using:BatonHome `
+            -FleetGo $using:FleetGo -DefaultRepo $using:DefaultRepo -FleetPath $using:FleetPath
+    } -ThrottleLimit $MaxParallel)
 }
 
 $worst = 0

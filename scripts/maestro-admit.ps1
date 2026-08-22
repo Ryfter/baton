@@ -17,6 +17,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'maestro-lib.ps1')
+Import-MaestroEnv | Out-Null
 
 $jobsDir = Get-MaestroJobsDir -BatonHome $BatonHome
 if (-not (Test-Path -LiteralPath $jobsDir)) {

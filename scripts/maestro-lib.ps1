@@ -9,6 +9,63 @@ $script:MaestroDefaultUsable = @(
     'lm-studio'
 )
 
+function Import-MaestroEnv {
+    <# Load overnight secrets into the current runspace (and parallel workers).
+       Bash maestro-watch sources .openrouter.env but Start-Job / ForEach-Object -Parallel do not. #>
+    $envFile = Join-Path (Join-Path $HOME '.baton/overnight') '.openrouter.env'
+    if (-not (Test-Path -LiteralPath $envFile)) { return $false }
+    foreach ($line in Get-Content -LiteralPath $envFile -Encoding utf8) {
+        $line = $line.Trim()
+        if (-not $line -or $line.StartsWith('#')) { continue }
+        if ($line -match '^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            $name = $Matches[1]
+            $val = $Matches[2].Trim()
+            if (($val.StartsWith('"') -and $val.EndsWith('"')) -or ($val.StartsWith("'") -and $val.EndsWith("'"))) {
+                $val = $val.Substring(1, $val.Length - 2)
+            }
+            Set-Item -Path "Env:$name" -Value $val
+        }
+    }
+    return $true
+}
+
+function Test-MaestroInstrumentReady {
+    param([Parameter(Mandatory)][string]$Name)
+    switch -Regex ($Name) {
+        '^openrouter' {
+            return -not [string]::IsNullOrWhiteSpace($env:OPENROUTER_API_KEY)
+        }
+        '^cursor-' {
+            return [bool](Get-Command cursor-agent -ErrorAction SilentlyContinue)
+        }
+        '^grok-cli$' {
+            return [bool](Get-Command grok -ErrorAction SilentlyContinue)
+        }
+        '^codex$' {
+            return [bool](Get-Command codex -ErrorAction SilentlyContinue)
+        }
+        '^kiro$' {
+            return [bool](Get-Command kiro-cli -ErrorAction SilentlyContinue)
+        }
+        '^lm-studio$' {
+            return $true
+        }
+        default { return $true }
+    }
+}
+
+function Set-MaestroJobStatus {
+    param(
+        [Parameter(Mandatory)]$Job,
+        [Parameter(Mandatory)][string]$Status,
+        [string]$StatusLine
+    )
+    $Job.status = $Status
+    if ($StatusLine) {
+        $Job | Add-Member -NotePropertyName status_line -NotePropertyValue $StatusLine -Force
+    }
+}
+
 function Get-MaestroJobsDir {
     param([Parameter(Mandatory)][string]$BatonHome)
     return (Join-Path $BatonHome 'maestro/jobs')
@@ -52,6 +109,7 @@ function Get-MaestroUsableInstruments {
         } catch { }
     }
     foreach ($name in $Prefer) {
+        if (-not (Test-MaestroInstrumentReady -Name $name)) { continue }
         if (-not $usable.Contains($name)) { [void]$usable.Add($name) }
     }
     return @($usable)
@@ -145,7 +203,8 @@ function Resolve-MaestroStatusFromGo {
     if ($s -match 'quota|rate.?limit|limited') { return 'waiting-quota' }
     if ($why -match 'quota|rate.?limit|no candidate|labor-unavailable|usage limit') { return 'waiting-quota' }
     if ($s -like 'interrupted-*') { return 'running' }
-    if ($s -in @('completed', 'accepted')) { return 'done' }
+    if ($s -in @('completed', 'accepted', 'failed', 'done')) { return 'done' }
+    if ($s -eq 'waiting-quota' -or $s -eq 'labor-unavailable') { return 'waiting-quota' }
     return 'done'
 }
 
@@ -290,12 +349,18 @@ function Invoke-MaestroFireOne {
             if ($prov) { $patch.provider = $prov }
             $patch.status = Resolve-MaestroStatusFromGo -GoStatus ([string]$out.status) -GoWhy ([string]$out.report)
         } catch {
-            if ($exit -ne 0 -and ($raw -match 'quota|rate.?limit|labor-unavailable|no candidate')) {
+            if ($raw -match 'quota|rate.?limit|labor-unavailable|no candidate') {
                 $patch.status = 'waiting-quota'
+            } else {
+                $patch.status = 'done'
             }
         }
     } elseif ($exit -ne 0) {
-        $patch.status = 'waiting-quota'
+        if ($raw -match 'quota|rate.?limit|labor-unavailable|no candidate') {
+            $patch.status = 'waiting-quota'
+        } else {
+            $patch.status = 'done'
+        }
     }
 
     Update-MaestroJobFile -Path $jobPath -Patch $patch
