@@ -23,6 +23,8 @@ $fireScript = Join-Path $PSScriptRoot 'maestro-fire.ps1'
 
 & pwsh -NoProfile -File $foldScript -BatonHome $BatonHome | Out-Null
 & pwsh -NoProfile -File $reconcileScript -BatonHome $BatonHome | Out-Null
+$securityScript = Join-Path $PSScriptRoot 'maestro-security.ps1'
+& pwsh -NoProfile -File $securityScript -BatonHome $BatonHome -DefaultRepo $DefaultRepo | Out-Null
 & pwsh -NoProfile -File $admitScript -BatonHome $BatonHome -MaxParallel $MaxParallel | Out-Null
 & pwsh -NoProfile -File $fireScript `
     -BatonHome $BatonHome `

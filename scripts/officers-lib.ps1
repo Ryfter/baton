@@ -671,6 +671,148 @@ function Update-SecurityScale {
     return $rec
 }
 
+function Get-SecurityDueProjects {
+    <# Projects whose sliding-scale recipe says scan is due. Read-only. #>
+    param(
+        [datetime]$Now = [datetime]::UtcNow,
+        [string]$BatonHome = (Get-OfficerBatonHome),
+        [hashtable]$ExtraRecords = @{}
+    )
+    $scale = Read-SecurityScale -BatonHome $BatonHome
+    $due = [System.Collections.Generic.List[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($k in @($scale.projects.Keys)) {
+        $rec = $scale.projects[$k]
+        $recipe = Get-SecurityRecipe -Project $k -Record $rec -Now $Now -BatonHome $BatonHome
+        if ($recipe.due) {
+            $due.Add([ordered]@{ project = $k; recipe = $recipe; record = $rec })
+            [void]$seen.Add($k)
+        }
+    }
+    foreach ($k in @($ExtraRecords.Keys)) {
+        if ($seen.Contains($k)) { continue }
+        $rec = $ExtraRecords[$k]
+        $recipe = Get-SecurityRecipe -Project $k -Record $rec -Now $Now -BatonHome $BatonHome
+        if ($recipe.due) {
+            $due.Add([ordered]@{ project = $k; recipe = $recipe; record = $rec })
+        }
+    }
+    return @($due)
+}
+
+function Resolve-SecurityRepoPath {
+    param(
+        [Parameter(Mandatory)][string]$Project,
+        [string]$BatonHome = (Get-OfficerBatonHome),
+        [string]$DefaultRepo = ''
+    )
+    $projectId = ($Project -replace '[\\/]', '').Trim()
+    if (-not $projectId) { return $DefaultRepo }
+    $recPath = Join-Path $BatonHome "projects/$projectId/project.json"
+    if (-not (Test-Path -LiteralPath $recPath)) { return $DefaultRepo }
+    try {
+        $rec = Get-Content -LiteralPath $recPath -Raw | ConvertFrom-Json
+        $folder = [string]$rec.folder
+        if (-not [string]::IsNullOrWhiteSpace($folder) -and (Test-Path -LiteralPath $folder)) {
+            return $folder
+        }
+    } catch { }
+    return $DefaultRepo
+}
+
+function Invoke-SecurityProjectScan {
+    <# Recipe + deterministic spine + scale update + run JSON. LM interpretation is a later wedge. #>
+    param(
+        [Parameter(Mandatory)][string]$Project,
+        [Parameter(Mandatory)][string]$RepoPath,
+        [datetime]$Now = [datetime]::UtcNow,
+        [switch]$Deep,
+        [switch]$Force,
+        [string]$BatonHome = (Get-OfficerBatonHome),
+        [scriptblock]$GitLog,
+        [scriptblock]$GitDiff,
+        [scriptblock]$Ripgrep
+    )
+    $scale = Read-SecurityScale -BatonHome $BatonHome
+    $rec = $null
+    if ($scale.projects.Contains($Project)) { $rec = $scale.projects[$Project] }
+    $recipe = Get-SecurityRecipe -Project $Project -Record $rec -Now $Now -Deep:$Deep -BatonHome $BatonHome
+    $out = [ordered]@{
+        ok      = $false
+        skipped = $false
+        reason  = ''
+        project = $Project
+        recipe  = $recipe
+        scan    = $null
+        report  = $null
+    }
+    if (-not $Force -and -not $recipe.due) {
+        $out.skipped = $true
+        $out.reason = 'not-due'
+        return $out
+    }
+    if (Test-SecuritySeatForbidden -Seat $recipe.seat) {
+        $out.reason = 'forbidden-seat'
+        return $out
+    }
+    $scan = Invoke-SecurityScannerSpine -RepoPath $RepoPath -GitLog $GitLog -GitDiff $GitDiff -Ripgrep $Ripgrep
+    $out.scan = $scan
+    if ($scan.reason -eq 'grimlore-skipped') {
+        $out.skipped = $true
+        $out.reason = 'grimlore-skipped'
+        return $out
+    }
+    $touched = $null
+    try { $touched = [datetime](& git -C $RepoPath log -1 --format=%cI 2>$null) } catch { }
+    $upd = @{ Project = $Project; BatonHome = $BatonHome; Now = $Now }
+    if ($touched) { $upd.Touched = $touched }
+    [void](Update-SecurityScale @upd)
+    $dir = Join-Path $BatonHome 'officers/security-runs'
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $stamp = (ConvertTo-OfficerUtc -Value $Now).ToString('yyyyMMddTHHmmssZ')
+    $path = Join-Path $dir "$Project-$stamp.json"
+    [ordered]@{ recipe = $recipe; scan = $scan } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding utf8NoBOM
+    $out.ok = [bool]$scan.ok
+    $out.reason = if ($scan.ok) { 'scanned' } else { [string]$scan.reason }
+    $out.report = $path
+    return $out
+}
+
+function Invoke-SecurityDueScans {
+    <# Run deterministic spine for due projects (cap per tick). No LM, no fleet-go. #>
+    param(
+        [datetime]$Now = [datetime]::UtcNow,
+        [string]$BatonHome = (Get-OfficerBatonHome),
+        [string]$DefaultRepo = '',
+        [hashtable]$ProjectRepos = @{},
+        [int]$MaxScans = 5
+    )
+    $due = Get-SecurityDueProjects -Now $Now -BatonHome $BatonHome
+    $results = [System.Collections.Generic.List[object]]::new()
+    $n = 0
+    foreach ($item in $due) {
+        if ($n -ge $MaxScans) { break }
+        $proj = [string]$item.project
+        $repo = $null
+        if ($ProjectRepos.Contains($proj)) {
+            $repo = [string]$ProjectRepos[$proj]
+        } else {
+            $repo = Resolve-SecurityRepoPath -Project $proj -BatonHome $BatonHome -DefaultRepo $DefaultRepo
+        }
+        if ([string]::IsNullOrWhiteSpace($repo) -or -not (Test-Path -LiteralPath $repo -PathType Container)) {
+            $results.Add([ordered]@{
+                ok = $false; skipped = $true; reason = 'no-repo'; project = $proj
+                recipe = $item.recipe; scan = $null; report = $null
+            })
+            continue
+        }
+        $r = Invoke-SecurityProjectScan -Project $proj -RepoPath $repo -Now $Now -BatonHome $BatonHome
+        $results.Add($r)
+        if (-not $r.skipped) { $n++ }
+    }
+    return [ordered]@{ scanned = $n; due = @($due).Count; results = @($results) }
+}
+
 # ---------- VRAM officer ----------
 
 function Get-VramStoreDir {

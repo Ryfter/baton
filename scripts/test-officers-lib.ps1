@@ -215,6 +215,33 @@ function Invoke-OfficerBattery {
             -Ripgrep { param($r) @("$r/foo.ps1:3: TODO secret-looking") }
         Check "$tag scanner ok from injectors" ($scan.ok -eq $true -and $scan.hit_n -eq 1)
         Check "$tag scanner keeps log" ($scan.log[0] -match 'abc123')
+
+        $scaleDue = Read-SecurityScale -BatonHome $box
+        $scaleDue.projects['due-proj'] = [ordered]@{
+            last_touched = '2026-08-23T10:00:00Z'
+            last_run     = '2026-08-22T10:00:00Z'
+            last_clean   = $null
+        }
+        Write-SecurityScale -Scale $scaleDue -BatonHome $box
+        $dueList = Get-SecurityDueProjects -Now $nowS -BatonHome $box
+        Check "$tag due projects lists hot" (@($dueList | Where-Object { $_.project -eq 'due-proj' }).Count -eq 1)
+        $scaleFresh = Read-SecurityScale -BatonHome $box
+        $scaleFresh.projects['fresh'] = [ordered]@{
+            last_touched = '2026-08-20T12:00:00Z'
+            last_run     = '2026-08-23T11:00:00Z'
+            last_clean   = $null
+        }
+        Write-SecurityScale -Scale $scaleFresh -BatonHome $box
+        $skipScan2 = Invoke-SecurityProjectScan -Project 'fresh' -RepoPath $box -Now $nowS -BatonHome $box `
+            -GitLog { param($r,$s) @() } -GitDiff { param($r) '' } -Ripgrep { param($r) @() }
+        Check "$tag scan skips when not due" ($skipScan2.skipped -eq $true -and $skipScan2.reason -eq 'not-due')
+        $forceScan = Invoke-SecurityProjectScan -Project 'fresh' -RepoPath $box -Now $nowS -BatonHome $box -Force `
+            -GitLog { param($r,$s) @('forced') } -GitDiff { param($r) '' } -Ripgrep { param($r) @() }
+        Check "$tag force scan runs anyway" ($forceScan.ok -eq $true -and (Test-Path -LiteralPath $forceScan.report))
+        $batch = Invoke-SecurityDueScans -BatonHome $box -DefaultRepo $box -MaxScans 2 -Now $nowS `
+            -ProjectRepos @{ 'due-proj' = $box }
+        Check "$tag due batch caps scans" ($batch.scanned -le 2)
+        Check "$tag due batch reports results" (@($batch.results).Count -ge 1)
     } finally {
         Remove-Item -LiteralPath $box -Recurse -Force -ErrorAction SilentlyContinue
     }
