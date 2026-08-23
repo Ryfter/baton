@@ -191,24 +191,44 @@ providers:
     stdin: false
     command_template: 'agy --print "{{prompt}}"'
 
-  # grok (xAI CLI) — DISABLED 2026-08-22. NOT headlessly dispatchable. See #183/#196/#197.
+  # grok (xAI CLI) — DISABLED, but NOT because the command is wrong. See #197 / baton-d136.
   #
-  # The template below is preserved as a record of what does NOT work. Bare `grok` is
-  # the interactive TUI; `grok --prompt-file <path>` never returns — it hangs with zero
-  # bytes of output until the caller gives up (one observed hang ran 3,955s, #196). The
-  # 2026-07-10 "proven quote-safe live" note above was a false positive: the probe read
-  # a `head` exit code, not grok's.
+  # grok IS headlessly dispatchable. `grok --prompt-file <path>` and `grok -p` are both
+  # documented one-shot flags and they work. Two earlier diagnoses in this file were
+  # wrong: the 2026-07-10 "proven quote-safe live" note (a probe reading `head`'s exit
+  # code) and the 2026-08-20 "bare grok is the TUI, use `grok agent stdio`" story.
   #
-  # The real headless entry point is `grok agent stdio`, which speaks ACP (JSON-RPC 2.0
-  # over NDJSON) — a different protocol from Baton's `stdio-json`. `initialize` and
-  # `authenticate` both succeed; `session/new` never returns (#197). A command_template
-  # swap therefore cannot fix this; it needs an ACP adapter.
+  # REAL ROOT CAUSE of the hang: grok auto-imports MCP servers from OTHER agents' config
+  # files and blocks session creation on them. `grok mcp list` reports "No MCP servers
+  # configured" while `grok inspect` shows 12, sourced from `.mcp.json [cursor]`
+  # (cwd-relative!), `~/.claude.json [claude]`, and plugins. Several never start
+  # ("Transport closed") and the wait overruns its own bound (elapsed_ms=45847 vs
+  # timeout_sec=30). Every path needing a session hangs; `grok models` needs none, which
+  # is why it always returned in 0.83s.
   #
-  # Until that adapter exists grok is an INTERACTIVE instrument — plan peer, reviewer,
-  # second opinion in a terminal pane — and must never be reachable from a dispatch path
-  # that expects file edits. `agentic: true` is commented out for the same reason: it
-  # claimed a capability grok cannot deliver headlessly, which is a silent-no-op risk in
-  # `/baton:go --execute` (#183).
+  # Probed 2026-08-23 on Firefly:
+  #   grok -p from D:\Dev\Baton (has .mcp.json)  -> hangs, zero bytes, killed at 60s
+  #   grok --no-leader -p                         -> hangs identically (not the leader)
+  #   grok --cwd <empty dir> -p "...PONG"         -> PONG   <-- WORKS
+  #   same, next run                              -> exit 1 in 47s, HTTP 402
+  #                                                  "Grok Build usage balance exhausted"
+  #
+  # Because .mcp.json is cwd-relative, grok's behaviour genuinely changed with the
+  # dispatch directory — which is what made this look like a directory-trust problem.
+  #
+  # THREE GATES before re-enabling, in order:
+  #   1. Isolate MCP. Dispatch from a worktree with no .mcp.json, or one declaring
+  #      {"mcpServers":{}}. Do NOT delete D:\Dev\Baton\.mcp.json — it serves Claude
+  #      Code and Cursor and is not grok's to consume.
+  #   2. Budget latency. Even clean, 45-90s elapses before the first byte because the
+  #      ~/.claude.json servers still boot. This is why #196 must measure SILENCE, not
+  #      duration: a slow provider emits, a hung one does not.
+  #   3. Balance. Grok Build reports the usage balance exhausted (402). Nothing
+  #      dispatches until that is topped up.
+  #
+  # `agentic` stays commented out until gate 1 is automated — an unisolated dispatch is
+  # a silent-no-op risk in `/baton:go --execute` (#183). ACP (`grok agent stdio`) is a
+  # real protocol but was never the blocker; do not build the adapter for this reason.
   - name: grok-cli
     kind: cli
     enabled: false

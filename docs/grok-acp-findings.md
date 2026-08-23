@@ -1,24 +1,76 @@
 # grok `agent stdio` (ACP) — protocol findings
 
-**Date:** 2026-08-20 · **Issue:** #196 · **Agent version:** grok 1.0.5 · **Host:** Firefly
+**Date:** 2026-08-20, **corrected 2026-08-23** · **Issues:** #196, #197 ·
+**Agent version:** grok 1.0.5 · **Host:** Firefly
 
-Supersedes the earlier "grok is not dispatchable headlessly / TTY mystery" theory
-(see `project_grok_headless_blocked` memory, since corrected).
+## SOLVED 2026-08-23 — the hang is MCP server import, and grok IS dispatchable
 
-## Root cause of the original hang
+**Both earlier root causes were wrong.** grok runs headlessly. `grok -p` returns
+correct output and exits with a real exit code once one thing is fixed.
 
-Baton's fleet row invokes `grok --prompt-file "{{prompt_file}}"`. Bare `grok` is the
-**interactive TUI**, so it waits on a terminal forever — the 3,955 s zero-byte hang.
-The headless entry point is a nested subcommand:
+### The chain
+
+1. `grok mcp list` reports **"No MCP servers configured."** grok's own registry is empty.
+2. `grok inspect` nonetheless shows **12 MCP servers**, auto-imported from *other agents'*
+   config files: `.mcp.json [cursor]` (cwd-relative), `~/.claude.json [claude]`, and
+   installed plugins.
+3. On session creation grok boots **all of them** and blocks on `mcp_ensure_initialized`.
+4. Several never come up (`error=MCP service error: Transport closed`), and the wait
+   **overruns its own bound** — observed `elapsed_ms=45847` against `timeout_sec=30`.
+5. Session creation therefore never completes, so **every** path that needs a session
+   hangs: `grok -p`, `--prompt-file`, and ACP `session/new` alike.
+6. `grok models` needs no session — which is exactly why it returns in 0.83 s.
+
+### Proof
+
+| Command | Result |
+|---|---|
+| `grok -p "…"` from `D:\Dev\Baton` (has `.mcp.json`) | hangs, zero bytes, killed at 60 s |
+| `grok --no-leader -p "…"` | hangs identically — leader socket is **not** the cause |
+| `grok --cwd <empty dir> -p "Reply with exactly: PONG"` | **`PONG`** — correct output |
+| same, second run | **exit 1 in 47 s**: `API error (status 402): Grok Build usage balance exhausted` |
+
+Dropping the cwd `.mcp.json` removes 7 of the 12 servers and that is enough to get
+through session creation. The 402 on the follow-up run is a **separate** finding — the
+Grok Build balance is exhausted — and it is what a *healthy* failure looks like: fast,
+structured, non-zero exit.
+
+### Why this was missed twice
+
+The debug log names the cause in one line, and `--debug-file` was never run:
 
 ```
-grok agent stdio      # run the agent over stdio  <- the dispatch path
-grok agent headless   # over the Grok WebSocket relay
-grok agent serve      # as a WebSocket server
+WARN xai_grok_shell::session::acp_session::mcp: MCP server failed to initialize
+     server="clairvoyance__clairvoyance" elapsed_ms=45847 timeout_sec=30
+     error=MCP service error: Transport closed
+INFO xai_grok_instrumentation: event="timing" name="mcp_ensure_initialized" elapsed_us=46161070
 ```
 
-`~/.grok/bin/agent.exe` is the **same TUI binary** and hangs identically. The
-subcommand is what matters, not the executable.
+The 2026-08-20 session did remove some MCP servers and observed that `initialize` got
+faster — then concluded MCP was "ruled out" because `session/new` still hung. It had the
+right suspect and stopped one step early: the servers it removed were not the ones still
+timing out, and `clairvoyance__clairvoyance` comes from Cursor's `.mcp.json`, not from
+`~/.claude.json` where the cleanup was applied.
+
+This also retroactively explains the "directory trust" red herring. `.mcp.json` is
+**cwd-relative**, so grok's behaviour genuinely did change with the directory Baton
+dispatched from — which looks exactly like a trust problem and is not one.
+
+### Re-enabling the fleet row
+
+Three things gate it, in order:
+
+1. **Isolate MCP.** Dispatch from a worktree with no `.mcp.json`, or add one declaring
+   `{"mcpServers":{}}`. Do not delete `D:\Dev\Baton\.mcp.json` — it serves Claude Code
+   and Cursor and is not grok's to consume.
+2. **Budget the latency.** Even clean, startup ran 45–90 s before first byte because
+   `~/.claude.json` servers still boot. That is overhead on every dispatch, and it is why
+   #196's *silence, not duration* idle-timeout is the right shape.
+3. **Balance.** Grok Build reports the usage balance exhausted (402). Nothing dispatches
+   until that is topped up or renewed.
+
+Decision: baton-d136. Supersedes baton-d135 (which retracted the "wrong command" story
+but had not yet found the cause) and the fix-shape half of baton-d122.
 
 ## What `grok agent stdio` actually speaks
 

@@ -93,14 +93,37 @@ it — re-copying is how drift starts.
   a quota-failover ladder (#201) no matter how much headroom it has — **dispatchability
   is a capability fact that outranks capacity.**
 
-  > **Grok is NOT headless-dispatchable today — do not route work to it.**
-  > `grok -p` / `--prompt-file` hang forever: bare `grok` is the interactive TUI and
-  > waits on a terminal (one dispatch ran 3,955 s emitting zero bytes). The headless
-  > entry point is the nested subcommand **`grok agent stdio`**, which speaks **ACP**
-  > (JSON-RPC 2.0 over NDJSON) — a different protocol from Baton's one-shot
-  > `stdio-json`, so it needs an adapter, not a `command_template` swap (baton-d122).
-  > `initialize` and `authenticate` work; `session/new` never returns. Tracking:
-  > **#197** (blocker), #196 (idle-timeout), #183. Detail: `docs/grok-acp-findings.md`.
+  > **Grok IS headless-dispatchable — the hang was MCP import, not the invocation.**
+  > Solved 2026-08-23 (baton-d136). `grok` is initialised two ways, **`grok`** and
+  > **`grok agent`**, and the top-level binary's one-shot flags (`-p/--single`,
+  > `--prompt-file`, `--prompt-json`, `--output-format`) work.
+  >
+  > **Root cause:** `grok mcp list` reports *"No MCP servers configured"*, yet
+  > `grok inspect` shows **12** — auto-imported from other agents' configs
+  > (`.mcp.json [cursor]`, **cwd-relative**; `~/.claude.json [claude]`; plugins). grok
+  > boots all of them on session creation and blocks on `mcp_ensure_initialized`.
+  > Several never start (`Transport closed`) and the wait overruns its own bound
+  > (`elapsed_ms=45847` vs `timeout_sec=30`), so every path needing a session hangs —
+  > `grok -p`, `--prompt-file`, and ACP `session/new` alike. `grok models` needs no
+  > session, which is why it always returned in 0.83 s.
+  >
+  > `grok --cwd <empty dir> -p "Reply with exactly: PONG"` returns **`PONG`**. The next
+  > run exits 1 in 47 s with `402: Grok Build usage balance exhausted` — a *healthy*
+  > failure, and a second, separate finding: **the balance is out.**
+  >
+  > **Do not route work to grok yet**, for three reasons in order: MCP must be isolated
+  > (dispatch from a tree with no `.mcp.json`, or one declaring `{"mcpServers":{}}` —
+  > do **not** delete `D:\Dev\Baton\.mcp.json`, it serves Claude Code and Cursor);
+  > 45–90 s of startup latency precedes the first byte, which is why #196 must measure
+  > **silence, not duration**; and the balance is exhausted.
+  >
+  > **An ACP adapter was never the blocker** — `grok agent stdio` is real, but do not
+  > build for it on these grounds (supersedes the fix-shape half of baton-d122). The old
+  > "directory trust" theory is also explained: `.mcp.json` is cwd-relative, so grok
+  > really did behave differently per directory.
+  >
+  > Tracking: **#197**, #196 (idle-timeout), #183. Detail: `docs/grok-acp-findings.md`.
+  > Three root-cause claims have now been wrong here — read the doc, do not re-derive.
 
   `agentic` is one of two edit-eligibility fields on a fleet row; the other is
   `diff_apply` (decision d103, `feat/diff-apply-worker-path`). Where `agentic: true`

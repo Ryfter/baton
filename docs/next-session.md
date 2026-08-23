@@ -1,3 +1,38 @@
+### UPDATE 2026-08-23 — grok hang SOLVED: it is MCP import, and grok IS dispatchable
+
+**Ignore both earlier root causes below.** grok runs headlessly. Detail:
+`docs/grok-acp-findings.md`; decision baton-d136.
+
+**Root cause:** `grok mcp list` says *"No MCP servers configured"* — but `grok inspect`
+shows **12**, auto-imported from other agents' configs (`.mcp.json [cursor]`,
+`~/.claude.json [claude]`, plugins). grok boots all of them on session creation and
+blocks on `mcp_ensure_initialized`. Several never come up (`Transport closed`) and the
+wait overruns its own bound (`elapsed_ms=45847` vs `timeout_sec=30`). So every path
+needing a session hangs — `grok -p`, `--prompt-file`, ACP `session/new` alike.
+`grok models` needs no session, which is why it always returned in 0.83 s.
+
+| Probe | Result |
+|---|---|
+| `grok -p` from `D:\Dev\Baton` (has `.mcp.json`) | hangs, zero bytes, killed at 60 s |
+| `grok --no-leader -p` | hangs identically — leader socket is NOT the cause |
+| `grok --cwd <empty dir> -p "Reply with exactly: PONG"` | **`PONG`** |
+| same, next run | exit 1 in 47 s — `402: Grok Build usage balance exhausted` |
+
+**Two separate findings.** (1) The hang is fixable config, not an upstream bug and not an
+ACP gap — **an ACP adapter was never the blocker.** (2) **The Grok Build balance is
+exhausted (402).** Nothing dispatches to grok until that is topped up, regardless.
+
+**To re-enable the row,** in order: isolate MCP (dispatch from a tree with no `.mcp.json`,
+or one declaring `{"mcpServers":{}}` — do **not** delete `D:\Dev\Baton\.mcp.json`, it
+serves Claude Code and Cursor); budget 45–90 s of startup latency before first byte, which
+is exactly why #196 should measure **silence, not duration**; then fix the balance.
+
+**Also corrected:** the old "directory trust" red herring. `.mcp.json` is *cwd-relative*,
+so grok's behaviour really did change with the dispatch directory — which looks like a
+trust problem and is not one.
+
+*(Kevin caught the framing that started this: "Grok is initialized with grok, or agent.")*
+
 ### UPDATE 2026-08-20 (late) — grok ACP mapped; fleet busy-check shipped
 
 **grok root cause is confirmed and the protocol is mapped, but ONE blocker remains.**
@@ -47,7 +82,7 @@ How to pick **Baton** back up and use it on its own backlog.
 
 ### UPDATE 2026-08-20 — two blockers resolved
 
-- **grok root cause found.** Not a TTY mystery: **Baton invokes the wrong command.** `grok` is
+- ~~**grok root cause found.** Not a TTY mystery: **Baton invokes the wrong command.**~~ **RETRACTED 2026-08-23 — see the top of this file.** The original text is kept below for the trail: `grok` is
   the interactive TUI. The headless path is `grok agent stdio` (nested subcommand; `grok agent`
   alone rejects `--prompt-file` with exit 2). `~/.grok/bin/agent.exe` is the same TUI binary and
   hangs identically. `grok agent stdio` speaks an **ACP session protocol**, so the fix is to point
