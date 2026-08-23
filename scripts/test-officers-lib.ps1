@@ -215,6 +215,89 @@ function Invoke-OfficerBattery {
             -Ripgrep { param($r) @("$r/foo.ps1:3: TODO secret-looking") }
         Check "$tag scanner ok from injectors" ($scan.ok -eq $true -and $scan.hit_n -eq 1)
         Check "$tag scanner keeps log" ($scan.log[0] -match 'abc123')
+
+        $scaleDue = Read-SecurityScale -BatonHome $box
+        $scaleDue.projects['due-proj'] = [ordered]@{
+            last_touched = '2026-08-23T10:00:00Z'
+            last_run     = '2026-08-22T10:00:00Z'
+            last_clean   = $null
+        }
+        Write-SecurityScale -Scale $scaleDue -BatonHome $box
+        $dueList = Get-SecurityDueProjects -Now $nowS -BatonHome $box
+        Check "$tag due projects lists hot" (@($dueList | Where-Object { $_.project -eq 'due-proj' }).Count -eq 1)
+        $scaleFresh = Read-SecurityScale -BatonHome $box
+        $scaleFresh.projects['fresh'] = [ordered]@{
+            last_touched = '2026-08-20T12:00:00Z'
+            last_run     = '2026-08-23T11:00:00Z'
+            last_clean   = $null
+        }
+        Write-SecurityScale -Scale $scaleFresh -BatonHome $box
+        $skipScan2 = Invoke-SecurityProjectScan -Project 'fresh' -RepoPath $box -Now $nowS -BatonHome $box `
+            -GitLog { param($r,$s) @() } -GitDiff { param($r) '' } -Ripgrep { param($r) @() }
+        Check "$tag scan skips when not due" ($skipScan2.skipped -eq $true -and $skipScan2.reason -eq 'not-due')
+        $forceScan = Invoke-SecurityProjectScan -Project 'fresh' -RepoPath $box -Now $nowS -BatonHome $box -Force `
+            -GitLog { param($r,$s) @('forced') } -GitDiff { param($r) '' } -Ripgrep { param($r) @() }
+        Check "$tag force scan runs anyway" ($forceScan.ok -eq $true -and (Test-Path -LiteralPath $forceScan.report))
+        $batch = Invoke-SecurityDueScans -BatonHome $box -DefaultRepo $box -MaxScans 2 -Now $nowS `
+            -ProjectRepos @{ 'due-proj' = $box }
+        Check "$tag due batch caps scans" ($batch.scanned -le 2)
+        Check "$tag due batch reports results" (@($batch.results).Count -ge 1)
+
+        $coldHeld = Get-SecurityRecipe -Project 'old' -Record $coldRec -Now $nowS -Windows @{
+            window_5h_used_pct = 100; window_7d_used_pct = 40; window_5h_hard = $true; residue = $false
+        }
+        Check "$tag cold held without residue" ($coldHeld.due_by_cadence -eq $true -and $coldHeld.due -eq $false -and $coldHeld.held_reason -match 'excess_capacity')
+        $coldGo = Get-SecurityRecipe -Project 'old' -Record $coldRec -Now $nowS -Windows @{
+            window_5h_used_pct = 20; window_7d_used_pct = 40; window_5h_hard = $false; residue = $true
+        }
+        Check "$tag cold runs on residue" ($coldGo.due -eq $true)
+
+        $seedDue = Get-SecurityDueProjects -Now $nowS -BatonHome $box -RegistryProjects @(
+            [ordered]@{ id = 'never-scanned'; folder = $box }
+        )
+        Check "$tag registry seed never-scanned due" (@($seedDue | Where-Object { $_.project -eq 'never-scanned' }).Count -eq 1)
+
+        $prompt = Format-SecurityInterpretPrompt -Project 'baton' -Scan $scan
+        Check "$tag interpret prompt cites project" ($prompt -match 'baton' -and $prompt -match 'abc123')
+        $interp = Invoke-SecurityInterpret -Project 'baton' -Scan $scan -Recipe $hotDue -Dispatcher {
+            param($prov, $p) [ordered]@{ stdout = 'high: TODO hit may hide secret'; exit_code = 0 }
+        }
+        Check "$tag interpret via injector" ($interp.ok -eq $true -and $interp.text -match 'high:')
+        Check "$tag opus maps to cursor-opus" ((Resolve-SecurityFleetProvider -Seat 'opus') -eq 'cursor-opus')
+        $withIx = Invoke-SecurityProjectScan -Project 'due-proj' -RepoPath $box -Now $nowS -BatonHome $box -Force `
+            -DoInterpret -GitLog { param($r,$s) @('ix1') } -GitDiff { param($r) 'a | 1 +' } `
+            -Ripgrep { param($r) @("$r/x:1: TODO") } -InterpretDispatcher {
+                param($prov, $p) [ordered]@{ stdout = 'med: review TODO'; exit_code = 0 }
+            }
+        Check "$tag scan stores interpret" ($withIx.interpret.ok -eq $true -and (Test-Path -LiteralPath $withIx.report))
+        $noSig = Invoke-SecurityProjectScan -Project 'due-proj' -RepoPath $box -Now $nowS -BatonHome $box -Force `
+            -DoInterpret -InterpretOnlyOnSignal `
+            -GitLog { param($r,$s) @() } -GitDiff { param($r) '' } -Ripgrep { param($r) @() }
+        Check "$tag interpret skipped without signal" ($null -eq $noSig.interpret)
+
+        Check "$tag med interpret needs deep" (Test-SecurityInterpretNeedsDeep -Interpret @{ ok = $true; text = 'med: check auth' })
+        Check "$tag low interpret skips deep" (-not (Test-SecurityInterpretNeedsDeep -Interpret @{ ok = $true; text = 'low: style' }))
+        Check "$tag high outcome is fail" ((Get-SecurityScanQualityOutcome -Scan $scan -Interpret @{ ok = $true; text = 'high: secret in TODO' }) -eq 'fail')
+        $scaleDeepMq = Read-SecurityScale -BatonHome $box
+        $scaleDeepMq.projects['deep-proj'] = [ordered]@{
+            last_touched = '2026-08-23T10:00:00Z'
+            last_run     = '2026-08-22T10:00:00Z'
+            last_clean   = $null
+        }
+        Write-SecurityScale -Scale $scaleDeepMq -BatonHome $box
+        $mqRows = [System.Collections.Generic.List[object]]::new()
+        $batchMq = Invoke-SecurityDueScans -BatonHome $box -DefaultRepo $box -MaxScans 1 -MaxDeepScans 1 -Now $nowS `
+            -ProjectRepos @{ 'deep-proj' = $box } -DoInterpret -DeepOnResidue -Windows @{
+                window_5h_used_pct = 20; window_7d_used_pct = 40; window_5h_hard = $false; residue = $true
+            } -InterpretDispatcher {
+                param($prov, $p) [ordered]@{ stdout = 'med: review auth path'; exit_code = 0 }
+            }
+        [void](Record-SecurityScanQuality -BatchResult $batchMq -BatonHome $box -Writer {
+            param($Provider, $Model, $TaskClass, $Outcome, $EvidenceRef, $Notes)
+            $mqRows.Add([ordered]@{ provider = $Provider; task_class = $TaskClass; outcome = $Outcome })
+        })
+        Check "$tag quality records spine" (@($mqRows | Where-Object { $_.task_class -eq 'security.spine' }).Count -ge 1)
+        Check "$tag deep on residue fires" ($batchMq.deep -eq 1)
     } finally {
         Remove-Item -LiteralPath $box -Recurse -Force -ErrorAction SilentlyContinue
     }

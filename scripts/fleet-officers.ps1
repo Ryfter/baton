@@ -8,6 +8,8 @@ param(
     [ValidateSet('status', 'systems', 'vram', 'registry', 'security', 'profiles', 'scan')][string]$Action = 'status',
     [string]$RepoPath = '',
     [string]$Project = 'baton',
+    [string]$FleetPath = $(Join-Path $HOME '.baton/overnight/fleet.yaml'),
+    [switch]$Interpret,
     [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' })
 )
 $ErrorActionPreference = 'Stop'
@@ -30,20 +32,13 @@ switch ($Action) {
     }
     'scan' {
         if ([string]::IsNullOrWhiteSpace($RepoPath)) { $RepoPath = Split-Path -Parent $PSScriptRoot }
-        $recipe = Get-SecurityRecipe -Project $Project -BatonHome $BatonHome
-        if (Test-SecuritySeatForbidden -Seat $recipe.seat) { throw "refusing forbidden seat $($recipe.seat)" }
-        $scan = Invoke-SecurityScannerSpine -RepoPath $RepoPath
-        $touched = $null
-        try { $touched = [datetime](& git -C $RepoPath log -1 --format=%cI 2>$null) } catch { }
-        $upd = @{ Project = $Project; BatonHome = $BatonHome }
-        if ($touched) { $upd.Touched = $touched }
-        [void](Update-SecurityScale @upd)
-        $dir = Join-Path $BatonHome 'officers/security-runs'
-        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-        $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
-        $path = Join-Path $dir "$Project-$stamp.json"
-        [ordered]@{ recipe = $recipe; scan = $scan } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding utf8NoBOM
-        [ordered]@{ recipe = $recipe; scan = $scan; report = $path } | ConvertTo-Json -Depth 8
+        $r = Invoke-SecurityProjectScan -Project $Project -RepoPath $RepoPath -BatonHome $BatonHome -Force `
+            -DoInterpret:$Interpret -FleetPath $FleetPath
+        if ($r.reason -eq 'forbidden-seat') { throw "refusing forbidden seat $($r.recipe.seat)" }
+        [ordered]@{
+            recipe = $r.recipe; scan = $r.scan; interpret = $r.interpret
+            report = $r.report; ok = $r.ok; reason = $r.reason
+        } | ConvertTo-Json -Depth 8
     }
     'profiles' {
         $root = Split-Path -Parent $PSScriptRoot
