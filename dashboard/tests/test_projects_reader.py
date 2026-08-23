@@ -121,6 +121,24 @@ def test_read_project_decisions(tmp_path: Path) -> None:
     assert high.title == 'First call'
 
 
+def test_read_project_decisions_mixed_timezone_sorts(tmp_path: Path) -> None:
+    """Live KB mix: some timestamps have offsets, some do not. Sort must not 500."""
+    kb = tmp_path / 'kb'
+    pdir = _setup_project(kb, 'alpha')
+    ddir = pdir / 'decisions'
+    ddir.mkdir()
+    (ddir / 'd001-aware.md').write_text(
+        "---\nid: d001\ntimestamp: 2026-08-23T01:24:11-06:00\nconfidence: high\n---\n\n# Aware\n",
+        encoding='utf-8',
+    )
+    (ddir / 'd002-naive.md').write_text(
+        "---\nid: d002\ntimestamp: 2026-05-30T10:00:00\nconfidence: med\n---\n\n# Naive\n",
+        encoding='utf-8',
+    )
+    decs = read_project_decisions(kb, 'alpha')
+    assert [d.id for d in decs] == ['d001', 'd002']
+
+
 def test_read_project_decisions_empty(tmp_path: Path) -> None:
     kb = tmp_path / 'kb'
     _setup_project(kb, 'alpha')

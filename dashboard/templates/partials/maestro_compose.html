@@ -1,9 +1,23 @@
 {# Maestro compose — first-fold front door (baton-d111 / baton-d124) #}
-<section class="maestro-compose" id="maestro-compose" aria-label="Start Baton">
+{% macro info(text) -%}
+<span class="maestro-i" tabindex="0">
+  <span class="maestro-i__mark" aria-hidden="true">i</span>
+  <span class="maestro-i__tip" role="tooltip">{{ text }}</span>
+</span>
+{%- endmacro %}
+
+<section class="maestro-compose{% if compact %} maestro-compose--compact{% endif %}" id="maestro-compose" aria-label="Start Baton">
+  {% if not compact %}
   <header class="maestro-compose__head">
+    <p class="maestro-compose__eyebrow">Front door</p>
     <h2>Baton</h2>
-    <p class="muted">Pick a registry project, paste a goal, then <strong>Admit job</strong>. Maestro writes the job record; Conductor talks after admission.</p>
+    <p class="maestro-compose__lede">Name a project. Paste a goal. Admit. Maestro writes the record; Conductor talks after.</p>
   </header>
+  {% else %}
+  <header class="maestro-compose__head maestro-compose__head--compact">
+    <p class="cockpit-label">ADMIT</p>
+  </header>
+  {% endif %}
 
   <form
     class="maestro-compose__form"
@@ -15,34 +29,81 @@
   >
     <input type="hidden" name="source" value="web" />
 
-    <label class="maestro-field" for="maestro-project">
-      <span>Registry project</span>
-      <select id="maestro-project" name="project" required {% if not projects %}disabled{% endif %}>
-        <option value="" disabled {% if not projects %}selected{% endif %}>Select a project…</option>
+    <div class="maestro-field maestro-field--project">
+      {% if not compact %}<label for="maestro-project">
+        <span>Project{% if projects %} <em class="maestro-field__count">{{ projects|length }}</em>{% endif %} {{ info("Which repo the job is for. Each chip is a Maestro registry slug — not the Portfolio KB list. Click a chip or use the list. Two names can share one folder when they are different lanes.") }}</span>
+      </label>{% endif %}
+      {% if projects %}
+      <div class="maestro-chips" role="group" aria-label="Registry projects">
+        {% for p in visible_projects %}
+        <button
+          type="button"
+          class="maestro-chip{% if last_project == p.id %} is-last{% endif %}"
+          data-maestro-project="{{ p.id }}"
+          aria-pressed="{{ 'true' if last_project == p.id else 'false' }}"
+          aria-describedby="tip-{{ p.id }}"
+        >
+          {{ p.name or p.id }}
+          <span class="maestro-chip__id">{{ p.id }}</span>
+          {% if last_project == p.id %}<abbr class="maestro-chip__live" title="The featured job on the strip below is this project.">live</abbr>{% endif %}
+          <span class="maestro-chip__tip" id="tip-{{ p.id }}" role="tooltip">{{ p.blurb or p.id }}</span>
+        </button>
+        {% endfor %}
+        {% if overflow_projects %}
+        <span class="maestro-chip maestro-chip--more">+{{ overflow_projects|length }} more</span>
+        {% endif %}
+      </div>
+      {% endif %}
+      <select id="maestro-project" name="project" required {% if not projects %}disabled{% endif %}{% if compact %} class="sr-only" aria-label="Project"{% endif %}>
+        <option value="" disabled {% if not last_project %}selected{% endif %}>Select a project…</option>
         {% for p in projects %}
-        <option value="{{ p.id }}">{% if p.name and p.name != p.id %}{{ p.name }} ({{ p.id }}){% else %}{{ p.name or p.id }}{% endif %}</option>
+        <option value="{{ p.id }}" {% if last_project == p.id %}selected{% endif %}>{% if p.name and p.name != p.id %}{{ p.name }} ({{ p.id }}){% else %}{{ p.name or p.id }}{% endif %}</option>
         {% endfor %}
       </select>
-      {% if projects %}
-      <span class="maestro-field__hint">From <code>$BATON_HOME/projects</code> — each folder needs a <code>project.json</code>.</span>
+      {% if projects and not compact %}
+      <span class="maestro-field__hint">Hover a chip for what that slug is.{% if last_project %} <strong>live</strong> means the featured job below is <strong>{{ last_project }}</strong>.{% endif %}</span>
       {% else %}
-      <span class="maestro-field__hint maestro-field__hint--warn" role="status">No registry projects yet. Add one under <code>$BATON_HOME/projects/&lt;id&gt;/project.json</code> to admit jobs.</span>
+      <div class="maestro-empty maestro-empty--inline" role="status">
+        <p class="maestro-empty__title">No registry projects</p>
+        <p class="maestro-field__hint maestro-field__hint--warn">Add <code>$BATON_HOME/projects/&lt;id&gt;/project.json</code> before you can admit a job.</p>
+      </div>
       {% endif %}
-    </label>
+    </div>
 
+    {% if not compact %}
     <label class="maestro-field" for="maestro-stakes">
-      <span>Stakes</span>
+      <span>Stakes {{ info("How expensive a miss is. low = cheap models are fine. standard = default. high = keep stronger review in the loop.") }}</span>
       <select id="maestro-stakes" name="stakes">
         <option value="low">low</option>
         <option value="standard" selected>standard</option>
         <option value="high">high</option>
       </select>
     </label>
+    {% else %}
+    <input type="hidden" name="stakes" value="standard" />
+    {% endif %}
 
     <label class="maestro-field maestro-field--goal" for="maestro-goal">
-      <span>Goal</span>
-      <textarea id="maestro-goal" name="goal" rows="6" required placeholder="Short ask or a long dump — this text is the goal."></textarea>
+      {% if not compact %}<span>Goal {{ info("The work itself — a short ask or a long dump. Maestro writes this onto the job record. Conductor talks after admission.") }}</span>{% endif %}
+      <textarea id="maestro-goal" name="goal" rows="{% if compact %}1{% else %}6{% endif %}" required placeholder="Quick goal or multi-topic dump… (Cmd+Enter to admit)" class="{% if compact %}maestro-goal--compact{% endif %}"></textarea>
     </label>
+
+    {% if not compact %}
+    <div class="maestro-voice" id="maestro-voice" aria-label="Voice input">
+      <label class="maestro-field maestro-field--stt" for="maestro-stt-target">
+        <span>Listen on {{ info("This computer (A) uses the browser on the machine you are sitting at. droid (C) sends audio to the Mac and runs mlx_whisper.") }}</span>
+        <select id="maestro-stt-target">
+          <option value="this" selected>This computer (A)</option>
+          <option value="factory"{% if stt and not stt.factory.available %} disabled{% endif %}>droid / factory (C){% if stt and not stt.factory.available %} — mlx missing{% endif %}</option>
+        </select>
+      </label>
+      <div class="maestro-voice__btns">
+        <button type="button" class="maestro-mic maestro-mic--toggle" id="maestro-mic-toggle" aria-pressed="false" title="Click to keep listening, click again to stop">Toggle listen</button>
+        <button type="button" class="maestro-mic maestro-mic--ptt" id="maestro-mic-ptt" aria-pressed="false" title="Hold to talk">Hold to talk</button>
+      </div>
+      <p class="maestro-voice__live" id="maestro-voice-live" role="status">Mic off — toggle or hold to talk</p>
+    </div>
+    {% endif %}
 
     <div class="maestro-compose__actions">
       <button type="submit" class="maestro-start" id="maestro-start" {% if not projects %}disabled{% endif %} aria-label="Admit job to Maestro">Admit job</button>
@@ -52,12 +113,86 @@
 
   <div
     id="maestro-status"
-    class="maestro-status"
+    class="maestro-status{% if compact %} maestro-status--compact{% endif %}"
     aria-live="polite"
+    tabindex="-1"
     hx-get="/maestro/partials/status"
     hx-trigger="load, every 5s"
     hx-swap="innerHTML"
   >
-    {% include "partials/maestro_status.html" %}
+    {% if not compact %}{% include "partials/maestro_status.html" %}{% endif %}
   </div>
 </section>
+<script>
+(function () {
+  var root = document.getElementById("maestro-compose");
+  if (!root) return;
+  var select = document.getElementById("maestro-project");
+  var goal = document.getElementById("maestro-goal");
+  if (goal && (root.classList.contains("maestro-compose--compact") || root.closest(".maestro-compose-card--compact"))) {
+    goal.addEventListener("focus", function () { goal.classList.add("is-expanded"); goal.rows = 4; });
+    goal.addEventListener("blur", function () {
+      if (!goal.value.trim()) { goal.classList.remove("is-expanded"); goal.rows = 1; }
+    });
+    goal.form && goal.form.addEventListener("keydown", function (e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); goal.form.requestSubmit(); }
+    });
+  }
+  function sync(id) {
+    if (!select || !id) return;
+    select.value = id;
+    root.querySelectorAll("[data-maestro-project]").forEach(function (el) {
+      var on = el.getAttribute("data-maestro-project") === id;
+      el.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+  root.addEventListener("click", function (event) {
+    var chip = event.target.closest("[data-maestro-project]");
+    if (!chip) return;
+    sync(chip.getAttribute("data-maestro-project"));
+  });
+  if (select) {
+    select.addEventListener("change", function () { sync(select.value); });
+  }
+  var pending = window.__batonWantedProject || new URLSearchParams(window.location.search).get("project");
+  if (pending) {
+    if (typeof window.BatonPickProject === "function") {
+      window.BatonPickProject(pending);
+    } else {
+      sync(pending);
+    }
+  }
+
+  window.BatonAfterAdmit = function () {
+    var goal = document.getElementById("maestro-goal");
+    if (goal) goal.value = "";
+    var status = document.getElementById("maestro-status");
+    var featured = status && status.querySelector(".maestro-job--featured");
+    var el = featured || status;
+    if (!el) return;
+    if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+    try {
+      el.focus({ preventScroll: false });
+    } catch (e) {
+      el.focus();
+    }
+    if (el.scrollIntoView) {
+      el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  };
+
+  function isAdmitSwap(detail) {
+    if (!detail || !detail.target || detail.target.id !== "maestro-status") return false;
+    if (detail.xhr && detail.xhr.status >= 400) return false;
+    var cfg = detail.requestConfig || {};
+    var verb = String(cfg.verb || "").toLowerCase();
+    var path = String(cfg.path || "");
+    return verb === "post" && /\/maestro\/jobs\/?$/.test(path);
+  }
+
+  document.body.addEventListener("htmx:afterSettle", function (event) {
+    if (!isAdmitSwap(event.detail)) return;
+    window.BatonAfterAdmit();
+  });
+})();
+</script>

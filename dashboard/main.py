@@ -74,6 +74,18 @@ app.include_router(build_maestro_router(templates))
 from dashboard.routers.cockpit import build_router as build_cockpit_router
 app.include_router(build_cockpit_router(templates))
 
+from dashboard.routers.machines import build_router as build_machines_router
+app.include_router(build_machines_router(templates))
+
+from dashboard.routers.gauges import build_router as build_gauges_router
+app.include_router(build_gauges_router(templates))
+
+from dashboard.routers.home import build_router as build_home_router
+app.include_router(build_home_router(templates))
+
+
+from dashboard.readers.home_board import read_home_floor, read_home_header
+
 
 def _ctx(request: Request) -> dict:
     stats = compute_stats(JOURNAL_PATH)
@@ -83,9 +95,25 @@ def _ctx(request: Request) -> dict:
     }
 
 
+def _home_paths(request: Request) -> tuple[Path, Path, Path, Path]:
+    home = Path(getattr(request.app.state, "baton_home", None) or baton_home())
+    journal = Path(getattr(request.app.state, "journal_path", None) or JOURNAL_PATH)
+    jobs = Path(getattr(request.app.state, "jobs_root", None) or JOBS_ROOT)
+    runs = Path(getattr(request.app.state, "runs_root", None) or RUNS_ROOT)
+    return home, journal, jobs, runs
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "index.html", _ctx(request))
+    ctx = _ctx(request)
+    home, journal, jobs, runs = _home_paths(request)
+    ctx["board"] = read_home_header(
+        baton_home=home, journal_path=journal, jobs_root=jobs, runs_root=runs,
+    )
+    ctx["floor"] = read_home_floor(
+        baton_home=home, journal_path=journal, jobs_root=jobs, runs_root=runs,
+    )
+    return templates.TemplateResponse(request, "index.html", ctx)
 
 
 @app.get("/partials/spend", response_class=HTMLResponse)
@@ -122,4 +150,5 @@ async def partial_fleet(request: Request) -> HTMLResponse:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("dashboard.main:app", host="127.0.0.1", port=8765, reload=True)
+    # Factory UI is used from the PC (droid:<port> / Tailscale), not just this box.
+    uvicorn.run("dashboard.main:app", host="0.0.0.0", port=8765, reload=True)

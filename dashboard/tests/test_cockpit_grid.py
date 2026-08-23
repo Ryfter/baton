@@ -69,7 +69,10 @@ def test_read_cockpit_grid_merges_job_and_run(tmp_path: Path):
     assert baton["job_id"] == job["id"]
     assert baton["run_id"] == "run-2026-08-22-a"
     assert "ship cockpit" in baton["goal"]
-    assert any("action" in line for line in baton["tail"])
+    assert any("opened PR" in line for line in baton["tail"])
+    assert "opened PR" in baton["last_output"]
+    assert any(t["kind"] == "output" and "opened PR" in t["detail"] for t in baton["turns"])
+    assert all(t["collapsed"] for t in baton["turns"] if t["kind"] != "output")
     assert by_id["canvas"]["status"] == "idle"
 
 
@@ -88,6 +91,7 @@ def test_cockpit_http_and_ws(tmp_path: Path):
     assert partial.status_code == 200
     assert "cockpit-grid" in partial.text
     assert "Baton" in partial.text
+    assert "Open in front door" in partial.text
 
     api = client.get("/api/cockpit-grid")
     assert api.status_code == 200

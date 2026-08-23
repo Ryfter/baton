@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Gauges — Baton{% endblock %}
+{% block content %}
+
+<div class="card gauges-page" style="grid-column: 1 / -1;">
+  <header class="cockpit-grid__head">
+    <div>
+      <p class="cockpit-label">FACTORY</p>
+      <h2 class="cockpit-grid__title">Gauges</h2>
+    </div>
+    <p class="muted">Live 5h burn by project. Cap instruments only when a real snapshot exists.</p>
+  </header>
+
+  <div id="gauges-board"
+       hx-get="/partials/gauges"
+       hx-trigger="load, every 2s"
+       hx-swap="innerHTML">
+    {% include "partials/gauges_board.html" %}
+  </div>
+</div>
+
+{% endblock %}

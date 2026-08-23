@@ -1,0 +1,81 @@
+{% set f = floor %}
+<section class="home-floor" aria-label="Factory floor">
+  <header class="home-floor__head">
+    <div>
+      <p class="cockpit-label">ACTIVE SESSIONS</p>
+      <h2 class="cockpit-grid__title">Factory floor</h2>
+    </div>
+    <span class="cockpit-live-count"><span class="pulse-dot"></span> {{ f.live_count }} live</span>
+  </header>
+
+  <div class="home-floor__grid">
+    {% for card in f.cards %}
+    <article class="project-card project-card--{{ card.attention_pill }}"
+             id="project-{{ card.project_id }}"
+             data-project-id="{{ card.project_id }}">
+      <header class="project-card__head">
+        <h3 class="project-card__name">{{ card.name }}</h3>
+        <span class="project-card__pill project-card__pill--{{ card.attention_pill }}">{{ card.attention_pill }}</span>
+        {% if card.provider %}<span class="project-card__instrument">{{ card.provider }}</span>{% endif %}
+      </header>
+
+      {% if card.goal %}<p class="project-card__goal">{{ card.goal }}</p>{% endif %}
+      {% if card.last_output %}
+      <p class="project-card__output">{{ card.last_output }}{% if card.recency_display %} · {{ card.recency_display }}{% endif %}</p>
+      {% endif %}
+
+      {% if card.job_id or card.run_id %}
+      <p class="project-card__ids muted">
+        {% if card.job_id %}<code>{{ card.job_id }}</code>{% endif %}
+        {% if card.run_id %}<code>{{ card.run_id }}</code>{% endif %}
+        {% if card.current_step %} · {{ card.current_step }}{% endif %}
+      </p>
+      {% endif %}
+
+      <details class="project-card__port">
+        <summary>Open port</summary>
+        {% if card.turns %}
+        <div class="project-card__turns">
+          {% for t in card.turns[-4:] %}
+          <details class="turn turn--{{ t.kind }}" {% if not t.collapsed %}open{% endif %}>
+            <summary>{{ t.kind }} · {{ t.label }}</summary>
+            <pre>{{ t.detail }}</pre>
+          </details>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="muted">— waiting for activity —</p>
+        {% endif %}
+      </details>
+
+      {% if card.economics.rows %}
+      <div class="project-economics">
+        <p class="project-economics__title">This window</p>
+        {% for row in card.economics.rows %}
+        <div class="project-economics__row">
+          <span class="project-economics__label"><code>{{ row.provider }}</code> / {{ row.model }}</span>
+          <span class="project-economics__nums">{{ row.tokens_display }} · {{ row.cost_display }}</span>
+          {% if row.tier %}<span class="project-economics__tier">{{ row.tier }}</span>{% endif %}
+          <div class="project-economics__bar"><span style="width: {{ (row.share_fill * 100)|round(1) }}%;"></span></div>
+        </div>
+        {% endfor %}
+        {% if card.economics.savings_display %}
+        <p class="project-economics__savings">✦ {{ card.economics.savings_display }}</p>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      <footer class="project-card__actions">
+        <a href="/?project={{ card.project_id }}#maestro-compose-card">Open in front door</a>
+        {% if card.job_id and card.status != 'done' %}
+        <form class="project-card__hold" hx-post="/maestro/jobs/{{ card.job_id }}/hold" hx-target="#maestro-status" hx-swap="innerHTML">
+          <button type="submit" class="inline-btn">Hold</button>
+        </form>
+        {% endif %}
+      </footer>
+    </article>
+    {% else %}
+    <p class="muted home-floor__empty">No active projects in this window. Admit a job above.</p>
+    {% endfor %}
+  </div>
+</section>

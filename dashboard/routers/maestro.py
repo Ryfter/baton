@@ -3,14 +3,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from dashboard.paths import baton_home
+from dashboard.readers.transcribe import engine_status, transcribe_bytes
+from dashboard.readers.cockpit_grid import last_output_from_turns, turns_for_job
 from dashboard.readers.maestro_jobs import (
     board_status,
-    budget_stub,
+    budget_for,
     create_job,
     hold_job,
     list_jobs,
@@ -20,6 +22,33 @@ from dashboard.readers.maestro_jobs import (
     read_job,
     release_job,
 )
+
+
+_FEATURE_RANK = {
+    "running": 0,
+    "admitted": 1,
+    "waiting-quota": 2,
+    "queued": 3,
+    "held": 4,
+    "done": 5,
+}
+
+
+def _featured_job(jobs: list, prefer: dict | None = None) -> dict | None:
+    if prefer and any(j.get("id") == prefer.get("id") for j in jobs):
+        return prefer
+    if not jobs:
+        return None
+    return min(jobs, key=lambda j: _FEATURE_RANK.get(str(j.get("status") or ""), 9))
+
+
+def _last_project(jobs: list, projects: list) -> str | None:
+    known = {p["id"] for p in projects}
+    for job in jobs:
+        pid = job.get("project")
+        if pid in known:
+            return str(pid)
+    return None
 
 
 def build_router(templates: Jinja2Templates) -> APIRouter:
@@ -32,31 +61,74 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
         override = getattr(req.app.state, "maestro_jobs_root", None)
         return Path(override) if override else maestro_root(_home(req))
 
+    def _status_ctx(req: Request, prefer: dict | None = None) -> dict:
+        board = board_status(_root(req), baton_home=_home(req))
+        all_jobs = list_jobs(_root(req))
+        # Live work first (running → admitted → … → done), newest within a status.
+        ranked = sorted(all_jobs, key=lambda j: j.get("created_at") or "", reverse=True)
+        ranked = sorted(
+            ranked, key=lambda j: _FEATURE_RANK.get(str(j.get("status") or ""), 9)
+        )
+        featured = _featured_job(all_jobs, prefer)
+        runs_root = Path(getattr(req.app.state, "runs_root", None) or _home(req) / "runs")
+        turns = turns_for_job(
+            _root(req),
+            featured.get("id") if featured else None,
+            runs_root,
+            featured.get("run_id") if featured else None,
+        )
+        return {
+            "jobs": ranked[:12],
+            "job": featured,
+            "budget": board["budget"],
+            "status_line": board.get("status_line"),
+            "counts": board.get("counts") or {},
+            "job_turns": turns,
+            "job_last_output": last_output_from_turns(turns),
+        }
+
+    def _compose_ctx(req: Request) -> dict:
+        home = _home(req)
+        projects = list_registry_projects(home)
+        ctx = _status_ctx(req)
+        ctx["projects"] = projects
+        ctx["last_project"] = _last_project(ctx["jobs"], projects)
+        ctx["stt"] = engine_status()
+        return ctx
+
     @router.get("/status")
     async def get_status(request: Request) -> JSONResponse:
-        return JSONResponse(board_status(_root(request)))
+        return JSONResponse(board_status(_root(request), baton_home=_home(request)))
 
     @router.get("/jobs")
     async def get_jobs(request: Request) -> JSONResponse:
         return JSONResponse({"jobs": list_jobs(_root(request))})
 
     @router.get("/budget")
-    async def get_budget() -> JSONResponse:
-        return JSONResponse(budget_stub())
+    async def get_budget(request: Request) -> JSONResponse:
+        return JSONResponse(budget_for(_home(request)))
+
+    @router.get("/stt")
+    async def get_stt() -> JSONResponse:
+        return JSONResponse(engine_status())
+
+    @router.post("/transcribe")
+    async def post_transcribe(audio: UploadFile = File(...)) -> JSONResponse:
+        data = await audio.read()
+        try:
+            text = transcribe_bytes(data, filename=audio.filename or "clip.webm")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        return JSONResponse({"text": text, "engine": "mlx_whisper", "target": "droid"})
 
     @router.get("/partials/status", response_class=HTMLResponse)
     async def partial_status(request: Request) -> HTMLResponse:
-        board = board_status(_root(request))
-        jobs = board["jobs"]
         return templates.TemplateResponse(
             request,
             "partials/maestro_status.html",
-            {
-                "jobs": jobs,
-                "job": jobs[0] if jobs else None,
-                "budget": board["budget"],
-                "status_line": board.get("status_line"),
-            },
+            _status_ctx(request),
         )
 
     @router.post("/jobs/{job_id}/release")
@@ -70,15 +142,10 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
 
         hx = request.headers.get("hx-request")
         if hx:
-            jobs = list_jobs(_root(request))[:8]
             return templates.TemplateResponse(
                 request,
                 "partials/maestro_status.html",
-                {
-                    "jobs": jobs,
-                    "job": job,
-                    "budget": budget_stub(),
-                },
+                _status_ctx(request, prefer=job),
             )
         return JSONResponse(job)
 
@@ -93,15 +160,10 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
 
         hx = request.headers.get("hx-request")
         if hx:
-            jobs = list_jobs(_root(request))[:8]
             return templates.TemplateResponse(
                 request,
                 "partials/maestro_status.html",
-                {
-                    "jobs": jobs,
-                    "job": job,
-                    "budget": budget_stub(),
-                },
+                _status_ctx(request, prefer=job),
             )
         return JSONResponse(job)
 
@@ -144,32 +206,25 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
         accept = (request.headers.get("accept") or "").lower()
         hx = request.headers.get("hx-request")
         if hx or ("text/html" in accept and "application/json" not in accept):
-            jobs = list_jobs(_root(request))[:8]
             return templates.TemplateResponse(
                 request,
                 "partials/maestro_status.html",
-                {
-                    "jobs": jobs,
-                    "job": job,
-                    "budget": budget_stub(),
-                },
+                _status_ctx(request, prefer=job),
             )
         return JSONResponse(job, status_code=201)
 
     @router.get("/partials/compose", response_class=HTMLResponse)
     async def partial_compose(request: Request) -> HTMLResponse:
-        home = _home(request)
-        projects = list_registry_projects(home)
-        jobs = list_jobs(_root(request))[:8]
+        ctx = _compose_ctx(request)
+        compact = request.query_params.get("compact") in {"1", "true", "yes"}
+        ctx["compact"] = compact
+        projects = ctx.get("projects") or []
+        ctx["visible_projects"] = projects[:5] if compact else projects
+        ctx["overflow_projects"] = projects[5:] if compact else []
         return templates.TemplateResponse(
             request,
             "partials/maestro_compose.html",
-            {
-                "projects": projects,
-                "jobs": jobs,
-                "job": jobs[0] if jobs else None,
-                "budget": budget_stub(),
-            },
+            ctx,
         )
 
     @router.get("/jobs/{job_id}")

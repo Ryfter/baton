@@ -31,8 +31,7 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
         # Default filter shows active + recent done (last 10)
         active = list_job_summaries(_jobs_root(request), _journal_path(request), 'active')
         done = list_job_summaries(_jobs_root(request), _journal_path(request), 'done')[:10]
-        return templates.TemplateResponse('partials/jobs_list.html', {
-            'request': request,
+        return templates.TemplateResponse(request, 'partials/jobs_list.html', {
             'active_jobs': active,
             'done_jobs': done,
         })
@@ -43,8 +42,7 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
             detail = read_job_detail(_jobs_root(request), _journal_path(request), job_id)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f'no such job: {job_id}')
-        return templates.TemplateResponse('job_detail.html', {
-            'request': request,
+        return templates.TemplateResponse(request, 'job_detail.html', {
             'detail': detail,
         })
 
@@ -55,8 +53,7 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
             detail = read_job_detail(_jobs_root(request), _journal_path(request), job_id)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f'no such job: {job_id}')
-        return templates.TemplateResponse('partials/job_detail_live.html', {
-            'request': request,
+        return templates.TemplateResponse(request, 'partials/job_detail_live.html', {
             'detail': detail,
         })
 

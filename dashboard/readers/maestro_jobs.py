@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from dashboard.readers.claude_quota import read_claude_quota
+
 VALID_STATUSES = frozenset(
     {"queued", "admitted", "running", "waiting-quota", "held", "done"}
 )
@@ -64,13 +66,36 @@ def list_registry_projects(baton_home: Path) -> list[dict[str, str]]:
             continue
         rec_path = d / "project.json"
         name = d.name
+        folder = ""
+        notes = ""
         if rec_path.is_file():
             try:
                 rec = json.loads(rec_path.read_text(encoding="utf-8"))
                 name = str(rec.get("name") or rec.get("id") or d.name)
+                folder = str(rec.get("folder") or "")
+                notes = str(rec.get("notes") or rec.get("description") or "")
             except (OSError, json.JSONDecodeError):
                 pass
-        out.append({"id": d.name, "name": name})
+        bits = [f"Registry id: {d.name}."]
+        if folder:
+            bits.append(folder)
+        if notes:
+            bits.append(notes)
+        out.append({
+            "id": d.name,
+            "name": name,
+            "folder": folder,
+            "notes": notes,
+            "blurb": " ".join(bits),
+        })
+    by_folder: dict[str, list[str]] = {}
+    for p in out:
+        if p["folder"]:
+            by_folder.setdefault(p["folder"], []).append(p["id"])
+    for p in out:
+        sibs = [i for i in by_folder.get(p["folder"], []) if i != p["id"]]
+        if sibs:
+            p["blurb"] += f" Same folder as {', '.join(sibs)} — a second lane, not a second repo."
     return out
 
 
@@ -225,7 +250,13 @@ def release_job(root: Path, job_id: str) -> dict[str, Any]:
     return job
 
 
-def board_status(root: Path, *, usable: Optional[Iterable[str]] = None) -> dict[str, Any]:
+def board_status(
+    root: Path,
+    *,
+    usable: Optional[Iterable[str]] = None,
+    baton_home: Optional[Path] = None,
+    now: Optional[datetime] = None,
+) -> dict[str, Any]:
     """Aggregate queue + counts for GET /maestro/status."""
     jobs = list_jobs(root)
     counts: dict[str, int] = {}
@@ -234,7 +265,7 @@ def board_status(root: Path, *, usable: Optional[Iterable[str]] = None) -> dict[
         counts[st] = counts.get(st, 0) + 1
     running = [j for j in jobs if j.get("status") == "running"]
     held_projects = sorted({str(j["project"]) for j in jobs if j.get("status") == "held"})
-    budget = budget_stub(usable=usable)
+    budget = budget_for(baton_home, usable=usable, now=now)
     budget["held_projects"] = held_projects
     lines: list[str] = []
     if running:
@@ -263,7 +294,7 @@ def board_status(root: Path, *, usable: Optional[Iterable[str]] = None) -> dict[
 
 
 def budget_stub(usable: Optional[Iterable[str]] = None) -> dict[str, Any]:
-    """Budget placeholder — maestro-admit.ps1 reads window-budget-lib for real meters."""
+    """Usable-instrument list. Claude remaining comes from budget_for()."""
     names = list(usable) if usable is not None else [
         "openrouter-ox-alpha",
         "codex",
@@ -273,9 +304,24 @@ def budget_stub(usable: Optional[Iterable[str]] = None) -> dict[str, Any]:
     ]
     return {
         "schema": 1,
-        "note": "stub — maestro-admit uses window-budget-lib on tick",
+        "note": "usable list — Claude remaining is read from claude-quota.json",
         "usable": names,
         "held_projects": [],
-        "claude_5h": "empty-until-reset",
-        "claude_7d": "unknown",
+        "claude_5h": "",
+        "claude_7d": "",
     }
+
+
+def budget_for(
+    baton_home: Optional[Path] = None,
+    *,
+    usable: Optional[Iterable[str]] = None,
+    now: Optional[datetime] = None,
+) -> dict[str, Any]:
+    budget = budget_stub(usable=usable)
+    if baton_home is None:
+        return budget
+    quota = read_claude_quota(baton_home, now=now)
+    budget["claude_5h"] = quota.get("five_hour_label") or ""
+    budget["claude_7d"] = quota.get("seven_day_label") or ""
+    return budget

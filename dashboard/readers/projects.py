@@ -68,8 +68,17 @@ def _file_mtime(path: Path) -> Optional[datetime]:
         return None
 
 
+def _aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """Normalize for sort — live KB mixes naive and offset timestamps."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _max_dt(*dts: Optional[datetime]) -> Optional[datetime]:
-    valid = [d for d in dts if d is not None]
+    valid = [_aware(d) for d in dts if d is not None]
     return max(valid) if valid else None
 
 
@@ -145,6 +154,7 @@ def read_project_decisions(kb_root: Path, project_id: str) -> list[DecisionRow]:
                 ts = None
         if ts is None:
             ts = _file_mtime(f)
+        ts = _aware(ts)
         job_val = fm.get('job') or None
         if job_val == 'null':
             job_val = None
@@ -157,7 +167,10 @@ def read_project_decisions(kb_root: Path, project_id: str) -> list[DecisionRow]:
             job=job_val,
             path=str(f),
         ))
-    rows.sort(key=lambda r: r.timestamp or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    rows.sort(
+        key=lambda r: _aware(r.timestamp) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
     return rows
 
 
@@ -266,7 +279,7 @@ def discover_projects(
             last_activity=last_act,
         ))
     out.sort(
-        key=lambda p: p.last_activity or datetime.min.replace(tzinfo=timezone.utc),
+        key=lambda p: _aware(p.last_activity) or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,
     )
     return out

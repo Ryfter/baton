@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Machines — Baton{% endblock %}
+{% block content %}
+
+<div class="card machines-page" style="grid-column: 1 / -1;">
+  <header class="cockpit-grid__head">
+    <div>
+      <p class="cockpit-label">FACTORY</p>
+      <h2 class="cockpit-grid__title">Machines</h2>
+    </div>
+    <p class="muted">One card per computer. Loaded and pinned models first. The full catalog stays folded.</p>
+  </header>
+
+  <div class="machines-grid">
+    {% for m in machines %}
+    <article class="machine-card{% if m.local %} machine-card--local{% endif %}{% if m.kind == 'cloud' %} machine-card--cloud{% endif %}">
+      <header class="machine-card__head">
+        <div>
+          <h3 class="machine-card__name">{{ m.name }}</h3>
+          {% if m.base_url %}<p class="machine-card__url"><code>{{ m.base_url }}</code></p>{% endif %}
+        </div>
+        <span class="machine-card__kind">{{ m.kind }}</span>
+      </header>
+      {% if m.note %}<p class="machine-card__note">{{ m.note }}</p>{% endif %}
+      {% if m.providers %}
+      <p class="machine-card__providers">{{ m.providers | join(" · ") }}</p>
+      {% endif %}
+
+      {% if m.installed %}
+      <p class="machine-card__label">Installed on this {{ "computer" if m.kind != "cloud" else "seat" }}</p>
+      <ul class="machine-card__list">
+        {% for model in m.installed %}
+        <li>
+          <code>{{ model.id }}</code>
+          {% if model.loaded %}<span class="machine-tag machine-tag--hot">loaded</span>{% endif %}
+          {% if model.pinned %}<span class="machine-tag">pin</span>{% endif %}
+          {% if m.local and model.loaded %}
+          <button class="inline-btn danger"
+                  hx-post="/controls/lmstudio/unload?model={{ model.id | urlencode }}"
+                  hx-confirm="Unload {{ model.id }}?"
+                  hx-swap="none"
+                  title="Unload">✕</button>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted">Nothing pinned or loaded here.</p>
+      {% endif %}
+
+      {% if m.catalog %}
+      <details class="machine-card__catalog">
+        <summary>Available catalog ({{ m.catalog | length }})</summary>
+        <ul class="machine-card__list">
+          {% for model in m.catalog %}
+          <li><code>{{ model.id }}</code></li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+
+      {% if m.local %}
+      <div class="machine-card__actions">
+        <button class="danger"
+                hx-post="/controls/ollama/stop-all"
+                hx-confirm="Stop all running Ollama models on this box?"
+                hx-swap="none">Stop Ollama</button>
+        <button class="danger"
+                hx-post="/controls/lmstudio/server/stop"
+                hx-confirm="Stop LM Studio server on this box?"
+                hx-swap="none">Stop LM Studio</button>
+      </div>
+      {% endif %}
+    </article>
+    {% else %}
+    <p class="muted">No machines in fleet.yaml yet.</p>
+    {% endfor %}
+  </div>
+</div>
+
+{% endblock %}

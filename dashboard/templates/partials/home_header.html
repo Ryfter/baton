@@ -1,0 +1,28 @@
+{% set b = board %}
+<section class="attention-rail{% if b.attention_clean %} attention-rail--clean{% endif %}" aria-live="polite">
+  {% if b.attention %}
+  <p class="attention-rail__title">Needs you</p>
+  <ul class="attention-rail__list">
+    {% for item in b.attention %}
+    <li>
+      <a href="/?project={{ item.project_id }}#project-{{ item.project_id }}" class="attention-rail__item attention-rail__item--{{ item.pill }}">
+        {{ item.label }}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="attention-rail__clean">Floor clean — nothing needs you.</p>
+  {% endif %}
+</section>
+
+<section class="capacity-strip">
+  <a href="/gauges" class="capacity-strip__link">
+    {% if b.capacity.claude_label %}<span>Claude 5h: {{ b.capacity.claude_label }}</span>{% endif %}
+    {% if b.capacity.window_label %}<span class="capacity-strip__sep">·</span><span>{{ b.capacity.window_label }}</span>{% endif %}
+    <span class="capacity-strip__sep">·</span><span>{{ b.capacity.window_tokens_display }} tok</span>
+    {% if b.capacity.savings_display %}<span class="capacity-strip__sep">·</span><span>{{ b.capacity.savings_display }}</span>{% endif %}
+    {% if b.capacity.next_fire %}<span class="capacity-strip__sep">·</span><span>{{ b.capacity.next_fire }}</span>{% endif %}
+    <span class="capacity-strip__sep">·</span><span class="capacity-strip__more">Gauges →</span>
+  </a>
+</section>

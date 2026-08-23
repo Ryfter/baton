@@ -16,11 +16,17 @@
   <div class="cockpit-grid__cells" id="cockpit-cells">
     {% for cell in g.cells %}
     <article class="cockpit-cell status-{{ cell.status }}{% if cell.live %} cockpit-cell--live{% endif %}"
-             data-project-id="{{ cell.project_id }}">
+             data-project-id="{{ cell.project_id }}"
+             role="link"
+             tabindex="0"
+             title="Open {{ cell.name }} in the front door">
       <header class="cockpit-cell__head">
         <span class="cockpit-cell__name">{{ cell.name }}</span>
         <span class="cockpit-cell__status status-{{ cell.status }}">{{ cell.status }}</span>
       </header>
+      <p class="cockpit-cell__jump">
+        <a href="/?project={{ cell.project_id }}#maestro-compose-card" data-project-id="{{ cell.project_id }}">Open in front door</a>
+      </p>
       {% if cell.goal %}
       <p class="cockpit-cell__goal">{{ cell.goal }}</p>
       {% endif %}
@@ -30,8 +36,21 @@
         {% if cell.provider %}<div><dt>instrument</dt><dd>{{ cell.provider }}</dd></div>{% endif %}
         {% if cell.current_step %}<div><dt>step</dt><dd>{{ cell.current_step }}</dd></div>{% endif %}
       </dl>
-      <pre class="cockpit-cell__tail" data-tail>{% for line in cell.tail %}{{ line }}
-{% endfor %}{% if not cell.tail %}<span class="muted">— waiting for activity —</span>{% endif %}</pre>
+      {% if cell.last_output %}
+      <p class="cockpit-cell__output">{{ cell.last_output }}</p>
+      {% endif %}
+      {% if cell.turns %}
+      <div class="cockpit-cell__turns">
+        {% for t in cell.turns[-6:] %}
+        <details class="turn turn--{{ t.kind }}" {% if not t.collapsed %}open{% endif %}>
+          <summary>{{ t.kind }} · {{ t.label }}</summary>
+          <pre>{{ t.detail }}</pre>
+        </details>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted cockpit-cell__empty">— waiting for activity —</p>
+      {% endif %}
     </article>
     {% else %}
     <p class="muted cockpit-grid__empty">No registry projects. Add <code>$BATON_HOME/projects/&lt;id&gt;/project.json</code>.</p>
