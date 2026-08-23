@@ -42,6 +42,11 @@ verbs:
     class: engine
     runner: fleet-usage.ps1
     json: true
+  - name: efficiency
+    summary: Efficiency Officer — bounded context select and state delta (token-saver).
+    class: engine
+    runner: fleet-efficiency.ps1
+    json: true
   - name: cost
     summary: Fold per-run effective-cost records into learned per-worker costs.
     class: engine

@@ -50,8 +50,7 @@ request normally.
 
 ## Use these strategies in order
 
-Resolve `/absolute/path/to/token-saver` from the active skill location that
-Codex or Claude provides. Do not ask the human for that path.
+Resolve `tools/token_saver/` from the Baton repo root (or plugin root).
 
 1. **Try local code before another model.** Use `rg`, `jq`, a parser, a
    formatter, a test, a database query, or a short deterministic script for
@@ -65,7 +64,7 @@ Codex or Claude provides. Do not ask the human for that path.
    the answer. For large text sources, run this yourself:
 
    ```bash
-   python3 /absolute/path/to/token-saver/scripts/select_context.py \
+   python3 {{repo_root}}/tools/token_saver/select_context.py \
      --request "What did we decide about Wednesday?" \
      --source /absolute/path/to/transcript.txt \
      --max-packet-bytes 12000 \
@@ -76,7 +75,7 @@ Codex or Claude provides. Do not ask the human for that path.
    When no source was named, use `--root` with the narrowest likely directory:
 
    ```bash
-   python3 /absolute/path/to/token-saver/scripts/select_context.py \
+   python3 {{repo_root}}/tools/token_saver/select_context.py \
      --request-file /tmp/current-request.txt \
      --root /absolute/path/to/project \
      --max-packet-bytes 12000 \
@@ -91,7 +90,7 @@ Codex or Claude provides. Do not ask the human for that path.
    the version the user accepted yourself:
 
    ```bash
-   python3 /absolute/path/to/token-saver/scripts/state_delta.py save \
+   python3 {{repo_root}}/tools/token_saver/state_delta.py save \
      --state /absolute/path/to/current-state.json \
      --accepted-file /absolute/path/to/accepted-result.md
    ```
@@ -99,7 +98,7 @@ Codex or Claude provides. Do not ask the human for that path.
    For the next change, make a prompt from that result and the new request:
 
    ```bash
-   python3 /absolute/path/to/token-saver/scripts/state_delta.py packet \
+   python3 {{repo_root}}/tools/token_saver/state_delta.py packet \
      --state /absolute/path/to/current-state.json \
      --change-file /absolute/path/to/new-change.txt \
      --max-packet-bytes 16000 \

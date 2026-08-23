@@ -46,7 +46,7 @@ You interact with it entirely through **slash commands** inside Claude Code (lik
 - **Claude Code** (you're already using it).
 - **PowerShell 7+** (`pwsh`) — the scripts are PowerShell.
 - **Python 3.10+** — for the dashboard and the knowledge-base search.
-- **The claude-octopus plugin** — the dispatch layer this builds on.
+- **Python 3.10+** — for the dashboard and the knowledge-base search.
 - **Optional but recommended:** [Ollama](https://ollama.com) (local models + the search
   embedding model), and any provider CLIs you want in the fleet (`codex`, `gemini`/`agy`,
   `gh`, LM Studio).
@@ -54,16 +54,15 @@ You interact with it entirely through **slash commands** inside Claude Code (lik
 ### Steps
 
 ```powershell
-# 1. Install the Octopus dispatch plugin (one-time)
-claude plugin marketplace add https://github.com/nyldn/plugins.git
-claude plugin install octo@nyldn-plugins
-
-# 2. Get this repo
+# 1. Get this repo
 git clone https://github.com/Ryfter/baton.git D:\Dev\baton
 cd D:\Dev\baton
 
-# 3. Bootstrap — deploys scripts into ~/.claude/ and seeds state into ~/.baton/
+# 2. Bootstrap — deploys scripts into ~/.claude/ and seeds state into ~/.baton/
 pwsh -NoProfile -File scripts\bootstrap.ps1
+
+# 3. (Optional) remove legacy Octopus if still installed
+pwsh -NoProfile -File scripts\uninstall-octopus.ps1
 
 # 4. (Optional) pull the local search model
 ollama pull nomic-embed-text

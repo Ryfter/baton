@@ -1,0 +1,65 @@
+# instruments.yaml — pre-defined Baton instruments (registry rows).
+# Complements fleet.yaml (LM providers) and tools.yaml (deterministic tools).
+# Orchestrators select by capability; they do not invent ad-hoc agents.
+#
+# Fields:
+#   name           unique key
+#   capability     routing key (matches fleet/tools capabilities where possible)
+#   kind           lm-fleet | tool | officer | scheduled
+#   enabled        true | false
+#   default_seat   fleet provider name or tool name
+#   init_brief     path to markdown spawned at instrument start (optional)
+#   profile        coding profile id (optional, for coding instrument)
+#   hooks          before | after script paths (optional, repo-relative)
+#   verify         verify recipe hint (optional)
+
+instruments:
+  - name: coding
+    capability: code-gen
+    kind: lm-fleet
+    enabled: true
+    default_seat: openrouter-ox-alpha
+    profile: python
+    init_brief: references/coding-profiles/python.md
+    verify: pytest -q
+
+  - name: coding-pwsh
+    capability: code-gen
+    kind: lm-fleet
+    enabled: true
+    default_seat: openrouter-ox-alpha
+    profile: pwsh
+    init_brief: references/coding-profiles/pwsh.md
+    verify: pwsh -NoProfile -File scripts/test-all.ps1
+
+  - name: research
+    capability: research
+    kind: lm-fleet
+    enabled: true
+    default_seat: openrouter-ox-alpha
+    init_brief: prompts/research-instrument.txt
+
+  - name: security-researcher
+    capability: security-sweep
+    kind: scheduled
+    enabled: true
+    default_seat: openrouter-ox-alpha
+    init_brief: prompts/security-researcher.txt
+
+  - name: efficiency-officer
+    capability: context-select
+    kind: officer
+    enabled: true
+    init_brief: prompts/efficiency-officer.txt
+
+  - name: doc-convert
+    capability: pdf-extract
+    kind: tool
+    enabled: true
+    default_seat: docling
+
+  - name: ocr
+    capability: ocr
+    kind: tool
+    enabled: true
+    default_seat: deepseek-ocr

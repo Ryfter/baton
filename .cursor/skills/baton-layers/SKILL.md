@@ -44,6 +44,10 @@ Context layer repo: `/Users/kev/Dev/Grimlore` (private). **Explains** why/who/en
 4. **Never** paste private Grimlore bodies into Ox Alpha / OpenRouter prompts — structure-only or non-secret fleet-map facts only.
 5. Quality → draft proposals: `~/.baton/overnight/bin/propose-grimlore-fold.sh` (writes under `grimlore-proposals/`, not auto into the repo).
 
+## Efficiency Officer (token-saver built in)
+
+Before large instrument prompts, Conductor runs `efficiency-lib.ps1` (fail-open). Manual: `/baton:efficiency select …`. Skill: `.cursor/skills/baton-efficiency/`. Octopus zip skill is **deprecated**.
+
 ## Scope (`baton-d108`)
 
 Maestro = code · Mouth/Conductor = Ox Alpha · Orchestrator = Opus · Instruments = Ox/Grok first

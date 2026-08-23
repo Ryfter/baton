@@ -236,8 +236,9 @@ must know:
   `projects/baton/` in `Ryfter/grimdex-know` (all d-records moved as git renames).
 - **Env var:** `BATON_REPO_ROOT` is the preferred repo-root override
   (`CAO_REPO_ROOT` still honored as legacy). Default project id in scripts: `baton`.
-- **octo** is a recommended companion plugin, NOT a hard plugin dependency
-  (cross-marketplace dependency resolution is unreliable).
+- **Octopus removed (2026-08-23):** Baton is the sole dispatch spine. If `octo@nyldn-plugins`
+  is still installed, run `scripts/uninstall-octopus.ps1`. Map old `/octo:*` habits via
+  `docs/octo-to-baton-map.md`. Orientation: `docs/agent-stack.md`.
 - **Phase 2 — EXECUTED (2026-06-11):** hooks ship with the plugin (`hooks/hooks.json`),
   including `log-tool-call` PostToolUse and `baton-init` SessionStart; all mutable state
   (jobs, runs, ensembles, ideas, current-job.json, routing-journal.jsonl,
