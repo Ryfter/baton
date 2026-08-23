@@ -167,6 +167,45 @@ function Invoke-OfficerBattery {
         $docLive = Get-OfficersDoctorLines -BatonHome $box -SystemsInventory $liveInv -VramInventory $vramLive
         Check "$tag doctor names loaded 30b" (($docLive -join "`n") -match 'qwen/qwen3-coder-30b')
         Check "$tag doctor names gpu source" (($docLive -join "`n") -match 'source=apple-unified')
+
+        Check "$tag fable seat forbidden" (Test-SecuritySeatForbidden -Seat 'cursor-fable')
+        Check "$tag sol seat forbidden" (Test-SecuritySeatForbidden -Seat 'gpt-5.6-sol')
+        Check "$tag ox seat allowed" (-not (Test-SecuritySeatForbidden -Seat 'openrouter-ox-alpha'))
+        $nowS = [datetime]'2026-08-23T12:00:00Z'
+        $hotRec = [pscustomobject]@{ last_touched = '2026-08-23T10:00:00Z'; last_run = '2026-08-22T10:00:00Z' }
+        Check "$tag touched-since-run is hot" ((Get-SecurityBand -Record $hotRec -Now $nowS) -eq 'hot')
+        $warmRec = [pscustomobject]@{ last_touched = '2026-08-16T12:00:00Z'; last_run = '2026-08-20T12:00:00Z' }
+        Check "$tag recent-clean is warm" ((Get-SecurityBand -Record $warmRec -Now $nowS) -eq 'warm')
+        $coldRec = [pscustomobject]@{ last_touched = '2026-07-01T12:00:00Z'; last_run = '2026-07-15T12:00:00Z'; last_clean = '2026-07-15T12:00:00Z' }
+        Check "$tag stale+clean is cold" ((Get-SecurityBand -Record $coldRec -Now $nowS) -eq 'cold')
+        $hotDue = Get-SecurityRecipe -Project 'baton' -Record $hotRec -Now $nowS
+        Check "$tag hot recipe nightly ox" ($hotDue.due -eq $true -and $hotDue.cadence -eq 'nightly' -and $hotDue.seat -eq 'openrouter-ox-alpha')
+        Check "$tag recipe denies fable" ($hotDue.deny_seats -contains 'fable' -and $hotDue.grimlore_to_ox -eq $false)
+        $deep = Get-SecurityRecipe -Project 'baton' -Record $warmRec -Now $nowS -Deep
+        Check "$tag deep seats opus not fable" ($deep.seat -eq 'opus' -and -not (Test-SecuritySeatForbidden -Seat $deep.seat))
+        $coldR = Get-SecurityRecipe -Project 'old' -Record $coldRec -Now $nowS
+        Check "$tag cold is monthly local" ($coldR.band -eq 'cold' -and $coldR.cadence -match 'monthly' -and $coldR.seat -eq 'local')
+        [void](Update-SecurityScale -Project 'baton' -Now $nowS -Touched $nowS.AddHours(-2) -BatonHome $box)
+        $scalePath = Get-SecurityScalePath -BatonHome $box
+        Check "$tag security scale persisted" ((Test-Path -LiteralPath $scalePath) -and ((Get-Content $scalePath -Raw) -match 'last_run'))
+
+        $rev = Invoke-EfficiencyProfileReview -RepoRoot (Split-Path -Parent $PSScriptRoot)
+        Check "$tag profile review never blocks" ($rev.blocked -eq $false)
+        Check "$tag shipped profiles are lean" ($rev.ok -eq $true)
+        $fatDir = Join-Path $box 'references/coding-profiles'
+        New-Item -ItemType Directory -Force -Path $fatDir | Out-Null
+        foreach ($l in @('python','pwsh','typescript','javascript','nodejs','react','html-css')) {
+            Set-Content -LiteralPath (Join-Path $fatDir "$l.md") -Value ("# $l`n" + ("leverage robustly`n" * 50)) -Encoding utf8NoBOM
+        }
+        $fat = Invoke-EfficiencyProfileReview -RepoRoot $box
+        Check "$tag fat profiles fail review" ($fat.ok -eq $false -and $fat.blocked -eq $false)
+        Check "$tag fat profile names bloat" (@($fat.findings | Where-Object { $_.reasons -contains 'promotional-language' }).Count -ge 1)
+
+        $planAdv = Invoke-EfficiencyPlanAdvise -Plan ([pscustomobject]@{
+            tasks = @([pscustomobject]@{ id = 't1'; desc = 'sum it'; capability = 'summarize'; est_cost_tier = 'paid' })
+        })
+        Check "$tag plan advise never blocks" ($planAdv.blocked -eq $false)
+        Check "$tag plan advise cheapens summarize" ($planAdv.plan.tasks[0].est_cost_tier -eq 'free')
     } finally {
         Remove-Item -LiteralPath $box -Recurse -Force -ErrorAction SilentlyContinue
     }

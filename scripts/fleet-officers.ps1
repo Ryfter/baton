@@ -5,7 +5,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('status', 'systems', 'vram', 'registry')][string]$Action = 'status',
+    [ValidateSet('status', 'systems', 'vram', 'registry', 'security', 'profiles')][string]$Action = 'status',
     [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' })
 )
 $ErrorActionPreference = 'Stop'
@@ -22,6 +22,13 @@ switch ($Action) {
     }
     'vram' {
         Get-VramInventory -BatonHome $BatonHome | ConvertTo-Json -Depth 6
+    }
+    'security' {
+        Get-SecurityRecipe -Project 'baton' -BatonHome $BatonHome | ConvertTo-Json -Depth 6
+    }
+    'profiles' {
+        $root = Split-Path -Parent $PSScriptRoot
+        Invoke-EfficiencyProfileReview -RepoRoot $root | ConvertTo-Json -Depth 6
     }
     default {
         Get-OfficersDoctorLines -BatonHome $BatonHome | ForEach-Object { Write-Host $_ }
