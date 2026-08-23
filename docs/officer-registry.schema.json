@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://baton.local/schemas/officer-registry.json",
+  "title": "Baton officer registry (baton-d133 stub)",
+  "description": "Standing factory officers only. Not an agent spawn list. No additional ids without a new decision.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "officers"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "decision": {
+      "type": "string",
+      "const": "baton-d133"
+    },
+    "officers": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/officer" }
+    }
+  },
+  "$defs": {
+    "officer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "level", "blocks_labor"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "enum": ["scheduler", "efficiency", "vram", "systems"]
+        },
+        "role": { "type": "string", "minLength": 1 },
+        "level": {
+          "type": "string",
+          "enum": [
+            "maestro-sidecar",
+            "conductor-sidecar",
+            "maestro-adjacent",
+            "factory-inventory"
+          ]
+        },
+        "blocks_labor": {
+          "type": "string",
+          "enum": ["never", "eligibility-only", "briefly", "no"]
+        },
+        "job": { "type": "string" },
+        "enabled": { "type": "boolean" }
+      }
+    }
+  }
+}

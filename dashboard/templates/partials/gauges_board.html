@@ -1,0 +1,58 @@
+{% set g = gauges %}
+{% set c = g.clock %}
+
+<section class="gauges-clock" aria-live="polite">
+  <p class="gauges-clock__line">
+    <span class="gauges-clock__window">{{ c.label }} {{ c.start_display }} → {{ c.end_display }}</span>
+    <span class="gauges-clock__sep">·</span>
+    <span class="gauges-clock__total">{{ c.total_tokens_display }} tok</span>
+    <span class="gauges-clock__sep">·</span>
+    <span class="gauges-clock__total">{{ c.total_cost_display }}</span>
+  </p>
+</section>
+
+{% if g.projects %}
+<section class="gauges-projects" aria-label="Project burn">
+  {% for p in g.projects %}
+  <article class="gauge-project-card">
+    <header class="gauge-project-card__head">
+      <h3 class="gauge-project-card__name">{{ p.name }}</h3>
+      <div class="gauge-project-card__hero">
+        <span class="gauge-project-card__tokens">{{ p.tokens_display }} tok</span>
+        <span class="gauge-project-card__cost">{{ p.cost_display }}</span>
+      </div>
+    </header>
+    <div class="gauge-project-card__bar" role="presentation">
+      <span class="gauge-project-card__fill" style="width: {{ (p.share_fill * 100) | round(1) }}%;"></span>
+    </div>
+    {% if p.models %}
+    <p class="gauge-project-card__models">{{ p.models | join(" · ") }}</p>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% elif g.empty_message %}
+<p class="gauges-empty muted">{{ g.empty_message }}</p>
+{% endif %}
+
+{% if g.caps %}
+<section class="gauges-caps" aria-label="Cap gauges">
+  <h3 class="gauges-caps__title">Caps</h3>
+  <div class="gauges-caps__grid">
+    {% for cap in g.caps %}
+    <article class="gauge-cap-card">
+      <header class="gauge-cap-card__head">
+        <h4 class="gauge-cap-card__title">{{ cap.title }}</h4>
+        {% if cap.used_pct is not none %}
+        <span class="gauge-cap-card__pct">{{ cap.used_pct }}%</span>
+        {% endif %}
+      </header>
+      <div class="gauge-cap-card__bar" role="presentation">
+        <span class="gauge-cap-card__fill" style="width: {{ (cap.fill * 100) | round(1) }}%;"></span>
+      </div>
+      <p class="gauge-cap-card__label">{{ cap.label }}</p>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}

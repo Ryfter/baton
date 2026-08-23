@@ -19,6 +19,7 @@
 . "$PSScriptRoot/cost-resolver-lib.ps1"   # realized-cost metering (slice 2)
 . "$PSScriptRoot/prompt-pool-lib.ps1"   # Slice B: live shadow A/B pool bookkeeping
 . "$PSScriptRoot/verification-lib.ps1"   # Test-DiffFilesInAllowedPaths (#125 matcher) for acceptance-rework scope
+. "$PSScriptRoot/officers-lib.ps1"   # Efficiency (never blocks) + VRAM claim for local labor
 
 function New-RunId {
     param([datetime]$Now = (Get-Date))
@@ -126,6 +127,122 @@ function ConvertTo-PlanObject {
         budget_cap = if ($null -eq $o.budget_cap) { $null } else { [double]$o.budget_cap }
         tasks      = @($tasks)
     }
+}
+
+function Get-WorktreeTopLevelDirs {
+    <# Directory names at the worktree root (skip .git). Fail-soft: missing path
+       or unlistable dir → empty array, never throw. Used to turn a planner's
+       absolute ~/dev/... path into a worktree-relative allowed_paths entry. #>
+    param([string]$Worktree)
+    if ([string]::IsNullOrWhiteSpace($Worktree)) { return @() }
+    if (-not (Test-Path -LiteralPath $Worktree -PathType Container)) { return @() }
+    try {
+        return @(
+            Get-ChildItem -LiteralPath $Worktree -Directory -Force -ErrorAction Stop |
+                Where-Object { $_.Name -ne '.git' } |
+                ForEach-Object { [string]$_.Name }
+        )
+    } catch { return @() }
+}
+
+function ConvertTo-WorktreeRelativeAllowedPath {
+    <# Turn one planner allowed_paths entry into a worktree-relative path.
+       Relative input is normalized (forward slashes, optional trailing / kept).
+       Absolute / ~/dev / drive-letter input is rewritten when it sits under
+       -Worktree, or when a suffix starts at a known top-level directory
+       (scripts/, docs/, …). Unconvertible absolute paths return $null so the
+       caller can keep the original and let Get-DiffApplyContext fail loud. #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$Worktree = '',
+        [string[]]$TopLevelDirs = @()
+    )
+    $raw = [string]$Path
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+    $hadSlash = $raw.EndsWith('/') -or $raw.EndsWith('\')
+    $p = $raw.Trim()
+
+    if ($p -eq '~') {
+        $p = [string]$HOME
+    } elseif ($p.StartsWith('~/') -or $p.StartsWith('~\')) {
+        $p = [System.IO.Path]::Combine([string]$HOME, $p.Substring(2))
+    }
+
+    $isAbs = [System.IO.Path]::IsPathRooted($p) -or
+             ($p -match '^[A-Za-z]:') -or
+             $p.StartsWith('\\') -or
+             $p.StartsWith('//')
+
+    if (-not $isAbs) {
+        $rel = $p.Replace('\', '/')
+        if ($rel.StartsWith('./')) { $rel = $rel.Substring(2) }
+        if ($hadSlash -and -not $rel.EndsWith('/')) { $rel = $rel + '/' }
+        return $rel
+    }
+
+    $full = $null
+    try { $full = [System.IO.Path]::GetFullPath($p) } catch { return $null }
+    if ([string]::IsNullOrWhiteSpace($full)) { return $null }
+
+    if (-not [string]::IsNullOrWhiteSpace($Worktree)) {
+        try {
+            $root = [System.IO.Path]::GetFullPath($Worktree).TrimEnd('\', '/')
+            $sep = [System.IO.Path]::DirectorySeparatorChar
+            if ($full.Equals($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+                if ($hadSlash) { return './' }
+                return '.'
+            }
+            if ($full.StartsWith(($root + $sep), [System.StringComparison]::OrdinalIgnoreCase)) {
+                $rel = $full.Substring($root.Length).TrimStart('\', '/').Replace('\', '/')
+                if ($hadSlash -and -not $rel.EndsWith('/')) { $rel = $rel + '/' }
+                return $rel
+            }
+        } catch { }
+    }
+
+    $segments = @($full -split '[\\/]' | Where-Object { $_ -ne '' })
+    $topSet = @{}
+    foreach ($d in @($TopLevelDirs)) {
+        $name = [string]$d
+        if ($name.EndsWith('/') -or $name.EndsWith('\')) { $name = $name.TrimEnd('\', '/') }
+        if (-not [string]::IsNullOrWhiteSpace($name)) {
+            $topSet[$name.ToLowerInvariant()] = $true
+        }
+    }
+    if ($topSet.Count -gt 0) {
+        for ($i = 0; $i -lt $segments.Count; $i++) {
+            if ($topSet.ContainsKey($segments[$i].ToLowerInvariant())) {
+                $rel = ($segments[$i..($segments.Count - 1)] -join '/')
+                if ($hadSlash -and -not $rel.EndsWith('/')) { $rel = $rel + '/' }
+                return $rel
+            }
+        }
+    }
+    return $null
+}
+
+function Repair-PlanAllowedPaths {
+    <# Rewrite every task's allowed_paths to worktree-relative form. Unconvertible
+       absolute entries are kept so Get-DiffApplyContext can fail loud instead of
+       silently emptying Ox context. Empty -RepoPath still normalizes slashes. #>
+    param(
+        [Parameter(Mandatory)]$Plan,
+        [string]$RepoPath = ''
+    )
+    if ($null -eq $Plan) { return $Plan }
+    $top = @(Get-WorktreeTopLevelDirs -Worktree $RepoPath)
+    foreach ($t in @($Plan.tasks)) {
+        $next = [System.Collections.Generic.List[string]]::new()
+        foreach ($p in @($t.allowed_paths)) {
+            $s = [string]$p
+            if ([string]::IsNullOrWhiteSpace($s)) { continue }
+            $converted = ConvertTo-WorktreeRelativeAllowedPath -Path $s -Worktree $RepoPath -TopLevelDirs $top
+            if ([string]::IsNullOrWhiteSpace($converted)) { $next.Add($s) }
+            else { $next.Add($converted) }
+        }
+        $t.allowed_paths = @($next)
+    }
+    return $Plan
 }
 
 function Resolve-TaskOrder {
@@ -488,10 +605,11 @@ function Build-PlannerPrompt {
       "depends_on": [], "est_cost_tier": "local|free|paid", "reversible": true,
       "stakes": "low|standard|high", "stakes_basis": "<one concrete risk/size sentence>",
       "verify_profile": "<REQUIRED for code-gen/code-transform when verification is on: a profile name from the target repo's .baton/verification.json (see evidence); empty otherwise>",
-      "allowed_paths": ["<exact repo-relative file paths, OR a directory prefix ending in '/' (e.g. \"app/\"); prefer naming concrete files when known; use the target repo's real top-level directories from the evidence (never guess); * globs are NOT supported on this path (a plan with scripts/* fails closed here; fleet-backlog uses globs for the same field name elsewhere); empty = unrestricted (avoid for code-gen)>"] }
+      "allowed_paths": ["<exact worktree-relative file paths, OR a directory prefix ending in '/' (e.g. \"app/\"); prefer naming concrete files when known; use the target repo's real top-level directories from the evidence (never guess); NEVER emit absolute, drive-letter, or ~ paths (/Users/..., D:\\Dev\\..., ~/dev/...) — those empty Ox diff-apply context; * globs are NOT supported on this path (a plan with scripts/* fails closed here; fleet-backlog uses globs for the same field name elsewhere); empty = unrestricted (avoid for code-gen)>"] }
   ]
 }
 
+allowed_paths MUST be worktree-relative (scripts/foo.ps1, docs/). Absolute ~/dev host paths are rejected at diff-apply.
 prefer the cheapest est_cost_tier AT WHICH AN ELIGIBLE PROVIDER EXISTS — see the capability tier floors in the evidence; never set a task's est_cost_tier below its capability's floor.
 Stakes classification: low for narrow, reversible, low-blast-radius work;
 standard for ordinary bounded feature or bugfix work; high for security/privacy/auth,
@@ -728,6 +846,13 @@ function Invoke-PlanPhase {
     $res = $walk.result
     $plan = ConvertTo-PlanObject -RawStdout ([string]$res.stdout)
     if ($null -eq $plan) { return $null }
+    if (-not [string]::IsNullOrWhiteSpace($RepoPath)) {
+        $plan = Repair-PlanAllowedPaths -Plan $plan -RepoPath $RepoPath
+    }
+    try {
+        $effPlan = Invoke-EfficiencyPlanAdvise -Plan $plan -RepoRoot $RepoPath
+        if ($effPlan -and $effPlan.plan) { $plan = $effPlan.plan }
+    } catch { }
     if ($RunId) { $plan.run_id = $RunId }
     $plan.goal = $Goal
     if ($null -ne $BudgetCap) { $plan.budget_cap = [double]$BudgetCap }
@@ -743,6 +868,8 @@ function Invoke-TaskViaFleet {
         [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
         [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
         [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
+        [string]$RepoPath,
+        [string]$RunDir,
         [scriptblock]$Dispatcher
     )
     $cap = if ($Task.capability) { $Task.capability } else { 'reasoning' }
@@ -751,6 +878,20 @@ function Invoke-TaskViaFleet {
         return @{ ok = $false; spend = 0.0; chose = ''; why = "no candidate for capability '$cap'"; alternatives = @() }
     }
     $prompt = "Task: $($Task.desc)"
+    try {
+        $effArgs = @{ Task = $Task }
+        if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $effArgs.RepoPath = $RepoPath }
+        if (-not [string]::IsNullOrWhiteSpace($RunDir)) { $effArgs.RunDir = $RunDir }
+        $eff = Invoke-EfficiencyAdvise @effArgs
+        if ($eff -and $eff.prompt) { $prompt = [string]$eff.prompt }
+        if ($eff -and $eff.cheaper_tier -and $Task.PSObject.Properties['est_cost_tier']) {
+            # Advise only — never raise a tier, never block.
+            $cur = [string]$Task.est_cost_tier
+            if ($cur -eq 'paid' -and [string]$eff.cheaper_tier -eq 'free') {
+                $Task.est_cost_tier = 'free'
+            }
+        }
+    } catch { }
     # Code factory (#code-factory): the non-agentic labor phase walks the cost-ordered
     # roster too. This executor never touches the repo (see the summary above), so a
     # failed candidate can be retried on the next-cheapest peer with no cleanup.
@@ -758,6 +899,17 @@ function Invoke-TaskViaFleet {
         -Attempt {
             param($c)
             if ($Dispatcher) { return (& $Dispatcher $c $prompt) }
+            $vramClaim = $null
+            if ([string]$c.cost_tier -eq 'local') {
+                try {
+                    $prof = Resolve-VramProfileForProvider -Provider $c
+                    $vramClaim = Request-VramClaim -Profile $prof -Model ([string]$c.name) `
+                        -RunId ("labor-" + [string]$Task.id)
+                    if (-not $vramClaim.ok) {
+                        return @{ stdout = ''; stderr = [string]$vramClaim.reason; exit_code = -1; duration_s = 0 }
+                    }
+                } catch { }
+            }
             return Invoke-Fleet -Name $c.name -Prompt $prompt -Path $FleetPath -NoJournal
         }
     $alts = @($cands | Where-Object { $null -ne $_ -and [string]$_.name -ne [string]$walk.chose } | ForEach-Object { [string]$_.name })
@@ -924,6 +1076,9 @@ function Invoke-PlanRevise {
         # planner-sized call to buy nothing.
         $res = & $dispatch $cands[0] $prompt
         if ([int]$res.exit_code -eq 0) { $revised = ConvertTo-PlanObject -RawStdout ([string]$res.stdout) }
+        if ($null -ne $revised -and -not [string]::IsNullOrWhiteSpace($RepoPath)) {
+            $revised = Repair-PlanAllowedPaths -Plan $revised -RepoPath $RepoPath
+        }
     } catch {
         Write-Debug "revise pass failed: $($_.Exception.Message)"
     }
@@ -1214,8 +1369,14 @@ function Invoke-Conductor {
         if ($Verify -and [string]$task.verify_profile) {
             Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-verification-started' -Message "verifying: $($task.verify_profile)")
         }
+        $fleetArgs = @{
+            Task = $task; FleetPath = $FleetPath; ToolsPath = $ToolsPath
+            MaxCostTier = $MaxCostTier; Dispatcher = $Dispatcher
+        }
+        if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $fleetArgs.RepoPath = $RepoPath }
+        if (-not [string]::IsNullOrWhiteSpace($RunDir)) { $fleetArgs.RunDir = $RunDir }
         $r = if ($Spawner) { & $Spawner $task }
-             else { Invoke-TaskViaFleet -Task $task -FleetPath $FleetPath -ToolsPath $ToolsPath -MaxCostTier $MaxCostTier -Dispatcher $Dispatcher }
+             else { Invoke-TaskViaFleet @fleetArgs }
         $tspend = if ($null -ne $r.spend) { [double]$r.spend } else { $est }
         $spend += $tspend
         if ($r.chose) {

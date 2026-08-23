@@ -1,2 +1,5 @@
 {# Maestro compose error — swapped into #maestro-status on POST 400; poll on the wrapper keeps going. #}
-<p class="maestro-status__line maestro-status__error" role="alert">{{ error }}</p>
+<div class="maestro-error" role="alert">
+  <p class="maestro-status__line maestro-status__error">{{ error }}</p>
+  <p class="maestro-error__hint muted">Fix the project or goal above, then admit again.</p>
+</div>

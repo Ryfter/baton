@@ -1,0 +1,12 @@
+{
+  "default": {"input_per_m": 3.0, "output_per_m": 15.0},
+  "models": {
+    "claude-sonnet-4-6": {"input_per_m": 3.0, "output_per_m": 15.0},
+    "claude-haiku-4-5": {"input_per_m": 0.8, "output_per_m": 4.0},
+    "gpt-5-codex": {"input_per_m": 2.5, "output_per_m": 10.0},
+    "gpt-4o": {"input_per_m": 2.5, "output_per_m": 10.0},
+    "grok-3": {"input_per_m": 3.0, "output_per_m": 15.0},
+    "ox-alpha": {"input_per_m": 0.5, "output_per_m": 2.0},
+    "openrouter/anthropic/claude-sonnet-4": {"input_per_m": 3.0, "output_per_m": 15.0}
+  }
+}

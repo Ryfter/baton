@@ -1,112 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
 
-<!-- Maestro compose strip -->
-<div class="card maestro-compose-card cockpit-layout__compose" style="grid-column: 1 / -1;"
-     hx-get="/maestro/partials/compose"
-     hx-trigger="load"
-     hx-swap="innerHTML">
-  <p class="muted">Loading Baton…</p>
-  <noscript>
-    <p>JavaScript is off — HTMX cannot load the first fold. Open <a href="/maestro/partials/compose">the Baton compose form</a> directly.</p>
-  </noscript>
-</div>
-
-<!-- Active sessions grid — OctoAlly-shaped hero (slice 4); WS tails via cockpit.js -->
-<div class="cockpit-layout__hero" style="grid-column: 1 / -1;"
-     id="cockpit-grid-mount"
-     hx-get="/partials/cockpit-grid"
-     hx-trigger="load"
-     hx-swap="innerHTML">
-  <p class="muted">Loading factory floor…</p>
-</div>
-
-<!-- Secondary ops row: fleet + assignments -->
-<div class="card fleet-cockpit-card cockpit-layout__secondary" style="grid-column: 1;"
-     hx-get="/partials/fleet"
+<div id="home-header"
+     hx-get="/partials/home-header"
      hx-trigger="load, every 2s"
      hx-swap="innerHTML">
-  {% include "partials/fleet_activity.html" %}
+  {% include "partials/home_header.html" %}
 </div>
 
-<section class="assignments-section cockpit-layout__secondary" style="grid-column: 2;">
-  <h2>Fleet assignments</h2>
-  <div id="assignments" hx-get="/partials/assignments" hx-trigger="load, every 5s"></div>
-</section>
-
-<!-- Runs gutter + detail (legibility feed, polls every 5s) -->
-<section class="runs-section">
-  <h2>Runs</h2>
-  <div id="runs-gutter" hx-get="/partials/runs" hx-trigger="load, every 5s"></div>
-  <div id="run-detail"><p class="muted">Select a run to see what it's doing.</p></div>
-</section>
-
-<!-- Portfolio panel — polls every 60s -->
-<div class="card" style="grid-column: 1 / -1;"
-     hx-get="/partials/projects"
-     hx-trigger="load, every 60s"
+<div class="card maestro-compose-card maestro-compose-card--compact" id="maestro-compose-card" style="grid-column: 1 / -1;"
+     hx-get="/maestro/partials/compose?compact=1"
+     hx-trigger="load"
      hx-swap="innerHTML">
-  {% include "partials/projects_list.html" %}
-</div>
-
-<!-- Jobs panel — polls every 30s -->
-<div class="card"
-     hx-get="/partials/jobs"
-     hx-trigger="load, every 30s"
-     hx-swap="innerHTML">
-  {% include "partials/jobs_list.html" %}
-</div>
-
-<!-- KB Search panel (Plan 8) — user-driven, no polling -->
-<div class="card">
-  {% include "partials/kb_search.html" %}
-</div>
-
-<!-- Spend Today — polls every 30s -->
-<div class="card"
-     hx-get="/partials/spend"
-     hx-trigger="every 30s"
-     hx-swap="innerHTML">
-  {% include "partials/spend_today.html" %}
-</div>
-
-<!-- Cost Doughnut Chart -->
-<div class="card">
-  <h2>Cost Breakdown</h2>
-  <div class="chart-wrap">
-    <canvas id="costChart"></canvas>
+  <div class="maestro-compose maestro-compose--boot">
+    <p class="muted">Loading admit…</p>
   </div>
 </div>
 
-<!-- Model Leaderboard — polls every 30s -->
-<div class="card"
-     hx-get="/partials/leaderboard"
-     hx-trigger="every 30s"
+<div id="home-floor" style="grid-column: 1 / -1;"
+     hx-get="/partials/home-floor"
+     hx-trigger="load, every 2s"
      hx-swap="innerHTML">
-  {% include "partials/leaderboard.html" %}
+  {% include "partials/home_floor.html" %}
 </div>
 
-<!-- Controls — polls every 15s so model lists stay fresh -->
-<div class="card"
-     hx-get="/partials/controls"
-     hx-trigger="every 15s"
-     hx-swap="innerHTML">
-  {% include "partials/controls.html" %}
-</div>
-
-<!-- Live Activity — polls every 5s -->
-<div class="card activity-feed"
-     hx-get="/partials/activity"
-     hx-trigger="every 5s"
-     hx-swap="innerHTML">
-  {% include "partials/activity_rows.html" %}
-</div>
-
-<!-- Inject chart data for app.js -->
-<script>
-  const chartLabels = {{ stats.models | map(attribute='name') | list | tojson }};
-  const chartData   = {{ stats.models | map(attribute='cost_usd') | list | tojson }};
-</script>
-<script src="/static/app.js"></script>
 <script src="/static/cockpit.js"></script>
 {% endblock %}

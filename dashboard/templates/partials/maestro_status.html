@@ -1,62 +1,156 @@
-{# Maestro status strip — framework lines only, not chat.
-   Router currently passes `jobs`; tolerate leftover `recent_jobs`. #}
+{# Maestro status — call sheet: tally, featured job, queue. Not chat. #}
+{% macro info(text) -%}
+<span class="maestro-i" tabindex="0">
+  <span class="maestro-i__mark" aria-hidden="true">i</span>
+  <span class="maestro-i__tip" role="tooltip">{{ text }}</span>
+</span>
+{%- endmacro %}
+
 {% set queue = jobs|default(recent_jobs, true)|default([]) %}
-{% if job %}
-<div class="maestro-latest">
-  <p class="maestro-working__label">Latest job</p>
-  <p class="maestro-status__line">
-    <strong>{{ job.id }}</strong>
-    · <span class="status-{{ job.status }}">{{ job.status }}</span>
-    · {{ job.project }}
-    {% if job.status == 'admitted' %} · waiting for Conductor{% elif job.status == 'queued' %} · queued — next tick admits{% elif job.provider %} · {{ job.provider }}{% elif job.run_id %} · run {{ job.run_id }}{% elif job.status not in ('held', 'done') %} · instrument pending{% endif %}
-  </p>
-  {% if job.status == 'held' %}
+{% set counts = counts|default({}) %}
+{% set featured_id = job.id if job else none %}
+
+{% macro clean_goal(text, n) -%}
+  {%- set g = text or '' -%}
+  {%- if g.startswith('<!--') and '-->' in g -%}
+    {%- set g = g.split('-->', 1)[1].strip() -%}
+  {%- endif -%}
+  {{- g[:n] -}}{%- if g|length > n -%}…{%- endif -%}
+{%- endmacro %}
+
+{% macro status_hint(j) -%}
+  {%- if j.status == 'admitted' -%}waiting for Conductor
+  {%- elif j.status == 'queued' -%}next tick admits
+  {%- elif j.status == 'waiting-quota' -%}waiting on quota
+  {%- elif j.status == 'held' -%}factory will not fire
+  {%- elif j.status == 'running' and j.provider -%}{{ j.provider }}
+  {%- elif j.status == 'running' and j.run_id -%}run {{ j.run_id }}
+  {%- elif j.status == 'running' -%}instrument pending
+  {%- elif j.status == 'done' -%}done
+  {%- elif j.provider -%}{{ j.provider }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro hold_control(j) %}
+  {% if j.status == 'held' %}
   <form
     class="maestro-hold"
-    hx-post="/maestro/jobs/{{ job.id }}/release"
+    hx-post="/maestro/jobs/{{ j.id }}/release"
     hx-target="#maestro-status"
     hx-swap="innerHTML"
   >
-    <button type="submit" class="maestro-hold__btn" title="Release hold and re-admit">Release hold</button>
+    <button type="submit" class="maestro-hold__btn maestro-hold__btn--release" title="Release hold and restore prior status">Release</button>
   </form>
-  {% elif job.status != 'done' %}
+  {% elif j.status != 'done' %}
   <form
     class="maestro-hold"
-    hx-post="/maestro/jobs/{{ job.id }}/hold"
+    hx-post="/maestro/jobs/{{ j.id }}/hold"
     hx-target="#maestro-status"
     hx-swap="innerHTML"
   >
-    <button type="submit" class="maestro-hold__btn" title="Pause this job before Conductor fires">Hold job</button>
+    <button type="submit" class="maestro-hold__btn" title="Pause this job before Conductor fires">Hold</button>
   </form>
   {% endif %}
+{% endmacro %}
+
+<div class="maestro-strip" role="status">
+  <p class="maestro-strip__call">{{ status_line or "idle — no active jobs" }} {{ info("Maestro’s one status line — who is running, queued, waiting on quota, or held. Not a chat.") }}</p>
+  <ul class="maestro-tally" aria-label="Job counts">
+    {% for key in ['queued', 'admitted', 'running', 'waiting-quota', 'held'] %}
+    <li class="maestro-tally__cell maestro-tally__cell--{{ key }}{% if counts.get(key) %} is-hot{% endif %}">
+      <span class="maestro-tally__n">{{ counts.get(key, 0) }}</span>
+      <span class="maestro-tally__k">{{ key }}</span>
+    </li>
+    {% endfor %}
+    {% if counts.get('done') %}
+    <li class="maestro-tally__cell maestro-tally__cell--done">
+      <span class="maestro-tally__n">{{ counts.done }}</span>
+      <span class="maestro-tally__k">done</span>
+    </li>
+    {% endif %}
+  </ul>
 </div>
+
+{% if job %}
+<article class="maestro-job maestro-job--featured status-{{ job.status }}" id="maestro-job-featured" tabindex="-1" aria-label="Featured job">
+  <header class="maestro-job__head">
+    <p class="maestro-working__label">Now {{ info("The job that needs attention first: running, then admitted, then waiting, then queued. Hold pauses it so the factory will not fire.") }}</p>
+    <span class="maestro-pill status-{{ job.status }}">{{ job.status }}</span>
+  </header>
+  <div class="maestro-job__body">
+    <p class="maestro-job__project">{{ job.project }}</p>
+    <p class="maestro-job__goal">{% if job.goal %}{{ clean_goal(job.goal, 160) }}{% else %}<span class="muted">No goal text</span>{% endif %}</p>
+    {% if job_last_output %}
+    <p class="maestro-job__output">{{ job_last_output }}</p>
+    {% endif %}
+    {% if job_turns %}
+    <div class="cockpit-cell__turns maestro-job__turns">
+      {% for t in job_turns[-6:] %}
+      <details class="turn turn--{{ t.kind }}" {% if not t.collapsed %}open{% endif %}>
+        <summary>{{ t.kind }} · {{ t.label }}</summary>
+        <pre>{{ t.detail }}</pre>
+      </details>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <p class="maestro-job__meta">
+      <code>{{ job.id }}</code>
+      · {{ job.stakes or 'standard' }}
+      · {{ job.source or 'web' }}
+      {% set hint = status_hint(job) %}
+      {% if hint %} · <span class="maestro-queue__hint">{{ hint }}</span>{% endif %}
+    </p>
+  </div>
+  <footer class="maestro-job__actions">
+    {{ hold_control(job) }}
+  </footer>
+</article>
 {% endif %}
 
 {% if queue %}
 <div class="maestro-working">
-  <p class="maestro-working__label">Job queue{% if queue|length > 1 %} ({{ queue|length }}){% endif %}</p>
+  <p class="maestro-working__label">Job queue{% if queue|length > 1 %} ({{ queue|length }}){% endif %} {{ info("Live work first, newest within a status. Done jobs sink to the bottom. Hold on a row pauses that job only.") }}</p>
   <ul class="maestro-working__list maestro-who">
-    {% for j in queue[:5] %}
-    <li class="maestro-queue__item">
-      <code>{{ j.id }}</code>
-      · <span class="status-{{ j.status }}">{{ j.status }}</span>
-      · {{ j.project }}
-      {% if j.status == 'admitted' %}<span class="maestro-queue__hint"> · waiting for Conductor</span>{% elif j.status == 'queued' %}<span class="maestro-queue__hint"> · next tick admits</span>{% elif j.provider %} · {{ j.provider }}{% endif %}
+    {% for j in queue[:8] %}
+    <li class="maestro-queue__item{% if j.id == featured_id %} is-featured{% endif %}">
+      <span class="maestro-pill status-{{ j.status }}">{{ j.status }}</span>
+      <span class="maestro-queue__project">{{ j.project }}</span>
+      <span class="maestro-queue__goal">{% if j.goal %}{{ clean_goal(j.goal, 72) }}{% else %}—{% endif %}</span>
+      <span class="maestro-queue__id"><code>{{ j.id }}</code></span>
+      {% set hint = status_hint(j) %}
+      {% if hint %}<span class="maestro-queue__hint">{{ hint }}</span>{% endif %}
+      {% if j.id != featured_id %}
+      <span class="maestro-queue__hold">{{ hold_control(j) }}</span>
+      {% endif %}
     </li>
     {% endfor %}
   </ul>
 </div>
 {% elif not job %}
-<p class="maestro-status__empty muted">No jobs yet. Pick a registry project above, paste a goal, and click <strong>Admit job</strong>.</p>
-{% endif %}
-
-{% if status_line %}
-<p class="maestro-status__rollup muted">{{ status_line }}</p>
+<div class="maestro-empty" role="status">
+  <p class="maestro-empty__title">No jobs yet</p>
+  <ol class="maestro-empty__steps">
+    <li>Pick a project above</li>
+    <li>Paste a short ask or a long dump</li>
+    <li>Click <strong>Admit job</strong></li>
+  </ol>
+  <p class="maestro-empty__note muted">Maestro writes the record. Conductor talks after admission.</p>
+</div>
 {% endif %}
 
 {% if budget %}
-<p class="maestro-status__budget muted">
-  usable (stub): {{ budget.usable | join(", ") }}
-  {% if budget.claude_5h %} · Claude 5h: {{ budget.claude_5h }}{% endif %}
-</p>
+<div class="maestro-budget" aria-label="Usable instruments">
+  <p class="maestro-working__label">Usable {{ info("Instruments Maestro may fire when a window is open. Stub list until admit reads the real meters.") }}</p>
+  <ul class="maestro-budget__chips">
+    {% for name in budget.usable %}
+    <li>{{ name }}</li>
+    {% endfor %}
+  </ul>
+  {% if budget.claude_5h %}
+  <p class="maestro-budget__note muted">Claude: {{ budget.claude_5h }}</p>
+  {% endif %}
+  {% if budget.claude_7d %}
+  <p class="maestro-budget__note muted">Claude week: {{ budget.claude_7d }}</p>
+  {% endif %}
+</div>
 {% endif %}

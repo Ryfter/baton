@@ -22,8 +22,7 @@ You are running the routing consolidation flow. Your job is to:
   `<!-- archived through: YYYY-MM-DDTHH:MM:SS -->`). Entries below it are
   "since-last-consolidation." If no marker exists, treat all entries as new.
 - Read `~/.claude/knowledge/universal/routing.md` (the catalog — migrated from `~/.claude/model-routing.md` in Plan 3). If the new path is missing, fall back to the legacy path and surface a warning.
-- Read `~/.claude-octopus/results/` (if it exists) — list the most recent run
-  directories to cross-reference patterns.
+- Read recent run folders under `$BATON_HOME/runs/` when cross-checking multi-model participation (Octopus results path is deprecated).
 
 ### 2. Analyze
 

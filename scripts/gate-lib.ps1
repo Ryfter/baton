@@ -579,9 +579,14 @@ function Invoke-AcceptanceGate {
     # by reading a journal.
     $panelNotes = @($degradationReasons.ToArray())
     $brief = Format-PolishBrief -Verdict $verdict -MergedFindings $merge.merged
+    $mergedFindings = @($merge.merged)
+    $agreedCount = @($mergedFindings | Where-Object { $_.agreed }).Count
+    $consensusPct = if ($mergedFindings.Count -gt 0) {
+        [math]::Round(100.0 * $agreedCount / $mergedFindings.Count, 1)
+    } else { 100.0 }
     return [ordered]@{
         verdict = $verdict.verdict; reason = $verdict.reason; counts = $verdict.counts
-        findings = $merge.merged; polish_brief = $brief
+        findings = $merge.merged; polish_brief = $brief; consensus_pct = $consensusPct
         reviews = @($reviews | ForEach-Object { @{ reviewer = $_.reviewer; provider = $_.provider; parsed = $_.parsed; count = @($_.findings).Count } })
         unparsed = $merge.unparsed
         degraded = [bool]$degraded
