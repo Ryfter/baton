@@ -219,7 +219,15 @@ if ($Execute) {
         [Console]::Error.WriteLine('go: --scaffold-verification has nothing to do with --no-verify (no oracle is used).')
         exit 2
     }
-    try { $wt = New-RunWorktree -RepoPath $repo -RunId (Split-Path $runDir -Leaf) }
+    try {
+        $wtArgs = @{
+            RepoPath = $repo
+            RunId    = (Split-Path $runDir -Leaf)
+            Label    = $theGoal
+        }
+        if (-not [string]::IsNullOrWhiteSpace($Project)) { $wtArgs.Project = $Project }
+        $wt = New-RunWorktree @wtArgs
+    }
     catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }
     $spawnArgs = @{ Worktree = $wt.worktree; FleetPath = $FleetPath; ToolsPath = $ToolsPath; MaxCostTier = $MaxCostTier; RunDir = $runDir }
     if ($PSBoundParameters.ContainsKey('Stakes')) { $spawnArgs.StakesOverride = $Stakes }

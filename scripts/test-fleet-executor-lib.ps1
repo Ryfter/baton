@@ -27,9 +27,12 @@ try {
     $repo = New-TempRepo -Root $tmpRoot
 
     # ---- New-RunWorktree ----
-    $wt = New-RunWorktree -RepoPath $repo -RunId 'go-t1'
+    Check 'N1 project prefix capped at 7' ((ConvertTo-WorktreeProjectPrefix -Project 'canvas-toolchain') -eq 'canvast')
+    Check 'N2 dir name pattern' ((Format-RunWorktreeDirName -Project 'baton' -Label 'Create hello.md with greeting') -eq 'WT-baton-hello-md-with-greeting')
+    $wt = New-RunWorktree -RepoPath $repo -RunId 'go-t1' -Project 'baton' -Label 'fix auth middleware'
     Check 'W1 worktree dir exists' (Test-Path $wt.worktree)
     Check 'W2 worktree lives under sibling .baton-worktrees' ($wt.worktree -like (Join-Path $tmpRoot '.baton-worktrees\*'))
+    Check 'W2a worktree dir uses WT-project-what pattern' ($wt.dir_name -match '^WT-baton-fix-auth-middleware')
     Check 'W3 branch named baton/run-<id>' ($wt.branch -eq 'baton/run-go-t1')
     Check 'W4 base_sha is repo HEAD' ($wt.base_sha -eq ([string](& git -C $repo rev-parse HEAD)).Trim())
     Check 'W5 worktree checked out on the run branch' ((([string](& git -C $wt.worktree branch --show-current)).Trim()) -eq 'baton/run-go-t1')

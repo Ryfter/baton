@@ -74,6 +74,9 @@ app.include_router(build_maestro_router(templates))
 from dashboard.routers.cockpit import build_router as build_cockpit_router
 app.include_router(build_cockpit_router(templates))
 
+from dashboard.routers.dark_factory import build_router as build_dark_factory_router
+app.include_router(build_dark_factory_router(templates))
+
 
 def _ctx(request: Request) -> dict:
     stats = compute_stats(JOURNAL_PATH)

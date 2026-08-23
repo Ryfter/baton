@@ -1,6 +1,15 @@
 {% extends "base.html" %}
 {% block content %}
 
+<!-- Dark factory ops — Level 4 lane status -->
+<div class="card dark-factory-card cockpit-layout__compose" style="grid-column: 1 / -1;"
+     id="dark-factory-panel"
+     hx-get="/dark-factory/partials/panel"
+     hx-trigger="load, every 15s"
+     hx-swap="innerHTML">
+  <p class="muted">Loading dark factory…</p>
+</div>
+
 <!-- Maestro compose strip -->
 <div class="card maestro-compose-card cockpit-layout__compose" style="grid-column: 1 / -1;"
      hx-get="/maestro/partials/compose"

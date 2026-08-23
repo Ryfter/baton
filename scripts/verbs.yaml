@@ -52,6 +52,11 @@ verbs:
     class: engine
     runner: fleet-security-researcher.ps1
     json: true
+  - name: dark-factory
+    summary: Level-4 overnight lanes — seed Maestro jobs for dashboard, spine, grimdex-edu.
+    class: engine
+    runner: fleet-dark-factory.ps1
+    json: true
   - name: cost
     summary: Fold per-run effective-cost records into learned per-worker costs.
     class: engine
