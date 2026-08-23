@@ -1,0 +1,42 @@
+# Officer registry stub (`baton-d133`)
+
+**Status:** stub only — no agents, no dispatch, no sidecar processes.  
+**Decision:** `baton-d133` (`Grimdex/projects/baton/decisions/d133-agent-hierarchy-instrument-officers.md`)  
+**Spec:** [`docs/superpowers/specs/2026-08-22-agent-hierarchy-instrument-officers-design.md`](superpowers/specs/2026-08-22-agent-hierarchy-instrument-officers-design.md)  
+**Schema:** [`docs/officer-registry.schema.json`](officer-registry.schema.json)
+
+This file is the in-repo face of the four standing officers. It does **not** invent new agents. Orchestrators still route **instruments** (fleet rows + `tools.yaml`); officers advise or gate. Implementation wedges stay in the spec §8 — this stub only names the registry shape.
+
+## Hierarchy (locked)
+
+```
+Kevin / Mouth (Ox Alpha)
+  └─ Maestro (code)
+        ├─ Scheduler          (sidecar — eligibility only)
+        ├─ VRAM officer       (maestro-adjacent — may briefly queue local GPU)
+        ├─ Systems agent      (inventory — never a mutex)
+        └─ Conductor (Ox Alpha)
+              ├─ Efficiency Officer  (sidecar — never blocks labor)
+              └─ Orchestrator(s) → Instruments
+```
+
+## Officers
+
+| id | Role | Level | Blocks labor? | Job |
+|---|---|---|---|---|
+| `scheduler` | Scheduler | Maestro sidecar | Eligibility only | Nested 5h vs week/month windows, Fable ≤1/h, `excess_capacity` tags. Does not admit. |
+| `efficiency` | Efficiency Officer | Conductor sidecar | **Never** | Token/process optimize, prompt reuse, lean language profiles, anti-overengineering. Token-watch is a duty, not a separate agent. |
+| `vram` | VRAM officer | Maestro-adjacent | **Briefly** (must) | Inventory loaded models; exclusive “1× large” vs shared “N× small”; serialize; prefer warm; TTL unload. Agent face of Local Resource Governor + d043. |
+| `systems` | Systems agent | Factory inventory | No | Catalog GPU/NPU/CPU/RAM/Pi/edge; recommend NPU for STT vs GPU for codegen; feed health canary. Discovery ≠ mutex. |
+
+## Do not
+
+- Seat deep security on Fable / Sol
+- Let Efficiency Officer block admit
+- Thrash-load multiple large local models without VRAM claims
+- Add per-language coding *agents* (language is a profile under one coding instrument)
+- Treat this stub as a runnable registry — no new processes, no new `/baton:` verbs
+
+## Schema
+
+A future live file (box-private, not this stub) MUST validate against `docs/officer-registry.schema.json`. Required per row: `id`, `role`, `level`, `blocks_labor`. Allowed `id` values are exactly the four above.
