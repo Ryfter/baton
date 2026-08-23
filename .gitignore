@@ -19,3 +19,13 @@ Thumbs.db
 *.log
 scratch/
 .worktrees/
+
+# Third-party / unlicensed material — this repo is PUBLIC.
+# Committing these would republish someone else's work, and git history plus
+# GitHub's caches keep it around even after a later delete.
+# Reference docs and transcripts of other people's talks/videos:
+*.docx
+# Downloaded skill with no author or licence marker (token-saver, 2026-07-28).
+# Root-scoped so tracked zips under dashboard/ are unaffected.
+/token-saver-skill.zip
+/tools/token_saver/
