@@ -523,6 +523,78 @@ function Test-SecurityScanHasSignal {
     return $false
 }
 
+function Get-SecurityInterpretSeverity {
+    param($Interpret)
+    if ($null -eq $Interpret -or -not $Interpret.ok) { return 'none' }
+    $t = [string]$Interpret.text
+    if ($t -match '(?i)\bhigh:') { return 'high' }
+    if ($t -match '(?i)\bmed:') { return 'med' }
+    if ($t -match '(?i)\blow:') { return 'low' }
+    return 'none'
+}
+
+function Test-SecurityInterpretNeedsDeep {
+    param($Interpret)
+    $sev = Get-SecurityInterpretSeverity -Interpret $Interpret
+    return ($sev -in @('med', 'high'))
+}
+
+function Get-SecurityScanQualityOutcome {
+    param($Scan, $Interpret)
+    $sev = Get-SecurityInterpretSeverity -Interpret $Interpret
+    if ($sev -eq 'high') { return 'fail' }
+    if ($sev -in @('med', 'low')) { return 'partial' }
+    if ($Scan -and $Scan.ok -and (Test-SecurityScanHasSignal -Scan $Scan)) { return 'partial' }
+    if ($Scan -and $Scan.ok) { return 'pass' }
+    if ($Scan -and -not $Scan.ok) { return 'fail' }
+    return 'unknown'
+}
+
+function Record-SecurityScanQuality {
+    <# Fold security runs into model-quality.jsonl. Fail-soft. Injectable writer for tests. #>
+    param(
+        $BatchResult,
+        [string]$BatonHome = (Get-OfficerBatonHome),
+        [scriptblock]$Writer
+    )
+    if ($null -eq $BatchResult -or @($BatchResult.results).Count -lt 1) { return @() }
+    $recorded = [System.Collections.Generic.List[object]]::new()
+    $writeFn = $Writer
+    if (-not $writeFn) {
+        $mqLib = Join-Path $PSScriptRoot 'model-quality-lib.ps1'
+        if (-not (Test-Path -LiteralPath $mqLib)) { return @() }
+        try {
+            . $mqLib
+            $writeFn = {
+                param($Provider, $Model, $TaskClass, $Outcome, $EvidenceRef, $Notes)
+                Add-ModelQualityEvent -Provider $Provider -Model $Model -TaskClass $TaskClass `
+                    -Outcome $Outcome -EvidenceRef $EvidenceRef -Notes $Notes -Reviewer 'maestro-security'
+            }
+        } catch { return @() }
+    }
+    foreach ($r in @($BatchResult.results)) {
+        if ($r.skipped) { continue }
+        $phase = if ($r.phase) { [string]$r.phase } else { 'spine' }
+        $outcome = Get-SecurityScanQualityOutcome -Scan $r.scan -Interpret $r.interpret
+        $provider = 'deterministic'
+        $model = 'git+rg'
+        if ($r.interpret -and $r.interpret.provider) {
+            $provider = [string]$r.interpret.provider
+            $model = [string]$r.interpret.provider
+        } elseif ($r.recipe -and $r.recipe.deep) {
+            $provider = Resolve-SecurityFleetProvider -Seat $r.recipe.seat
+            $model = $provider
+        }
+        $evidence = if ($r.report) { [string]$r.report } else { "project=$($r.project)" }
+        $notes = "project=$($r.project); phase=$phase; band=$($r.recipe.band); reason=$($r.reason)"
+        try {
+            $ev = & $writeFn $provider $model "security.$phase" $outcome $evidence $notes
+            if ($ev) { $recorded.Add($ev) }
+        } catch { }
+    }
+    return @($recorded)
+}
+
 function Resolve-SecurityFleetProvider {
     param([string]$Seat)
     $s = ([string]$Seat).ToLowerInvariant()
@@ -769,23 +841,31 @@ function Update-SecurityScale {
         [datetime]$Now = [datetime]::UtcNow,
         [datetime]$Touched,
         [switch]$Clean,
+        [string]$SignalSeverity = '',
+        [switch]$DeepRun,
         [string]$BatonHome = (Get-OfficerBatonHome)
     )
     $scale = Read-SecurityScale -BatonHome $BatonHome
     $rec = [ordered]@{
-        last_run     = (ConvertTo-OfficerUtc -Value $Now).ToString('o')
-        last_touched = $null
-        last_clean   = $null
+        last_run      = (ConvertTo-OfficerUtc -Value $Now).ToString('o')
+        last_touched  = $null
+        last_clean    = $null
+        last_signal   = $null
+        last_deep_run = $null
     }
     if ($scale.projects.Contains($Project)) {
         $prev = $scale.projects[$Project]
         if ($prev.last_touched) { $rec.last_touched = [string]$prev.last_touched }
         if ($prev.last_clean) { $rec.last_clean = [string]$prev.last_clean }
+        if ($prev.last_signal) { $rec.last_signal = [string]$prev.last_signal }
+        if ($prev.last_deep_run) { $rec.last_deep_run = [string]$prev.last_deep_run }
     }
     if ($PSBoundParameters.ContainsKey('Touched')) {
         $rec.last_touched = (ConvertTo-OfficerUtc -Value $Touched).ToString('o')
     }
     if ($Clean) { $rec.last_clean = (ConvertTo-OfficerUtc -Value $Now).ToString('o') }
+    if (-not [string]::IsNullOrWhiteSpace($SignalSeverity)) { $rec.last_signal = $SignalSeverity }
+    if ($DeepRun) { $rec.last_deep_run = (ConvertTo-OfficerUtc -Value $Now).ToString('o') }
     $scale.projects[$Project] = $rec
     Write-SecurityScale -Scale $scale -BatonHome $BatonHome
     return $rec
@@ -908,6 +988,7 @@ function Invoke-SecurityProjectScan {
         skipped   = $false
         reason    = ''
         project   = $Project
+        phase     = if ($Deep) { 'deep' } else { 'spine' }
         recipe    = $recipe
         scan      = $null
         interpret = $null
@@ -943,6 +1024,11 @@ function Invoke-SecurityProjectScan {
     try { $touched = [datetime](& git -C $RepoPath log -1 --format=%cI 2>$null) } catch { }
     $upd = @{ Project = $Project; BatonHome = $BatonHome; Now = $Now }
     if ($touched) { $upd.Touched = $touched }
+    if ($null -ne $interpret) {
+        $sev = Get-SecurityInterpretSeverity -Interpret $interpret
+        if ($sev -ne 'none') { $upd.SignalSeverity = $sev }
+    }
+    if ($Deep) { $upd.DeepRun = $true }
     [void](Update-SecurityScale @upd)
     $dir = Join-Path $BatonHome 'officers/security-runs'
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
@@ -958,18 +1044,21 @@ function Invoke-SecurityProjectScan {
 }
 
 function Invoke-SecurityDueScans {
-    <# Run spine (+ optional interpret) for due projects. Cap per tick. #>
+    <# Run spine (+ optional interpret) for due projects. Cap per tick.
+       Deep Opus pass on excess_capacity when interpret finds med/high signal. #>
     param(
         [datetime]$Now = [datetime]::UtcNow,
         [string]$BatonHome = (Get-OfficerBatonHome),
         [string]$DefaultRepo = '',
         [hashtable]$ProjectRepos = @{},
         [int]$MaxScans = 5,
+        [int]$MaxDeepScans = 1,
         [switch]$SeedFromRegistry,
         [string]$RegistryRoot = '',
         [array]$RegistryProjects = @(),
         [switch]$DoInterpret,
         [switch]$InterpretOnlyOnSignal,
+        [switch]$DeepOnResidue,
         [string]$FleetPath = '',
         $Windows,
         [scriptblock]$InterpretDispatcher
@@ -978,6 +1067,8 @@ function Invoke-SecurityDueScans {
         -RegistryRoot $RegistryRoot -RegistryProjects $RegistryProjects -Windows $Windows
     $results = [System.Collections.Generic.List[object]]::new()
     $n = 0
+    $deepN = 0
+    $residue = ($null -ne $Windows -and $Windows.residue -eq $true)
     foreach ($item in $due) {
         if ($n -ge $MaxScans) { break }
         $proj = [string]$item.project
@@ -991,7 +1082,7 @@ function Invoke-SecurityDueScans {
         }
         if ([string]::IsNullOrWhiteSpace($repo) -or -not (Test-Path -LiteralPath $repo -PathType Container)) {
             $results.Add([ordered]@{
-                ok = $false; skipped = $true; reason = 'no-repo'; project = $proj
+                ok = $false; skipped = $true; reason = 'no-repo'; project = $proj; phase = 'spine'
                 recipe = $item.recipe; scan = $null; interpret = $null; report = $null
             })
             continue
@@ -1001,8 +1092,14 @@ function Invoke-SecurityDueScans {
             -FleetPath $FleetPath -InterpretDispatcher $InterpretDispatcher
         $results.Add($r)
         if (-not $r.skipped) { $n++ }
+        if ($DeepOnResidue -and $residue -and $deepN -lt $MaxDeepScans -and (Test-SecurityInterpretNeedsDeep -Interpret $r.interpret)) {
+            $deep = Invoke-SecurityProjectScan -Project $proj -RepoPath $repo -Now $Now -BatonHome $BatonHome `
+                -Deep -Force -DoInterpret -FleetPath $FleetPath -InterpretDispatcher $InterpretDispatcher
+            $results.Add($deep)
+            $deepN++
+        }
     }
-    return [ordered]@{ scanned = $n; due = @($due).Count; results = @($results) }
+    return [ordered]@{ scanned = $n; deep = $deepN; due = @($due).Count; results = @($results) }
 }
 
 # ---------- VRAM officer ----------

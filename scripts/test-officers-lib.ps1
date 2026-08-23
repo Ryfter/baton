@@ -274,6 +274,30 @@ function Invoke-OfficerBattery {
             -DoInterpret -InterpretOnlyOnSignal `
             -GitLog { param($r,$s) @() } -GitDiff { param($r) '' } -Ripgrep { param($r) @() }
         Check "$tag interpret skipped without signal" ($null -eq $noSig.interpret)
+
+        Check "$tag med interpret needs deep" (Test-SecurityInterpretNeedsDeep -Interpret @{ ok = $true; text = 'med: check auth' })
+        Check "$tag low interpret skips deep" (-not (Test-SecurityInterpretNeedsDeep -Interpret @{ ok = $true; text = 'low: style' }))
+        Check "$tag high outcome is fail" ((Get-SecurityScanQualityOutcome -Scan $scan -Interpret @{ ok = $true; text = 'high: secret in TODO' }) -eq 'fail')
+        $scaleDeepMq = Read-SecurityScale -BatonHome $box
+        $scaleDeepMq.projects['deep-proj'] = [ordered]@{
+            last_touched = '2026-08-23T10:00:00Z'
+            last_run     = '2026-08-22T10:00:00Z'
+            last_clean   = $null
+        }
+        Write-SecurityScale -Scale $scaleDeepMq -BatonHome $box
+        $mqRows = [System.Collections.Generic.List[object]]::new()
+        $batchMq = Invoke-SecurityDueScans -BatonHome $box -DefaultRepo $box -MaxScans 1 -MaxDeepScans 1 -Now $nowS `
+            -ProjectRepos @{ 'deep-proj' = $box } -DoInterpret -DeepOnResidue -Windows @{
+                window_5h_used_pct = 20; window_7d_used_pct = 40; window_5h_hard = $false; residue = $true
+            } -InterpretDispatcher {
+                param($prov, $p) [ordered]@{ stdout = 'med: review auth path'; exit_code = 0 }
+            }
+        [void](Record-SecurityScanQuality -BatchResult $batchMq -BatonHome $box -Writer {
+            param($Provider, $Model, $TaskClass, $Outcome, $EvidenceRef, $Notes)
+            $mqRows.Add([ordered]@{ provider = $Provider; task_class = $TaskClass; outcome = $Outcome })
+        })
+        Check "$tag quality records spine" (@($mqRows | Where-Object { $_.task_class -eq 'security.spine' }).Count -ge 1)
+        Check "$tag deep on residue fires" ($batchMq.deep -eq 1)
     } finally {
         Remove-Item -LiteralPath $box -Recurse -Force -ErrorAction SilentlyContinue
     }
