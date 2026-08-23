@@ -13,7 +13,17 @@ own instruction file). This doc is the source of truth and the anti-drift regist
 | Codex / ChatGPT (codex CLI) | `AGENTS.md` |
 | Gemini / Antigravity (`agy`) | `GEMINI.md` |
 | Grok (`grok` CLI) | `GROK.md` (Grok-specific role); also loads `AGENTS.md` / `CLAUDE.md` via Grok project-rules discovery, and `.grok/rules/*.md` |
-| GitHub Copilot | `.github/copilot-instructions.md` (add when adopted) |
+| GitHub Copilot (`copilot` CLI) | `.github/copilot-instructions.md` — **does not exist yet** (#209). A Copilot session on this repo therefore starts with none of the shared law below. |
+
+**Four GitHub binaries, not one** — this gets collapsed repeatedly, so it is written
+down here rather than re-derived:
+
+| Binary | What it is | Use as |
+|---|---|---|
+| `gh` | GitHub CLI | A **tool** every agent shells out to — PRs, issues, `gh api`, auth. Never a fleet `providers:` row. |
+| `copilot` | Copilot coding **agent** (`@github/copilot`) | The only one of the four that could be a fleet worker. Headless `copilot -p`; speaks ACP. Gated on #188 + #209. |
+| `gh copilot` | Retired `gh` extension (`suggest`/`explain`) | **Do not invoke.** Retired Oct 2025, and it only ever printed a suggested shell command. The seed row naming it is disabled (#188). |
+| `gh models` | `gh models run` — cheap text inference | Optional draft/judge worker (`github-models` row). Not an agent, not Copilot. |
 
 Every agent should also read `docs/next-session.md` (the operating loop) and
 `docs/roadmap.md` (status), and use the shared knowledge base (`Ryfter/grimdex-know`, the
@@ -68,10 +78,20 @@ it — re-copying is how drift starts.
   Plus `agy` CLI quirks: `agy --print "<prompt>"` needs the prompt as the argument
   (≤965 bytes; it rejects stdin); pass `--add-dir <dir>` for context and
   `--dangerously-skip-permissions` to let it edit — large inline prompts hang.
-- **`GROK.md` — Grok = plan once-over peer + second implementer** (decision d080).
-  Claude conducts; Codex + Grok review plans via `plan-review`. Register with
-  `agentic: true` (platform `grok` is outside d078's auto-infer set). Grimdex pointer
-  stanza is maintained by `grimdex wire-project` alongside CLAUDE/AGENTS/GEMINI.
+- **`GROK.md` — Grok = plan once-over peer, in a terminal pane** (decision d080).
+  Claude conducts; Codex + Grok review plans via `plan-review`. The "second
+  implementer" half of d080 is **suspended** — see the box below; Grok cannot
+  implement headlessly, so Codex is the only unattended implementer today. Grimdex
+  pointer stanza is maintained by `grimdex wire-project` alongside
+  CLAUDE/AGENTS/GEMINI.
+
+  Historically this said *"register with `agentic: true`"* (platform `grok` is outside
+  d078's auto-infer set). **That instruction is withdrawn.** `agentic: true` claims the
+  provider has its own filesystem harness; grok does not, headlessly, so the flag turns
+  a hang into a silent no-op inside `/baton:go --execute` (#183). The seed row is
+  `enabled: false` with `agentic` commented out, and grok must not be the substitute in
+  a quota-failover ladder (#201) no matter how much headroom it has — **dispatchability
+  is a capability fact that outranks capacity.**
 
   > **Grok is NOT headless-dispatchable today — do not route work to it.**
   > `grok -p` / `--prompt-file` hang forever: bare `grok` is the interactive TUI and

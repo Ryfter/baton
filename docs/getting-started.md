@@ -12,7 +12,7 @@ After running `pwsh -NoProfile -File scripts\bootstrap.ps1 -Force`, you have:
 
 - **26 slash commands** invokable from any Claude Code session
 - **A live dashboard** at `http://localhost:8765` (start with `python -m dashboard.main` from this repo)
-- **A fleet** of paid + local LLM providers (`claude-cli`, `codex`, `gh-copilot`, `gemini-antigravity`, `ollama-local`, `lm-studio` — confirmed via `/baton:fleet doctor`)
+- **A fleet** of paid + local LLM providers (`claude-cli`, `codex`, `gemini-antigravity`, `ollama-local`, `lm-studio` — confirmed via `/baton:fleet doctor`). Two seed rows ship **disabled** because the commands they name do not work: `gh-copilot` (`gh copilot suggest` was retired Oct 2025 — #188) and `grok-cli` (hangs headlessly — #183/#197).
 - **A knowledge base** at `~/.claude/knowledge/` (universal + per-project layers)
 - **A vector index** at `~/.claude/knowledge/.index/` (semantic search over the KB)
 

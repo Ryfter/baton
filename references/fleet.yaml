@@ -191,31 +191,66 @@ providers:
     stdin: false
     command_template: 'agy --print "{{prompt}}"'
 
-  # grok (xAI CLI) does NOT read stdin: bare `grok -p` errors ("a value is required
-  # for '--single <PROMPT>'"), and inline `grok -p "{{prompt}}"` breaks on the
-  # embedded double quotes of JSON-heavy plan-review prompts. So the prompt rides a
-  # temp file via the {{prompt_file}} transport (grok --prompt-file <path>, proven
-  # quote-safe live 2026-07-10) — quote-safe and 965-byte-safe, no stdin: false veto
-  # needed (a {{prompt_file}} template is never a stdin-promotion candidate).
-  # agentic: true is REQUIRED — platform 'grok' is outside the d078 auto-infer
-  # set {claude, codex, gemini}.
+  # grok (xAI CLI) — DISABLED 2026-08-22. NOT headlessly dispatchable. See #183/#196/#197.
+  #
+  # The template below is preserved as a record of what does NOT work. Bare `grok` is
+  # the interactive TUI; `grok --prompt-file <path>` never returns — it hangs with zero
+  # bytes of output until the caller gives up (one observed hang ran 3,955s, #196). The
+  # 2026-07-10 "proven quote-safe live" note above was a false positive: the probe read
+  # a `head` exit code, not grok's.
+  #
+  # The real headless entry point is `grok agent stdio`, which speaks ACP (JSON-RPC 2.0
+  # over NDJSON) — a different protocol from Baton's `stdio-json`. `initialize` and
+  # `authenticate` both succeed; `session/new` never returns (#197). A command_template
+  # swap therefore cannot fix this; it needs an ACP adapter.
+  #
+  # Until that adapter exists grok is an INTERACTIVE instrument — plan peer, reviewer,
+  # second opinion in a terminal pane — and must never be reachable from a dispatch path
+  # that expects file edits. `agentic: true` is commented out for the same reason: it
+  # claimed a capability grok cannot deliver headlessly, which is a silent-no-op risk in
+  # `/baton:go --execute` (#183).
   - name: grok-cli
     kind: cli
-    enabled: true
+    enabled: false
     cost_tier: paid
     role: finisher
     platform: grok
-    agentic: true
-    command_template: 'grok --prompt-file "{{prompt_file}}"'
-    capabilities: [code-gen, reasoning, plan-review, review]
+    # agentic: true          # DO NOT re-enable before #197 — see note above
+    command_template: 'grok --prompt-file "{{prompt_file}}"'   # hangs; kept as a record
+    capabilities: [reasoning, plan-review, review]
 
+  # gh-copilot — DISABLED 2026-08-22. The command it names no longer exists. See #188.
+  #
+  # `gh copilot suggest` was a `gh` extension, retired October 2025. It also was never
+  # a coding agent: it printed a suggested shell command, so this row could not have
+  # done bulk labor even while the extension lived.
+  #
+  # Four different GitHub binaries get collapsed into this one row. They are not
+  # interchangeable:
+  #   gh          GitHub CLI. A TOOL every pane should shell out to (PRs, issues,
+  #               `gh api`, auth). Never a providers: row.
+  #   copilot     The Copilot coding AGENT (`@github/copilot`). Headless `copilot -p`.
+  #               Speaks ACP. This is the one that could be a fleet worker.
+  #   gh copilot  RETIRED extension (suggest/explain). What this row names. Dead.
+  #   gh models   `gh models run` — cheap text inference. Not an agent, not Copilot.
+  #               Modelled separately as the `github-models` row.
+  #
+  # Promoting `copilot` to a real agentic row is #188, and is gated on #209 (Copilot
+  # auto-loads `.github/copilot-instructions.md`, which this repo does not have, so a
+  # Copilot session starts with none of the shared law). When that row lands it wants
+  # `copilot -p "{{prompt}}" -s --no-ask-user` with a tight `--allow-tool=…` — never
+  # `--allow-all`.
+  #
+  # The row NAME is kept as-is on purpose: `scripts/copilot-credit-lib.ps1` and
+  # `scripts/fleet-usage.ps1` default to the worker string 'gh-copilot' for the d079
+  # credit panel. Renaming is part of #188, not a seed-only edit.
   - name: gh-copilot
     kind: cli
-    enabled: true
+    enabled: false
     cost_tier: paid
     role: bulk
     platform: github
-    command_template: 'gh copilot suggest "{{prompt}}"'
+    command_template: 'gh copilot suggest "{{prompt}}"'   # retired Oct 2025; do not invoke
     # Copilot credit budget (d079) — BOX-PRIVATE: set real values ONLY in your live
     # ~/.baton/fleet.yaml. The allowance/reset-day are per-account.
     # budget: 1500            # monthly Copilot AI-credit allowance (credits; 1 = $0.01)
