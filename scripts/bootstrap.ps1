@@ -88,21 +88,15 @@ function Copy-WithPrompt($src, $dst, $label, [switch]$Force) {
     Write-Ok "$label -> $dst"
 }
 
-# --- Step 1: Verify Octopus is installed ---
-Write-Step "Verifying claude-octopus is installed"
+# --- Step 1: Octopus deprecated (Baton is the sole dispatch spine) ---
+Write-Step "Checking deprecated Octopus plugin"
 $octoCheck = & claude plugin list 2>&1 | Out-String
 if ($octoCheck -match 'octo@nyldn-plugins') {
-    Write-Ok "claude-octopus detected"
+    Write-Warn "octo@nyldn-plugins still installed — overlaps Baton; remove with:"
+    Write-Host "      pwsh -NoProfile -File scripts/uninstall-octopus.ps1"
+    Write-Host "      See docs/octo-to-baton-map.md for /octo:* replacements."
 } else {
-    Write-Warn "claude-octopus not detected. Install with:"
-    Write-Host "      claude plugin marketplace add https://github.com/nyldn/plugins.git"
-    Write-Host "      claude plugin install octo@nyldn-plugins"
-    if ($DryRun) {
-        Write-Warn "continuing dry-run despite missing Octopus (would exit 1 in real run)"
-    } else {
-        Write-Host "      Then re-run this bootstrap."
-        exit 1
-    }
+    Write-Ok "Octopus not installed (expected after 2026-08-23 unification)"
 }
 
 # --- Step 2: Remove legacy deployed hook copies (hooks now ship inside the plugin) ---

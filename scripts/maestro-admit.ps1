@@ -17,6 +17,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'maestro-lib.ps1')
+. (Join-Path $PSScriptRoot 'officers-lib.ps1')
 Import-MaestroEnv | Out-Null
 
 $jobsDir = Get-MaestroJobsDir -BatonHome $BatonHome
@@ -34,13 +35,37 @@ $slots = [Math]::Max(0, $MaxParallel - $runningCount - $admittedCount)
 $usable = @(Get-MaestroUsableInstruments -BatonHome $BatonHome)
 $hasInstrument = $usable.Count -gt 0
 
-$queued = @($records | Where-Object { [string]$_.Job.status -eq 'queued' } | Sort-Object Created)
+# Scheduler re-evaluates queued + waiting-quota + excess_capacity. It never admits;
+# Maestro still makes the admit decision after eligibility.
+$queued = @($records | Where-Object {
+    [string]$_.Job.status -in @('queued', 'waiting-quota', 'excess_capacity')
+} | Sort-Object Created)
 $admitted = @()
 $waiting = @()
 
 foreach ($rec in $queued) {
     $job = $rec.Job
     $proj = [string]$job.project
+
+    $elig = $null
+    try {
+        $elig = Get-SchedulerEligibility -Job $job -BatonHome $BatonHome
+    } catch { $elig = $null }
+    if ($null -ne $elig -and -not [bool]$elig.eligible) {
+        $st = [string]$elig.state
+        if ([string]$job.status -ne $st) {
+            $job.status = $st
+            $job | Add-Member -NotePropertyName status_line -NotePropertyValue ([string]$elig.reason) -Force
+            if ($elig.hint) {
+                $job | Add-Member -NotePropertyName scheduler_hint -NotePropertyValue ([string]$elig.hint) -Force
+            }
+            $job | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $rec.Path -Encoding utf8NoBOM
+            Write-MaestroEvent -Root $jobsDir -JobId ([string]$job.id) -Kind 'scheduler' -Status $st
+        }
+        $waiting += [string]$job.id
+        continue
+    }
+
     if (-not (Test-MaestroProjectAdmittable -Project $proj -Blocks $blocks)) { continue }
     if ($slots -lt 1) { break }
 
@@ -55,6 +80,7 @@ foreach ($rec in $queued) {
 
     $job.status = 'admitted'
     if ($job.PSObject.Properties['status_line']) { $job.PSObject.Properties.Remove('status_line') }
+    if ($job.PSObject.Properties['scheduler_hint']) { $job.PSObject.Properties.Remove('scheduler_hint') }
     $job | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $rec.Path -Encoding utf8NoBOM
     Write-MaestroEvent -Root $jobsDir -JobId ([string]$job.id) -Kind 'admitted' -Status 'admitted'
     $admitted += [string]$job.id

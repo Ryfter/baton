@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "decision": "baton-d133",
+  "officers": [
+    {
+      "id": "scheduler",
+      "role": "Scheduler",
+      "level": "maestro-sidecar",
+      "blocks_labor": "eligibility-only",
+      "job": "Nested 5h vs week/month windows, Fable <=1/h, excess_capacity tags. Does not admit.",
+      "enabled": true
+    },
+    {
+      "id": "efficiency",
+      "role": "Efficiency Officer",
+      "level": "conductor-sidecar",
+      "blocks_labor": "never",
+      "job": "Token/process optimize, prompt reuse, lean language profiles, anti-overengineering.",
+      "enabled": true
+    },
+    {
+      "id": "vram",
+      "role": "VRAM officer",
+      "level": "maestro-adjacent",
+      "blocks_labor": "briefly",
+      "job": "Inventory loaded models; exclusive 1x large vs shared Nx small; serialize; prefer warm; TTL unload.",
+      "enabled": true
+    },
+    {
+      "id": "systems",
+      "role": "Systems agent",
+      "level": "factory-inventory",
+      "blocks_labor": "no",
+      "job": "Catalog GPU/NPU/CPU/RAM/Pi/edge; recommend placement; feed health canary. Discovery is not a mutex.",
+      "enabled": true
+    }
+  ]
+}

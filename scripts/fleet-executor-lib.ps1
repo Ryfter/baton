@@ -14,15 +14,79 @@
 . "$PSScriptRoot/routing-observe-lib.ps1"   # #159 write-on-observe outcome ratings
 . "$PSScriptRoot/diff-apply-lib.ps1"   # d103 parse/apply/context for the diff-apply dispatch branch
 . "$PSScriptRoot/coordination-lib.ps1"   # resource facet: admission control for LOCAL dispatch only
+. "$PSScriptRoot/job-lib.ps1"   # ConvertTo-JobSlug for worktree dir names
+
+function ConvertTo-WorktreeProjectPrefix {
+    <# First seven alphanumeric chars of the project slug (or repo folder name). #>
+    param(
+        [string]$Project = '',
+        [string]$RepoPath = ''
+    )
+    $src = [string]$Project
+    if ([string]::IsNullOrWhiteSpace($src) -and -not [string]::IsNullOrWhiteSpace($RepoPath)) {
+        $src = Split-Path -Leaf $RepoPath
+    }
+    $prefix = ($src.ToLowerInvariant() -replace '[^a-z0-9]', '')
+    if ($prefix.Length -gt 7) { $prefix = $prefix.Substring(0, 7) }
+    if ([string]::IsNullOrWhiteSpace($prefix)) { $prefix = 'repo' }
+    return $prefix
+}
+
+function ConvertTo-WorktreeWhatSlug {
+    <# Kebab slug describing what the worktree is for (goal brief or run id). #>
+    param(
+        [string]$Label = '',
+        [string]$RunId = ''
+    )
+    $what = ''
+    if (-not [string]::IsNullOrWhiteSpace($Label)) {
+        $what = ConvertTo-JobSlug -Brief $Label
+    }
+    if ([string]::IsNullOrWhiteSpace($what) -and -not [string]::IsNullOrWhiteSpace($RunId)) {
+        $what = ($RunId.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+    }
+    if ([string]::IsNullOrWhiteSpace($what)) { $what = 'run' }
+    if ($what.Length -gt 40) { $what = $what.Substring(0, 40).TrimEnd('-') }
+    return $what
+}
+
+function Format-RunWorktreeDirName {
+    <# WT-{project<=7}-{what} — human-scannable worktree folder under .baton-worktrees. #>
+    param(
+        [string]$Project = '',
+        [string]$RepoPath = '',
+        [string]$Label = '',
+        [string]$RunId = ''
+    )
+    $proj = ConvertTo-WorktreeProjectPrefix -Project $Project -RepoPath $RepoPath
+    $what = ConvertTo-WorktreeWhatSlug -Label $Label -RunId $RunId
+    return "WT-$proj-$what"
+}
+
+function Resolve-RunWorktreePath {
+    param(
+        [Parameter(Mandatory)][string]$WtRoot,
+        [Parameter(Mandatory)][string]$DirName,
+        [Parameter(Mandatory)][string]$RunId
+    )
+    $candidate = Join-Path $WtRoot $DirName
+    if (-not (Test-Path -LiteralPath $candidate)) { return $candidate }
+    $tail = ($RunId.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+    if ($tail.Length -gt 16) { $tail = $tail.Substring($tail.Length - 16) }
+    if ([string]::IsNullOrWhiteSpace($tail)) { $tail = 'run' }
+    return (Join-Path $WtRoot "$DirName-$tail")
+}
 
 function New-RunWorktree {
-    <# Throwaway worktree at <repo-parent>/.baton-worktrees/<run-id> on a new branch
+    <# Throwaway worktree at <repo-parent>/.baton-worktrees/WT-<project>-<what> on a new branch
        baton/run-<run-id> off the repo's current HEAD. Returns
-       @{ worktree; branch; base_sha }. Throws with a clear message on any git
+       @{ worktree; branch; base_sha; dir_name }. Throws with a clear message on any git
        failure — callers surface it and exit 2. #>
     param(
         [Parameter(Mandatory)][string]$RepoPath,
-        [Parameter(Mandatory)][string]$RunId
+        [Parameter(Mandatory)][string]$RunId,
+        [string]$Project = '',
+        [string]$Label = ''
     )
     & git -C $RepoPath rev-parse --git-dir 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "execute: '$RepoPath' is not a git repository" }
@@ -34,11 +98,12 @@ function New-RunWorktree {
     $resolvedRepo = (Resolve-Path -LiteralPath $RepoPath).Path
     $wtRoot = Join-Path (Split-Path $resolvedRepo -Parent) '.baton-worktrees'
     New-Item -ItemType Directory -Force -Path $wtRoot | Out-Null
-    $wt = Join-Path $wtRoot $RunId
+    $dirName = Format-RunWorktreeDirName -Project $Project -RepoPath $resolvedRepo -Label $Label -RunId $RunId
+    $wt = Resolve-RunWorktreePath -WtRoot $wtRoot -DirName $dirName -RunId $RunId
     $branch = "baton/run-$RunId"
     $out = & git -C $RepoPath worktree add -b $branch $wt HEAD 2>&1
     if ($LASTEXITCODE -ne 0) { throw "execute: git worktree add failed: $(@($out) -join ' ')" }
-    return @{ worktree = $wt; branch = $branch; base_sha = $base }
+    return @{ worktree = $wt; branch = $branch; base_sha = $base; dir_name = (Split-Path -Leaf $wt) }
 }
 
 function Get-RunDiff {
@@ -843,8 +908,9 @@ function Get-CoordDispatchTtlSec {
 function Resolve-CoordRunContext {
     <# RunId / Project annotations for a claim row. Weight orders nothing in v1, so
        both are annotations: every failure degrades to '' rather than blocking a
-       dispatch. RunId is the run dir's leaf (New-RunWorktree names the worktree after
-       it); Project is the repository the worktree belongs to, via git's common dir. #>
+       dispatch. RunId is the run dir's leaf (branch baton/run-<run-id>); the worktree
+       folder is WT-<project<=7>-<what>. Project is the repository the worktree belongs
+       to, via git's common dir. #>
     param(
         [string]$Worktree = '',
         [string]$RunDir = ''

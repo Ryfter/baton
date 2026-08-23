@@ -83,6 +83,8 @@ app.include_router(build_gauges_router(templates))
 from dashboard.routers.home import build_router as build_home_router
 app.include_router(build_home_router(templates))
 
+from dashboard.routers.dark_factory import build_router as build_dark_factory_router
+app.include_router(build_dark_factory_router(templates))
 
 from dashboard.readers.home_board import read_home_floor, read_home_header
 

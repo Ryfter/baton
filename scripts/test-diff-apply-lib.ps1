@@ -762,11 +762,8 @@ try {
     Assert 'C11 states the minimality rule verbatim' ($prompt10 -match [regex]::Escape('keep each SEARCH section as small as possible while still matching only once'))
 
     # ---------- C30: a concrete-FILE entry that escapes the worktree is skipped ----------
-    #            Directory-prefix entries were containment-checked; entries naming a
-    #            concrete file were not, so '../outer-secret.txt' was read and its
-    #            contents embedded in the model prompt. allowed_paths is
-    #            planner-supplied, so a bad entry must be skipped silently, never
-    #            abort the run.
+    #            Mixed in-scope + outside still succeeds (the outsider is dropped).
+    #            All-outside is the loud fail (C31) — not this case.
     $wt30 = New-FixtureWorktree
     Set-FixtureFile $wt30 'dir/inside.txt' "inside`n" | Out-Null
     $secret30 = Join-Path $applyTmp 'outer-secret.txt'
@@ -782,6 +779,20 @@ try {
     $prompt30 = Build-DiffApplyPrompt -TaskDesc 'edit the inside file' -InputBlock '' `
         -Context $c30 -AllowedPaths $c30Paths -Limits $limits30
     Assert 'C30 outside content absent from the built prompt' ($prompt30 -notmatch 'SUPER-SECRET-OUTSIDE-MARKER')
+
+    # ---------- C31: ALL allowed_paths outside the worktree fail LOUD ----------
+    #            Absolute ~/dev (or parent-escape) lists used to return ok + zero
+    #            files; Ox was still asked to "Read X" and failed as "ambiguous".
+    $wt31 = New-FixtureWorktree
+    Set-FixtureFile $wt31 'dir/inside.txt' "inside`n" | Out-Null
+    $limits31 = Get-DiffApplyLimits -Provider ([ordered]@{})
+    $abs31 = Join-Path $applyTmp 'not-in-worktree.txt'
+    [System.IO.File]::WriteAllText($abs31, "ABS-OUTSIDE`n", [System.Text.UTF8Encoding]::new($false))
+    $c31 = Get-DiffApplyContext -Worktree $wt31 -AllowedPaths @($abs31, '../outer-secret.txt') -Limits $limits31
+    Assert 'C31 ok=false (all-outside is loud)' ($c31.ok -eq $false)
+    Assert 'C31 reason names outside-worktree' ($c31.reason -match 'outside the worktree')
+    Assert 'C31 reason tells planner to use worktree-relative paths' ($c31.reason -match 'worktree-relative')
+    Assert 'C31 no files collected' (@($c31.files).Count -eq 0)
 } catch {
     Write-Host "FAIL  C-section threw: $_" -ForegroundColor Red
     $script:failures++

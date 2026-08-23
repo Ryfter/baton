@@ -114,6 +114,15 @@ function Get-MaestroUsableInstruments {
         if (-not (Test-MaestroInstrumentReady -Name $name)) { continue }
         if (-not $usable.Contains($name)) { [void]$usable.Add($name) }
     }
+    $instLib = Join-Path $PSScriptRoot 'instruments-lib.ps1'
+    if (Test-Path -LiteralPath $instLib) {
+        try {
+            . $instLib
+            foreach ($seat in @(Get-UsableInstrumentSeats -BatonHome $BatonHome)) {
+                if ($seat -and -not $usable.Contains($seat)) { [void]$usable.Add($seat) }
+            }
+        } catch { }
+    }
     return @($usable)
 }
 
@@ -390,6 +399,12 @@ function Invoke-MaestroFireOne {
 
     Update-MaestroJobFile -Path $jobPath -Patch $patch
     Write-MaestroEvent -Root $JobsDir -JobId ([string]$job.id) -Kind 'fired' -Status $patch.status -RunId $patch.run_id -Provider $patch.provider
+    if ([string]$patch.provider -match '(?i)fable') {
+        try {
+            . (Join-Path $PSScriptRoot 'officers-lib.ps1')
+            Record-SchedulerFableFire -BatonHome $BatonHome
+        } catch { }
+    }
 
     return [pscustomobject]@{
         id       = [string]$job.id

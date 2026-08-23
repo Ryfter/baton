@@ -33,6 +33,40 @@ try {
     Check 'VF1c absent verify_profile -> empty' ($vft2.verify_profile -eq '')
     Check 'VF1d absent allowed_paths -> empty' (@($vft2.allowed_paths).Count -eq 0)
 
+    # ---- AP: planner allowed_paths must be worktree-relative (Ox empty-context) ----
+    $apWt = Join-Path ([System.IO.Path]::GetTempPath()) "cond-ap-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Force -Path (Join-Path $apWt 'scripts') | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $apWt 'docs') | Out-Null
+    try {
+        Check 'AP1 relative path stays relative' (
+            (ConvertTo-WorktreeRelativeAllowedPath -Path 'scripts/foo.ps1' -Worktree $apWt) -eq 'scripts/foo.ps1')
+        Check 'AP2 directory prefix keeps trailing slash' (
+            (ConvertTo-WorktreeRelativeAllowedPath -Path 'docs/' -Worktree $apWt) -eq 'docs/')
+        $under = Join-Path $apWt 'scripts/foo.ps1'
+        Check 'AP3 absolute-under-worktree strips prefix' (
+            (ConvertTo-WorktreeRelativeAllowedPath -Path $under -Worktree $apWt) -eq 'scripts/foo.ps1')
+        $homeAbs = Join-Path $HOME 'dev/Baton/scripts/foo.ps1'
+        $fromHome = ConvertTo-WorktreeRelativeAllowedPath -Path $homeAbs -Worktree $apWt -TopLevelDirs @('scripts','docs')
+        Check 'AP4 host ~/dev absolute becomes worktree-relative via top-level dir' ($fromHome -eq 'scripts/foo.ps1')
+        $tilde = ConvertTo-WorktreeRelativeAllowedPath -Path '~/dev/Baton/docs/' -Worktree $apWt -TopLevelDirs @('scripts','docs')
+        Check 'AP5 tilde ~/dev path becomes docs/' ($tilde -eq 'docs/')
+        $outside = ConvertTo-WorktreeRelativeAllowedPath -Path '/tmp/not-this-repo/secret.txt' -Worktree $apWt -TopLevelDirs @('scripts','docs')
+        Check 'AP6 absolute outside with no top-level match returns null' ($null -eq $outside)
+
+        $absPlan = [pscustomobject]@{
+            tasks = @([pscustomobject]@{
+                id = 't1'; allowed_paths = @($under, 'docs/', '/tmp/outside/no-top-level.txt')
+            })
+        }
+        $repaired = Repair-PlanAllowedPaths -Plan $absPlan -RepoPath $apWt
+        $got = @($repaired.tasks[0].allowed_paths)
+        Check 'AP7 repair strips worktree prefix' ($got[0] -eq 'scripts/foo.ps1')
+        Check 'AP8 repair keeps relative directory prefix' ($got[1] -eq 'docs/')
+        Check 'AP9 repair keeps unconvertible absolute for loud fail' ($got[2] -eq '/tmp/outside/no-top-level.txt')
+    } finally {
+        Remove-Item -Recurse -Force $apWt -ErrorAction SilentlyContinue
+    }
+
     # ---- ST1: additive stakes schema normalization + validation (d086 PR-B) ----
     $stakesPlan = ConvertTo-PlanObject -RawStdout '{"tasks":[{"id":"t1","desc":"auth change","stakes":"high","stakes_basis":"security-sensitive authentication change"},{"id":"t2","desc":"legacy task"}]}'
     Check 'ST1a supplied stakes preserved' ($stakesPlan.tasks[0].stakes -eq 'high')
@@ -144,6 +178,9 @@ try {
     )
     Check 'VP1f allowed_paths schema notes * globs are NOT supported on this path' (
         ($pp -match 'globs are NOT supported') -or ($pp -match '\* globs are NOT supported')
+    )
+    Check 'VP1g planner prompt forbids absolute and tilde allowed_paths' (
+        ($pp -match 'worktree-relative') -and ($pp -match '~/dev') -and ($pp -match 'NEVER emit absolute')
     )
 
     # VP2: with a committed .baton/verification.json, evidence lists profile names (hermetic).

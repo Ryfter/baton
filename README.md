@@ -5,9 +5,9 @@
 Baton turns Claude Code into the conductor of a fleet of coding LLMs — paid cloud
 CLIs, free CLIs, and local models on your own machines. You hand each task to the
 right agent (pass the baton), and Baton tracks what they did, what it cost, what
-you decided, and what you learned. Built on
-[claude-octopus](https://github.com/nyldn/claude-octopus) as the dispatch layer
-(recommended companion plugin, not a hard dependency).
+you decided, and what you learned. **One dispatch spine** — fleet, Maestro, gates,
+and the Efficiency Officer (token-saver built in). Octopus is not required; see
+[`docs/agent-stack.md`](docs/agent-stack.md).
 
 **Status:** `v1.15.0` — *the fleet does the labor.* The conductor now farms coding tasks out to
 non-Claude instruments and gets repo-applied results back — with direct `/baton:codex|grok|gemini|agy`
@@ -170,11 +170,13 @@ legible about cost while doing it. Full notes live in [`docs/releases/`](docs/re
 claude plugin marketplace add Ryfter/baton
 claude plugin install baton@ryfter
 
-# 2. (recommended) Install the Octopus dispatch plugin
-claude plugin marketplace add https://github.com/nyldn/plugins.git
-claude plugin install octo@nyldn-plugins
+# 2. Bootstrap from clone (or re-sync after pull)
+pwsh -NoProfile -File scripts\bootstrap.ps1
 
-# 3. (optional) enable cost tracking — add to your PowerShell profile:
+# 3. (optional) remove legacy Octopus if still installed
+pwsh -NoProfile -File scripts\uninstall-octopus.ps1
+
+# 4. (optional) enable cost tracking — add to your PowerShell profile:
 #    . $HOME\.claude\otel-env.ps1
 
 # 4. Start the dashboard
@@ -300,7 +302,6 @@ python -m pytest dashboard kb tools baton_mcp -q
 
 [MIT](LICENSE) © 2026 Kevin Rank.
 
-This is a personal project built on [Claude Code](https://claude.com/claude-code) and
-[claude-octopus](https://github.com/nyldn/claude-octopus). It assumes a Windows + PowerShell 7
-+ Python 3.12+ environment with `gh` and (optionally) Ollama for local models. Provided as-is;
-expect rough edges.
+This is a personal project built on [Claude Code](https://claude.com/claude-code).
+It assumes a Windows + PowerShell 7 + Python 3.12+ environment with `gh` and
+(optionally) Ollama for local models. Provided as-is; expect rough edges.

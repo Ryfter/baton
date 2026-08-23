@@ -326,6 +326,7 @@ roles:
     )
     $twoMerged = Merge-ReviewFindings -Reviews $twoModelReviews
     Check 'G31c two distinct providers on one finding do agree' (@($twoMerged.merged)[0].agreed)
+    Check 'G31d consensus_pct on agreed panel' ($g.consensus_pct -eq 50.0)
     Check 'G32 result shape' ($g.Contains('polish_brief') -and $g.Contains('reviews') -and @($g.reviews).Count -eq 2)
 
     $g2 = Invoke-AcceptanceGate -Artifact 'code' -Task 'do x' -Reviewers @('r1','r3') -Dispatcher $disp

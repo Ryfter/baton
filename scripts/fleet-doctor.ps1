@@ -113,5 +113,9 @@ if ($Json) {
     $rows | Format-Table NAME, STATUS, class, DETAIL -AutoSize | Out-String | Write-Host
     $enabled = @($fleet | Where-Object { $_.enabled -eq $true }).Count
     Write-Host "$enabled enabled provider(s)."
+    try {
+        . (Join-Path $PSScriptRoot 'officers-lib.ps1')
+        foreach ($line in @(Get-OfficersDoctorLines)) { Write-Host $line }
+    } catch { }
 }
 if ($anyBad) { exit 1 } else { exit 0 }

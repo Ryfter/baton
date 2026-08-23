@@ -91,7 +91,9 @@ completion. Stay thin — coordinate, narrate, and let the engine and the fleet 
 - The Conductor never touches the user's checkout directly. Without `--execute` the
   engine only plans, routes, and logs. With `--execute`, agentic instruments (codex,
   agy, claude-cli — `agentic`/platform-eligible providers) edit a throwaway worktree
-  at `<repo-parent>/.baton-worktrees/<run-id>` on branch `baton/run-<run-id>`; the
+  at `<repo-parent>/.baton-worktrees/WT-<project>-<what>` (project = first 7
+  alphanumeric chars of `--project` or the repo folder; what = goal slug) on branch
+  `baton/run-<run-id>`; the
   cumulative diff is written to `<run-dir>/changes.diff` and reviewed by the named
   fail-loud acceptance panel unless `--no-gate` is supplied. After any post-labor
   terminal result, Baton commits unreviewed work to the `baton/run-*` branch and pushes
