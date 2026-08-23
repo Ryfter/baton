@@ -206,6 +206,15 @@ function Invoke-OfficerBattery {
         })
         Check "$tag plan advise never blocks" ($planAdv.blocked -eq $false)
         Check "$tag plan advise cheapens summarize" ($planAdv.plan.tasks[0].est_cost_tier -eq 'free')
+
+        $skipGl = Invoke-SecurityScannerSpine -RepoPath '/Users/kev/Dev/Grimlore'
+        Check "$tag scanner skips grimlore" ($skipGl.ok -eq $false -and $skipGl.reason -eq 'grimlore-skipped')
+        $scan = Invoke-SecurityScannerSpine -RepoPath $box `
+            -GitLog { param($r,$s) @('abc123 fix todo') } `
+            -GitDiff { param($r) 'scripts/officers-lib.ps1 | 2 +-' } `
+            -Ripgrep { param($r) @("$r/foo.ps1:3: TODO secret-looking") }
+        Check "$tag scanner ok from injectors" ($scan.ok -eq $true -and $scan.hit_n -eq 1)
+        Check "$tag scanner keeps log" ($scan.log[0] -match 'abc123')
     } finally {
         Remove-Item -LiteralPath $box -Recurse -Force -ErrorAction SilentlyContinue
     }
