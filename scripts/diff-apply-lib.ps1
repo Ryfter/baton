@@ -680,6 +680,7 @@ function Get-DiffApplyContext {
     $sep = [System.IO.Path]::DirectorySeparatorChar
 
     $collected = [ordered]@{}   # rel path (forward-slash) -> absolute path
+    $skippedOutside = [System.Collections.Generic.List[string]]::new()
 
     foreach ($entry in $entries) {
         $e = [string]$entry
@@ -687,7 +688,9 @@ function Get-DiffApplyContext {
             $dirRel = $e.TrimEnd('\', '/')
             $dirFull = [System.IO.Path]::GetFullPath((Join-Path $Worktree $dirRel))
             if (-not ($dirFull -eq $rootFull -or $dirFull.StartsWith(($rootFull + $sep), [System.StringComparison]::OrdinalIgnoreCase))) {
-                continue   # a directory prefix that resolves outside the worktree — skip, never escape
+                # Outside worktree — do NOT silently proceed with empty context (2026-08-22 Ox empty-prompt failures).
+                $skippedOutside.Add($e)
+                continue
             }
             if (-not (Test-Path -LiteralPath $dirFull -PathType Container)) { continue }
             foreach ($full in (Get-DiffApplyFilesUnder -Dir $dirFull -WorktreeRootFull $rootFull)) {
@@ -701,10 +704,15 @@ function Get-DiffApplyContext {
             # nothing is written. Reuse Test-DiffApplyPathSafe — never a second
             # implementation of containment.
             #
-            # Skip SILENTLY rather than throwing: allowed_paths is planner-supplied,
-            # and one bad entry must not be able to abort a whole run.
+            # Outside-worktree entries are recorded (not silent): an all-outside
+            # allowed_paths list used to yield ok+$empty files, the HTTP model was
+            # asked to "Read X", and every Ox/local diff_apply run failed as
+            # "ambiguous" with no operator signal.
             $safe = Test-DiffApplyPathSafe -Worktree $Worktree -RelPath $e
-            if (-not $safe.ok) { continue }
+            if (-not $safe.ok) {
+                $skippedOutside.Add($e)
+                continue
+            }
             $full = [string]$safe.full
             if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }   # not-yet-created file: not read
             $rel = $full.Substring($rootFull.Length).TrimStart('\', '/').Replace('\', '/')
@@ -715,6 +723,14 @@ function Get-DiffApplyContext {
     $relList = [System.Collections.Generic.List[string]]::new()
     foreach ($k in $collected.Keys) { $relList.Add([string]$k) }
     $relList.Sort([System.StringComparer]::Ordinal)   # deterministic ordering — same task, same prompt
+
+    if ($relList.Count -eq 0 -and $skippedOutside.Count -gt 0) {
+        $sample = ($skippedOutside | Select-Object -First 3) -join ', '
+        $out.ok = $false
+        $out.reason = "diff-apply: all $($skippedOutside.Count) allowed_paths are outside the worktree (e.g. $sample). Planner must use worktree-relative paths; absolute ~/dev paths are dropped for containment and previously caused silent empty-context model calls."
+        $out.file_count = 0
+        return $out
+    }
 
     if ($relList.Count -gt $maxFiles) {
         $out.ok = $false
