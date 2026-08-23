@@ -1,5 +1,6 @@
 # baton CLI verb registry — single source of truth for the Phase-1 dispatcher.
-# Engine/hybrid verbs only (interactive skins like start/init are out of scope).
+# Bare `baton` (no verb) is the front door / Maestro room — see maestro.ps1.
+# Engine/hybrid verbs below are power tools (`baton --help`).
 # Each runner must exist under scripts/ (or a resolved script root).
 verbs:
   - name: go
@@ -42,6 +43,15 @@ verbs:
     class: engine
     runner: fleet-usage.ps1
     json: true
+  - name: quota
+    summary: Claude 5h + Cursor billing-cycle meters (cached under BATON_HOME).
+    class: engine
+    runner: cursor-quota.ps1
+    json: true
+    flag_aliases:
+      --json: -Json
+      --format: -Format
+      --force: -Force
   - name: efficiency
     summary: Efficiency Officer — bounded context select and state delta (token-saver).
     class: engine

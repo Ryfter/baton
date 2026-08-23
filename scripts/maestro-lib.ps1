@@ -2,9 +2,6 @@
 
 . (Join-Path $PSScriptRoot 'maestro-session-lib.ps1')
 
-$script:MaestroUsageLib = Join-Path $PSScriptRoot 'usage-lib.ps1'
-$script:MaestroHardOutStates = @('exhausted', 'cooling_down', 'waiting_for_reset')
-
 $script:MaestroDefaultUsable = @(
     'openrouter-ox-alpha',
     'opencode',
@@ -39,22 +36,6 @@ function Import-MaestroEnv {
             Set-Item -Path "Env:$name" -Value $val
         }
     }
-    return $true
-}
-
-function Test-MaestroInstrumentAvailable {
-    param(
-        [Parameter(Mandatory)][string]$Name,
-        [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' })
-    )
-    if (-not (Test-MaestroInstrumentReady -Name $Name)) { return $false }
-    if (-not (Test-Path -LiteralPath $script:MaestroUsageLib)) { return $true }
-    try {
-        . $script:MaestroUsageLib
-        $usagePath = Join-Path $BatonHome 'usage-journal.jsonl'
-        $st = (Get-WorkerState -Worker $Name -UsagePath $usagePath).state
-        if ($script:MaestroHardOutStates -contains $st) { return $false }
-    } catch { }
     return $true
 }
 
@@ -141,8 +122,17 @@ function Get-MaestroUsableInstruments {
         } catch { }
     }
     foreach ($name in $Prefer) {
-        if (-not (Test-MaestroInstrumentAvailable -Name $name -BatonHome $BatonHome)) { continue }
+        if (-not (Test-MaestroInstrumentReady -Name $name)) { continue }
         if (-not $usable.Contains($name)) { [void]$usable.Add($name) }
+    }
+    $instLib = Join-Path $PSScriptRoot 'instruments-lib.ps1'
+    if (Test-Path -LiteralPath $instLib) {
+        try {
+            . $instLib
+            foreach ($seat in @(Get-UsableInstrumentSeats -BatonHome $BatonHome)) {
+                if ($seat -and -not $usable.Contains($seat)) { [void]$usable.Add($seat) }
+            }
+        } catch { }
     }
     return @($usable)
 }
@@ -213,23 +203,23 @@ function Get-MaestroFireMaxCostTier {
 }
 
 function Get-MaestroConductorSeat {
-    param(
-        [string]$Provider,
-        [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' })
-    )
-    $candidates = [System.Collections.Generic.List[string]]::new()
-    $hint = if ($Provider) { $Provider.Trim() } else { '' }
-    if ($hint) { [void]$candidates.Add($hint) }
-    foreach ($n in $script:MaestroDefaultUsable) {
-        if (-not $candidates.Contains($n)) { [void]$candidates.Add($n) }
-    }
-    foreach ($n in $candidates) {
-        if (-not (Test-MaestroInstrumentAvailable -Name $n -BatonHome $BatonHome)) { continue }
-        $tier = if ($n -in $script:MaestroFreeSeats -or $n -match '^(openrouter|opencode)') { 'free' } else { 'paid' }
+    param([string]$Provider)
+    $name = if ($Provider) { $Provider.Trim() } else { '' }
+    if ($name) {
+        $tier = if ($name -in $script:MaestroFreeSeats -or $name -match '^(openrouter|opencode)') { 'free' } else { 'paid' }
         return [pscustomobject]@{
-            Name     = $n
+            Name     = $name
             CostTier = $tier
-            Ready    = $true
+            Ready    = [bool](Test-MaestroInstrumentReady -Name $name)
+        }
+    }
+    foreach ($n in $script:MaestroFreeSeats) {
+        if (Test-MaestroInstrumentReady -Name $n) {
+            return [pscustomobject]@{
+                Name     = $n
+                CostTier = 'free'
+                Ready    = $true
+            }
         }
     }
     return [pscustomobject]@{
@@ -644,20 +634,6 @@ function Test-MaestroChoiceMatchesProject {
     return $false
 }
 
-function Get-MaestroRunOutcome {
-    param(
-        [string]$BatonHome,
-        [string]$RunId
-    )
-    if ([string]::IsNullOrWhiteSpace($RunId)) { return $null }
-    $report = Join-Path $BatonHome ("runs/{0}/report.md" -f $RunId)
-    if (-not (Test-Path -LiteralPath $report)) { return $null }
-    foreach ($line in (Get-Content -LiteralPath $report -TotalCount 12 -ErrorAction SilentlyContinue)) {
-        if ($line -match '^\*\*Status:\*\*\s*(.+)$') { return $Matches[1].Trim() }
-    }
-    return $null
-}
-
 function Get-MaestroProjectStatus {
     param(
         [string]$BatonHome,
@@ -689,10 +665,7 @@ function Get-MaestroProjectStatus {
         foreach ($j in ($mine | Select-Object -First 8)) {
             $goal = [string]$j.goal
             if ($goal.Length -gt 48) { $goal = $goal.Substring(0, 45) + '...' }
-            $stat = [string]$j.status
-            $outcome = Get-MaestroRunOutcome -BatonHome $BatonHome -RunId ([string]$j.run_id)
-            if ($outcome) { $stat = '{0}/{1}' -f $stat, $outcome }
-            $lines.Add(('    {0,-16} {1,-18} {2}' -f $j.id, $stat, $goal))
+            $lines.Add(('    {0,-16} {1,-12} {2}' -f $j.id, $j.status, $goal))
         }
     }
     $wts = @($Choices | Where-Object {
@@ -1067,67 +1040,6 @@ function Write-MaestroEvent {
     ($row | ConvertTo-Json -Compress) + "`n" | Add-Content -LiteralPath $eventsPath -Encoding utf8NoBOM
 }
 
-function Invoke-MaestroFleetGoFire {
-    param(
-        [Parameter(Mandatory)]$Job,
-        [Parameter(Mandatory)][string]$BatonHome,
-        [Parameter(Mandatory)][string]$FleetGo,
-        [Parameter(Mandatory)][string]$DefaultRepo,
-        [Parameter(Mandatory)][string]$FleetPath
-    )
-    $repoPath = Resolve-MaestroRepoPath -BatonHome $BatonHome -ProjectId ([string]$Job.project) -DefaultRepo $DefaultRepo
-    $stakes = if ($Job.stakes) { [string]$Job.stakes } else { 'standard' }
-    $goalText = Expand-MaestroGoalWithHandoff -Goal ([string]$Job.goal) -JobId ([string]$Job.id) -BatonHome $BatonHome
-    $goArgs = @{
-        Goal        = $goalText
-        RepoPath    = $repoPath
-        FleetPath   = $FleetPath
-        Execute     = $true
-        NoPlanGate  = $true
-        NoVerify    = $true
-        Stakes      = $stakes
-        Json        = $true
-        MaxCostTier = (Get-MaestroFireMaxCostTier -Job $Job)
-    }
-
-    $raw = ''
-    $exit = 0
-    try {
-        $raw = (& pwsh -NoProfile -File $FleetGo @goArgs | Out-String).Trim()
-        $exit = $LASTEXITCODE
-    } catch {
-        $raw = $_.Exception.Message
-        $exit = 1
-    }
-
-    $patch = @{
-        run_id   = $null
-        provider = $null
-        status   = 'done'
-    }
-    if ($raw) {
-        try {
-            $out = $raw | ConvertFrom-Json
-            if ($out.run_id) { $patch.run_id = [string]$out.run_id }
-            $prov = Get-GoProvider -Out $out
-            if ($prov) { $patch.provider = $prov }
-            $patch.status = Resolve-MaestroStatusFromGo -GoStatus ([string]$out.status) -GoWhy ([string]$out.report)
-        } catch {
-            if ($raw -match 'quota|rate.?limit|labor-unavailable|no candidate') {
-                $patch.status = 'waiting-quota'
-            }
-        }
-    } elseif ($exit -ne 0) {
-        if ($raw -match 'quota|rate.?limit|labor-unavailable|no candidate') {
-            $patch.status = 'waiting-quota'
-        }
-    }
-    return [pscustomobject]@{
-        patch = $patch
-        exit  = $exit
-    }
-}
-
 function Invoke-MaestroFireOne {
     param(
         [Parameter(Mandatory)]$Pick,
@@ -1154,10 +1066,8 @@ function Invoke-MaestroFireOne {
         status   = 'done'
     }
     $exit = 0
-    $usedHerdr = $false
 
     if (Test-MaestroUseHerdr -Project $proj) {
-        $usedHerdr = $true
         . (Join-Path $PSScriptRoot 'maestro-herdr.ps1')
         $prevTarget = $env:HERDR_TARGET
         try {
@@ -1176,26 +1086,59 @@ function Invoke-MaestroFireOne {
             if ($null -eq $prevTarget) { Remove-Item Env:\HERDR_TARGET -ErrorAction SilentlyContinue }
             else { $env:HERDR_TARGET = $prevTarget }
         }
-    }
-
-    $herdrBlocked = $usedHerdr -and (
-        $exit -ne 0 -or
-        $patch.status -eq 'waiting-quota' -or
-        [string]$patch.provider -eq 'herdr:error'
-    )
-    if (-not $usedHerdr -or ($herdrBlocked -and $env:HERDR_STRICT -ne '1')) {
-        if ($herdrBlocked) {
-            Write-Verbose 'Herdr seat unavailable — falling back to fleet-go route-around.'
-            $patch = @{ run_id = $null; provider = $null; status = 'done' }
+    } else {
+        $goArgs = @{
+            Goal        = $goalText
+            RepoPath    = $repoPath
+            FleetPath   = $FleetPath
+            Execute     = $true
+            NoPlanGate  = $true
+            NoVerify    = $true
+            Stakes      = $stakes
+            Json        = $true
+            MaxCostTier = (Get-MaestroFireMaxCostTier -Job $job)
         }
-        $fg = Invoke-MaestroFleetGoFire -Job $job -BatonHome $BatonHome -FleetGo $FleetGo `
-            -DefaultRepo $DefaultRepo -FleetPath $FleetPath
-        $patch = $fg.patch
-        $exit = [int]$fg.exit
+
+        $raw = ''
+        try {
+            $raw = (& pwsh -NoProfile -File $FleetGo @goArgs | Out-String).Trim()
+            $exit = $LASTEXITCODE
+        } catch {
+            $raw = $_.Exception.Message
+            $exit = 1
+        }
+
+        if ($raw) {
+            try {
+                $out = $raw | ConvertFrom-Json
+                if ($out.run_id) { $patch.run_id = [string]$out.run_id }
+                $prov = Get-GoProvider -Out $out
+                if ($prov) { $patch.provider = $prov }
+                $patch.status = Resolve-MaestroStatusFromGo -GoStatus ([string]$out.status) -GoWhy ([string]$out.report)
+            } catch {
+                if ($raw -match 'quota|rate.?limit|labor-unavailable|no candidate') {
+                    $patch.status = 'waiting-quota'
+                } else {
+                    $patch.status = 'done'
+                }
+            }
+        } elseif ($exit -ne 0) {
+            if ($raw -match 'quota|rate.?limit|labor-unavailable|no candidate') {
+                $patch.status = 'waiting-quota'
+            } else {
+                $patch.status = 'done'
+            }
+        }
     }
 
     Update-MaestroJobFile -Path $jobPath -Patch $patch
     Write-MaestroEvent -Root $JobsDir -JobId ([string]$job.id) -Kind 'fired' -Status $patch.status -RunId $patch.run_id -Provider $patch.provider
+    if ([string]$patch.provider -match '(?i)fable') {
+        try {
+            . (Join-Path $PSScriptRoot 'officers-lib.ps1')
+            Record-SchedulerFableFire -BatonHome $BatonHome
+        } catch { }
+    }
 
     return [pscustomobject]@{
         id       = [string]$job.id

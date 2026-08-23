@@ -1,6 +1,16 @@
 #!/usr/bin/env sh
 # POSIX entry point — exec the PowerShell dispatcher with full arg passthrough.
 # Works on Linux and macOS when pwsh is on PATH.
+# Resolve this file through a symlink chain so `ln -s repo/baton ~/.local/bin/baton` works.
 set -eu
-dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+src=$0
+while [ -L "$src" ]; do
+  dir=$(CDPATH= cd -- "$(dirname -- "$src")" && pwd)
+  link=$(readlink "$src")
+  case "$link" in
+    /*) src=$link ;;
+    *) src=$dir/$link ;;
+  esac
+done
+dir=$(CDPATH= cd -- "$(dirname -- "$src")" && pwd)
 exec pwsh -NoProfile -File "$dir/scripts/baton.ps1" "$@"

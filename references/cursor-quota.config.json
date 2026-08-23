@@ -1,0 +1,12 @@
+{
+  "cache_ttl_seconds": 300,
+  "api_url": "https://api2.cursor.sh/auth/usage-summary",
+  "display": {
+    "statusline_format": "ansi",
+    "room_format": "detail",
+    "show_auto_api": true,
+    "bar_width": 10,
+    "yellow_pct": 70,
+    "red_pct": 90
+  }
+}

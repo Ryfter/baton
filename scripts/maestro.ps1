@@ -16,7 +16,7 @@ param(
     [string]$Goal,
     [Alias('goal-file')][string]$GoalFile,
     [string]$Provider,
-    [Alias('max-tier')][ValidateSet('local', 'free', 'paid')][string]$MaxCostTier = 'paid',
+    [Alias('max-tier')][ValidateSet('local', 'free', 'paid')][string]$MaxCostTier = 'free',
     [Alias('bin-dir')][string]$BinDir,
     [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }),
     [switch]$Json,
@@ -312,9 +312,7 @@ function Invoke-BatonRoom {
         $room.ScrollIndex = 0
         $job = New-MaestroJob -BatonHome $BatonHome -Project $room.Current -Goal $parsed.Goal `
             -MaxCostTier $MaxCostTier -Source 'cli' -Provider $seat.Name
-        Write-Output ("Queued {0} ({1}) on {2}." -f $job.id, $job.status, $job.project)
-        Write-Output ("Goal: {0}" -f $job.goal)
-        Write-Output 'Maestro watch will admit and fire when a slot opens. Type jobs for the queue, status for worktrees.'
+        Write-Output ("On it. {0} — {1}" -f $job.project, $job.goal)
         Show-BatonInputChrome
     }
 }
@@ -368,10 +366,7 @@ function Invoke-MaestroStatus {
         return
     }
     foreach ($j in $jobs) {
-        $stat = [string]$j.status
-        $outcome = Get-MaestroRunOutcome -BatonHome $BatonHome -RunId ([string]$j.run_id)
-        if ($outcome) { $stat = '{0}/{1}' -f $stat, $outcome }
-        Write-Output ("{0,-16} {1,-18} {2,-14} {3}" -f $j.id, $j.project, $stat, $j.goal)
+        Write-Output ("{0,-16} {1,-18} {2,-14} {3}" -f $j.id, $j.project, $j.status, $j.goal)
     }
 }
 

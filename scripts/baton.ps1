@@ -253,10 +253,11 @@ function Find-BatonClosestVerb {
 
 function Show-BatonHelp {
     param([Parameter(Mandatory)][object[]]$Verbs)
-    Write-Output 'baton — vendor-neutral CLI for the Baton engine'
+    Write-Output 'baton — type `baton` with no arguments to start. You are in Maestro.'
     Write-Output ''
     Write-Output 'Usage:'
-    Write-Output '  baton <verb> [args...]'
+    Write-Output '  baton                  start (plain English, status picks a worktree)'
+    Write-Output '  baton <verb> [args...] power tools'
     Write-Output '  baton --help | -h'
     Write-Output '  baton --version'
     Write-Output '  baton verbs --json'

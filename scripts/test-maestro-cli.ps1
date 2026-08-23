@@ -176,14 +176,6 @@ try {
     Assert 'G16 run rows keep the useful icons' ($card0 -match '🌳' -and $card0 -match '📊')
     Assert 'G17 seat label drops the openrouter- prefix' ((Format-MaestroSeatLabel -Name 'openrouter-ox-alpha') -eq 'ox-alpha')
 
-    $usagePath = Join-Path $root 'usage-journal.jsonl'
-    (@{ ts = '2026-01-01T00:00:00Z'; event = 'lockout'; worker = 'grok-cli'; reason = 'cap'; reset_at = '2030-01-01T00:00:00Z' } | ConvertTo-Json -Compress) |
-        Set-Content -LiteralPath $usagePath -Encoding utf8NoBOM
-    Assert 'RA1 grok lockout is unavailable' (-not (Test-MaestroInstrumentAvailable -Name 'grok-cli' -BatonHome $root))
-    Assert 'RA2 ox-alpha stays available when grok is out' (Test-MaestroInstrumentAvailable -Name 'openrouter-ox-alpha' -BatonHome $root)
-    $seat = Get-MaestroConductorSeat -Provider 'grok-cli' -BatonHome $root
-    Assert 'RA3 seat skips locked-out grok for ox-alpha' ([string]$seat.Name -eq 'openrouter-ox-alpha')
-
     $lonely = "status`nquit" | & pwsh -NoProfile -File $maestro 2>&1 | Out-String
     Assert 'ST1 status without a project asks to pick' ($lonely -match '(?i)pick a project|no project')
     $scoped = "in canvas-toolchain, simplify install`nstatus`nquit" | & pwsh -NoProfile -File $maestro 2>&1 | Out-String
