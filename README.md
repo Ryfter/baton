@@ -33,6 +33,14 @@ claude plugin install baton@ryfter
 Commands surface as `/baton:<command>` — e.g. `/baton:go "ship the feature"`, `/baton:codex "..."`,
 `/baton:route`, `/baton:fleet doctor`, `/baton:usage`.
 
+### CLI
+
+```
+baton
+```
+
+That starts Baton. You are in Maestro. Say a project and what to do. Type `status` to pick a worktree. `quit` leaves. See [docs/maestro-dogfood.md](docs/maestro-dogfood.md).
+
 ---
 
 ## Visual overview

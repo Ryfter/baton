@@ -122,7 +122,7 @@ providers:
     Check 'rec: unregistered specialist'      (@($recs | Where-Object { $_ -match 'UNREGISTERED SPECIALIST.*qwen3-embedding-8b' }).Count -eq 1)
     Check 'rec: offline box noted'            (@($recs | Where-Object { $_ -match 'offline.*ollama-box2' }).Count -eq 1)
     Check 'rec: keep never culled'            (@($recs | Where-Object { $_ -match 'heretic' }).Count -eq 0)
-    Check 'rec: auto sentinel not flagged'    (@($recs | Where-Object { $_ -match 'MISSING PIN.*auto' }).Count -eq 0)
+    Check 'rec: auto sentinel not flagged'    (@($recs | Where-Object { $_ -match 'MISSING DEFAULT MODEL.*auto' }).Count -eq 0)
 
     # --- Missing pin: registry pins a model the box doesn't have ---
     $fleet2 = $fleetYaml.Replace("model_default: 'phi-4'", "model_default: 'phi-9-imaginary'")
@@ -130,7 +130,15 @@ providers:
     Set-Content -Path $fleet2Path -Value $fleet2 -Encoding utf8
     $inv2 = Add-InventoryTags -Inventory (Get-ModelInventory -FleetPath $fleet2Path -Prober $prober) -FleetPath $fleet2Path
     $recs2 = @(Get-InventoryRecommendations -Inventory $inv2 -FleetPath $fleet2Path)
-    Check 'rec: missing pin'     (@($recs2 | Where-Object { $_ -match 'MISSING PIN.*phi-9-imaginary' }).Count -eq 1)
+    Check 'rec: missing default model' (@($recs2 | Where-Object { $_ -match 'MISSING DEFAULT MODEL.*phi-9-imaginary' }).Count -eq 1)
+
+    Check 'ph: 192.0.2.20 is placeholder' (Test-FleetPlaceholderUrl -Url 'http://192.0.2.20:11434')
+    Check 'ph: localhost not placeholder' (-not (Test-FleetPlaceholderUrl -Url 'http://localhost:1234'))
+    $lmBoxTagged = Add-InventoryHostTags -Inventory $inv -LmLinkContext $null -HostMap @{}
+    Check 'host: localhost scope is this-mac' (@($lmBoxTagged.boxes | Where-Object { $_.base_url -eq 'http://localhost:1234' })[0].scope -eq 'this-mac')
+    $brief = @(Get-ModelInventoryDisplayRows -BoxEntry $lmBox)
+    Check 'brief: keeps loaded model' (@($brief | Where-Object { $_.id -eq 'qwen/qwen3-coder-30b' }).Count -eq 1)
+    Check 'brief: drops unregistered catalog noise' (@($brief | Where-Object { $_.id -eq 'llama-twin-a-7b' }).Count -eq 0)
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }

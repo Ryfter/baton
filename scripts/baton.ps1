@@ -253,10 +253,11 @@ function Find-BatonClosestVerb {
 
 function Show-BatonHelp {
     param([Parameter(Mandatory)][object[]]$Verbs)
-    Write-Output 'baton — vendor-neutral CLI for the Baton engine'
+    Write-Output 'baton — type `baton` with no arguments to start. You are in Maestro.'
     Write-Output ''
     Write-Output 'Usage:'
-    Write-Output '  baton <verb> [args...]'
+    Write-Output '  baton                  start (plain English, status picks a worktree)'
+    Write-Output '  baton <verb> [args...] power tools'
     Write-Output '  baton --help | -h'
     Write-Output '  baton --version'
     Write-Output '  baton verbs --json'
@@ -300,8 +301,16 @@ $verbsPath = Join-Path $PSScriptRoot 'verbs.yaml'
 $verbs = @(Read-BatonVerbs -Path $verbsPath)
 
 if ($cliArgs.Count -eq 0) {
-    Show-BatonHelp -Verbs $verbs
-    exit 0
+    # `baton` is the front door — you are in Maestro. --help lists engine verbs.
+    try {
+        $room = Resolve-BatonScript -Name 'maestro.ps1'
+    } catch {
+        [Console]::Error.WriteLine("baton: $($_.Exception.Message)")
+        exit 1
+    }
+    # Same process so a piped line (and the keyboard) reach the room.
+    & $room
+    exit $LASTEXITCODE
 }
 
 $head = [string]$cliArgs[0]

@@ -2,6 +2,14 @@
 
 Queue work, fire, watch, hold. Jobs: `$BATON_HOME/maestro/jobs/mj-*.json` (default `~/.baton/maestro/jobs/`). Events: `events.jsonl` beside them. Spec: [`2026-08-15-maestro-front-door-design.md`](superpowers/specs/2026-08-15-maestro-front-door-design.md).
 
+## Front door
+
+Type `baton`. That is the whole command. You are in Maestro. ↑ cycles the **try typing** chips from the bottom (`projects`, then the line above). `status` is this project's jobs and worktrees. `worktrees` is the full list. `projects` picks a project.
+
+```bash
+baton
+```
+
 ## Fire a job
 
 Write `status: admitted` (oldest `created_at` wins):

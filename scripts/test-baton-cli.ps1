@@ -38,9 +38,11 @@ try {
     Assert 'H2 baton --help lists >= 10 verbs' ($verbLines.Count -ge 10)
     Assert 'H3 baton --help mentions go' ($helpOut -match '\bgo\b')
 
-    $helpOut2 = & pwsh -NoProfile -File $baton 2>&1 | Out-String
+    $helpOut2 = 'quit' | & pwsh -NoProfile -File $baton 2>&1 | Out-String
     Assert 'H4 bare baton exit 0' ($LASTEXITCODE -eq 0)
-    Assert 'H5 bare baton lists verbs' ($helpOut2 -match '\bfleet\b')
+    Assert 'H5 bare baton is the room (not a verb list)' (
+        $helpOut2 -match '(?i)status' -and $helpOut2 -notmatch '(?m)^\s+fleet\s'
+    )
 
     # ------------------------------------------------------------------
     # 2. baton verbs --json — valid JSON, required fields
