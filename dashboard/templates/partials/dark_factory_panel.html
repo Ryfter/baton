@@ -1,23 +1,33 @@
 {# Dark factory Level-4 ops card — Maestro lanes, security cadence, curriculum #}
 <section class="dark-factory-panel" aria-label="Dark factory">
   <header class="dark-factory-panel__head">
-    <h2>Dark factory</h2>
-    <p class="muted dark-factory-panel__tagline">Level 4 — spec in, branches out, you merge.</p>
+    <div>
+      <p class="dark-factory-panel__eyebrow">Level 4</p>
+      <h2>Dark factory</h2>
+      <p class="muted dark-factory-panel__tagline">Spec in · branches out · you merge · Ox Alpha does the labor</p>
+    </div>
+    <span class="seat-badge seat-badge--factory">Ox Alpha</span>
   </header>
 
   <div class="dark-factory-panel__grid">
+    <div class="dark-factory-stat dark-factory-stat--pulse">
+      <span class="dark-factory-stat__n">{{ board.running }}</span>
+      <span class="dark-factory-stat__label">Running now</span>
+      <span class="dark-factory-stat__sub muted">
+        {{ board.queued }} queued · {{ board.admitted }} admitted
+      </span>
+    </div>
+
     <div class="dark-factory-stat">
       <span class="dark-factory-stat__n">{{ board.jobs_total }}</span>
       <span class="dark-factory-stat__label">Maestro jobs</span>
-      <span class="dark-factory-stat__sub muted">
-        {{ board.queued }} queued · {{ board.admitted }} admitted · {{ board.running }} running
-      </span>
+      <span class="dark-factory-stat__sub muted">fleet-wide registry</span>
     </div>
 
     <div class="dark-factory-stat">
       <span class="dark-factory-stat__n">{{ board.security_count }}</span>
       <span class="dark-factory-stat__label">Security due</span>
-      <span class="dark-factory-stat__sub muted">hot/warm/cold cadence</span>
+      <span class="dark-factory-stat__sub muted">hot / warm / cold</span>
     </div>
 
     <div class="dark-factory-stat">
@@ -28,55 +38,58 @@
   </div>
 
   {% if board.lanes %}
-  <p class="dark-factory-panel__lanes muted">
-    Lanes:
-    {% for lane in board.lanes %}
-      <code class="lane-chip">{{ lane }}</code>{% if not loop.last %} · {% endif %}
-    {% endfor %}
-  </p>
-  {% endif %}
-
-  {% if board.dark_factory_jobs %}
-  <div class="dark-factory-panel__jobs">
-    <p class="maestro-working__label">Active dark-factory jobs</p>
-    <ul class="maestro-working__list">
-      {% for j in board.dark_factory_jobs[:5] %}
-      <li>
-        <code>{{ j.id }}</code>
-        · <span class="status-{{ j.status }}">{{ j.status }}</span>
-        · {{ j.project }}
-      </li>
+  <div class="dark-factory-panel__lanes">
+    <span class="maestro-working__label">Priority lanes</span>
+    <div class="lane-row">
+      {% for lane in board.lanes %}
+      <code class="lane-chip">{{ lane }}</code>
       {% endfor %}
-    </ul>
+    </div>
   </div>
   {% endif %}
 
-  {% if board.security_due %}
-  <div class="dark-factory-panel__security">
-    <p class="maestro-working__label">Security sweep queue</p>
-    <ul class="maestro-working__list">
-      {% for row in board.security_due[:4] %}
-      <li>{{ row.project }} · {{ row.heat }} · {{ row.cadence }}</li>
-      {% endfor %}
-    </ul>
-  </div>
-  {% endif %}
+  <div class="dark-factory-panel__columns">
+    {% if board.dark_factory_jobs %}
+    <div class="dark-factory-panel__jobs">
+      <p class="maestro-working__label">Dark-factory jobs</p>
+      <ul class="maestro-working__list">
+        {% for j in board.dark_factory_jobs[:6] %}
+        <li>
+          <code>{{ j.id }}</code>
+          · <span class="status-{{ j.status }}">{{ j.status }}</span>
+          · {{ j.project }}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
 
-  {% if board.curriculum_modules %}
-  <div class="dark-factory-panel__curriculum">
-    <p class="maestro-working__label">Grimdex-edu modules</p>
-    <ul class="maestro-working__list">
-      {% for m in board.curriculum_modules %}
-      <li><code>{{ m.id }}</code> · {{ m.pages }} pages</li>
-      {% endfor %}
-    </ul>
+    {% if board.security_due %}
+    <div class="dark-factory-panel__security">
+      <p class="maestro-working__label">Security sweep</p>
+      <ul class="maestro-working__list">
+        {% for row in board.security_due[:4] %}
+        <li>{{ row.project }} · {{ row.heat }} · {{ row.cadence }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    {% if board.curriculum_modules %}
+    <div class="dark-factory-panel__curriculum">
+      <p class="maestro-working__label">Grimdex-edu</p>
+      <ul class="maestro-working__list">
+        {% for m in board.curriculum_modules %}
+        <li><code>{{ m.id }}</code> · {{ m.pages }} pages</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
   </div>
-  {% endif %}
 
   <p class="dark-factory-panel__hint muted">
-    Seed overnight:
-    <code>pwsh -File scripts/fleet-dark-factory.ps1 -Action night -Fire</code>
-    or
+    <code>pwsh -File scripts/fleet-dark-factory.ps1 -Action broadcast</code>
+    ·
     <code>scripts/dark-factory-night.sh</code>
   </p>
 </section>

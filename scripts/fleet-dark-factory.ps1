@@ -5,7 +5,7 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Position = 0)][ValidateSet('seed', 'status', 'night')][string]$Action = 'seed',
+    [Parameter(Position = 0)][ValidateSet('seed', 'status', 'night', 'broadcast')][string]$Action = 'seed',
     [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }),
     [switch]$Admit,
     [switch]$Fire,
@@ -20,7 +20,11 @@ switch ($Action) {
     'status' {
         $out = Get-DarkFactoryStatus -BatonHome $BatonHome
     }
+    'broadcast' {
+        $out = Invoke-DarkFactoryBroadcast -BatonHome $BatonHome -Admit:$Admit
+    }
     'night' {
+        $null = Invoke-DarkFactoryBroadcast -BatonHome $BatonHome -Admit
         $seed = Invoke-DarkFactorySeed -BatonHome $BatonHome -Admit
         $admitScript = Join-Path $PSScriptRoot 'maestro-admit.ps1'
         & pwsh -NoProfile -File $admitScript -BatonHome $BatonHome | Out-Null
@@ -51,6 +55,9 @@ if ($Json) { $out | ConvertTo-Json -Depth 8 } else {
             if ($out.curriculum.root) {
                 Write-Host "grimdex-edu: shipped=$($out.curriculum.shipped) pending=$($out.curriculum.pending)"
             }
+        }
+        'broadcast' {
+            Write-Host "broadcast: standing=$($out.standing_order)  handoffs=$(@($out.handoffs).Count)  sessions=$(@($out.sessions).Count)"
         }
         'night' {
             Write-Host "dark-factory night: seeded $(@($out.seed.created).Count)  skipped $(@($out.seed.skipped).Count)"

@@ -32,6 +32,17 @@ try {
     $status = Get-DarkFactoryStatus -BatonHome $box
     Check 'status has jobs' ($status.jobs_total -ge 2)
     Check 'status lists lanes' (@($status.lanes).Count -ge 3)
+
+    $ctx = Get-DarkFactoryContextMaintenanceText
+    Check 'context maintenance text mentions handoff' ($ctx -match 'handoff')
+    Check 'context maintenance text mentions Efficiency' ($ctx -match 'Efficiency')
+    $route = Get-DarkFactoryRouteAroundText
+    Check 'route-around text mentions grok' ($route -match '(?i)grok')
+    Check 'route-around text mentions ox-alpha' ($route -match 'openrouter-ox-alpha')
+
+    $broadcast = Invoke-DarkFactoryBroadcast -BatonHome $box
+    Check 'broadcast writes standing order' (Test-Path (Join-Path $box 'overnight/DARK-FACTORY-TONIGHT.md'))
+    Check 'broadcast writes handoffs' (@($broadcast.handoffs).Count -ge 2)
 } finally {
     $env:BATON_HOME = $prevHome
     Remove-Item -Recurse -Force $box -ErrorAction SilentlyContinue

@@ -1,0 +1,45 @@
+{# Command center hero — fleet posture at a glance #}
+<section class="command-hero" aria-label="Command center">
+  <div class="command-hero__brand">
+    <p class="command-hero__eyebrow">Overnight ops</p>
+    <h2 class="command-hero__title">{{ hero.mode }}</h2>
+    <p class="command-hero__sub muted">
+      Primary seat <code>{{ hero.primary_seat }}</code> · Kevin merges branches
+    </p>
+  </div>
+
+  <div class="command-hero__stats">
+    <div class="command-stat command-stat--live">
+      <span class="command-stat__n">{{ hero.jobs_running }}</span>
+      <span class="command-stat__label">Running</span>
+      <span class="command-stat__sub muted">{{ hero.jobs_queued }} queued</span>
+    </div>
+    <div class="command-stat">
+      <span class="command-stat__n">{{ hero.jobs_active }}</span>
+      <span class="command-stat__label">Active jobs</span>
+      <span class="command-stat__sub muted">{{ hero.jobs_total }} total</span>
+    </div>
+    <div class="command-stat command-stat--spend">
+      <span class="command-stat__n">${{ "%.2f"|format(hero.spend_today_usd) }}</span>
+      <span class="command-stat__label">Spend today</span>
+      <span class="command-stat__sub muted">{{ hero.otel_calls }} OTel calls</span>
+    </div>
+    <div class="command-stat">
+      <span class="command-stat__n">{{ hero.curriculum_shipped }}</span>
+      <span class="command-stat__label">Learn pages</span>
+      <span class="command-stat__sub muted">~{{ hero.curriculum_pending }} backlog</span>
+    </div>
+    {% if hero.security_due %}
+    <div class="command-stat command-stat--warn">
+      <span class="command-stat__n">{{ hero.security_due }}</span>
+      <span class="command-stat__label">Security due</span>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="command-hero__actions">
+    <span class="seat-badge" title="Default instrument seat for all projects">Ox Alpha</span>
+    <a class="command-link" href="/projects">Portfolio</a>
+    <a class="command-link" href="{{ hero.mydashboard_url }}/" target="_blank" rel="noopener">MyDashboard ↗</a>
+  </div>
+</section>

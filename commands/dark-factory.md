@@ -34,3 +34,9 @@ Roadmap: `Grimdex-edu/docs/curriculum-roadmap.md`
 - Ox Alpha for labor; no auto-merge to master
 - Worktrees: `WT-<project≤7>-<goal-slug>` under `.baton-worktrees/`
 - Branches: `baton/run-<run-id>` left for human review
+- **Context windows:** maintain aggressively on long runs — handoff-first prompts, Efficiency select/delta before each dispatch, fresh orchestrator per claim, fold completed work to `report-<project>.md`
+
+```powershell
+# Push standing order + handoffs to every active thread
+pwsh -NoProfile -File scripts/fleet-dark-factory.ps1 -Action broadcast -Json
+```

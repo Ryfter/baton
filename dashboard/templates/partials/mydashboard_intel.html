@@ -1,0 +1,40 @@
+{# MyDashboard topic radar — read-only from local SQLite #}
+<section class="mydashboard-intel" aria-label="MyDashboard intel">
+  <header class="mydashboard-intel__head">
+    <div>
+      <p class="mydashboard-intel__eyebrow">Intel radar</p>
+      <h2>MyDashboard</h2>
+    </div>
+    {% if intel.available and intel.url %}
+    <a class="mydashboard-intel__open" href="{{ intel.url }}/?window={{ intel.window }}" target="_blank" rel="noopener">Open board ↗</a>
+    {% endif %}
+  </header>
+
+  {% if intel.available %}
+  <p class="mydashboard-intel__meta muted">
+    {{ intel.counts.topics }} topics · {{ intel.counts.items }} stories · window {{ intel.window }}
+  </p>
+
+  {% if intel.topics %}
+  <ol class="mydashboard-intel__list">
+    {% for t in intel.topics %}
+    <li class="mydashboard-intel__row">
+      <a href="{{ intel.url }}/topics/{{ t.id }}?window={{ intel.window }}" target="_blank" rel="noopener" class="mydashboard-intel__title">{{ t.title }}</a>
+      <span class="mydashboard-intel__metrics" title="viral {{ '%.3f'|format(t.viral_score) }}">
+        <span>V {{ '%.2f'|format(t.viral_score) }}</span>
+        <span>vel {{ '%.2f'|format(t.velocity) }}</span>
+      </span>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty">No scored topics yet — refresh MyDashboard to ingest.</p>
+  {% endif %}
+
+  {% else %}
+  <p class="empty">
+    {% if intel.error %}{{ intel.error }}{% else %}MyDashboard not available{% endif %}
+    {% if intel.root %}<br><span class="muted small">Expected at <code>{{ intel.root }}</code></span>{% endif %}
+  </p>
+  {% endif %}
+</section>

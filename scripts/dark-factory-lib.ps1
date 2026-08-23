@@ -233,3 +233,254 @@ function Get-DarkFactoryStatus {
         lanes          = @(Get-DarkFactoryLanes | ForEach-Object { $_.lane })
     }
 }
+
+function Get-DarkFactoryRouteAroundText {
+    return @'
+## Provider failover — Baton's superpower
+
+When **any** seat is out (Grok quota, Codex lockout, Claude window, etc.):
+
+1. **Do not halt.** Route around automatically — that is why Baton exists.
+2. **Order:** ``openrouter-ox-alpha`` → ``opencode`` → ``codex`` → ``claude-*`` → ``cursor-*`` → local.
+3. Usage journal + ``Select-Capability`` skip exhausted workers; pick the next cheapest eligible seat.
+4. Log which worker was skipped and which seat took the task (handoff + ``report-<project>.md``).
+5. **Never** wait for Kevin to swap models or ask which backup to use.
+
+Grok is secondary muscle only. If Grok is dry, Ox Alpha (or Codex under 40% usage) owns the work.
+'@
+}
+
+function Get-DarkFactoryContextMaintenanceText {
+    return @'
+## Context windows — maintain aggressively (long runs)
+
+Unbounded chat history is a factory failure mode. **Every thread** must keep prompts lean:
+
+1. **Handoff-first:** Treat `~/.baton/maestro/handoffs/<job-id>.md` as authoritative state.
+   Do not assume prior conversation memory survives the next dispatch.
+2. **Before each instrument / fleet-go:** run Efficiency Officer select or delta-packet:
+   `pwsh -File scripts/fleet-efficiency.ps1 -Action select -Request "<claim>" -Root <repo>`
+   Never paste whole trees, full transcripts, or duplicate standing orders.
+3. **After each completed claim:** refresh the handoff (current state, relevant files, done-when),
+   append ≤8 lines to `~/.baton/overnight/report-<project>.md`, then **spawn a fresh orchestrator**
+   for the next claim instead of continuing one bloated thread.
+4. **Parallel = disjoint context:** each worker gets only its `allowed_paths` slice + handoff excerpt.
+   Never fan the same full session dump to multiple orchestrators.
+5. **Rotate early:** if context is heavy, quality drops, or you are re-explaining — new run/worktree
+   beat retrying inside a stuffed window. Ox Alpha is cheap; stale context is not.
+6. Efficiency Officer **never blocks** labor, but skipping context hygiene is a Maestro bug.
+'@
+}
+
+function Get-DarkFactoryStandingOrderText {
+    param([string]$BatonHome = (Get-BatonHome))
+    $eduRoot = Get-DarkFactoryGrimdexEduRoot -BatonHome $BatonHome
+    $curriculum = 'unknown'
+    if ($eduRoot) {
+        $auditScript = Join-Path $eduRoot 'scripts/curriculum-audit.ps1'
+        if (Test-Path -LiteralPath $auditScript) {
+            try {
+                $a = & pwsh -NoProfile -File $auditScript -Json 2>$null | ConvertFrom-Json
+                if ($a) { $curriculum = "shipped=$($a.shipped) backlog=$($a.backlog) pending=$($a.pending)" }
+            } catch { }
+        }
+    }
+    $ctx = Get-DarkFactoryContextMaintenanceText
+    $route = Get-DarkFactoryRouteAroundText
+    return @"
+# Dark factory standing order — $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC
+
+Kevin is offline. **Keep working tonight.** Level 4 dark factory is active.
+
+## Seating (baton-d124) — USE OX ALPHA HEAVILY
+
+- **Primary seat:** ``openrouter-ox-alpha`` (stealth/ox-alpha on OpenRouter) for Conductor,
+  planning, diff_apply, verify loops, research, and writing.
+- **Secondary:** Grok 4.6 agentic when Ox cannot edit; Codex review only if usage < 40%.
+- **Grok out?** Route to Ox Alpha or the next eligible agent — never stop the factory.
+- **Never:** Fable or GPT-5.6 Sol for security/adversarial work.
+- **Never** paste private Grimlore bodies into Ox/OpenRouter prompts.
+
+$route
+
+Fleet path: ``$BatonHome/overnight/fleet.yaml``
+
+$ctx
+
+## Worktree naming
+
+``WT-<project<=7>-<goal-slug>`` under ``.baton-worktrees/``; branch ``baton/run-<run-id>`` for review.
+
+## Priority lanes (queued — admit when slots open)
+
+1. **dashboard** (baton) — command center + Dark Factory panel; keep HTMX polling green.
+2. **baton-spine** (baton) — dark-factory seed/broadcast/night scripts; verbs + docs.
+3. **grimdex-edu-curriculum** — ship Learn pages from ``learn/curriculum-backlog.yaml``
+   ($curriculum). Start **grimdex-harness** module (4 lessons).
+
+Commands:
+- ``pwsh -File scripts/fleet-dark-factory.ps1 -Action broadcast``
+- ``pwsh -File scripts/fleet-dark-factory.ps1 -Action night -Fire``
+- ``~/.baton/overnight/bin/dark-factory-night.sh``
+
+## Rules
+
+- Fan parallel orchestrators; do not serialize projects.
+- Never ask Kevin to spawn conductors.
+- Never auto-merge to master — leave ``baton/run-*`` branches for human review.
+- Efficiency Officer never blocks labor (fail-open) — but **must run** for context select/delta.
+
+Read also: ``~/.baton/overnight/LAYER-SEATING.md``, ``docs/maestro-autoroute.md``
+"@
+}
+
+function Get-DarkFactoryProjectBrief {
+    param(
+        [Parameter(Mandatory)][string]$ProjectId,
+        [string]$BatonHome = (Get-BatonHome)
+    )
+    $eduRoot = Get-DarkFactoryGrimdexEduRoot -BatonHome $BatonHome
+    switch -Regex ($ProjectId) {
+        '^baton' {
+            return @'
+Continue dark factory tonight on Baton:
+- Command center dashboard shipped — keep hero, MyDashboard intel, dark factory panel green.
+- Automation: fleet-dark-factory broadcast/seed/night; maestro-admit queued dark-factory jobs.
+- Officers/instruments wedge: Ox Alpha default seat on all instrument rows.
+- Refresh handoffs after each claim; Efficiency select before every fleet-go --execute.
+Use openrouter-ox-alpha heavily for every labor run.
+'@
+        }
+        '^grimdex-edu' {
+            return @"
+Continue Grimdex-edu Learn curriculum build-out ($eduRoot):
+- Backlog: learn/curriculum-backlog.yaml (15 lessons planned).
+- Audit: scripts/curriculum-audit.ps1 -Json
+- Ship grimdex-harness module first: what-is-grimdex, learn-module-verbosity, student-zone-layout, install-and-bootstrap.
+- Each page: front matter, ## In plain terms, ## Official sources, pass-through links.
+- One lesson batch per fresh orchestrator; handoff between batches.
+Use openrouter-ox-alpha for all writing labor. No course wiki content (D41).
+"@
+        }
+        '^grimdex-know|^grimdex' {
+            return @'
+Grimdex engine / knowledge: capture any Baton officer decisions as Grimdex records when touched.
+Ox Alpha for docs and small scripts. Do not fork student Grimdex installs.
+Handoff + Efficiency select before large doc edits.
+'@
+        }
+        '^grimlore' {
+            return @'
+Grimlore context cards only — no private bodies to Ox. Structure references for Baton agents.
+Keep prompts to roster facts; never paste private card bodies into OpenRouter.
+'@
+        }
+        default {
+            return @"
+Continue this project's highest-value backlog tonight.
+Use openrouter-ox-alpha heavily for planning and labor; Grok only when Ox cannot edit.
+If Grok (or any seat) is out of quota, route to the next eligible agent — never halt.
+Work in WT-<project>-<slug> worktrees; leave baton/run-* branches for Kevin.
+Maintain context aggressively: handoff after each claim, fresh orchestrator per slice.
+"@
+        }
+    }
+}
+
+function Invoke-DarkFactoryBroadcast {
+    <# Push standing order + per-job handoffs into every active Maestro thread. #>
+    param(
+        [string]$BatonHome = (Get-BatonHome),
+        [switch]$Seed,
+        [switch]$Admit
+    )
+    Ensure-DarkFactoryProjectRegistry -BatonHome $BatonHome | Out-Null
+    $orderText = Get-DarkFactoryStandingOrderText -BatonHome $BatonHome
+    $overnight = Join-Path $BatonHome 'overnight'
+    if (-not (Test-Path -LiteralPath $overnight)) { New-Item -ItemType Directory -Force -Path $overnight | Out-Null }
+    $orderPath = Join-Path $overnight 'DARK-FACTORY-TONIGHT.md'
+    Set-Content -LiteralPath $orderPath -Value $orderText -Encoding utf8NoBOM
+    $maestroOrder = Join-Path (Get-MaestroRoot -BatonHome $BatonHome) 'STANDING-ORDER.md'
+    Set-Content -LiteralPath $maestroOrder -Value $orderText -Encoding utf8NoBOM
+
+    $ctxBlock = Get-DarkFactoryContextMaintenanceText
+    $goalNext = Join-Path $overnight 'goal-next.md'
+    @(
+        '# goal-next — dark factory tonight (auto-broadcast)',
+        '',
+        '**Ox Alpha heavily.** Primary seat: ``openrouter-ox-alpha``.',
+        '**Grok out?** Route to Ox or the next eligible agent — never halt the factory.',
+        '',
+        'Kevin is asleep. Continue all active Maestro threads. Do not stop for approval.',
+        '',
+        'Read: ``DARK-FACTORY-TONIGHT.md`` · ``LAYER-SEATING.md`` · ``MAESTRO-PARALLEL.md``',
+        '',
+        $ctxBlock,
+        '',
+        (Get-DarkFactoryProjectBrief -ProjectId 'baton' -BatonHome $BatonHome),
+        ''
+    ) | Set-Content -LiteralPath $goalNext -Encoding utf8NoBOM
+
+    $projDir = Join-Path $BatonHome 'projects'
+    $sessions = @()
+    if (Test-Path -LiteralPath $projDir) {
+        foreach ($pj in Get-ChildItem -LiteralPath $projDir -Directory) {
+            $projId = $pj.Name
+            try {
+                Set-MaestroProjectSession -Project $projId -Provider 'openrouter-ox-alpha' -Kind 'openrouter' -BatonHome $BatonHome | Out-Null
+                [void]$sessions.Add($projId)
+            } catch { }
+        }
+    }
+
+    $jobsDir = Get-MaestroJobsDir -BatonHome $BatonHome
+    $active = @('queued', 'admitted', 'running', 'waiting-quota', 'excess_capacity')
+    $handoffs = [System.Collections.ArrayList]@()
+    $constraints = @(
+        'Aggressive context hygiene: handoff-only prompts; Efficiency select/delta before dispatch;',
+        'fresh orchestrator per claim; fold to report-*.md after each slice.',
+        'Ox Alpha heavily. No merge to master. No private Grimlore to Ox.'
+    ) -join ' '
+    foreach ($rec in @(Get-MaestroJobRecords -JobsDir $jobsDir)) {
+        $j = $rec.Job
+        $st = [string]$j.status
+        if ($active -notcontains $st) { continue }
+        $proj = [string]$j.project
+        $jid = [string]$j.id
+        $brief = Get-DarkFactoryProjectBrief -ProjectId $proj -BatonHome $BatonHome
+        $goalBlock = @"
+$brief
+
+---
+Standing order (all threads):
+$(Get-DarkFactoryStandingOrderText -BatonHome $BatonHome)
+"@
+        $path = Write-MaestroHandoff -JobId $jid -Goal $goalBlock `
+            -CurrentState "Maestro job $jid status=$st project=$proj" `
+            -RelevantFiles "See project folder in ~/.baton/projects/$proj/project.json; handoff is authoritative over chat history." `
+            -Constraints $constraints `
+            -DoneWhen 'Concrete diff in worktree + baton/run-* branch left for Kevin; handoff refreshed for next claim.' `
+            -Checks 'pwsh -File scripts/fleet-efficiency.ps1 -Action select -Request "<next claim>" -Root <repo>; pwsh -File scripts/fleet-dark-factory.ps1 -Action status -Json' `
+            -BatonHome $BatonHome
+        [void]$handoffs.Add([ordered]@{ job_id = $jid; project = $proj; status = $st; handoff = $path })
+    }
+
+    $seedResult = $null
+    if ($Seed) {
+        $seedResult = Invoke-DarkFactorySeed -BatonHome $BatonHome -Admit:$Admit
+    } elseif ($Admit) {
+        $admitScript = Join-Path $PSScriptRoot 'maestro-admit.ps1'
+        if (Test-Path -LiteralPath $admitScript) {
+            & pwsh -NoProfile -File $admitScript -BatonHome $BatonHome | Out-Null
+        }
+    }
+
+    return [ordered]@{
+        standing_order = $orderPath
+        maestro_order  = $maestroOrder
+        goal_next      = $goalNext
+        sessions       = @($sessions)
+        handoffs       = @($handoffs)
+        seed           = $seedResult
+    }
+}

@@ -3,27 +3,30 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}Baton{% endblock %}</title>
-  <!-- Inline favicon — avoids a 404 with zero network/asset cost. -->
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>B</text></svg>">
-  <!-- Vendored locally so the dashboard runs fully offline (no CDN / Google Fonts). -->
+  <title>{% block title %}Baton Command Center{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%233b82f6'/><stop offset='1' stop-color='%23fbbf24'/></linearGradient></defs><rect width='100' height='100' rx='18' fill='%23080b11'/><text x='50' y='68' text-anchor='middle' font-size='52' font-weight='700' fill='url(%23g)'>B</text></svg>">
   <script src="/static/vendor/htmx.min.js"></script>
   <script src="/static/vendor/chart.umd.min.js"></script>
   <script src="/static/maestro-voice.js" defer></script>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-  <header>
-    <h1><a href="/" style="text-decoration:none;color:inherit;">Baton</a></h1>
-    <nav class="topnav">
+<body class="command-body">
+  <div class="ambient-bg" aria-hidden="true"></div>
+  <header class="site-header">
+    <div class="site-header__brand">
+      <h1><a href="/">Baton</a></h1>
+      <span class="site-header__tag">Command center</span>
+    </div>
+    <nav class="topnav" aria-label="Primary">
       <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Home</a>
       <a href="/projects" class="{% if request.url.path.startswith('/projects') %}active{% endif %}">Portfolio</a>
       <a href="/machines" class="{% if request.url.path.startswith('/machines') %}active{% endif %}">Machines</a>
       <a href="/gauges" class="{% if request.url.path.startswith('/gauges') %}active{% endif %}">Gauges</a>
+      <a href="http://127.0.0.1:8765/" target="_blank" rel="noopener" class="topnav-external">MyDashboard ↗</a>
     </nav>
     <span class="server-time">{{ server_time }}</span>
   </header>
-  <main>
+  <main class="command-main">
     {% block content %}{% endblock %}
   </main>
 </body>

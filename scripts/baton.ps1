@@ -300,8 +300,16 @@ $verbsPath = Join-Path $PSScriptRoot 'verbs.yaml'
 $verbs = @(Read-BatonVerbs -Path $verbsPath)
 
 if ($cliArgs.Count -eq 0) {
-    Show-BatonHelp -Verbs $verbs
-    exit 0
+    # `baton` is the front door — you are in Maestro. --help lists engine verbs.
+    try {
+        $room = Resolve-BatonScript -Name 'maestro.ps1'
+    } catch {
+        [Console]::Error.WriteLine("baton: $($_.Exception.Message)")
+        exit 1
+    }
+    # Same process so a piped line (and the keyboard) reach the room.
+    & $room
+    exit $LASTEXITCODE
 }
 
 $head = [string]$cliArgs[0]

@@ -57,6 +57,23 @@ body {
   line-height: 1.5;
 }
 
+.command-body {
+  position: relative;
+  isolation: isolate;
+}
+
+.ambient-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 80% 50% at 10% -10%, rgba(59, 130, 246, 0.14), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 90% 0%, rgba(251, 191, 36, 0.1), transparent 50%),
+    radial-gradient(ellipse 50% 35% at 50% 100%, rgba(90, 212, 160, 0.06), transparent 45%),
+    var(--bg-primary);
+}
+
 /* Scrollbar Styling */
 ::-webkit-scrollbar {
   width: 8px;
@@ -91,6 +108,26 @@ header {
   top: 0;
   z-index: 100;
   box-shadow: var(--shadow-sm);
+}
+
+.site-header {
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.site-header__brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65rem;
+}
+
+.site-header__tag {
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #fbbf24;
+  opacity: 0.9;
 }
 
 header h1 {
@@ -146,12 +183,18 @@ header h1 a:hover {
   border-color: rgba(59, 130, 246, 0.3);
 }
 
-main {
+.topnav-external {
+  border-color: rgba(90, 212, 160, 0.25) !important;
+  color: #86efac !important;
+}
+
+main,
+.command-main {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1.5rem;
   padding: 2rem;
-  max-width: 1400px;
+  max-width: 1480px;
   margin: 0 auto;
 }
 
@@ -172,6 +215,23 @@ main {
 
 .card:hover {
   border-color: var(--border-color-hover);
+}
+
+.card--hero {
+  padding: 0;
+  border-color: rgba(255, 255, 255, 0.1);
+  background: linear-gradient(165deg, rgba(22, 28, 42, 0.96), rgba(12, 16, 24, 0.98));
+  box-shadow: var(--shadow-md);
+}
+
+.card--hero > .dark-factory-panel,
+.card--hero > .mydashboard-intel {
+  padding: 1.35rem 1.45rem;
+}
+
+.card--flat {
+  background: rgba(15, 19, 26, 0.65);
+  border-style: dashed;
 }
 
 .card h2 {
@@ -2147,5 +2207,309 @@ input:focus-visible,
 }
 .dark-factory-panel__hint { font-size: 0.75rem; margin-top: 0.85rem; margin-bottom: 0; }
 @media (max-width: 720px) {
-  .dark-factory-panel__grid { grid-template-columns: 1fr; }
+  .dark-factory-panel__grid { grid-template-columns: 1fr 1fr; }
+}
+
+/* ── Command hero ───────────────────────────────────────────── */
+.command-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr) auto;
+  gap: 1.25rem 1.5rem;
+  align-items: center;
+  padding: 1.35rem 1.5rem;
+  border-radius: var(--radius);
+  border: 1px solid rgba(251, 191, 36, 0.22);
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.07), rgba(59, 130, 246, 0.06));
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.command-hero__eyebrow,
+.dark-factory-panel__eyebrow,
+.mydashboard-intel__eyebrow {
+  margin: 0 0 0.2rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #fbbf24;
+}
+
+.command-hero__title {
+  margin: 0;
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.command-hero__sub {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+}
+
+.command-hero__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.65rem;
+}
+
+.command-stat {
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.command-stat--live {
+  border-color: rgba(74, 222, 128, 0.35);
+  background: rgba(74, 222, 128, 0.06);
+}
+
+.command-stat--spend .command-stat__n {
+  color: #6ee7b7;
+}
+
+.command-stat--warn {
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.command-stat__n {
+  display: block;
+  font-size: 1.55rem;
+  font-weight: 750;
+  font-family: var(--font-mono);
+  line-height: 1.05;
+  color: var(--text-primary);
+}
+
+.command-stat__label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-top: 0.15rem;
+}
+
+.command-stat__sub {
+  display: block;
+  font-size: 0.68rem;
+  margin-top: 0.2rem;
+}
+
+.command-hero__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.seat-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.65rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #fde68a;
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.seat-badge--factory {
+  color: #fcd34d;
+}
+
+.command-link {
+  font-size: 0.82rem;
+  color: #93c5fd;
+  text-decoration: none;
+}
+
+.command-link:hover {
+  text-decoration: underline;
+}
+
+/* ── Ops hero row ───────────────────────────────────────────── */
+.ops-hero-row {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 1.25rem;
+  align-items: stretch;
+}
+
+@media (max-width: 1024px) {
+  .command-hero {
+    grid-template-columns: 1fr;
+  }
+  .command-hero__actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .ops-hero-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── MyDashboard intel panel ────────────────────────────────── */
+.mydashboard-intel__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.mydashboard-intel__head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #86efac;
+}
+
+.mydashboard-intel__eyebrow {
+  color: #5ad4a0;
+}
+
+.mydashboard-intel__open {
+  font-size: 0.78rem;
+  color: #7eb6ff;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.mydashboard-intel__meta {
+  margin: 0 0 0.75rem;
+  font-size: 0.78rem;
+}
+
+.mydashboard-intel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.mydashboard-intel__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.45rem 0.55rem;
+  border-radius: 6px;
+  background: rgba(90, 212, 160, 0.04);
+  border: 1px solid rgba(90, 212, 160, 0.1);
+}
+
+.mydashboard-intel__title {
+  color: #e8ecf4;
+  text-decoration: none;
+  font-size: 0.84rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mydashboard-intel__title:hover {
+  color: #7eb6ff;
+  text-decoration: underline;
+}
+
+.mydashboard-intel__metrics {
+  display: flex;
+  gap: 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: #5ad4a0;
+  white-space: nowrap;
+}
+
+.mydashboard-card {
+  border-color: rgba(90, 212, 160, 0.18);
+}
+
+/* ── Analytics fold ─────────────────────────────────────────── */
+.analytics-fold {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 0.35rem 1rem 1rem;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.analytics-fold__summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  padding: 0.75rem 0;
+  list-style: none;
+}
+
+.analytics-fold__summary::-webkit-details-marker {
+  display: none;
+}
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
+}
+
+@media (max-width: 900px) {
+  .analytics-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Dark factory panel enhancements */
+.dark-factory-panel__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.dark-factory-panel__head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.dark-factory-panel__tagline {
+  margin: 0.25rem 0 0;
+  font-size: 0.78rem;
+}
+
+.dark-factory-stat--pulse .dark-factory-stat__n {
+  color: #4ade80;
+}
+
+.dark-factory-panel__columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.85rem;
+  margin-top: 0.75rem;
+}
+
+.lane-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+
+.dark-factory-panel__grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 900px) {
+  .dark-factory-panel__grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }

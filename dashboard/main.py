@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from dashboard.paths import baton_home
+from dashboard.readers.command_hero import read_command_hero
 from dashboard.readers.stats import compute_stats
 from dashboard.readers.ensembles import read_ensembles
 from dashboard.routers.api import router as api_router
@@ -87,6 +88,8 @@ from dashboard.routers.dark_factory import build_router as build_dark_factory_ro
 app.include_router(build_dark_factory_router(templates))
 
 from dashboard.readers.home_board import read_home_floor, read_home_header
+from dashboard.routers.mydashboard import build_router as build_mydashboard_router
+app.include_router(build_mydashboard_router(templates))
 
 
 def _ctx(request: Request) -> dict:
@@ -116,6 +119,13 @@ async def index(request: Request) -> HTMLResponse:
         baton_home=home, journal_path=journal, jobs_root=jobs, runs_root=runs,
     )
     return templates.TemplateResponse(request, "index.html", ctx)
+
+
+@app.get("/partials/command-hero", response_class=HTMLResponse)
+async def partial_command_hero(request: Request) -> HTMLResponse:
+    ctx = _ctx(request)
+    ctx["hero"] = read_command_hero(app.state.baton_home, JOURNAL_PATH)
+    return templates.TemplateResponse(request, "partials/command_hero.html", ctx)
 
 
 @app.get("/partials/spend", response_class=HTMLResponse)
