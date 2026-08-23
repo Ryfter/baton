@@ -52,6 +52,6 @@ Code, not chat agents:
 | Scheduler | `scripts/officers-lib.ps1` `Get-SchedulerEligibility` | `scripts/maestro-admit.ps1` (re-evaluates queued / waiting-quota / excess_capacity) |
 | Efficiency | `Invoke-EfficiencyAdvise` | `Invoke-TaskViaFleet` (fail-open, never blocks) |
 | VRAM | `Request-VramClaim` | local `cost_tier` labor — deny → failover |
-| Systems | `Get-SystemsInventory` / `Get-SystemsPlacementAdvice` | `fleet-doctor` text footer; `$BATON_HOME/systems/inventory.json` |
+| Systems | `Get-SystemsInventory` / `Get-SystemsPlacementAdvice` | `fleet-doctor` text footer; `$BATON_HOME/systems/inventory.json`. GPU GB from nvidia-smi or Apple unified memory; loaded models from LM Studio `/api/v1/models`. |
 
 Language profiles (lean): `references/coding-profiles/`. Tests: `scripts/test-officers-lib.ps1` (battery ×5).

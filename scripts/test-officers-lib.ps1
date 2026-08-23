@@ -13,6 +13,7 @@ function Check($n, $c) {
 function Invoke-OfficerBattery {
     param([int]$Pass)
     $tag = "p$Pass"
+    $env:BATON_OFFICERS_NOPROBE = '1'
 
     $reg = Get-OfficerRegistry
     $vr = Test-OfficerRegistry -Registry $reg
@@ -144,6 +145,28 @@ function Invoke-OfficerBattery {
         Check "$tag inventory persisted" ((Test-Path -LiteralPath $path) -and ((Get-Content $path -Raw) -match 'gpu_gb'))
         $lines = Get-OfficersDoctorLines -BatonHome $box
         Check "$tag doctor lines mention officers" (($lines -join "`n") -match 'officers: registry=ok')
+
+        $lmsJson = '{"models":[{"key":"google/gemma-4-e2b","size_bytes":5954405243,"format":"gguf","loaded_instances":[{"id":"google/gemma-4-e2b","remaining_ttl_seconds":100}]},{"key":"qwen/qwen3-coder-30b","size_bytes":25104903500,"format":"gguf","loaded_instances":[{"id":"qwen/qwen3-coder-30b","remaining_ttl_seconds":200}]},{"key":"idle-7b","size_bytes":4000000000,"loaded_instances":[]}]}'
+        $parsed = @(ConvertFrom-OfficerLmStudioModels -RawJson $lmsJson)
+        Check "$tag lms parser only loaded" ($parsed.Count -eq 2 -and $parsed[0].id -eq 'google/gemma-4-e2b')
+        Check "$tag lms size_gb rounded" ($parsed[0].size_gb -eq 5.55)
+        $gpuStub = { [ordered]@{ gpu_gb = 24; gpu_used_gb = $null; gpu_name = 'Apple M4'; npu = $true; source = 'apple-unified' } }
+        $lmsStub = { param($url) $lmsJson }
+        $liveInv = Get-SystemsInventory -GpuProber $gpuStub -LmsProber $lmsStub
+        Check "$tag live inventory gpu_gb 24" ($liveInv.gpu_gb -eq 24 -and $liveInv.npu -eq $true)
+        Check "$tag live inventory source apple-unified" ($liveInv.gpu_source -eq 'apple-unified')
+        Check "$tag live inventory sees two loaded" ($liveInv.loaded_ids.Count -eq 2 -and $liveInv.loaded_ids -contains 'qwen/qwen3-coder-30b')
+        $livePlace = Get-SystemsPlacementAdvice -Kind codegen -Inventory $liveInv
+        Check "$tag codegen uses unified 24GB as gpu" ($livePlace.target -eq 'gpu' -and $livePlace.reason -match 'unified')
+        $liveStt = Get-SystemsPlacementAdvice -Kind stt -Inventory $liveInv
+        Check "$tag apple ANE is npu for STT" ($liveStt.target -eq 'npu')
+        $deadLms = Get-OfficerLmStudioSnapshot -BaseUrl 'http://127.0.0.1:1' -Prober { throw 'refused' }
+        Check "$tag lms down is fail-soft" ($deadLms.ok -eq $false -and @($deadLms.loaded).Count -eq 0)
+        $vramLive = Get-VramInventory -HostKey 'gpu-a' -BatonHome $box -Now $now -IsPidAlive $alive -LmsProber $lmsStub
+        Check "$tag vram inventory lists LMS loaded" ($vramLive.loaded_ids -contains 'google/gemma-4-e2b')
+        $docLive = Get-OfficersDoctorLines -BatonHome $box -SystemsInventory $liveInv -VramInventory $vramLive
+        Check "$tag doctor names loaded 30b" (($docLive -join "`n") -match 'qwen/qwen3-coder-30b')
+        Check "$tag doctor names gpu source" (($docLive -join "`n") -match 'source=apple-unified')
     } finally {
         Remove-Item -LiteralPath $box -Recurse -Force -ErrorAction SilentlyContinue
     }

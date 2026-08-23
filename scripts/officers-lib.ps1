@@ -544,22 +544,147 @@ function Release-VramClaim {
     return $false
 }
 
+function Test-OfficerNoProbe {
+    return [string]$env:BATON_OFFICERS_NOPROBE -in @('1', 'true', 'TRUE', 'yes')
+}
+
+function ConvertFrom-OfficerLmStudioModels {
+    <# Loaded rows from LM Studio native GET /api/v1/models (or v0 /api/v0/models).
+       size_bytes is on-disk GGUF size, not a VRAM occupancy meter. #>
+    param([Parameter(Mandatory)][string]$RawJson)
+    $o = $RawJson | ConvertFrom-Json -ErrorAction Stop
+    $list = if ($null -ne $o.models) { @($o.models) } else { @($o.data) }
+    $loaded = [System.Collections.Generic.List[object]]::new()
+    foreach ($m in $list) {
+        $id = if ($m.key) { [string]$m.key } elseif ($m.id) { [string]$m.id } else { '' }
+        $inst = @()
+        if ($null -ne $m.loaded_instances) { $inst = @($m.loaded_instances) }
+        $isLoaded = ($inst.Count -gt 0) -or ([string]$m.state -eq 'loaded')
+        if (-not $isLoaded) { continue }
+        $bytes = $null
+        if ($m.size_bytes) { $bytes = [long]$m.size_bytes }
+        $ttl = $null
+        if ($inst.Count -gt 0 -and $null -ne $inst[0].remaining_ttl_seconds) {
+            $ttl = [int]$inst[0].remaining_ttl_seconds
+        }
+        $loaded.Add([ordered]@{
+            id         = $id
+            size_bytes = $bytes
+            size_gb    = $(if ($null -ne $bytes) { [math]::Round($bytes / 1GB, 2) } else { $null })
+            ttl_s      = $ttl
+            format     = $(if ($m.format) { [string]$m.format } elseif ($m.compatibility_type) { [string]$m.compatibility_type } else { '' })
+        })
+    }
+    return @($loaded)
+}
+
+function Get-OfficerLmStudioSnapshot {
+    <# Fail-soft probe of one LM Studio (or OpenAI-compat) base URL. #>
+    param(
+        [string]$BaseUrl = 'http://localhost:1234',
+        [scriptblock]$Prober,
+        [int]$TimeoutSec = 3
+    )
+    $empty = [ordered]@{ ok = $false; reason = ''; loaded = @(); loaded_disk_gb = $null; base_url = $BaseUrl }
+    if ((Test-OfficerNoProbe) -and -not $Prober) { $empty.reason = 'noprobe'; return $empty }
+    if ([string]::IsNullOrWhiteSpace($BaseUrl)) { $empty.reason = 'no-url'; return $empty }
+    $url = $BaseUrl.TrimEnd('/') + '/api/v1/models'
+    try {
+        $raw = $null
+        if ($Prober) {
+            $raw = [string](& $Prober $url)
+        } else {
+            $raw = [string](Invoke-WebRequest -Uri $url -TimeoutSec $TimeoutSec -UseBasicParsing).Content
+        }
+        if ([string]::IsNullOrWhiteSpace($raw)) { $empty.reason = 'empty-body'; return $empty }
+        $rows = @(ConvertFrom-OfficerLmStudioModels -RawJson $raw)
+        $disk = [double]0
+        foreach ($r in $rows) {
+            if ($null -ne $r.size_gb) { $disk += [double]$r.size_gb }
+        }
+        return [ordered]@{
+            ok             = $true
+            reason         = 'ok'
+            loaded         = $rows
+            loaded_disk_gb = $(if ($null -ne $disk) { [math]::Round([double]$disk, 2) } else { $null })
+            base_url       = $BaseUrl
+        }
+    } catch {
+        $empty.reason = $_.Exception.Message
+        return $empty
+    }
+}
+
+function Get-HostGpuFacts {
+    <# nvidia-smi when present; else Apple unified memory (ANE = NPU). Injectable. #>
+    param([scriptblock]$Prober)
+    if ($Prober) { return & $Prober }
+    $out = [ordered]@{
+        gpu_gb      = $null
+        gpu_used_gb = $null
+        gpu_name    = $null
+        npu         = $false
+        source      = 'none'
+    }
+    $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+    if ($smi) {
+        try {
+            $line = & nvidia-smi --query-gpu=memory.total,memory.used,name --format=csv,noheader,nounits 2>$null |
+                Select-Object -First 1
+            if ($line) {
+                $parts = @($line -split ',' | ForEach-Object { $_.Trim() })
+                if ($parts.Count -ge 2) {
+                    $out.gpu_gb = [math]::Round(([double]$parts[0]) / 1024.0, 1)
+                    $out.gpu_used_gb = [math]::Round(([double]$parts[1]) / 1024.0, 1)
+                    if ($parts.Count -ge 3) { $out.gpu_name = $parts[2] }
+                    $out.source = 'nvidia-smi'
+                    return $out
+                }
+            }
+        } catch { }
+    }
+    if ($IsMacOS -or [string][Environment]::OSVersion.Platform -eq 'Unix') {
+        try {
+            $brand = [string](& sysctl -n machdep.cpu.brand_string 2>$null)
+            $bytes = [string](& sysctl -n hw.memsize 2>$null)
+            if ($brand -match 'Apple M') {
+                $out.npu = $true
+                $out.gpu_name = $brand.Trim()
+                $out.source = 'apple-unified'
+                if ($bytes -match '^\d+$') {
+                    $out.gpu_gb = [math]::Round(([double]$bytes) / 1GB, 1)
+                }
+                return $out
+            }
+        } catch { }
+    }
+    return $out
+}
+
 function Get-VramInventory {
     param(
         [string]$HostKey = 'local',
         [string]$BatonHome = (Get-OfficerBatonHome),
         [datetime]$Now = [datetime]::UtcNow,
-        [scriptblock]$IsPidAlive
+        [scriptblock]$IsPidAlive,
+        [string]$LmStudioUrl = 'http://localhost:1234',
+        [scriptblock]$LmsProber
     )
     $live = @(Read-VramLiveClaims -HostKey $HostKey -BatonHome $BatonHome -Now $Now -IsPidAlive $IsPidAlive)
+    $lms = Get-OfficerLmStudioSnapshot -BaseUrl $LmStudioUrl -Prober $LmsProber
+    $loadedIds = @($lms.loaded | ForEach-Object { [string]$_.id } | Where-Object { $_ })
     return [ordered]@{
-        host      = (ConvertTo-OfficerFsKey $HostKey)
-        count     = $live.Count
-        exclusive = @($live | Where-Object { $_.profile -eq 'exclusive-large' }).Count
-        shared    = @($live | Where-Object { $_.profile -eq 'shared-small' }).Count
-        models    = @($live | ForEach-Object { [string]$_.model } | Where-Object { $_ } | Select-Object -Unique)
-        claims    = $live
-        officer   = 'vram'
+        host           = (ConvertTo-OfficerFsKey $HostKey)
+        count          = $live.Count
+        exclusive      = @($live | Where-Object { $_.profile -eq 'exclusive-large' }).Count
+        shared         = @($live | Where-Object { $_.profile -eq 'shared-small' }).Count
+        models         = @($live | ForEach-Object { [string]$_.model } | Where-Object { $_ } | Select-Object -Unique)
+        claims         = $live
+        loaded         = @($lms.loaded)
+        loaded_ids     = $loadedIds
+        loaded_disk_gb = $lms.loaded_disk_gb
+        lms_ok         = [bool]$lms.ok
+        officer        = 'vram'
     }
 }
 
@@ -575,7 +700,13 @@ function Resolve-VramProfileForProvider {
 # ---------- Systems agent ----------
 
 function Get-SystemsInventory {
-    param($Facts)
+    param(
+        $Facts,
+        [scriptblock]$GpuProber,
+        [scriptblock]$LmsProber,
+        [string]$LmStudioUrl = 'http://localhost:1234',
+        [switch]$NoProbe
+    )
     if ($null -ne $Facts) {
         $inv = [ordered]@{}
         foreach ($k in @($Facts.Keys)) { $inv[$k] = $Facts[$k] }
@@ -585,15 +716,32 @@ function Get-SystemsInventory {
     }
     $ramMb = $null
     try { $ramMb = [int]([math]::Round([gc]::GetTotalMemory($false) / 1MB, 0)) } catch { }
+    $gpu = [ordered]@{ gpu_gb = $null; gpu_used_gb = $null; gpu_name = $null; npu = $false; source = 'none' }
+    $lms = [ordered]@{ ok = $false; loaded = @(); loaded_disk_gb = $null }
+    $allowProbe = -not $NoProbe
+    if ($allowProbe -and ($GpuProber -or -not (Test-OfficerNoProbe))) {
+        $gpu = Get-HostGpuFacts -Prober $GpuProber
+    }
+    if ($allowProbe -and ($LmsProber -or -not (Test-OfficerNoProbe))) {
+        $lms = Get-OfficerLmStudioSnapshot -BaseUrl $LmStudioUrl -Prober $LmsProber
+    }
+    $loadedIds = @($lms.loaded | ForEach-Object { [string]$_.id } | Where-Object { $_ })
     return [ordered]@{
-        ts         = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
-        os         = [string][Environment]::OSVersion.Platform
-        cpu_count  = [int][Environment]::ProcessorCount
-        working_mb = $ramMb
-        gpu_gb     = $null
-        npu        = $false
-        officer    = 'systems'
-        source     = 'runtime-probe'
+        ts             = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+        os             = [string][Environment]::OSVersion.Platform
+        cpu_count      = [int][Environment]::ProcessorCount
+        working_mb     = $ramMb
+        gpu_gb         = $gpu.gpu_gb
+        gpu_used_gb    = $gpu.gpu_used_gb
+        gpu_name       = $gpu.gpu_name
+        gpu_source     = $gpu.source
+        npu            = [bool]$gpu.npu
+        loaded         = @($lms.loaded)
+        loaded_ids     = $loadedIds
+        loaded_disk_gb = $lms.loaded_disk_gb
+        lms_ok         = [bool]$lms.ok
+        officer        = 'systems'
+        source         = $(if ($gpu.source -and $gpu.source -ne 'none') { [string]$gpu.source } else { 'runtime-probe' })
     }
 }
 
@@ -619,8 +767,17 @@ function Get-SystemsPlacementAdvice {
             else { $place.target = 'cpu'; $place.reason = 'no NPU declared — STT on CPU' }
         }
         'codegen' {
-            if ($gpu -ge 16) { $place.target = 'gpu'; $place.reason = "GPU ${gpu}GB enough for local codegen" }
-            else { $place.target = 'cloud'; $place.reason = 'local GPU too small or unknown — prefer Ox/cloud for codegen' }
+            $src = [string]$Inventory.gpu_source
+            $loadedN = @($Inventory.loaded_ids).Count
+            if ($gpu -ge 16) {
+                $place.target = 'gpu'
+                $how = if ($src -eq 'apple-unified') { 'unified' } else { 'GPU' }
+                $place.reason = "$how ${gpu}GB enough for local codegen"
+                if ($loadedN -gt 0) { $place.reason += " (LMS serving $loadedN)" }
+            } else {
+                $place.target = 'cloud'
+                $place.reason = 'local GPU too small or unknown — prefer Ox/cloud for codegen'
+            }
         }
         'embed' {
             if ($gpu -ge 4 -and $gpu -lt 16) { $place.target = 'gpu-small'; $place.reason = 'small GPU for embeddings' }
@@ -648,15 +805,22 @@ function Save-SystemsInventory {
 }
 
 function Get-OfficersDoctorLines {
-    param([string]$BatonHome = (Get-OfficerBatonHome))
-    $inv = Get-SystemsInventory
-    $vram = Get-VramInventory -BatonHome $BatonHome
+    param(
+        [string]$BatonHome = (Get-OfficerBatonHome),
+        $SystemsInventory,
+        $VramInventory
+    )
+    $inv = if ($null -ne $SystemsInventory) { $SystemsInventory } else { Get-SystemsInventory }
+    $vram = if ($null -ne $VramInventory) { $VramInventory } else { Get-VramInventory -BatonHome $BatonHome }
     $sched = Read-SchedulerState -BatonHome $BatonHome
     $reg = Test-OfficerRegistry
+    $loaded = @($inv.loaded_ids)
+    if ($loaded.Count -lt 1) { $loaded = @($vram.loaded_ids) }
     $lines = [System.Collections.Generic.List[string]]::new()
     [void]$lines.Add("officers: registry=$(if ($reg.ok) { 'ok' } else { 'bad:' + $reg.reason })")
-    [void]$lines.Add("systems: os=$($inv.os) cpu=$($inv.cpu_count) npu=$($inv.npu) gpu_gb=$($inv.gpu_gb)")
-    [void]$lines.Add("vram: host=$($vram.host) live=$($vram.count) exclusive=$($vram.exclusive) shared=$($vram.shared)")
+    [void]$lines.Add("systems: os=$($inv.os) cpu=$($inv.cpu_count) npu=$($inv.npu) gpu_gb=$($inv.gpu_gb) source=$($inv.gpu_source)")
+    $loadStr = if ($loaded.Count) { $loaded -join ',' } else { '-' }
+    [void]$lines.Add("vram: host=$($vram.host) live=$($vram.count) exclusive=$($vram.exclusive) shared=$($vram.shared) loaded=$loadStr disk_gb=$($vram.loaded_disk_gb)")
     [void]$lines.Add("scheduler: last_fable=$($sched.last_fable_at)")
     return @($lines)
 }
