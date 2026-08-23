@@ -242,6 +242,38 @@ function Invoke-OfficerBattery {
             -ProjectRepos @{ 'due-proj' = $box }
         Check "$tag due batch caps scans" ($batch.scanned -le 2)
         Check "$tag due batch reports results" (@($batch.results).Count -ge 1)
+
+        $coldHeld = Get-SecurityRecipe -Project 'old' -Record $coldRec -Now $nowS -Windows @{
+            window_5h_used_pct = 100; window_7d_used_pct = 40; window_5h_hard = $true; residue = $false
+        }
+        Check "$tag cold held without residue" ($coldHeld.due_by_cadence -eq $true -and $coldHeld.due -eq $false -and $coldHeld.held_reason -match 'excess_capacity')
+        $coldGo = Get-SecurityRecipe -Project 'old' -Record $coldRec -Now $nowS -Windows @{
+            window_5h_used_pct = 20; window_7d_used_pct = 40; window_5h_hard = $false; residue = $true
+        }
+        Check "$tag cold runs on residue" ($coldGo.due -eq $true)
+
+        $seedDue = Get-SecurityDueProjects -Now $nowS -BatonHome $box -RegistryProjects @(
+            [ordered]@{ id = 'never-scanned'; folder = $box }
+        )
+        Check "$tag registry seed never-scanned due" (@($seedDue | Where-Object { $_.project -eq 'never-scanned' }).Count -eq 1)
+
+        $prompt = Format-SecurityInterpretPrompt -Project 'baton' -Scan $scan
+        Check "$tag interpret prompt cites project" ($prompt -match 'baton' -and $prompt -match 'abc123')
+        $interp = Invoke-SecurityInterpret -Project 'baton' -Scan $scan -Recipe $hotDue -Dispatcher {
+            param($prov, $p) [ordered]@{ stdout = 'high: TODO hit may hide secret'; exit_code = 0 }
+        }
+        Check "$tag interpret via injector" ($interp.ok -eq $true -and $interp.text -match 'high:')
+        Check "$tag opus maps to cursor-opus" ((Resolve-SecurityFleetProvider -Seat 'opus') -eq 'cursor-opus')
+        $withIx = Invoke-SecurityProjectScan -Project 'due-proj' -RepoPath $box -Now $nowS -BatonHome $box -Force `
+            -DoInterpret -GitLog { param($r,$s) @('ix1') } -GitDiff { param($r) 'a | 1 +' } `
+            -Ripgrep { param($r) @("$r/x:1: TODO") } -InterpretDispatcher {
+                param($prov, $p) [ordered]@{ stdout = 'med: review TODO'; exit_code = 0 }
+            }
+        Check "$tag scan stores interpret" ($withIx.interpret.ok -eq $true -and (Test-Path -LiteralPath $withIx.report))
+        $noSig = Invoke-SecurityProjectScan -Project 'due-proj' -RepoPath $box -Now $nowS -BatonHome $box -Force `
+            -DoInterpret -InterpretOnlyOnSignal `
+            -GitLog { param($r,$s) @() } -GitDiff { param($r) '' } -Ripgrep { param($r) @() }
+        Check "$tag interpret skipped without signal" ($null -eq $noSig.interpret)
     } finally {
         Remove-Item -LiteralPath $box -Recurse -Force -ErrorAction SilentlyContinue
     }

@@ -514,6 +514,111 @@ function Test-SecurityDue {
     }
 }
 
+function Test-SecurityScanHasSignal {
+    param($Scan)
+    if ($null -eq $Scan) { return $false }
+    if ([int]$Scan.hit_n -gt 0) { return $true }
+    if (@($Scan.log).Count -gt 0) { return $true }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Scan.diff)) { return $true }
+    return $false
+}
+
+function Resolve-SecurityFleetProvider {
+    param([string]$Seat)
+    $s = ([string]$Seat).ToLowerInvariant()
+    if ($s -match 'opus') { return 'cursor-opus' }
+    if ($s -eq 'local') { return 'lm-studio' }
+    if ($s -match 'ox-alpha') { return 'openrouter-ox-alpha' }
+    if ($s -match 'openrouter') { return 'openrouter-ox-alpha' }
+    return 'openrouter-ox-alpha'
+}
+
+function Format-SecurityInterpretPrompt {
+    <# Capped scanner output only. Never includes Grimlore or private context. #>
+    param(
+        [Parameter(Mandatory)][string]$Project,
+        $Scan,
+        [int]$MaxBytes = 10000
+    )
+    $lines = [System.Collections.Generic.List[string]]::new()
+    [void]$lines.Add("Security researcher interpret pass for project: $Project")
+    [void]$lines.Add('Review the deterministic scanner output below. Flag secrets, risky diffs, supply-chain smells, and TODO/FIXME that look like latent vulns.')
+    [void]$lines.Add('Output: bullet findings with severity (low|med|high), then one-line overall risk. No speculation beyond the evidence shown.')
+    [void]$lines.Add('')
+    [void]$lines.Add('## recent commits')
+    foreach ($l in @($Scan.log)) { [void]$lines.Add([string]$l) }
+    [void]$lines.Add('')
+    [void]$lines.Add('## diff stat')
+    [void]$lines.Add([string]$Scan.diff)
+    [void]$lines.Add('')
+    [void]$lines.Add('## TODO/FIXME/XXX hits')
+    foreach ($h in @($Scan.hits)) { [void]$lines.Add([string]$h) }
+    $text = ($lines -join "`n")
+    if ([Text.Encoding]::UTF8.GetByteCount($text) -gt $MaxBytes) {
+        $text = $text.Substring(0, [Math]::Min($text.Length, $MaxBytes))
+    }
+    return $text
+}
+
+function Invoke-SecurityInterpret {
+    <# LM interprets spine output. Injectable dispatcher for hermetic tests. Fail-soft live. #>
+    param(
+        [Parameter(Mandatory)][string]$Project,
+        $Scan,
+        $Recipe,
+        [string]$FleetPath = '',
+        [scriptblock]$Dispatcher
+    )
+    $out = [ordered]@{
+        ok       = $false
+        skipped  = $false
+        reason   = ''
+        text     = ''
+        provider = $null
+        officer  = 'security-researcher'
+    }
+    if ($null -eq $Scan -or -not $Scan.ok) {
+        $out.skipped = $true
+        $out.reason = 'no-scan'
+        return $out
+    }
+    if (Test-SecuritySeatForbidden -Seat $Recipe.seat) {
+        $out.skipped = $true
+        $out.reason = 'forbidden-seat'
+        return $out
+    }
+    $provider = Resolve-SecurityFleetProvider -Seat $Recipe.seat
+    $prompt = Format-SecurityInterpretPrompt -Project $Project -Scan $Scan
+    try {
+        if ($Dispatcher) {
+            $r = & $Dispatcher $provider $prompt
+            $out.text = [string]$r.stdout
+            $out.provider = $provider
+            $out.ok = -not [string]::IsNullOrWhiteSpace($out.text)
+            $out.reason = if ($out.ok) { 'interpreted' } else { 'empty-response' }
+            return $out
+        }
+        $fleetLib = Join-Path $PSScriptRoot 'fleet-lib.ps1'
+        if (-not (Test-Path -LiteralPath $fleetLib)) {
+            $out.skipped = $true
+            $out.reason = 'no-fleet-lib'
+            return $out
+        }
+        . $fleetLib
+        if ([string]::IsNullOrWhiteSpace($FleetPath)) {
+            $FleetPath = Join-Path (Get-OfficerBatonHome) 'overnight/fleet.yaml'
+        }
+        $r = Invoke-Fleet -Name $provider -Prompt $prompt -Path $FleetPath -NoJournal -NoUsageJournal
+        $out.text = [string]$r.stdout
+        $out.provider = $provider
+        $out.ok = -not [string]::IsNullOrWhiteSpace($out.text)
+        $out.reason = if ($out.ok) { 'interpreted' } else { 'empty-response' }
+    } catch {
+        $out.reason = $_.Exception.Message
+    }
+    return $out
+}
+
 function Get-SecuritySeat {
     param(
         [Parameter(Mandatory)][string]$Band,
@@ -530,20 +635,32 @@ function Get-SecuritySeat {
 
 function Get-SecurityRecipe {
     <# Sliding-scale recipe. Scanners are the deterministic spine; LM interprets.
-       Never seats Fable/Sol. Never pastes Grimlore into Ox. #>
+       Never seats Fable/Sol. Never pastes Grimlore into Ox. Cold band runs only
+       on excess_capacity (scheduler residue). #>
     param(
         [Parameter(Mandatory)][string]$Project,
         $Record,
         [datetime]$Now = [datetime]::UtcNow,
         [switch]$Deep,
-        [string]$BatonHome = (Get-OfficerBatonHome)
+        [string]$BatonHome = (Get-OfficerBatonHome),
+        $Windows
     )
     if ($null -eq $Record) {
         $scale = Read-SecurityScale -BatonHome $BatonHome
         if ($scale.projects.Contains($Project)) { $Record = $scale.projects[$Project] }
     }
     $band = Get-SecurityBand -Record $Record -Now $Now
-    $due = Test-SecurityDue -Band $band -Record $Record -Now $Now
+    $dueByCadence = Test-SecurityDue -Band $band -Record $Record -Now $Now
+    $requiresExcess = ($band -eq 'cold')
+    $due = $dueByCadence
+    $heldReason = ''
+    if ($requiresExcess -and $dueByCadence) {
+        $win = Get-SchedulerWindowSnapshot -BatonHome $BatonHome -Now $Now -Override $Windows
+        if ($win.residue -ne $true) {
+            $due = $false
+            $heldReason = 'excess_capacity: cold band needs scheduler residue'
+        }
+    }
     $seat = Get-SecuritySeat -Band $band -Deep:$Deep
     if (Test-SecuritySeatForbidden -Seat $seat) { $seat = 'openrouter-ox-alpha' }
     $cadence = switch ($band) {
@@ -553,20 +670,23 @@ function Get-SecurityRecipe {
         default { 'nightly' }
     }
     return [ordered]@{
-        project        = $Project
-        band           = $band
-        due            = [bool]$due
-        cadence        = $cadence
-        seat           = $seat
-        deep           = [bool]$Deep
-        deny_seats     = @('fable', 'sol', 'gpt-5.6-sol')
-        grimlore_to_ox = $false
-        scanners       = @(
+        project                  = $Project
+        band                     = $band
+        due                      = [bool]$due
+        due_by_cadence           = [bool]$dueByCadence
+        requires_excess_capacity = [bool]$requiresExcess
+        held_reason              = $heldReason
+        cadence                  = $cadence
+        seat                     = $seat
+        deep                     = [bool]$Deep
+        deny_seats               = @('fable', 'sol', 'gpt-5.6-sol')
+        grimlore_to_ox           = $false
+        scanners                 = @(
             'git log --since=last-run --oneline'
             'git diff --stat'
             'rg -n "TODO|FIXME|XXX" --glob !node_modules'
         )
-        officer        = 'security-researcher'
+        officer                  = 'security-researcher'
     }
 }
 
@@ -671,30 +791,71 @@ function Update-SecurityScale {
     return $rec
 }
 
+function Get-SecurityRegistryProjects {
+    <# Active + inactive registry rows. Skips Grimlore. Fail-soft when registry unavailable. #>
+    param(
+        [string]$BatonHome = (Get-OfficerBatonHome),
+        [string]$Root = $(if ($env:BATON_PROJECTS_ROOT) { $env:BATON_PROJECTS_ROOT } else { '' })
+    )
+    $lib = Join-Path $PSScriptRoot 'registry-lib.ps1'
+    if (-not (Test-Path -LiteralPath $lib)) { return @() }
+    try {
+        . $lib
+        $roster = Get-ProjectRoster -BatonHome $BatonHome -Root $(if ($Root) { $Root } else { (Get-ProjectHomeRoot) })
+        $out = [System.Collections.Generic.List[object]]::new()
+        foreach ($p in @($roster.active) + @($roster.inactive)) {
+            $folder = [string]$p.folder
+            if ($folder -match '(?i)grimlore') { continue }
+            [void]$out.Add([ordered]@{ id = [string]$p.id; folder = $folder; slug = [string]$p.slug })
+        }
+        return @($out)
+    } catch { return @() }
+}
+
 function Get-SecurityDueProjects {
     <# Projects whose sliding-scale recipe says scan is due. Read-only. #>
     param(
         [datetime]$Now = [datetime]::UtcNow,
         [string]$BatonHome = (Get-OfficerBatonHome),
-        [hashtable]$ExtraRecords = @{}
+        [hashtable]$ExtraRecords = @{},
+        [switch]$SeedFromRegistry,
+        [string]$RegistryRoot = '',
+        [array]$RegistryProjects = @(),
+        $Windows
     )
     $scale = Read-SecurityScale -BatonHome $BatonHome
     $due = [System.Collections.Generic.List[object]]::new()
     $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($k in @($scale.projects.Keys)) {
         $rec = $scale.projects[$k]
-        $recipe = Get-SecurityRecipe -Project $k -Record $rec -Now $Now -BatonHome $BatonHome
+        $recipe = Get-SecurityRecipe -Project $k -Record $rec -Now $Now -BatonHome $BatonHome -Windows $Windows
         if ($recipe.due) {
-            $due.Add([ordered]@{ project = $k; recipe = $recipe; record = $rec })
+            $due.Add([ordered]@{ project = $k; recipe = $recipe; record = $rec; folder = $null })
             [void]$seen.Add($k)
         }
     }
     foreach ($k in @($ExtraRecords.Keys)) {
         if ($seen.Contains($k)) { continue }
         $rec = $ExtraRecords[$k]
-        $recipe = Get-SecurityRecipe -Project $k -Record $rec -Now $Now -BatonHome $BatonHome
+        $recipe = Get-SecurityRecipe -Project $k -Record $rec -Now $Now -BatonHome $BatonHome -Windows $Windows
         if ($recipe.due) {
-            $due.Add([ordered]@{ project = $k; recipe = $recipe; record = $rec })
+            $due.Add([ordered]@{ project = $k; recipe = $recipe; record = $rec; folder = $null })
+            [void]$seen.Add($k)
+        }
+    }
+    $candidates = @($RegistryProjects)
+    if ($SeedFromRegistry -and @($candidates).Count -eq 0) {
+        $candidates = Get-SecurityRegistryProjects -BatonHome $BatonHome -Root $RegistryRoot
+    }
+    foreach ($p in @($candidates)) {
+        $id = [string]$p.id
+        if ([string]::IsNullOrWhiteSpace($id) -or $seen.Contains($id)) { continue }
+        $recipe = Get-SecurityRecipe -Project $id -Record $null -Now $Now -BatonHome $BatonHome -Windows $Windows
+        if ($recipe.due) {
+            $due.Add([ordered]@{
+                project = $id; recipe = $recipe; record = $null; folder = [string]$p.folder
+            })
+            [void]$seen.Add($id)
         }
     }
     return @($due)
@@ -721,34 +882,40 @@ function Resolve-SecurityRepoPath {
 }
 
 function Invoke-SecurityProjectScan {
-    <# Recipe + deterministic spine + scale update + run JSON. LM interpretation is a later wedge. #>
+    <# Recipe + deterministic spine + optional LM interpret + scale update + run JSON. #>
     param(
         [Parameter(Mandatory)][string]$Project,
         [Parameter(Mandatory)][string]$RepoPath,
         [datetime]$Now = [datetime]::UtcNow,
         [switch]$Deep,
         [switch]$Force,
+        [switch]$DoInterpret,
+        [switch]$InterpretOnlyOnSignal,
+        [string]$FleetPath = '',
         [string]$BatonHome = (Get-OfficerBatonHome),
+        $Windows,
         [scriptblock]$GitLog,
         [scriptblock]$GitDiff,
-        [scriptblock]$Ripgrep
+        [scriptblock]$Ripgrep,
+        [scriptblock]$InterpretDispatcher
     )
     $scale = Read-SecurityScale -BatonHome $BatonHome
     $rec = $null
     if ($scale.projects.Contains($Project)) { $rec = $scale.projects[$Project] }
-    $recipe = Get-SecurityRecipe -Project $Project -Record $rec -Now $Now -Deep:$Deep -BatonHome $BatonHome
+    $recipe = Get-SecurityRecipe -Project $Project -Record $rec -Now $Now -Deep:$Deep -BatonHome $BatonHome -Windows $Windows
     $out = [ordered]@{
-        ok      = $false
-        skipped = $false
-        reason  = ''
-        project = $Project
-        recipe  = $recipe
-        scan    = $null
-        report  = $null
+        ok        = $false
+        skipped   = $false
+        reason    = ''
+        project   = $Project
+        recipe    = $recipe
+        scan      = $null
+        interpret = $null
+        report    = $null
     }
     if (-not $Force -and -not $recipe.due) {
         $out.skipped = $true
-        $out.reason = 'not-due'
+        $out.reason = if ($recipe.held_reason) { $recipe.held_reason } else { 'not-due' }
         return $out
     }
     if (Test-SecuritySeatForbidden -Seat $recipe.seat) {
@@ -762,6 +929,16 @@ function Invoke-SecurityProjectScan {
         $out.reason = 'grimlore-skipped'
         return $out
     }
+    $interpret = $null
+    $wantInterpret = $DoInterpret -and $scan.ok
+    if ($wantInterpret -and $InterpretOnlyOnSignal -and -not (Test-SecurityScanHasSignal -Scan $scan)) {
+        $wantInterpret = $false
+    }
+    if ($wantInterpret) {
+        $interpret = Invoke-SecurityInterpret -Project $Project -Scan $scan -Recipe $recipe `
+            -FleetPath $FleetPath -Dispatcher $InterpretDispatcher
+        $out.interpret = $interpret
+    }
     $touched = $null
     try { $touched = [datetime](& git -C $RepoPath log -1 --format=%cI 2>$null) } catch { }
     $upd = @{ Project = $Project; BatonHome = $BatonHome; Now = $Now }
@@ -771,7 +948,9 @@ function Invoke-SecurityProjectScan {
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $stamp = (ConvertTo-OfficerUtc -Value $Now).ToString('yyyyMMddTHHmmssZ')
     $path = Join-Path $dir "$Project-$stamp.json"
-    [ordered]@{ recipe = $recipe; scan = $scan } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding utf8NoBOM
+    $payload = [ordered]@{ recipe = $recipe; scan = $scan }
+    if ($null -ne $interpret) { $payload.interpret = $interpret }
+    ($payload | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $path -Encoding utf8NoBOM
     $out.ok = [bool]$scan.ok
     $out.reason = if ($scan.ok) { 'scanned' } else { [string]$scan.reason }
     $out.report = $path
@@ -779,15 +958,24 @@ function Invoke-SecurityProjectScan {
 }
 
 function Invoke-SecurityDueScans {
-    <# Run deterministic spine for due projects (cap per tick). No LM, no fleet-go. #>
+    <# Run spine (+ optional interpret) for due projects. Cap per tick. #>
     param(
         [datetime]$Now = [datetime]::UtcNow,
         [string]$BatonHome = (Get-OfficerBatonHome),
         [string]$DefaultRepo = '',
         [hashtable]$ProjectRepos = @{},
-        [int]$MaxScans = 5
+        [int]$MaxScans = 5,
+        [switch]$SeedFromRegistry,
+        [string]$RegistryRoot = '',
+        [array]$RegistryProjects = @(),
+        [switch]$DoInterpret,
+        [switch]$InterpretOnlyOnSignal,
+        [string]$FleetPath = '',
+        $Windows,
+        [scriptblock]$InterpretDispatcher
     )
-    $due = Get-SecurityDueProjects -Now $Now -BatonHome $BatonHome
+    $due = Get-SecurityDueProjects -Now $Now -BatonHome $BatonHome -SeedFromRegistry:$SeedFromRegistry `
+        -RegistryRoot $RegistryRoot -RegistryProjects $RegistryProjects -Windows $Windows
     $results = [System.Collections.Generic.List[object]]::new()
     $n = 0
     foreach ($item in $due) {
@@ -796,17 +984,21 @@ function Invoke-SecurityDueScans {
         $repo = $null
         if ($ProjectRepos.Contains($proj)) {
             $repo = [string]$ProjectRepos[$proj]
+        } elseif (-not [string]::IsNullOrWhiteSpace([string]$item.folder)) {
+            $repo = [string]$item.folder
         } else {
             $repo = Resolve-SecurityRepoPath -Project $proj -BatonHome $BatonHome -DefaultRepo $DefaultRepo
         }
         if ([string]::IsNullOrWhiteSpace($repo) -or -not (Test-Path -LiteralPath $repo -PathType Container)) {
             $results.Add([ordered]@{
                 ok = $false; skipped = $true; reason = 'no-repo'; project = $proj
-                recipe = $item.recipe; scan = $null; report = $null
+                recipe = $item.recipe; scan = $null; interpret = $null; report = $null
             })
             continue
         }
-        $r = Invoke-SecurityProjectScan -Project $proj -RepoPath $repo -Now $Now -BatonHome $BatonHome
+        $r = Invoke-SecurityProjectScan -Project $proj -RepoPath $repo -Now $Now -BatonHome $BatonHome `
+            -Windows $Windows -DoInterpret:$DoInterpret -InterpretOnlyOnSignal:$InterpretOnlyOnSignal `
+            -FleetPath $FleetPath -InterpretDispatcher $InterpretDispatcher
         $results.Add($r)
         if (-not $r.skipped) { $n++ }
     }
