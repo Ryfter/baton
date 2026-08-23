@@ -390,6 +390,12 @@ function Invoke-MaestroFireOne {
 
     Update-MaestroJobFile -Path $jobPath -Patch $patch
     Write-MaestroEvent -Root $JobsDir -JobId ([string]$job.id) -Kind 'fired' -Status $patch.status -RunId $patch.run_id -Provider $patch.provider
+    if ([string]$patch.provider -match '(?i)fable') {
+        try {
+            . (Join-Path $PSScriptRoot 'officers-lib.ps1')
+            Record-SchedulerFableFire -BatonHome $BatonHome
+        } catch { }
+    }
 
     return [pscustomobject]@{
         id       = [string]$job.id

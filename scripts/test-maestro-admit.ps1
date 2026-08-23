@@ -48,6 +48,38 @@ try {
     $j3 = Get-Content -LiteralPath (Join-Path $jobsDir 'mj-cccccccccccc.json') -Raw | ConvertFrom-Json
     Check 'release restores held job to queued' ([string]$j3.status -eq 'queued')
     Check 'held_from cleared after release' (-not ($j3.PSObject.Properties.Name -contains 'held_from'))
+
+    . (Join-Path $PSScriptRoot 'officers-lib.ps1')
+    $fableJob = [ordered]@{
+        id          = 'mj-ffffffffffffffff'
+        project     = 'bookprofile'
+        goal        = 'sprint bundle review'
+        tags        = @('fable')
+        wants_fable = $true
+        status      = 'queued'
+        created_at  = '2026-08-21T02:00:00Z'
+        source      = 'web'
+    }
+    ($fableJob | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath (Join-Path $jobsDir 'mj-ffffffffffffffff.json') -Encoding utf8NoBOM
+    Record-SchedulerFableFire -Now ([datetime]::UtcNow.AddMinutes(-10)) -BatonHome $tmp
+    & (Join-Path $PSScriptRoot 'maestro-admit.ps1') -BatonHome $tmp -MaxParallel 8 -Json | Out-Null
+    $jf = Get-Content -LiteralPath (Join-Path $jobsDir 'mj-ffffffffffffffff.json') -Raw | ConvertFrom-Json
+    Check 'scheduler holds fable inside 1h' ([string]$jf.status -eq 'waiting-quota')
+
+    $xcJob = [ordered]@{
+        id         = 'mj-eeeeeeeeeeee'
+        project    = 'grimlore'
+        goal       = 'deep security sweep'
+        tags       = @('excess_capacity')
+        class      = 'excess_capacity'
+        status     = 'queued'
+        created_at = '2026-08-21T02:01:00Z'
+        source     = 'web'
+    }
+    ($xcJob | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath (Join-Path $jobsDir 'mj-eeeeeeeeeeee.json') -Encoding utf8NoBOM
+    & (Join-Path $PSScriptRoot 'maestro-admit.ps1') -BatonHome $tmp -MaxParallel 8 -Json | Out-Null
+    $jx = Get-Content -LiteralPath (Join-Path $jobsDir 'mj-eeeeeeeeeeee.json') -Raw | ConvertFrom-Json
+    Check 'scheduler holds excess_capacity without residue' ([string]$jx.status -eq 'excess_capacity')
 } finally {
     $env:BATON_HOME = $prevHome
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

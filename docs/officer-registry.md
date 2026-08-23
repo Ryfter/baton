@@ -40,3 +40,18 @@ Kevin / Mouth (Ox Alpha)
 ## Schema
 
 A future live file (box-private, not this stub) MUST validate against `docs/officer-registry.schema.json`. Required per row: `id`, `role`, `level`, `blocks_labor`. Allowed `id` values are exactly the four above.
+
+Example instance: [`docs/officer-registry.example.json`](officer-registry.example.json).
+
+## Runtime (this worktree)
+
+Code, not chat agents:
+
+| Officer | Library | Wired into |
+|---|---|---|
+| Scheduler | `scripts/officers-lib.ps1` `Get-SchedulerEligibility` | `scripts/maestro-admit.ps1` (re-evaluates queued / waiting-quota / excess_capacity) |
+| Efficiency | `Invoke-EfficiencyAdvise` | `Invoke-TaskViaFleet` (fail-open, never blocks) |
+| VRAM | `Request-VramClaim` | local `cost_tier` labor — deny → failover |
+| Systems | `Get-SystemsInventory` / `Get-SystemsPlacementAdvice` | `fleet-doctor` text footer; `$BATON_HOME/systems/inventory.json` |
+
+Language profiles (lean): `references/coding-profiles/`. Tests: `scripts/test-officers-lib.ps1` (battery ×5).

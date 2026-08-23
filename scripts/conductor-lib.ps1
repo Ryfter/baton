@@ -19,6 +19,7 @@
 . "$PSScriptRoot/cost-resolver-lib.ps1"   # realized-cost metering (slice 2)
 . "$PSScriptRoot/prompt-pool-lib.ps1"   # Slice B: live shadow A/B pool bookkeeping
 . "$PSScriptRoot/verification-lib.ps1"   # Test-DiffFilesInAllowedPaths (#125 matcher) for acceptance-rework scope
+. "$PSScriptRoot/officers-lib.ps1"   # Efficiency (never blocks) + VRAM claim for local labor
 
 function New-RunId {
     param([datetime]$Now = (Get-Date))
@@ -871,6 +872,17 @@ function Invoke-TaskViaFleet {
         return @{ ok = $false; spend = 0.0; chose = ''; why = "no candidate for capability '$cap'"; alternatives = @() }
     }
     $prompt = "Task: $($Task.desc)"
+    try {
+        $eff = Invoke-EfficiencyAdvise -Task $Task
+        if ($eff -and $eff.prompt) { $prompt = [string]$eff.prompt }
+        if ($eff -and $eff.cheaper_tier -and $Task.PSObject.Properties['est_cost_tier']) {
+            # Advise only — never raise a tier, never block.
+            $cur = [string]$Task.est_cost_tier
+            if ($cur -eq 'paid' -and [string]$eff.cheaper_tier -eq 'free') {
+                $Task.est_cost_tier = 'free'
+            }
+        }
+    } catch { }
     # Code factory (#code-factory): the non-agentic labor phase walks the cost-ordered
     # roster too. This executor never touches the repo (see the summary above), so a
     # failed candidate can be retried on the next-cheapest peer with no cleanup.
@@ -878,6 +890,17 @@ function Invoke-TaskViaFleet {
         -Attempt {
             param($c)
             if ($Dispatcher) { return (& $Dispatcher $c $prompt) }
+            $vramClaim = $null
+            if ([string]$c.cost_tier -eq 'local') {
+                try {
+                    $prof = Resolve-VramProfileForProvider -Provider $c
+                    $vramClaim = Request-VramClaim -Profile $prof -Model ([string]$c.name) `
+                        -RunId ("labor-" + [string]$Task.id)
+                    if (-not $vramClaim.ok) {
+                        return @{ stdout = ''; stderr = [string]$vramClaim.reason; exit_code = -1; duration_s = 0 }
+                    }
+                } catch { }
+            }
             return Invoke-Fleet -Name $c.name -Prompt $prompt -Path $FleetPath -NoJournal
         }
     $alts = @($cands | Where-Object { $null -ne $_ -and [string]$_.name -ne [string]$walk.chose } | ForEach-Object { [string]$_.name })
