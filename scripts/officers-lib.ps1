@@ -8,6 +8,7 @@
   dispatch. Systems agent inventories hardware and recommends placement.
   No new LM agents — these are code.
 #>
+. (Join-Path $PSScriptRoot 'efficiency-lib.ps1')
 
 function Get-OfficerBatonHome {
     param([string]$BatonHome)
@@ -279,23 +280,6 @@ function Get-SchedulerEligibility {
 
 # ---------- Efficiency Officer ----------
 
-function Get-CodingProfile {
-    param(
-        [string]$Language = 'python',
-        [string]$RepoRoot
-    )
-    $lang = [string]$Language
-    if ([string]::IsNullOrWhiteSpace($lang)) { $lang = 'python' }
-    $lang = $lang.ToLowerInvariant()
-    if ($lang -eq 'ts') { $lang = 'typescript' }
-    if ($lang -eq 'js') { $lang = 'javascript' }
-    if ($lang -eq 'node') { $lang = 'nodejs' }
-    if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
-    $path = Join-Path $RepoRoot "references/coding-profiles/$lang.md"
-    if (Test-Path -LiteralPath $path) { return (Get-Content -LiteralPath $path -Raw) }
-    return ''
-}
-
 function Test-EfficiencyWorthIt {
     <# Anti-overengineering: a "save" that costs more coordination than it saves is skipped. #>
     param(
@@ -315,6 +299,8 @@ function Invoke-EfficiencyAdvise {
     param(
         $Task,
         [string]$RepoRoot,
+        [string]$RepoPath,
+        [string]$RunDir,
         [string]$Language
     )
     $out = [ordered]@{
@@ -329,12 +315,24 @@ function Invoke-EfficiencyAdvise {
         $desc = if ($null -ne $Task -and $Task.desc) { [string]$Task.desc } else { '' }
         $cap = if ($null -ne $Task) { [string]$Task.capability } else { '' }
         $tier = if ($null -ne $Task) { [string]$Task.est_cost_tier } else { '' }
-        $out.prompt = "Task: $desc"
+        $root = $RepoRoot
+        if (-not $root) { $root = $RepoPath }
+        $basePrompt = "Task: $desc"
+        $out.prompt = $basePrompt
+
+        if ($root -or $RunDir) {
+            $built = Build-EfficiencyTaskPrompt -TaskDesc $desc -RepoPath $root -RunDir $RunDir
+            if ($built -and $built -ne $basePrompt) {
+                $out.prompt = $built
+                $out.applied = $true
+                $out.reason = 'context-select'
+            }
+        }
 
         if ($tier -eq 'paid' -and $cap -in @('summarize', 'research', 'triage')) {
             $out.cheaper_tier = 'free'
             $out.applied = $true
-            $out.reason = 'cheaper-seat'
+            if ($out.reason -eq 'identity') { $out.reason = 'cheaper-seat' }
         }
 
         $lang = $Language
@@ -346,10 +344,10 @@ function Invoke-EfficiencyAdvise {
             elseif ($joined -match '\.jsx?\b') { $lang = 'javascript' }
         }
         $profile = ''
-        if ($lang) { $profile = Get-CodingProfile -Language $lang -RepoRoot $RepoRoot }
+        if ($lang) { $profile = Get-CodingProfile -Language $lang -RepoRoot $root }
         $extra = if ($profile) { [Text.Encoding]::UTF8.GetByteCount($profile) } else { 0 }
         if ($profile -and (Test-EfficiencyWorthIt -TaskDesc $desc -ExtraBytes $extra)) {
-            $out.prompt = "Task: $desc`n`nCoding profile ($lang):`n$profile".Trim()
+            $out.prompt = "$($out.prompt)`n`nCoding profile ($lang):`n$profile".Trim()
             $out.applied = $true
             if ($out.reason -eq 'identity') { $out.reason = 'appended-profile' }
         } elseif (-not $out.applied) {

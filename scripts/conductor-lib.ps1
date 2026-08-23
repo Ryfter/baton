@@ -864,6 +864,8 @@ function Invoke-TaskViaFleet {
         [string]$FleetPath = (Join-Path (Get-BatonHome) 'fleet.yaml'),
         [string]$ToolsPath = (Join-Path (Get-BatonHome) 'tools.yaml'),
         [ValidateSet('local','free','paid')][string]$MaxCostTier = 'paid',
+        [string]$RepoPath,
+        [string]$RunDir,
         [scriptblock]$Dispatcher
     )
     $cap = if ($Task.capability) { $Task.capability } else { 'reasoning' }
@@ -873,7 +875,10 @@ function Invoke-TaskViaFleet {
     }
     $prompt = "Task: $($Task.desc)"
     try {
-        $eff = Invoke-EfficiencyAdvise -Task $Task
+        $effArgs = @{ Task = $Task }
+        if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $effArgs.RepoPath = $RepoPath }
+        if (-not [string]::IsNullOrWhiteSpace($RunDir)) { $effArgs.RunDir = $RunDir }
+        $eff = Invoke-EfficiencyAdvise @effArgs
         if ($eff -and $eff.prompt) { $prompt = [string]$eff.prompt }
         if ($eff -and $eff.cheaper_tier -and $Task.PSObject.Properties['est_cost_tier']) {
             # Advise only — never raise a tier, never block.
@@ -1360,8 +1365,14 @@ function Invoke-Conductor {
         if ($Verify -and [string]$task.verify_profile) {
             Add-RunEvent -RunDir $RunDir -EventObj (New-RunEvent -TaskId $task.id -Kind 'task-verification-started' -Message "verifying: $($task.verify_profile)")
         }
+        $fleetArgs = @{
+            Task = $task; FleetPath = $FleetPath; ToolsPath = $ToolsPath
+            MaxCostTier = $MaxCostTier; Dispatcher = $Dispatcher
+        }
+        if (-not [string]::IsNullOrWhiteSpace($RepoPath)) { $fleetArgs.RepoPath = $RepoPath }
+        if (-not [string]::IsNullOrWhiteSpace($RunDir)) { $fleetArgs.RunDir = $RunDir }
         $r = if ($Spawner) { & $Spawner $task }
-             else { Invoke-TaskViaFleet -Task $task -FleetPath $FleetPath -ToolsPath $ToolsPath -MaxCostTier $MaxCostTier -Dispatcher $Dispatcher }
+             else { Invoke-TaskViaFleet @fleetArgs }
         $tspend = if ($null -ne $r.spend) { [double]$r.spend } else { $est }
         $spend += $tspend
         if ($r.chose) {

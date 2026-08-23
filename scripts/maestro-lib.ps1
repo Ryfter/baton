@@ -114,6 +114,15 @@ function Get-MaestroUsableInstruments {
         if (-not (Test-MaestroInstrumentReady -Name $name)) { continue }
         if (-not $usable.Contains($name)) { [void]$usable.Add($name) }
     }
+    $instLib = Join-Path $PSScriptRoot 'instruments-lib.ps1'
+    if (Test-Path -LiteralPath $instLib) {
+        try {
+            . $instLib
+            foreach ($seat in @(Get-UsableInstrumentSeats -BatonHome $BatonHome)) {
+                if ($seat -and -not $usable.Contains($seat)) { [void]$usable.Add($seat) }
+            }
+        } catch { }
+    }
     return @($usable)
 }
 

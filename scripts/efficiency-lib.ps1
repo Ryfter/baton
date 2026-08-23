@@ -140,9 +140,12 @@ $($sel.packet)
 }
 
 function Get-CodingProfile {
-    param([ValidateSet('python','pwsh','typescript','javascript','nodejs','react','html-css')][string]$Language = 'python')
-    $repoRoot = Split-Path -Parent $PSScriptRoot
-    $path = Join-Path $repoRoot "references/coding-profiles/$Language.md"
+    param(
+        [ValidateSet('python','pwsh','typescript','javascript','nodejs','react','html-css')][string]$Language = 'python',
+        [string]$RepoRoot
+    )
+    if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
+    $path = Join-Path $RepoRoot "references/coding-profiles/$Language.md"
     if (Test-Path -LiteralPath $path) { return (Get-Content -LiteralPath $path -Raw) }
     return ''
 }
