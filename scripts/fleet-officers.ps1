@@ -5,7 +5,9 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('status', 'systems', 'vram', 'registry', 'security', 'profiles')][string]$Action = 'status',
+    [ValidateSet('status', 'systems', 'vram', 'registry', 'security', 'profiles', 'scan')][string]$Action = 'status',
+    [string]$RepoPath = '',
+    [string]$Project = 'baton',
     [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' })
 )
 $ErrorActionPreference = 'Stop'
@@ -24,7 +26,24 @@ switch ($Action) {
         Get-VramInventory -BatonHome $BatonHome | ConvertTo-Json -Depth 6
     }
     'security' {
-        Get-SecurityRecipe -Project 'baton' -BatonHome $BatonHome | ConvertTo-Json -Depth 6
+        Get-SecurityRecipe -Project $Project -BatonHome $BatonHome | ConvertTo-Json -Depth 6
+    }
+    'scan' {
+        if ([string]::IsNullOrWhiteSpace($RepoPath)) { $RepoPath = Split-Path -Parent $PSScriptRoot }
+        $recipe = Get-SecurityRecipe -Project $Project -BatonHome $BatonHome
+        if (Test-SecuritySeatForbidden -Seat $recipe.seat) { throw "refusing forbidden seat $($recipe.seat)" }
+        $scan = Invoke-SecurityScannerSpine -RepoPath $RepoPath
+        $touched = $null
+        try { $touched = [datetime](& git -C $RepoPath log -1 --format=%cI 2>$null) } catch { }
+        $upd = @{ Project = $Project; BatonHome = $BatonHome }
+        if ($touched) { $upd.Touched = $touched }
+        [void](Update-SecurityScale @upd)
+        $dir = Join-Path $BatonHome 'officers/security-runs'
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+        $path = Join-Path $dir "$Project-$stamp.json"
+        [ordered]@{ recipe = $recipe; scan = $scan } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding utf8NoBOM
+        [ordered]@{ recipe = $recipe; scan = $scan; report = $path } | ConvertTo-Json -Depth 8
     }
     'profiles' {
         $root = Split-Path -Parent $PSScriptRoot

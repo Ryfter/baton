@@ -570,6 +570,79 @@ function Get-SecurityRecipe {
     }
 }
 
+function Invoke-SecurityScannerSpine {
+    <# Deterministic spine only. No LM. Never walks Grimlore. Output is capped. #>
+    param(
+        [Parameter(Mandatory)][string]$RepoPath,
+        [string]$Since = '',
+        [int]$MaxLines = 80,
+        [scriptblock]$GitLog,
+        [scriptblock]$GitDiff,
+        [scriptblock]$Ripgrep
+    )
+    $out = [ordered]@{
+        ok      = $false
+        reason  = ''
+        repo    = $RepoPath
+        since   = $Since
+        log     = @()
+        diff    = ''
+        hits    = @()
+        hit_n   = 0
+        officer = 'security-researcher'
+    }
+    $full = try { [System.IO.Path]::GetFullPath($RepoPath) } catch { [string]$RepoPath }
+    if ($full -match '(?i)grimlore') {
+        $out.reason = 'grimlore-skipped'
+        return $out
+    }
+    if (-not (Test-Path -LiteralPath $RepoPath -PathType Container)) {
+        $out.reason = 'no-repo'
+        return $out
+    }
+    try {
+        $logLines = @()
+        if ($GitLog) {
+            $logLines = @(& $GitLog $RepoPath $Since)
+        } else {
+            $gitArgs = @('-C', $RepoPath, 'log', '--oneline', '-n', '30')
+            if (-not [string]::IsNullOrWhiteSpace($Since)) { $gitArgs += @('--since', $Since) }
+            $logLines = @(& git @gitArgs 2>$null)
+        }
+        $out.log = @($logLines | Select-Object -First 30 | ForEach-Object { [string]$_ })
+
+        $diffText = ''
+        if ($GitDiff) {
+            $diffText = [string](& $GitDiff $RepoPath)
+        } else {
+            $diffText = [string]((& git -C $RepoPath diff --stat 2>$null) -join "`n")
+        }
+        if ($diffText.Length -gt 4000) { $diffText = $diffText.Substring(0, 4000) }
+        $out.diff = $diffText
+
+        $hits = @()
+        if ($Ripgrep) {
+            $hits = @(& $Ripgrep $RepoPath)
+        } else {
+            $rg = Get-Command rg -ErrorAction SilentlyContinue
+            if ($rg) {
+                $hits = @(& rg -n --glob '!node_modules' --glob '!.git' --glob '!*.lock' `
+                    --glob '!docs/superpowers/plans/**' --glob '!docs/superpowers/specs/**' `
+                    --max-count 40 `
+                    'TODO|FIXME|XXX' $RepoPath 2>$null)
+            }
+        }
+        $out.hits = @($hits | Select-Object -First $MaxLines | ForEach-Object { [string]$_ })
+        $out.hit_n = @($out.hits).Count
+        $out.ok = $true
+        $out.reason = 'scanned'
+        return $out
+    } catch {
+        $out.reason = $_.Exception.Message
+        return $out
+    }
+}
+
 function Update-SecurityScale {
     param(
         [Parameter(Mandatory)][string]$Project,
