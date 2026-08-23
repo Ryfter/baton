@@ -849,6 +849,10 @@ function Invoke-PlanPhase {
     if (-not [string]::IsNullOrWhiteSpace($RepoPath)) {
         $plan = Repair-PlanAllowedPaths -Plan $plan -RepoPath $RepoPath
     }
+    try {
+        $effPlan = Invoke-EfficiencyPlanAdvise -Plan $plan -RepoRoot $RepoPath
+        if ($effPlan -and $effPlan.plan) { $plan = $effPlan.plan }
+    } catch { }
     if ($RunId) { $plan.run_id = $RunId }
     $plan.goal = $Goal
     if ($null -ne $BudgetCap) { $plan.budget_cap = [double]$BudgetCap }

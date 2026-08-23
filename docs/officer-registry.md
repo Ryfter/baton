@@ -54,4 +54,4 @@ Code, not chat agents:
 | VRAM | `Request-VramClaim` | local `cost_tier` labor — deny → failover |
 | Systems | `Get-SystemsInventory` / `Get-SystemsPlacementAdvice` | `fleet-doctor` text footer; `$BATON_HOME/systems/inventory.json`. GPU GB from nvidia-smi or Apple unified memory; loaded models from LM Studio `/api/v1/models`. |
 
-Language profiles (lean): `references/coding-profiles/`. Tests: `scripts/test-officers-lib.ps1` (battery ×5).
+Language profiles (lean): `references/coding-profiles/` — `Invoke-EfficiencyProfileReview` flags bloat. Security recipe: `Get-SecurityRecipe` + `$BATON_HOME/officers/security-scale.json` (hot/warm/cold; never Fable/Sol). Tests: `scripts/test-officers-lib.ps1` (battery ×5).

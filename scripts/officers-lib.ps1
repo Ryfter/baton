@@ -363,6 +363,241 @@ function Invoke-EfficiencyAdvise {
     return $out
 }
 
+function Invoke-EfficiencyPlanAdvise {
+    <# Post-plan advisor. May cheapen summarize/research/triage seats. Never blocks. #>
+    param(
+        [Parameter(Mandatory)]$Plan,
+        [string]$RepoRoot
+    )
+    $notes = [System.Collections.Generic.List[string]]::new()
+    try {
+        foreach ($t in @($Plan.tasks)) {
+            $adv = Invoke-EfficiencyAdvise -Task $t -RepoRoot $RepoRoot
+            if ($adv.cheaper_tier -and [string]$t.est_cost_tier -eq 'paid') {
+                $t.est_cost_tier = [string]$adv.cheaper_tier
+                [void]$notes.Add("$($t.id): $($adv.reason)")
+            }
+        }
+    } catch { }
+    return [ordered]@{
+        blocked = $false
+        plan    = $Plan
+        notes   = @($notes)
+        officer = 'efficiency'
+    }
+}
+
+function Invoke-EfficiencyProfileReview {
+    <# Lean-profile gate. Advise only — never rewrites files, never blocks labor. #>
+    param(
+        [string]$RepoRoot,
+        [int]$MaxBytes = 1200,
+        [int]$MaxLines = 40
+    )
+    if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
+    $dir = Join-Path $RepoRoot 'references/coding-profiles'
+    $findings = [System.Collections.Generic.List[object]]::new()
+    $langs = @('python', 'pwsh', 'typescript', 'javascript', 'nodejs', 'react', 'html-css')
+    foreach ($lang in $langs) {
+        $path = Join-Path $dir "$lang.md"
+        if (-not (Test-Path -LiteralPath $path)) {
+            $findings.Add([ordered]@{ lang = $lang; ok = $false; reason = 'missing' })
+            continue
+        }
+        $raw = Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue
+        if ($null -eq $raw) { $raw = '' }
+        $bytes = [Text.Encoding]::UTF8.GetByteCount($raw)
+        $lines = @($raw -split "`n").Count
+        $reasons = [System.Collections.Generic.List[string]]::new()
+        if ($bytes -gt $MaxBytes) { [void]$reasons.Add("bytes $bytes > $MaxBytes") }
+        if ($lines -gt $MaxLines) { [void]$reasons.Add("lines $lines > $MaxLines") }
+        if ($raw -notmatch '(?i)verify') { [void]$reasons.Add('missing-verify') }
+        if ($raw -match '(?i)\b(leverage|delve|robustly|comprehensive solution)\b') {
+            [void]$reasons.Add('promotional-language')
+        }
+        $findings.Add([ordered]@{
+            lang    = $lang
+            ok      = ($reasons.Count -eq 0)
+            bytes   = $bytes
+            lines   = $lines
+            reasons = @($reasons)
+            path    = $path
+        })
+    }
+    $bad = @($findings | Where-Object { -not $_.ok })
+    return [ordered]@{
+        blocked  = $false
+        ok       = ($bad.Count -eq 0)
+        findings = @($findings)
+        officer  = 'efficiency'
+    }
+}
+
+# ---------- Security researcher (instrument recipe, not an agent) ----------
+
+function Get-SecurityScalePath {
+    param([string]$BatonHome = (Get-OfficerBatonHome))
+    return (Join-Path $BatonHome 'officers/security-scale.json')
+}
+
+function Read-SecurityScale {
+    param([string]$BatonHome = (Get-OfficerBatonHome))
+    $path = Get-SecurityScalePath -BatonHome $BatonHome
+    $empty = [ordered]@{ projects = [ordered]@{} }
+    if (-not (Test-Path -LiteralPath $path)) { return $empty }
+    try {
+        $doc = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $projects = [ordered]@{}
+        foreach ($p in @($doc.projects.PSObject.Properties)) {
+            $projects[[string]$p.Name] = $p.Value
+        }
+        return [ordered]@{ projects = $projects }
+    } catch { return $empty }
+}
+
+function Write-SecurityScale {
+    param(
+        [Parameter(Mandatory)]$Scale,
+        [string]$BatonHome = (Get-OfficerBatonHome)
+    )
+    $path = Get-SecurityScalePath -BatonHome $BatonHome
+    $dir = Split-Path $path -Parent
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    ($Scale | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $path -Encoding utf8NoBOM
+}
+
+function Test-SecuritySeatForbidden {
+    param([string]$Seat)
+    $s = ([string]$Seat).ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($s)) { return $false }
+    if ($s -match 'fable') { return $true }
+    if ($s -match 'gpt-5\.6' -and $s -match 'sol') { return $true }
+    if ($s -match '(^|[/\s_-])sol($|[/\s_-])') { return $true }
+    return $false
+}
+
+function Get-SecurityBand {
+    param(
+        $Record,
+        [datetime]$Now = [datetime]::UtcNow,
+        [int]$WarmDays = 14,
+        [int]$ColdDays = 21
+    )
+    $nowUtc = ConvertTo-OfficerUtc -Value $Now
+    $touched = ConvertTo-OfficerUtc -Value $(if ($Record) { $Record.last_touched } else { $null })
+    $lastRun = ConvertTo-OfficerUtc -Value $(if ($Record) { $Record.last_run } else { $null })
+    $clean = ConvertTo-OfficerUtc -Value $(if ($Record) { $Record.last_clean } else { $null })
+    if ($null -eq $touched) { return 'hot' }
+    if ($null -eq $lastRun -or $touched -gt $lastRun) { return 'hot' }
+    $sinceTouch = ($nowUtc - $touched).TotalDays
+    if ($sinceTouch -ge $ColdDays -and $null -ne $clean) { return 'cold' }
+    if ($sinceTouch -le $WarmDays) { return 'warm' }
+    if ($null -ne $clean) { return 'cold' }
+    return 'warm'
+}
+
+function Test-SecurityDue {
+    param(
+        [Parameter(Mandatory)][string]$Band,
+        $Record,
+        [datetime]$Now = [datetime]::UtcNow
+    )
+    $nowUtc = ConvertTo-OfficerUtc -Value $Now
+    $lastRun = ConvertTo-OfficerUtc -Value $(if ($Record) { $Record.last_run } else { $null })
+    if ($null -eq $lastRun) { return $true }
+    $hours = ($nowUtc - $lastRun).TotalHours
+    switch ($Band) {
+        'hot'  { return ($hours -ge 20) }
+        'warm' { return ($hours -ge (7 * 24)) }
+        'cold' { return ($hours -ge (30 * 24)) }
+        default { return $true }
+    }
+}
+
+function Get-SecuritySeat {
+    param(
+        [Parameter(Mandatory)][string]$Band,
+        [switch]$Deep
+    )
+    if ($Deep) { return 'opus' }
+    switch ($Band) {
+        'hot'  { return 'openrouter-ox-alpha' }
+        'warm' { return 'openrouter-ox-alpha' }
+        'cold' { return 'local' }
+        default { return 'openrouter-ox-alpha' }
+    }
+}
+
+function Get-SecurityRecipe {
+    <# Sliding-scale recipe. Scanners are the deterministic spine; LM interprets.
+       Never seats Fable/Sol. Never pastes Grimlore into Ox. #>
+    param(
+        [Parameter(Mandatory)][string]$Project,
+        $Record,
+        [datetime]$Now = [datetime]::UtcNow,
+        [switch]$Deep,
+        [string]$BatonHome = (Get-OfficerBatonHome)
+    )
+    if ($null -eq $Record) {
+        $scale = Read-SecurityScale -BatonHome $BatonHome
+        if ($scale.projects.Contains($Project)) { $Record = $scale.projects[$Project] }
+    }
+    $band = Get-SecurityBand -Record $Record -Now $Now
+    $due = Test-SecurityDue -Band $band -Record $Record -Now $Now
+    $seat = Get-SecuritySeat -Band $band -Deep:$Deep
+    if (Test-SecuritySeatForbidden -Seat $seat) { $seat = 'openrouter-ox-alpha' }
+    $cadence = switch ($band) {
+        'hot'  { 'nightly' }
+        'warm' { 'weekly' }
+        'cold' { 'monthly-or-excess_capacity' }
+        default { 'nightly' }
+    }
+    return [ordered]@{
+        project        = $Project
+        band           = $band
+        due            = [bool]$due
+        cadence        = $cadence
+        seat           = $seat
+        deep           = [bool]$Deep
+        deny_seats     = @('fable', 'sol', 'gpt-5.6-sol')
+        grimlore_to_ox = $false
+        scanners       = @(
+            'git log --since=last-run --oneline'
+            'git diff --stat'
+            'rg -n "TODO|FIXME|XXX" --glob !node_modules'
+        )
+        officer        = 'security-researcher'
+    }
+}
+
+function Update-SecurityScale {
+    param(
+        [Parameter(Mandatory)][string]$Project,
+        [datetime]$Now = [datetime]::UtcNow,
+        [datetime]$Touched,
+        [switch]$Clean,
+        [string]$BatonHome = (Get-OfficerBatonHome)
+    )
+    $scale = Read-SecurityScale -BatonHome $BatonHome
+    $rec = [ordered]@{
+        last_run     = (ConvertTo-OfficerUtc -Value $Now).ToString('o')
+        last_touched = $null
+        last_clean   = $null
+    }
+    if ($scale.projects.Contains($Project)) {
+        $prev = $scale.projects[$Project]
+        if ($prev.last_touched) { $rec.last_touched = [string]$prev.last_touched }
+        if ($prev.last_clean) { $rec.last_clean = [string]$prev.last_clean }
+    }
+    if ($PSBoundParameters.ContainsKey('Touched')) {
+        $rec.last_touched = (ConvertTo-OfficerUtc -Value $Touched).ToString('o')
+    }
+    if ($Clean) { $rec.last_clean = (ConvertTo-OfficerUtc -Value $Now).ToString('o') }
+    $scale.projects[$Project] = $rec
+    Write-SecurityScale -Scale $scale -BatonHome $BatonHome
+    return $rec
+}
+
 # ---------- VRAM officer ----------
 
 function Get-VramStoreDir {
@@ -822,5 +1057,16 @@ function Get-OfficersDoctorLines {
     $loadStr = if ($loaded.Count) { $loaded -join ',' } else { '-' }
     [void]$lines.Add("vram: host=$($vram.host) live=$($vram.count) exclusive=$($vram.exclusive) shared=$($vram.shared) loaded=$loadStr disk_gb=$($vram.loaded_disk_gb)")
     [void]$lines.Add("scheduler: last_fable=$($sched.last_fable_at)")
+    try {
+        $scale = Read-SecurityScale -BatonHome $BatonHome
+        $dueN = 0
+        foreach ($k in @($scale.projects.Keys)) {
+            $r = Get-SecurityRecipe -Project $k -Record $scale.projects[$k]
+            if ($r.due) { $dueN++ }
+        }
+        [void]$lines.Add("security: projects=$($scale.projects.Count) due=$dueN")
+    } catch {
+        [void]$lines.Add('security: scale-unreadable')
+    }
     return @($lines)
 }
