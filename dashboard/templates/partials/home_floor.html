@@ -38,6 +38,44 @@
       </p>
       {% endif %}
 
+      {% set obs = card.observability %}
+      {% if obs and (obs.has_plan or obs.sidecar_live or obs.trajectory or obs.regressions) %}
+      <div class="project-observability">
+        <p class="project-observability__title">Declared vs observed</p>
+        {% if obs.trajectory %}
+        <p class="project-observability__trajectory project-observability__trajectory--{{ obs.trajectory.verdict }}">
+          Trajectory: {{ obs.trajectory.verdict }}{% if obs.trajectory.narrative %} — {{ obs.trajectory.narrative }}{% endif %}
+        </p>
+        {% endif %}
+        {% if obs.declared %}
+        <ul class="project-observability__declared">
+          {% for d in obs.declared %}
+          <li><span class="project-observability__mark project-observability__mark--{{ d.status }}">{{ d.status }}</span> {{ d.title }}</li>
+          {% endfor %}
+        </ul>
+        {% elif obs.has_plan %}
+        <p class="muted">No active tasks in PLAN.md</p>
+        {% endif %}
+        {% if obs.observed.active_components or obs.observed.live_file %}
+        <p class="project-observability__observed">
+          Observed:
+          {% if obs.observed.active_components %}{{ obs.observed.active_components | join(', ') }}{% endif %}
+          {% if obs.observed.live_file and not obs.observed.live_stale %} · touching <code>{{ obs.observed.live_file }}</code>{% endif %}
+        </p>
+        {% endif %}
+        {% if obs.regressions %}
+        <ul class="project-observability__regressions">
+          {% for r in obs.regressions %}
+          <li>Revising done: {{ r.title }}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+        {% if obs.map_url %}
+        <p class="project-observability__map"><a href="{{ obs.map_url }}" target="_blank" rel="noopener">Open AgentTrail map →</a></p>
+        {% endif %}
+      </div>
+      {% endif %}
+
       <details class="project-card__port">
         <summary>Open port</summary>
         {% if card.turns %}

@@ -37,8 +37,8 @@ try {
     Check 'context maintenance text mentions handoff' ($ctx -match 'handoff')
     Check 'context maintenance text mentions Efficiency' ($ctx -match 'Efficiency')
     $route = Get-DarkFactoryRouteAroundText
-    Check 'route-around text mentions grok' ($route -match '(?i)grok')
-    Check 'route-around text mentions ox-alpha' ($route -match 'openrouter-ox-alpha')
+    Check 'route-around text mentions Select-Capability' ($route -match 'Select-Capability')
+    Check 'route-around text rejects fixed failover list' ($route -match 'No fixed failover')
 
     $broadcast = Invoke-DarkFactoryBroadcast -BatonHome $box
     Check 'broadcast writes standing order' (Test-Path (Join-Path $box 'overnight/DARK-FACTORY-TONIGHT.md'))

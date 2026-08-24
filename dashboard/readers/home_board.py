@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from dashboard.readers.agent_observability import (
+    observability_attention_items,
+    observability_for_project,
+)
 from dashboard.readers.claude_quota import read_claude_quota
 from dashboard.readers.cockpit_grid import read_cockpit_grid
 from dashboard.readers.display_goal import sanitize_goal
@@ -178,6 +182,18 @@ def read_home_header(
             label = f"{cell.get('name')}: {pill.replace('-', ' ')}"
             attention.append({"project_id": cell["project_id"], "label": label, "pill": pill})
 
+        if cell.get("status") in {"running", "admitted"}:
+            attention.extend(
+                observability_attention_items(
+                    baton_home=baton_home,
+                    project_id=cell["project_id"],
+                    project_name=str(cell.get("name") or cell["project_id"]),
+                    jobs_dir=jobs_dir,
+                    job_id=cell.get("job_id"),
+                    now=clock,
+                )
+            )
+
     for econ in economics.values():
         total_window_tokens += econ.get("total_tokens") or 0
         if econ.get("savings_usd"):
@@ -241,6 +257,16 @@ def read_home_floor(
         pill = _resolve_pill(status, ago_sec)
         activity = _classify_activity(cell, str(cell.get("last_output") or ""))
 
+        obs = observability_for_project(
+            baton_home=baton_home,
+            project_id=pid,
+            jobs_dir=jobs_dir,
+            job_id=cell.get("job_id"),
+            now=clock,
+        )
+        if obs.get("trajectory", {}).get("needs_attention"):
+            pill = "needs-you"
+
         cards.append({
             **cell,
             "goal": sanitize_goal(str(cell.get("goal") or "")),
@@ -251,6 +277,7 @@ def read_home_floor(
             "activity_status": activity.get("status_label") or "",
             "economics": econ,
             "port_collapsed": True,
+            "observability": obs,
         })
 
     cards.sort(key=lambda c: (_attention_rank(c["attention_pill"]), c.get("name", "").lower()))

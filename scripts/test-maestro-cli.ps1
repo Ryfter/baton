@@ -49,9 +49,14 @@ try {
     $tierFree = Get-MaestroFireMaxCostTier -Job ([pscustomobject]@{ max_cost_tier = 'free' })
     Assert 'L2 job max_cost_tier=free honored' ($tierFree -eq 'free')
 
-    $seat = Get-MaestroConductorSeat
+    $seat = Get-MaestroConductorSeat -BatonHome $home2
     Assert 'L3 conductor seat is a non-empty name' (-not [string]::IsNullOrWhiteSpace([string]$seat.Name))
-    Assert 'L4 default seat cost_tier is free' ([string]$seat.CostTier -eq 'free')
+    $rankedDefault = Select-MaestroRankedProviders -BatonHome $home2
+    if ($rankedDefault.Count -gt 0) {
+        Assert 'L4 default seat matches router top pick' ([string]$seat.Name -eq [string]$rankedDefault[0].name)
+    } else {
+        Assert 'L4 default seat has a cost tier when router empty' ($seat.CostTier -in @('local', 'free', 'paid'))
+    }
 
     $choices = @(Get-MaestroRoomChoices -BatonHome $home2)
     $ids = @($choices | ForEach-Object { [string]$_.Id })
@@ -175,6 +180,36 @@ try {
     Assert 'G15 card has no █░ meter' ($card0 -notmatch '[█░]')
     Assert 'G16 run rows keep the useful icons' ($card0 -match '🌳' -and $card0 -match '📊')
     Assert 'G17 seat label drops the openrouter- prefix' ((Format-MaestroSeatLabel -Name 'openrouter-ox-alpha') -eq 'ox-alpha')
+
+    $miniFleet = Join-Path $home2 'overnight/fleet.yaml'
+    New-Item -ItemType Directory -Force -Path (Split-Path $miniFleet -Parent) | Out-Null
+    @'
+general_capabilities: [code-gen]
+providers:
+  - name: grok-cli
+    kind: cli
+    enabled: true
+    cost_tier: paid
+    platform: grok
+    agentic: true
+    capabilities: [code-gen]
+    command_template: 'echo "{{prompt}}"'
+  - name: openrouter-ox-alpha
+    kind: http
+    enabled: true
+    cost_tier: free
+    capabilities: [code-gen]
+    agentic: true
+    command_template: 'echo "{{prompt}}"'
+'@ | Set-Content -LiteralPath $miniFleet -Encoding utf8NoBOM
+    $usagePath = Join-Path $home2 'usage-journal.jsonl'
+    (@{ ts = '2026-01-01T00:00:00Z'; event = 'lockout'; worker = 'grok-cli'; reason = 'cap'; reset_at = '2030-01-01T00:00:00Z' } | ConvertTo-Json -Compress) |
+        Set-Content -LiteralPath $usagePath -Encoding utf8NoBOM
+    $ranked = Select-MaestroRankedProviders -BatonHome $home2 -FleetPath $miniFleet
+    Assert 'RT1 Select-Capability ranks providers' ($ranked.Count -ge 1)
+    Assert 'RT2 locked-out grok is not in ranked pool' (@($ranked | Where-Object { [string]$_.name -eq 'grok-cli' }).Count -eq 0)
+    $seat = Get-MaestroConductorSeat -Provider 'grok-cli' -BatonHome $home2
+    Assert 'RT3 seat uses router top pick when hint is exhausted' ([string]$seat.Name -eq [string]$ranked[0].name)
 
     $lonely = "status`nquit" | & pwsh -NoProfile -File $maestro 2>&1 | Out-String
     Assert 'ST1 status without a project asks to pick' ($lonely -match '(?i)pick a project|no project')

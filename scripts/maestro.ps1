@@ -16,7 +16,7 @@ param(
     [string]$Goal,
     [Alias('goal-file')][string]$GoalFile,
     [string]$Provider,
-    [Alias('max-tier')][ValidateSet('local', 'free', 'paid')][string]$MaxCostTier = 'free',
+    [Alias('max-tier')][ValidateSet('local', 'free', 'paid')][string]$MaxCostTier = 'paid',
     [Alias('bin-dir')][string]$BinDir,
     [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }),
     [switch]$Json,
@@ -255,6 +255,23 @@ function Invoke-BatonRoom {
             $room.LastList = ''
             . (Join-Path $PSScriptRoot 'cursor-quota-lib.ps1')
             Write-Output (Format-BatonQuotaPanel -BatonHome $BatonHome)
+            continue
+        }
+        if ($line -match '^(?i)(new|create)\s+project\b') {
+            try {
+                . (Join-Path $PSScriptRoot 'project-create-lib.ps1')
+                $created = Invoke-MaestroNewProjectLine -Line $line -BatonHome $BatonHome
+                Write-Output ("Created {0} at {1}" -f $created.id, $created.folder)
+                if ($created.github.url) { Write-Output ("GitHub: {0}" -f $created.github.url) }
+                if ($created.grimdex_path) { Write-Output ("Grimdex: {0}" -f $created.grimdex_path) }
+                if ($created.grimlore_path) { Write-Output ("Grimlore: {0}" -f $created.grimlore_path) }
+                $room.Current = [string]$created.id
+                $choices = @(Get-MaestroRoomChoices -BatonHome $BatonHome)
+                $room.Choices = $choices
+            } catch {
+                Write-Output $_.Exception.Message
+            }
+            Show-BatonInputChrome
             continue
         }
         if ($line -in @('projects', 'worktrees')) {

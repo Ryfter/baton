@@ -12,9 +12,10 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'registry-lib.ps1')
+. (Join-Path $PSScriptRoot 'project-create-lib.ps1')
 
 function Write-Usage {
-    [Console]::Error.WriteLine("Usage: /baton:project list [--json] | archive <slug> | unarchive <slug> | hide <slug> | set-blurb <slug> `"<text>`"")
+    [Console]::Error.WriteLine("Usage: /baton:project list [--json] | create `"<name>`" [--description `"<text>`"] [--json] | archive <slug> | unarchive <slug> | hide <slug> | set-blurb <slug> `"<text>`"")
 }
 
 function Get-RecordForSlug {
@@ -73,6 +74,26 @@ switch (($Subcommand | ForEach-Object { $_.ToLowerInvariant() })) {
             Show 'Active'   $roster.active
             Show 'Inactive' $roster.inactive
             Show 'Archived' $roster.archived
+        }
+        exit 0
+    }
+    'create' {
+        $name = $Slug
+        if ([string]::IsNullOrWhiteSpace($name)) { Write-Usage; exit 2 }
+        $desc = if ($Value) { $Value } else { '' }
+        try {
+            $created = New-BatonProject -Name $name -Description $desc
+        } catch {
+            [Console]::Error.WriteLine($_.Exception.Message)
+            exit 1
+        }
+        if ($Json) {
+            $created | ConvertTo-Json -Depth 6
+        } else {
+            Write-Host ("Created project {0} at {1}" -f $created.id, $created.folder)
+            if ($created.github.url) { Write-Host ("GitHub: {0}" -f $created.github.url) }
+            if ($created.grimdex_path) { Write-Host ("Grimdex: {0}" -f $created.grimdex_path) }
+            if ($created.grimlore_path) { Write-Host ("Grimlore: {0}" -f $created.grimlore_path) }
         }
         exit 0
     }

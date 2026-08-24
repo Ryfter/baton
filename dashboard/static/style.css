@@ -2196,6 +2196,46 @@ input:focus-visible,
   color: var(--maestro-brass-dim);
   text-transform: uppercase;
 }
+.project-observability {
+  margin: 0.45rem 0;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  background: rgba(12, 16, 22, 0.55);
+  border: 1px solid rgba(212, 165, 116, 0.1);
+  font-size: 0.74rem;
+}
+.project-observability__title {
+  margin: 0 0 0.35rem;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+}
+.project-observability__trajectory { margin: 0 0 0.35rem; }
+.project-observability__trajectory--stuck,
+.project-observability__trajectory--drifting { color: #fca5a5; }
+.project-observability__trajectory--converging { color: #86efac; }
+.project-observability__declared,
+.project-observability__regressions {
+  margin: 0.25rem 0 0.35rem;
+  padding-left: 1.1rem;
+}
+.project-observability__declared li,
+.project-observability__regressions li { margin: 0.15rem 0; }
+.project-observability__mark {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.05rem 0.25rem;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.project-observability__mark--active { color: #93c5fd; }
+.project-observability__mark--blocked { color: #fca5a5; }
+.project-observability__observed { margin: 0.2rem 0; color: #cbd5e1; }
+.project-observability__regressions { color: #fbbf24; list-style: disc; }
+.project-observability__map { margin: 0.35rem 0 0; }
+.project-observability__map a { color: var(--maestro-brass); }
 .project-economics {
   margin-top: 0.55rem;
   padding: 0.55rem 0.65rem;
