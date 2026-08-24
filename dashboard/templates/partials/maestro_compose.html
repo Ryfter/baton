@@ -60,13 +60,13 @@
         <option value="{{ p.id }}" {% if last_project == p.id %}selected{% endif %}>{% if p.name and p.name != p.id %}{{ p.name }} ({{ p.id }}){% else %}{{ p.name or p.id }}{% endif %}</option>
         {% endfor %}
       </select>
-      {% if projects and not compact %}
-      <span class="maestro-field__hint">Hover a chip for what that slug is.{% if last_project %} <strong>live</strong> means the featured job below is <strong>{{ last_project }}</strong>.{% endif %}</span>
-      {% else %}
+      {% if not projects %}
       <div class="maestro-empty maestro-empty--inline" role="status">
         <p class="maestro-empty__title">No registry projects</p>
         <p class="maestro-field__hint maestro-field__hint--warn">Add <code>$BATON_HOME/projects/&lt;id&gt;/project.json</code> before you can admit a job.</p>
       </div>
+      {% elif not compact %}
+      <span class="maestro-field__hint">Hover a chip for what that slug is.{% if last_project %} <strong>live</strong> means the featured job below is <strong>{{ last_project }}</strong>.{% endif %}</span>
       {% endif %}
     </div>
 

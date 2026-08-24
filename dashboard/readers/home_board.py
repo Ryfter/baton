@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -16,6 +17,11 @@ from dashboard.readers.project_economics import economics_for_projects
 _ATTENTION_STATUSES = frozenset({"waiting-quota", "held"})
 _LIVE_STATUSES = frozenset({"running", "admitted", "queued", "waiting-quota", "held"})
 _STALL_SECONDS = 300
+_STALE_SECONDS = 43200  # 12h — backlog from yesterday, not a live lockup
+_LIFECYCLE_RE = re.compile(
+    r"^(created|admitted|queued|running|held|waiting-quota|done)\s*[·•]\s*",
+    re.IGNORECASE,
+)
 
 
 def _parse_ts(value: Any) -> Optional[datetime]:
@@ -90,18 +96,48 @@ def _attention_rank(pill: str) -> int:
         "running": 4,
         "admitted": 5,
         "queued": 6,
-        "idle": 7,
-        "done": 8,
+        "stale": 7,
+        "idle": 8,
+        "done": 9,
     }
-    return order.get(pill, 9)
+    return order.get(pill, 10)
 
 
-def _attention_pill(status: str, stalled: bool) -> str:
-    if stalled and status == "running":
-        return "stalled"
+def _resolve_pill(status: str, ago_sec: Optional[int]) -> str:
+    if status == "running":
+        if ago_sec is not None and ago_sec > _STALE_SECONDS:
+            return "stale"
+        if ago_sec is not None and ago_sec > _STALL_SECONDS:
+            return "stalled"
     if status in _ATTENTION_STATUSES:
+        if ago_sec is not None and ago_sec > _STALE_SECONDS and status in {"held"}:
+            return "stale"
         return "needs-you"
     return status
+
+
+def _classify_activity(cell: dict[str, Any], last_output: str) -> dict[str, str]:
+    turns = cell.get("turns") or []
+    has_stdout = any(str(t.get("kind") or "") == "output" for t in turns)
+    text = " ".join((last_output or "").split())
+    if has_stdout and text:
+        return {"kind": "stdout", "text": text}
+    if text and (_LIFECYCLE_RE.match(text) or not has_stdout):
+        status = str(cell.get("status") or "idle").replace("-", " ")
+        return {"kind": "lifecycle", "text": text, "status_label": status.title()}
+    if text:
+        return {"kind": "stdout", "text": text}
+    status = str(cell.get("status") or "idle").replace("-", " ")
+    return {"kind": "lifecycle", "text": "", "status_label": status.title()}
+
+
+def _format_window_label(raw: str) -> str:
+    label = (raw or "").strip()
+    if not label:
+        return "Rolling 5h window"
+    if label.lower().startswith("fallback"):
+        return "Rolling 5h window"
+    return label
 
 
 def read_home_header(
@@ -127,14 +163,17 @@ def read_home_header(
     quota = read_claude_quota(baton_home, now=clock)
 
     attention: list[dict[str, str]] = []
+    stale_count = 0
     total_window_tokens = 0
     total_savings = 0.0
 
     for cell in grid["cells"]:
         last_at = _last_job_activity(jobs_dir, cell.get("job_id"))
         ago = _seconds_ago(last_at, clock)
-        stalled = cell.get("status") == "running" and ago is not None and ago > _STALL_SECONDS
-        pill = _attention_pill(str(cell.get("status") or "idle"), stalled)
+        pill = _resolve_pill(str(cell.get("status") or "idle"), ago)
+        if pill == "stale":
+            stale_count += 1
+            continue
         if pill in {"needs-you", "stalled", "waiting-quota", "held"}:
             label = f"{cell.get('name')}: {pill.replace('-', ' ')}"
             attention.append({"project_id": cell["project_id"], "label": label, "pill": pill})
@@ -144,21 +183,22 @@ def read_home_header(
         if econ.get("savings_usd"):
             total_savings += float(econ["savings_usd"])
 
-    claude_label = quota.get("five_hour_label") or ""
+    claude_label = quota.get("five_hour_label") or "open"
     admitted = sum(1 for j in list_jobs(jobs_dir) if j.get("status") == "admitted")
     queued = sum(1 for j in list_jobs(jobs_dir) if j.get("status") == "queued")
     next_fire = ""
     if admitted:
-        next_fire = f"{admitted} admitted — next tick fires"
+        next_fire = f"{admitted} admitted"
     elif queued:
-        next_fire = f"{queued} queued — admit on tick"
+        next_fire = f"{queued} queued"
 
     return {
         "attention": attention,
-        "attention_clean": len(attention) == 0,
+        "attention_clean": len(attention) == 0 and stale_count == 0,
+        "stale_count": stale_count,
         "capacity": {
             "claude_label": claude_label,
-            "window_label": window.get("label") or "",
+            "window_label": _format_window_label(str(window.get("label") or "")),
             "window_tokens_display": _fmt_tokens(total_window_tokens),
             "savings_display": f"Saved ${total_savings:.2f}" if total_savings > 0.01 else "",
             "next_fire": next_fire,
@@ -198,16 +238,17 @@ def read_home_floor(
 
         last_at = _last_job_activity(jobs_dir, cell.get("job_id"))
         ago_sec = _seconds_ago(last_at, clock)
-        stalled = status == "running" and ago_sec is not None and ago_sec > _STALL_SECONDS
-        pill = _attention_pill(status, stalled)
-        if stalled:
-            pill = "stalled"
+        pill = _resolve_pill(status, ago_sec)
+        activity = _classify_activity(cell, str(cell.get("last_output") or ""))
 
         cards.append({
             **cell,
             "goal": sanitize_goal(str(cell.get("goal") or "")),
             "attention_pill": pill,
             "recency_display": _format_ago(ago_sec),
+            "activity_kind": activity["kind"],
+            "activity_text": activity.get("text") or "",
+            "activity_status": activity.get("status_label") or "",
             "economics": econ,
             "port_collapsed": True,
         })
