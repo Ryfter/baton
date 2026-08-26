@@ -29,6 +29,9 @@ try {
         -SkipGitHub -BatonHome $batonHome -ProjectsRoot $devRoot
     Check 'PC3 folder created' (Test-Path -LiteralPath $created.folder)
     Check 'PC4 charter exists' (Test-Path -LiteralPath (Join-Path $created.folder 'CHARTER.md'))
+    Check 'PC4b PLAN.md skeleton' (Test-Path -LiteralPath (Join-Path $created.folder 'PLAN.md'))
+    $planText = Get-Content -LiteralPath (Join-Path $created.folder 'PLAN.md') -Raw
+    Check 'PC4c PLAN.md has component id' ($planText -match '\{#[a-z0-9-]+\}')
     Check 'PC5 registry record' (Test-Path -LiteralPath (Join-Path $batonHome 'projects/widget-lab/project.json'))
     Check 'PC6 grimdex tier' (Test-Path -LiteralPath (Join-Path $grimdex 'projects/widget-lab/decision-guidance.md'))
     Check 'PC7 grimlore bundle' (Test-Path -LiteralPath (Join-Path $grimlore 'projects/widget-lab/index.md'))

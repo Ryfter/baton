@@ -5,7 +5,9 @@ $ErrorActionPreference = 'Stop'
 $box = Join-Path ([System.IO.Path]::GetTempPath()) ("df-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force -Path (Join-Path $box 'maestro/jobs') | Out-Null
 $prevHome = $env:BATON_HOME
+$prevTrail = $env:BATON_AGENTTRAIL
 $env:BATON_HOME = $box
+$env:BATON_AGENTTRAIL = '0'  # hermetic — do not spawn npx agenttrail
 
 $script:fail = 0
 function Check($n, $c) { if ($c) { Write-Host "PASS: $n" } else { Write-Host "FAIL: $n"; $script:fail++ } }
@@ -15,12 +17,16 @@ try {
     $lanes = Get-DarkFactoryLanes
     Check 'grimdex lane present' (@($lanes | Where-Object lane -eq 'grimdex-edu-curriculum').Count -eq 1)
 
+    $skipSide = Start-DarkFactoryObservabilitySidecar -ProjectId 'baton' -BatonHome $box
+    Check 'sidecar skip when BATON_AGENTTRAIL=0' ([bool]$skipSide.skipped -eq $true)
+
     $dry = Invoke-DarkFactorySeed -BatonHome $box -DryRun
     $jobFiles = @(Get-ChildItem (Join-Path $box 'maestro/jobs') -Filter 'mj-*.json' -ErrorAction SilentlyContinue)
     Check 'dry-run creates no job files' ($jobFiles.Count -eq 0 -and @($dry.created).Count -ge 2)
 
     $seed = Invoke-DarkFactorySeed -BatonHome $box
     Check 'seed creates jobs' (@($seed.created).Count -ge 2)
+    Check 'seed returns sidecars list' ($null -ne $seed.sidecars)
     $jobsDir = Join-Path $box 'maestro/jobs'
     $first = Get-Content -LiteralPath (Join-Path $jobsDir "$($seed.created[0].job_id).json") -Raw | ConvertFrom-Json
     Check 'seeded job tagged dark-factory' (@($first.tags) -contains 'dark-factory')
@@ -45,6 +51,7 @@ try {
     Check 'broadcast writes handoffs' (@($broadcast.handoffs).Count -ge 2)
 } finally {
     $env:BATON_HOME = $prevHome
+    $env:BATON_AGENTTRAIL = $prevTrail
     Remove-Item -Recurse -Force $box -ErrorAction SilentlyContinue
 }
 

@@ -21,13 +21,14 @@ param(
 )
 
 . "$PSScriptRoot/baton-home.ps1"
+$BatonHome = Get-BatonHome
 
 $obsRoot = Join-Path $BatonHome 'observability'
 $trailRoot = Join-Path $obsRoot 'agenttrail'
 $pulsePath = Join-Path $obsRoot 'agentpulse.json'
 
 function Write-Json($obj) {
-    if ($Json) { $obj | ConvertTo-Json -Depth 8 -Compress:$false }
+    if ($script:Json) { $obj | ConvertTo-Json -Depth 8 -Compress:$false }
 }
 
 function Resolve-ProjectFolder {

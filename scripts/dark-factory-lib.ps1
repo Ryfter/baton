@@ -148,6 +148,35 @@ function Test-DarkFactoryLaneActive {
     return $false
 }
 
+function Start-DarkFactoryObservabilitySidecar {
+    <# Fail-open AgentTrail start for a registry project. Skipped when BATON_AGENTTRAIL=0. #>
+    param(
+        [Parameter(Mandatory)][string]$ProjectId,
+        [string]$BatonHome = (Get-BatonHome)
+    )
+    if ($env:BATON_AGENTTRAIL -eq '0') {
+        return [ordered]@{ ok = $true; skipped = $true; reason = 'BATON_AGENTTRAIL=0' }
+    }
+    $script = Join-Path $PSScriptRoot 'fleet-agenttrail.ps1'
+    if (-not (Test-Path -LiteralPath $script)) {
+        return [ordered]@{ ok = $false; skipped = $true; reason = 'fleet-agenttrail.ps1 missing' }
+    }
+    try {
+        $raw = & pwsh -NoProfile -File $script -Action start -Project $ProjectId -Json 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            return [ordered]@{ ok = $false; skipped = $false; error = $raw.Trim() }
+        }
+        try {
+            $doc = $raw | ConvertFrom-Json
+            return [ordered]@{ ok = [bool]$doc.ok; skipped = $false; detail = $doc }
+        } catch {
+            return [ordered]@{ ok = $true; skipped = $false; raw = $raw.Trim() }
+        }
+    } catch {
+        return [ordered]@{ ok = $false; skipped = $false; error = $_.Exception.Message }
+    }
+}
+
 function Invoke-DarkFactorySeed {
     param(
         [string]$BatonHome = (Get-BatonHome),
@@ -157,6 +186,7 @@ function Invoke-DarkFactorySeed {
     Ensure-DarkFactoryProjectRegistry -BatonHome $BatonHome | Out-Null
     $created = [System.Collections.ArrayList]@()
     $skipped = [System.Collections.ArrayList]@()
+    $sidecars = [System.Collections.ArrayList]@()
     foreach ($lane in @(Get-DarkFactoryLanes)) {
         $proj = [string]$lane.project
         $name = [string]$lane.lane
@@ -171,6 +201,8 @@ function Invoke-DarkFactorySeed {
         $markedGoal = "<!-- dark-factory:lane=$name -->`n$([string]$lane.goal)"
         $job = New-DarkFactoryMaestroJob -Project $proj -Goal $markedGoal -Stakes ([string]$lane.stakes) -BatonHome $BatonHome
         [void]$created.Add([ordered]@{ lane = $name; job_id = [string]$job.id; project = $proj })
+        $side = Start-DarkFactoryObservabilitySidecar -ProjectId $proj -BatonHome $BatonHome
+        [void]$sidecars.Add([ordered]@{ project = $proj; lane = $name; sidecar = $side })
     }
     $admitted = @()
     if ($Admit -and -not $DryRun) {
@@ -184,6 +216,7 @@ function Invoke-DarkFactorySeed {
         created  = @($created)
         skipped  = @($skipped)
         admitted = $admitted
+        sidecars = @($sidecars)
     }
 }
 

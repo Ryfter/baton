@@ -24,6 +24,11 @@ ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
   if [[ -x "${OUT}/bin/maestro-watch.sh" ]]; then
     "${OUT}/bin/maestro-watch.sh" --once || true
   fi
+  # Fail-open AgentPulse snapshot for Home attention rail (docs/agent-observability.md)
+  if [[ "${BATON_AGENTTRAIL:-1}" != "0" ]]; then
+    "$PWSH" -NoProfile -File "${BATON}/scripts/fleet-agenttrail.ps1" -Action snapshot -Json \
+      || echo "[$(ts)] agentpulse snapshot skipped (fail-open)"
+  fi
   echo "[$(ts)] dark-factory-night done"
 } >>"$LOG" 2>&1
 

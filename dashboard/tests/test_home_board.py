@@ -9,7 +9,12 @@ from fastapi import FastAPI, Request
 from fastapi.templating import Jinja2Templates
 from fastapi.testclient import TestClient
 
-from dashboard.readers.home_board import _classify_activity, _resolve_pill, read_home_header
+from dashboard.readers.home_board import (
+    _classify_activity,
+    _dedupe_attention,
+    _resolve_pill,
+    read_home_header,
+)
 from dashboard.readers.maestro_jobs import create_job, maestro_root, write_job
 from dashboard.routers.home import build_router
 
@@ -34,6 +39,19 @@ def test_attention_rail_waiting_quota(tmp_path: Path):
     )
     assert header["attention_clean"] is False
     assert any("answerbot" in a["label"].lower() for a in header["attention"])
+
+
+def test_dedupe_attention_by_project_kind_label():
+    rows = [
+        {"project_id": "a", "kind": "blocked", "label": "a: blocked — x", "pill": "needs-you"},
+        {"project_id": "a", "kind": "blocked", "label": "a: blocked — x", "pill": "needs-you"},
+        {"project_id": "a", "kind": "regression", "label": "a: revising done — y", "pill": "needs-you"},
+        {"project_id": "b", "pill": "stalled", "label": "b: stalled"},
+    ]
+    out = _dedupe_attention(rows)
+    assert len(out) == 3
+    assert out[0]["kind"] == "blocked"
+    assert out[1]["kind"] == "regression"
 
 
 def test_stale_running_job_not_in_attention_rail(tmp_path: Path):

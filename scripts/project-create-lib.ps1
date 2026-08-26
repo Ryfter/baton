@@ -6,6 +6,7 @@
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/baton-home.ps1"
 . "$PSScriptRoot/registry-lib.ps1"
+. "$PSScriptRoot/start-lib.ps1"             # New-CharterContent
 . "$PSScriptRoot/maestro-session-lib.ps1"
 
 function Resolve-GrimdexDataRoot {
@@ -39,6 +40,33 @@ function ConvertTo-ProjectSlug {
     $s = $Text.Trim().ToLowerInvariant()
     $s = [regex]::Replace($s, '[^a-z0-9]+', '-')
     return $s.Trim('-')
+}
+
+function New-PlanMdSkeleton {
+    <# AgentTrail PLAN.md convention stub — do not run npx agenttrail init. #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Folder,
+        [string]$Description = ''
+    )
+    $plan = Join-Path $Folder 'PLAN.md'
+    if (Test-Path -LiteralPath $plan) { return $false }
+    $compId = ConvertTo-ProjectSlug -Text $Name
+    if ([string]::IsNullOrWhiteSpace($compId)) { $compId = 'core' }
+    $descLine = if ($Description) { "tech: $Description" } else { 'tech: scaffold — replace with real components' }
+    @"
+# $Name
+
+## Build the core {#$compId}
+$descLine
+files: []
+- [ ] Define the first real component {#$compId-first}
+  from: roadmap
+
+## decisions
+- $(Get-Date -Format 'yyyy-MM-dd'): PLAN.md scaffolded by Baton project create (AgentTrail convention). Run ``npx agenttrail init`` when the repo earns a live map.
+"@ | Set-Content -LiteralPath $plan -Encoding utf8NoBOM
+    return $true
 }
 
 function Test-GhCliReady {
@@ -167,10 +195,14 @@ function New-BatonProject {
     $goalText = if ($Goal) { $Goal.Trim() } else { $desc }
 
     $readme = Join-Path $folder 'README.md'
-    "# $displayName`n`n$desc`n" | Set-Content -LiteralPath $readme -Encoding utf8NoBOM
+    "# $displayName`n`n$desc`n`nLiving map: ``PLAN.md`` (AgentTrail convention).`n" | Set-Content -LiteralPath $readme -Encoding utf8NoBOM
 
     $charter = New-CharterContent -Name $displayName -Goal $goalText -Audience '' -Done '' -Reasoning ''
+    if ($charter -notmatch 'PLAN\.md') {
+        $charter = $charter.TrimEnd() + "`n`n## Living map`n`nAgents maintain ``PLAN.md`` (AgentTrail declared-vs-observed). Maestro jobs remain canonical for labor.`n"
+    }
     Set-Content -LiteralPath (Join-Path $folder 'CHARTER.md') -Value $charter -Encoding utf8NoBOM
+    [void](New-PlanMdSkeleton -Name $displayName -Folder $folder -Description $desc)
 
     & git -C $folder init -b main 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "git init failed in $folder" }

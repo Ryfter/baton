@@ -135,6 +135,23 @@ def _classify_activity(cell: dict[str, Any], last_output: str) -> dict[str, str]
     return {"kind": "lifecycle", "text": "", "status_label": status.title()}
 
 
+def _dedupe_attention(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Collapse duplicate rail rows by project_id + kind/pill + label."""
+    seen: set[tuple[str, str, str]] = set()
+    out: list[dict[str, str]] = []
+    for row in rows:
+        key = (
+            str(row.get("project_id") or ""),
+            str(row.get("kind") or row.get("pill") or ""),
+            str(row.get("label") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
 def _format_window_label(raw: str) -> str:
     label = (raw or "").strip()
     if not label:
@@ -198,6 +215,8 @@ def read_home_header(
         total_window_tokens += econ.get("total_tokens") or 0
         if econ.get("savings_usd"):
             total_savings += float(econ["savings_usd"])
+
+    attention = _dedupe_attention(attention)
 
     claude_label = quota.get("five_hour_label") or "open"
     admitted = sum(1 for j in list_jobs(jobs_dir) if j.get("status") == "admitted")

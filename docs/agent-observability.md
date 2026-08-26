@@ -120,6 +120,17 @@ files: [src/notify/**]
 - 2026-08-24: use local sidecar, not cloud telemetry
 ```
 
+## Factory wiring
+
+| Hook | Behavior |
+|---|---|
+| Dark factory **seed** | After each new lane job, fail-open `fleet-agenttrail.ps1 -Action start` for that project (`Start-DarkFactoryObservabilitySidecar`). Skipped when `BATON_AGENTTRAIL=0`. |
+| Dark factory **night** | After the night tick, fail-open `fleet-agenttrail.ps1 -Action snapshot` (AgentPulse JSON for the Home rail). |
+| **project create** | Writes an AgentTrail `PLAN.md` skeleton (+ one-line mention in README/CHARTER). Does **not** run `npx agenttrail init`. |
+| Home attention rail | De-dupes rows by `project_id` + `kind`/`pill` + `label`. |
+
+Hermetic suite: `pwsh -NoProfile -File scripts/test-fleet-agenttrail.ps1`
+
 ## What we deliberately did not build
 
 - Full AgentTrail UI inside Baton (link out instead).
@@ -132,3 +143,4 @@ files: [src/notify/**]
 - Home redesign spec: `docs/superpowers/specs/2026-08-23-maestro-home-redesign-design.md`
 - Landscape row: `Grimlore/projects/baton/list-of-urls.md`
 - Ecosystem boundaries: `docs/ecosystem-boundaries.md`
+- Routing vision (least viable model + cost/runtime): [`README.md`](../README.md#the-routing-bet) · [`docs/GUIDE.md`](GUIDE.md)
