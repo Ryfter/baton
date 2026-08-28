@@ -1,13 +1,13 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-  The Baton room — you type `baton`, you are in Maestro.
+  Maestro harness — bare `maestro` prints passive status; explicit subcommands for factory actions.
 
 .DESCRIPTION
-  Bare `baton` starts this. Say a project and what to do in plain English.
-  Type status for this project. Type quit to leave.
+  Bare `maestro` (or `start`) prints 3-line passive status and exits.
+  Use `admit` to queue a job, `status` for the factory queue, `go` for legacy admit.
 
-  Power leftovers (not the front door): install, fire, --json seat dump.
+  Power leftovers: install, fire, --json seat dump.
 #>
 [CmdletBinding()]
 param(
@@ -317,6 +317,46 @@ function Invoke-BatonRoom {
     }
 }
 
+function Invoke-BatonPassiveStatus {
+    $lines = Format-BatonPassiveStatus -BatonHome $BatonHome
+    foreach ($ln in $lines) { Write-Output $ln }
+    [Console]::Error.WriteLine('hint     baton admit "…" · baton status · baton quota · baton --help')
+}
+
+function Invoke-MaestroAdmit {
+    $text = $Goal
+    if ([string]::IsNullOrWhiteSpace($text) -and $GoalFile) {
+        if (-not (Test-Path -LiteralPath $GoalFile)) { throw "goal file not found: $GoalFile" }
+        $text = Get-Content -LiteralPath $GoalFile -Raw
+    }
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        [Console]::Error.WriteLine('admit requires a goal: baton admit "refactor tests"')
+        exit 2
+    }
+    $proj = $Project
+    if ([string]::IsNullOrWhiteSpace($proj)) {
+        $ctx = Resolve-BatonProjectFromCwd -BatonHome $BatonHome
+        if (-not $ctx.Registered) {
+            [Console]::Error.WriteLine('admit: cwd is not a registered project. Use --project <id>.')
+            exit 2
+        }
+        $proj = [string]$ctx.Id
+    }
+    $seat = Get-MaestroConductorSeat -Provider $Provider
+    $job = New-MaestroJob -BatonHome $BatonHome -Project $proj -Goal $text.Trim() `
+        -MaxCostTier $MaxCostTier -Source 'cli' -Provider $seat.Name
+    if ($Fire) {
+        $fireScript = Join-Path $PSScriptRoot 'maestro-fire.ps1'
+        & pwsh -NoProfile -File $fireScript -BatonHome $BatonHome | Out-Null
+        $jobPath = Join-Path (Get-MaestroJobsDir -BatonHome $BatonHome) "$($job.id).json"
+        if (Test-Path -LiteralPath $jobPath) {
+            $job = Get-Content -LiteralPath $jobPath -Raw | ConvertFrom-Json
+        }
+    }
+    if ($Json) { $job | ConvertTo-Json -Depth 6; return }
+    Write-Output ("admitted {0} — {1}" -f $job.id, $job.goal)
+}
+
 function Invoke-MaestroGo {
     if ([string]::IsNullOrWhiteSpace($Project)) {
         throw 'go requires --project <registry-id>'
@@ -384,14 +424,19 @@ function Invoke-MaestroInstall {
 
 $cmd = $Subcommand.Trim().ToLowerInvariant()
 
+if ($cmd -eq 'admit' -and [string]::IsNullOrWhiteSpace($Goal) -and $args.Count -gt 0) {
+    $Goal = ($args -join ' ').Trim()
+}
+
 switch ($cmd) {
     { $_ -in @('help', '--help', '-h') } { Show-MaestroHelp; exit 0 }
     'go' { Invoke-MaestroGo; exit 0 }
+    'admit' { Invoke-MaestroAdmit; exit 0 }
     'status' { Invoke-MaestroStatus; exit 0 }
     'install' { Invoke-MaestroInstall; exit 0 }
     { $_ -in @('', 'start') } {
         if ($Json) { Write-BatonSeatJson; exit 0 }
-        Invoke-BatonRoom
+        Invoke-BatonPassiveStatus
         exit 0
     }
     'fire' {

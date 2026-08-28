@@ -220,6 +220,22 @@ try {
     $exact = Find-MaestroRoomExactPick -Choices $choices -Text 'canvas-toolchain'
     Assert 'G7 exact pick resolves a registered project' ([string]$exact.Id -eq 'canvas-toolchain')
 
+    $passiveOut = & pwsh -NoProfile -File $maestro -NoWatch 2>&1 | Out-String
+    Assert 'P4 bare maestro is passive not room' (
+        $LASTEXITCODE -eq 0 -and
+        $passiveOut -match '(?m)^project\s' -and
+        $passiveOut -notmatch 'type here|enter runs|╭'
+    )
+
+    $admitOut = & pwsh -NoProfile -File $maestro go --project baton --goal 'passive pivot' --json 2>&1 | Out-String
+    # baseline — go still works until admit wired in verbs (Task 4 uses baton admit)
+
+    $admitNew = & pwsh -NoProfile -File $maestro admit --project baton --goal 'from admit subcommand' --json 2>&1 | Out-String
+    Assert 'A1 maestro admit exit 0' ($LASTEXITCODE -eq 0)
+    $admitObj = $null
+    try { $admitObj = $admitNew | ConvertFrom-Json } catch { }
+    Assert 'A2 maestro admit returns mj- id' ($admitObj -and [string]$admitObj.id -match '^mj-')
+
     $jsonOut = & pwsh -NoProfile -File $maestro -NoWatch -Json 2>&1 | Out-String
     Assert 'P1 seat --json exit 0' ($LASTEXITCODE -eq 0)
     $startObj = $null

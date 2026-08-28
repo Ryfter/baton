@@ -1,5 +1,5 @@
 # baton CLI verb registry — single source of truth for the Phase-1 dispatcher.
-# Bare `baton` (no verb) is the front door / Maestro room — see maestro.ps1.
+# Bare `baton` (no verb) prints passive status — see maestro.ps1 Invoke-BatonPassiveStatus.
 # Engine/hybrid verbs below are power tools (`baton --help`).
 # Each runner must exist under scripts/ (or a resolved script root).
 verbs:
@@ -52,6 +52,24 @@ verbs:
       --json: -Json
       --format: -Format
       --force: -Force
+  - name: admit
+    summary: Queue a Maestro dark-factory job (project from cwd unless --project).
+    class: hybrid
+    runner: maestro.ps1
+    json: true
+    flag_aliases:
+      --project: -Project
+      --goal-file: -GoalFile
+      --fire: -Fire
+      --json: -Json
+      --max-tier: -MaxCostTier
+  - name: status
+    summary: List Maestro jobs (factory queue and runners).
+    class: engine
+    runner: maestro.ps1
+    json: true
+    flag_aliases:
+      --json: -Json
   - name: efficiency
     summary: Efficiency Officer — bounded context select and state delta (token-saver).
     class: engine

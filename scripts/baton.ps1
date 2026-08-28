@@ -367,5 +367,9 @@ if ($verb.flag_aliases -and $verb.flag_aliases.Count -gt 0) {
 
 # Full passthrough of (possibly alias-translated) tokens — runners own validation.
 # Avoid re-ordering flags here. Exit code is the runner's exit code.
-& pwsh -NoProfile -File $runnerPath @tail
+if ([string]$verb.runner -eq 'maestro.ps1') {
+    & pwsh -NoProfile -File $runnerPath $head @tail
+} else {
+    & pwsh -NoProfile -File $runnerPath @tail
+}
 exit $LASTEXITCODE
