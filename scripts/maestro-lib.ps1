@@ -101,6 +101,96 @@ function Get-MaestroJobRecords {
     return $out
 }
 
+function Resolve-BatonProjectFromCwd {
+    param(
+        [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }),
+        [string]$Cwd = $(Get-Location).Path
+    )
+    $path = try { [IO.Path]::GetFullPath($Cwd) } catch { [string]$Cwd }
+    . (Join-Path $PSScriptRoot 'registry-lib.ps1')
+    $slug = Get-ProjectId -Folder $path
+    $choices = @(Get-MaestroRoomChoices -BatonHome $BatonHome)
+    # Exact project folder match via registry records
+    foreach ($c in @($choices | Where-Object { $_.Kind -eq 'project' })) {
+        $recPath = Join-Path $BatonHome 'projects' ([string]$c.Id) 'project.json'
+        if (Test-Path -LiteralPath $recPath) {
+            $rec = Get-Content -LiteralPath $recPath -Raw | ConvertFrom-Json
+            $folder = [string]$rec.folder
+            if ($folder) {
+                try {
+                    $full = [IO.Path]::GetFullPath($folder)
+                    if ($path.Equals($full, [StringComparison]::OrdinalIgnoreCase)) {
+                        return [pscustomobject]@{ Id = [string]$c.Id; Path = $path; Registered = $true }
+                    }
+                } catch { }
+            }
+        }
+        if ([string]$c.Id -eq $slug) {
+            return [pscustomobject]@{ Id = [string]$c.Id; Path = $path; Registered = $true }
+        }
+    }
+    # Worktree match
+    foreach ($c in @($choices | Where-Object { $_.Kind -eq 'worktree' })) {
+        if ($path -match [regex]::Escape([string]$c.Label) -or [string]$c.Id -eq $slug) {
+            foreach ($p in @($choices | Where-Object { $_.Kind -eq 'project' })) {
+                if (Test-MaestroChoiceMatchesProject -Choice $c -ProjectId ([string]$p.Id)) {
+                    return [pscustomobject]@{ Id = [string]$p.Id; Path = $path; Registered = $true }
+                }
+            }
+        }
+    }
+    return [pscustomobject]@{ Id = $slug; Path = $path; Registered = $false }
+}
+
+function Get-BatonJobCounts {
+    param([string]$BatonHome)
+    $jobsDir = Get-MaestroJobsDir -BatonHome $BatonHome
+    $active = 0; $held = 0; $wq = 0
+    $terminal = @('done', 'rejected', 'cancelled')
+    foreach ($rec in @(Get-MaestroJobRecords -JobsDir $jobsDir)) {
+        $st = [string]$rec.Job.status
+        if ($terminal -contains $st) { continue }
+        switch -Regex ($st) {
+            '^held$' { $held++ }
+            '^waiting-quota$' { $wq++ }
+            '^(running|admitted)$' { $active++ }
+            default { $active++ }
+        }
+    }
+    return [pscustomobject]@{ Active = $active; Held = $held; WaitingQuota = $wq }
+}
+
+function Format-BatonPassiveStatus {
+    param(
+        [string]$BatonHome,
+        [string]$Cwd = $(Get-Location).Path
+    )
+    $ctx = Resolve-BatonProjectFromCwd -BatonHome $BatonHome -Cwd $Cwd
+    $projLabel = if ($ctx.Registered) { [string]$ctx.Id } else { '(unregistered)' }
+    $line1 = ('project  {0} · {1}' -f $projLabel, $ctx.Path)
+
+    . (Join-Path $PSScriptRoot 'cursor-quota-lib.ps1')
+    $cfg = Get-CursorQuotaConfig -BatonHome $BatonHome
+    $claude = Read-ClaudeQuotaCache -BatonHome $BatonHome
+    $cursor = Read-CursorQuotaCache -BatonHome $BatonHome
+    $parts = [System.Collections.Generic.List[string]]::new()
+    $cl = Format-ClaudeQuotaStatusLine -Cache $claude -Format detail -Config $cfg
+    if ($cl) { [void]$parts.Add(($cl -replace '^\s+', '')) }
+    $cu = Format-CursorQuotaStatusLine -Cache $cursor -Format detail -Config $cfg
+    if ($cu) { [void]$parts.Add(($cu -replace '^\s+Cursor', 'Cursor')) }
+    $line2 = if ($parts.Count -gt 0) {
+        ('quota    ' + ($parts -join ' · '))
+    } else {
+        'quota    (no snapshot — run Claude Code or baton quota)'
+    }
+
+    $c = Get-BatonJobCounts -BatonHome $BatonHome
+    $wqTxt = if ($c.WaitingQuota -gt 0) { " · $($c.WaitingQuota) waiting quota" } else { '' }
+    $line3 = ('jobs     {0} active · {1} held{2}' -f $c.Active, $c.Held, $wqTxt)
+
+    return @($line1, $line2, $line3)
+}
+
 function Get-MaestroUsableInstruments {
     param(
         [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }),
@@ -610,13 +700,13 @@ function Format-MaestroRoomScroll {
 function Test-MaestroChoiceMatchesProject {
     param($Choice, [string]$ProjectId)
     if (-not $Choice -or [string]::IsNullOrWhiteSpace($ProjectId)) { return $false }
-    $pid = $ProjectId.Trim().ToLowerInvariant()
+    $projId = $ProjectId.Trim().ToLowerInvariant()
     $label = ([string]$Choice.Label).ToLowerInvariant()
     $id = ([string]$Choice.Id).ToLowerInvariant()
     $path = ([string]$Choice.Path).ToLowerInvariant()
-    if ($id -eq $pid -or $label -eq $pid) { return $true }
-    if ($pid.Length -ge 3) {
-        if ($label.Contains($pid) -or $id.Contains($pid) -or $path.Contains($pid)) { return $true }
+    if ($id -eq $projId -or $label -eq $projId) { return $true }
+    if ($projId.Length -ge 3) {
+        if ($label.Contains($projId) -or $id.Contains($projId) -or $path.Contains($projId)) { return $true }
     }
     $prefixes = @{
         'canvas-toolchain' = @('ct-')
@@ -628,7 +718,7 @@ function Test-MaestroChoiceMatchesProject {
         'grimlore'         = @('gl-')
         'baton'            = @('maestro', 'wt-front', 'wt-factory')
     }
-    foreach ($pre in @($prefixes[$pid])) {
+    foreach ($pre in @($prefixes[$projId])) {
         if ($label.StartsWith($pre) -or $id.StartsWith($pre)) { return $true }
     }
     return $false

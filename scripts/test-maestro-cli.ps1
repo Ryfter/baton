@@ -65,6 +65,24 @@ try {
     Assert 'U1 utterance project' ([string]$parsed.Project -eq 'canvas-toolchain')
     Assert 'U2 utterance goal keeps the work' ([string]$parsed.Goal -match 'simplify install')
 
+    . (Join-Path $here 'registry-lib.ps1')
+
+    $projCtx = Resolve-BatonProjectFromCwd -BatonHome $home2 -Cwd (Join-Path $wt2 'ct-install-easy')
+    Assert 'C1 worktree cwd resolves parent project' ([string]$projCtx.Id -eq 'canvas-toolchain')
+    Assert 'C2 worktree cwd is registered' ($projCtx.Registered -eq $true)
+
+    $badCtx = Resolve-BatonProjectFromCwd -BatonHome $home2 -Cwd '/tmp/not-a-project'
+    Assert 'C3 unknown cwd is unregistered' ($badCtx.Registered -eq $false)
+
+    $counts = Get-BatonJobCounts -BatonHome $home2
+    Assert 'C4 empty factory counts zero' ($counts.Active -eq 0 -and $counts.Held -eq 0)
+
+    $lines = Format-BatonPassiveStatus -BatonHome $home2 -Cwd (Join-Path $wt2 'ct-install-easy')
+    Assert 'C5 passive status is 3 lines' (@($lines).Count -eq 3)
+    Assert 'C6 line1 starts with project' ($lines[0] -match '^project\s')
+    Assert 'C7 line2 starts with quota' ($lines[1] -match '^quota\s')
+    Assert 'C8 line3 starts with jobs' ($lines[2] -match '^jobs\s')
+
     $job = New-MaestroJob -BatonHome $home2 -Project 'baton' -Goal 'ship the front door' -MaxCostTier free -Source cli
     Assert 'J1 New-MaestroJob returns mj- id' ([string]$job.id -match '^mj-[0-9a-f]{12}$')
     Assert 'J2 source is cli' ([string]$job.source -eq 'cli')
