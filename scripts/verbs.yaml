@@ -1,6 +1,6 @@
 # baton CLI verb registry — single source of truth for the Phase-1 dispatcher.
-# Bare `baton` (no verb) prints passive status — see maestro.ps1 Invoke-BatonPassiveStatus.
-# Engine/hybrid verbs below are power tools (`baton --help`).
+# Bare `baton` (no verb) prints passive status (project, quota, jobs) — Invoke-BatonPassiveStatus in maestro.ps1.
+# Factory verbs: admit, status, quota. Engine/hybrid verbs below are power tools (`baton --help`).
 # Each runner must exist under scripts/ (or a resolved script root).
 verbs:
   - name: go

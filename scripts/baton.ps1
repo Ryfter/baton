@@ -1,14 +1,13 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-  baton CLI dispatcher — vendor-neutral front door over existing fleet runners.
+  baton CLI — passive status default; explicit verbs for factory and fleet actions.
 
 .DESCRIPTION
-  baton <verb> [args...]   resolve verb → runner, invoke with full arg passthrough
-  baton                    list verbs
-  baton --help | -h        list verbs
-  baton --version          print version
-  baton verbs --json       machine-readable verb registry
+  Bare `baton` (no verb) prints 3-line passive status (project, quota, jobs) and exits 0.
+  Primary factory verbs: admit (queue work), status (job list), quota (Claude + Cursor meters).
+  `baton <verb> [args...]` dispatches to fleet runners via verbs.yaml.
+  `baton --help | -h` lists verbs; `baton --version` prints version; `baton verbs --json` exports the registry.
 
   Does not re-parse runner flags. Exit code is the runner's exit code.
   Unknown verb → exit 2 (with a closest-name hint when distance is small).

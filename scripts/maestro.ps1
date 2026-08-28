@@ -1,13 +1,15 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-  Maestro harness — bare `maestro` prints passive status; explicit subcommands for factory actions.
+  Maestro harness — bare `maestro` prints passive status; admit/status for factory actions.
 
 .DESCRIPTION
-  Bare `maestro` (or `start`) prints 3-line passive status and exits.
-  Use `admit` to queue a job, `status` for the factory queue, `go` for legacy admit.
+  Bare `maestro` (or `start`) prints 3-line passive status (project, quota, jobs) and exits 0.
+  `admit` queues a dark-factory job (project from cwd unless --project).
+  `status` lists Maestro jobs; `go` remains the legacy natural-language admit path.
+  `quota` delegates to cursor-quota.ps1 when invoked via `baton quota`.
 
-  Power leftovers: install, fire, --json seat dump.
+  Power leftovers: install, fire, --json seat dump. No interactive room or stdin loop.
 #>
 [CmdletBinding()]
 param(
