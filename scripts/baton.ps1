@@ -253,10 +253,11 @@ function Find-BatonClosestVerb {
 
 function Show-BatonHelp {
     param([Parameter(Mandatory)][object[]]$Verbs)
-    Write-Output 'baton — type `baton` with no arguments to start. You are in Maestro.'
-    Write-Output ''
     Write-Output 'Usage:'
-    Write-Output '  baton                  start (plain English, status picks a worktree)'
+    Write-Output '  baton                  passive status (project, quota, jobs)'
+    Write-Output '  baton admit "goal"     queue dark-factory work'
+    Write-Output '  baton status           list Maestro jobs'
+    Write-Output '  baton quota            Claude 5h + Cursor meters'
     Write-Output '  baton <verb> [args...] power tools'
     Write-Output '  baton --help | -h'
     Write-Output '  baton --version'
@@ -301,7 +302,7 @@ $verbsPath = Join-Path $PSScriptRoot 'verbs.yaml'
 $verbs = @(Read-BatonVerbs -Path $verbsPath)
 
 if ($cliArgs.Count -eq 0) {
-    # `baton` is the front door — you are in Maestro. --help lists engine verbs.
+    # Bare `baton` prints passive status via maestro.ps1 (no verb).
     try {
         $room = Resolve-BatonScript -Name 'maestro.ps1'
     } catch {

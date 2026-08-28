@@ -37,12 +37,18 @@ try {
     $verbLines = @($helpOut -split "`n" | Where-Object { $_ -match '^\s{2}\S' })
     Assert 'H2 baton --help lists >= 10 verbs' ($verbLines.Count -ge 10)
     Assert 'H3 baton --help mentions go' ($helpOut -match '\bgo\b')
+    Assert 'H3b help mentions admit' ($helpOut -match '\badmit\b')
+    Assert 'H3c help does not say you are in Maestro room' ($helpOut -notmatch 'you are in Maestro')
 
-    $helpOut2 = 'quit' | & pwsh -NoProfile -File $baton 2>&1 | Out-String
+    $bareOut = & pwsh -NoProfile -File $baton 2>&1 | Out-String
     Assert 'H4 bare baton exit 0' ($LASTEXITCODE -eq 0)
-    Assert 'H5 bare baton is the room (not a verb list)' (
-        $helpOut2 -match '(?i)status' -and $helpOut2 -notmatch '(?m)^\s+fleet\s'
+    Assert 'H5 bare baton is passive status' (
+        $bareOut -match '(?m)^project\s' -and
+        $bareOut -match '(?m)^quota\s' -and
+        $bareOut -match '(?m)^jobs\s' -and
+        $bareOut -notmatch '(?m)^\s+fleet\s'
     )
+    Assert 'H5b bare baton is not the room' ($bareOut -notmatch 'type here|enter runs|╭')
 
     # ------------------------------------------------------------------
     # 2. baton verbs --json — valid JSON, required fields

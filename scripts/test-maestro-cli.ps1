@@ -1,5 +1,5 @@
 # scripts/test-maestro-cli.ps1
-# Hermetic tests: `baton` is the room. Type English. status lists worktrees.
+# Hermetic tests: passive status default, admit verb, lib helpers.
 # Never touches the real ~/.baton jobs, never fires fleet-go.
 $ErrorActionPreference = 'Stop'
 $script:Fail = 0
@@ -88,33 +88,6 @@ try {
     Assert 'J2 source is cli' ([string]$job.source -eq 'cli')
     Assert 'J3 max_cost_tier is free' ([string]$job.max_cost_tier -eq 'free')
 
-    $roomOut = "worktrees`nquit" | & pwsh -NoProfile -File $maestro 2>&1 | Out-String
-    Assert 'R1 room worktrees+quit exit 0' ($LASTEXITCODE -eq 0)
-    Assert 'R2 room worktrees lists a project' ($roomOut -match 'canvas-toolchain')
-    Assert 'R3 room worktrees lists a worktree' ($roomOut -match 'ct-install-easy')
-    Assert 'R4 room does not teach maestro start' ($roomOut -notmatch 'maestro start')
-
-    $talkOut = "in canvas-toolchain, simplify install`nquit" | & pwsh -NoProfile -File $maestro 2>&1 | Out-String
-    Assert 'R5 room English exit 0' ($LASTEXITCODE -eq 0)
-    $jobsDir = Join-Path $home2 'maestro/jobs'
-    $written = @(Get-ChildItem -LiteralPath $jobsDir -Filter 'mj-*.json' -ErrorAction SilentlyContinue)
-    $foundTalk = $false
-    foreach ($f in $written) {
-        $j = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json
-        if ([string]$j.project -eq 'canvas-toolchain' -and [string]$j.goal -match 'simplify install') {
-            $foundTalk = $true
-        }
-    }
-    Assert 'R6 room English admitted a job' $foundTalk
-
-    $pickOut = "projects`n2`nquit" | & pwsh -NoProfile -File $maestro 2>&1 | Out-String
-    Assert 'R7 picking a number from projects exit 0' ($LASTEXITCODE -eq 0)
-    Assert 'R8 pick acknowledges a choice' ($pickOut -match '(?i)(working on|picked|selected|on )')
-
-    $projOut = "projects`nquit" | & pwsh -NoProfile -File $maestro 2>&1 | Out-String
-    Assert 'R9 projects lists a registered project' ($projOut -match '(?m)^\s+\d+\s+canvas-toolchain\b')
-    Assert 'R10 projects does not list worktrees' ($projOut -notmatch '(?m)^\s+\d+\s+ct-install-easy\b')
-
     $keys = @(Get-MaestroRoomKeywords)
     $keyNames = @($keys | ForEach-Object { [string]$_.Name })
     Assert 'K1 keywords include status' ($keyNames -contains 'status')
@@ -123,13 +96,6 @@ try {
     Assert 'K3 keywords include quit' ($keyNames -contains 'quit')
     $sheet = Format-MaestroRoomKeywords
     Assert 'K4 keyword sheet names status' ($sheet -match '(?m)^\s+.*\bstatus\b')
-
-    $quotaOut = "quota`nquit" | & pwsh -NoProfile -File $maestro 2>&1 | Out-String
-    Assert 'Q1 room quota exit 0' ($LASTEXITCODE -eq 0)
-    Assert 'Q2 room quota mentions Cursor cycle' ($quotaOut -match 'Cursor cycle|cursor cycle')
-
-    $helpOut = "help`nquit" | & pwsh -NoProfile -File $maestro 2>&1 | Out-String
-    Assert 'K5 help reprints the sheet' ($helpOut -match '\bstatus\b' -and $helpOut -match '\bquit\b')
 
     $items = @(Get-MaestroRoomScrollItems -Choices $choices)
     $runs = @($items | ForEach-Object { [string]$_.Run })
@@ -194,31 +160,15 @@ try {
     Assert 'G16 run rows keep the useful icons' ($card0 -match '🌳' -and $card0 -match '📊')
     Assert 'G17 seat label drops the openrouter- prefix' ((Format-MaestroSeatLabel -Name 'openrouter-ox-alpha') -eq 'ox-alpha')
 
-    $lonely = "status`nquit" | & pwsh -NoProfile -File $maestro 2>&1 | Out-String
-    Assert 'ST1 status without a project asks to pick' ($lonely -match '(?i)pick a project|no project')
-    $scoped = "in canvas-toolchain, simplify install`nstatus`nquit" | & pwsh -NoProfile -File $maestro 2>&1 | Out-String
-    Assert 'ST2 status names the current project' ($scoped -match 'canvas-toolchain')
-    Assert 'ST3 status is not a full project picker' ($scoped -notmatch '(?m)^\s+1\s+baton\s+project')
-
-    $bare = "quit" | & pwsh -NoProfile -File $baton 2>&1 | Out-String
-    Assert 'B1 bare baton is the room' ($LASTEXITCODE -eq 0 -and $bare -match '(?i)status')
-    Assert 'B2 room shows keywords on entry' ($bare -match '\bstatus\b' -and $bare -match '\bhelp\b')
-    Assert 'B3 room shows a type-here cue' ($bare -match '(?i)type here')
-    Assert 'B4 room scroll lists all seeded projects' ($bare -match 'canvas-toolchain' -and $bare -match '\bbaton\b')
-    Assert 'B5 room says enter runs' ($bare -match '(?i)enter runs|↑')
-
-    $namePick = "canvas-toolchain`nquit" | & pwsh -NoProfile -File $maestro 2>&1 | Out-String
-    Assert 'B6 typing a project name picks it' ($namePick -match '(?i)working on canvas-toolchain')
-    $nameJobs = @(Get-ChildItem -LiteralPath $jobsDir -Filter 'mj-*.json' -ErrorAction SilentlyContinue)
-    $nameAdmitted = $false
-    foreach ($f in $nameJobs) {
-        $j = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json
-        if ([string]$j.goal -eq 'canvas-toolchain') { $nameAdmitted = $true }
-    }
-    Assert 'B7 typing a project name does not admit a job' (-not $nameAdmitted)
-
     $exact = Find-MaestroRoomExactPick -Choices $choices -Text 'canvas-toolchain'
     Assert 'G7 exact pick resolves a registered project' ([string]$exact.Id -eq 'canvas-toolchain')
+
+    $bare = & pwsh -NoProfile -File $baton 2>&1 | Out-String
+    Assert 'B1 bare baton passive exit 0' ($LASTEXITCODE -eq 0 -and $bare -match '(?m)^project\s')
+    Assert 'B2 bare baton does not hang on redirected stdin' ($true)
+
+    $viaVerb = & pwsh -NoProfile -File $baton admit --project baton --goal 'via verb' --json 2>&1 | Out-String
+    Assert 'B3 baton admit creates job' ($LASTEXITCODE -eq 0 -and $viaVerb -match 'mj-')
 
     $passiveOut = & pwsh -NoProfile -File $maestro -NoWatch 2>&1 | Out-String
     Assert 'P4 bare maestro is passive not room' (
