@@ -98,6 +98,23 @@ def test_classify_lifecycle_output():
     assert activity["kind"] == "lifecycle"
 
 
+def test_command_palette_api(tmp_path: Path):
+    (tmp_path / "projects" / "baton" / "project.json").parent.mkdir(parents=True)
+    (tmp_path / "projects" / "baton" / "project.json").write_text(
+        '{"id":"baton","name":"Baton"}', encoding="utf-8",
+    )
+    templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
+    app = FastAPI()
+    app.state.baton_home = tmp_path
+    app.state.journal_path = tmp_path / "model-routing-log.md"
+    app.state.jobs_root = tmp_path / "jobs"
+    app.state.runs_root = tmp_path / "runs"
+    app.include_router(build_router(templates))
+    client = TestClient(app)
+    data = client.get("/api/command-palette").json()
+    assert data["projects"][0]["id"] == "baton"
+
+
 def test_home_page_no_doughnut(tmp_path: Path):
     journal = tmp_path / "model-routing-log.md"
     journal.write_text("# log\n", encoding="utf-8")
@@ -131,6 +148,7 @@ def test_home_page_no_doughnut(tmp_path: Path):
     client = TestClient(app)
     page = client.get("/")
     assert page.status_code == 200
+    assert "command-palette" in page.text
     assert "costChart" not in page.text
     assert "attention-rail" in page.text
     assert "empty-until-reset" not in page.text

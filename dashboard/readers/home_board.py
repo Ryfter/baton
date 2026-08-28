@@ -16,6 +16,7 @@ from dashboard.readers.cockpit_grid import read_cockpit_grid
 from dashboard.readers.display_goal import sanitize_goal
 from dashboard.readers.gauges import _fmt_tokens, resolve_window
 from dashboard.readers.maestro_jobs import list_jobs, maestro_root
+from dashboard.readers.pane_truth import permission_attention_items
 from dashboard.readers.project_economics import economics_for_projects
 
 _ATTENTION_STATUSES = frozenset({"waiting-quota", "held"})
@@ -198,6 +199,17 @@ def read_home_header(
         if pill in {"needs-you", "stalled", "waiting-quota", "held"}:
             label = f"{cell.get('name')}: {pill.replace('-', ' ')}"
             attention.append({"project_id": cell["project_id"], "label": label, "pill": pill})
+
+        attention.extend(
+            permission_attention_items(
+                baton_home=baton_home,
+                project_id=cell["project_id"],
+                project_name=str(cell.get("name") or cell["project_id"]),
+                job_id=cell.get("job_id"),
+                job_status=str(cell.get("status") or ""),
+                now=clock,
+            )
+        )
 
         if cell.get("status") in {"running", "admitted"}:
             attention.extend(
