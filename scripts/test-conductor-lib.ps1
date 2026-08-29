@@ -7,8 +7,13 @@ function Check($n,$c){ if($c){Write-Host "PASS: $n"} else {Write-Host "FAIL: $n"
 
 try {
     # ---- Task 1: plan parsing (pure) ----
+    # Run ids carry ms + a random suffix so parallel fleet-go spawns in the same
+    # second get distinct worktrees; assert the SHAPE, not an exact string.
+    $t1Now = [datetime]'2026-06-18T14:22:05'
     Check 'T1 run id has go- prefix and dashed timestamp' `
-        ((New-RunId -Now ([datetime]'2026-06-18T14:22:05')) -eq 'go-2026-06-18T14-22-05')
+        ((New-RunId -Now $t1Now) -match '^go-2026-06-18T14-22-05-\d{3}-[0-9a-f]{4}$')
+    Check 'T1b run ids unique for identical timestamps' `
+        ((New-RunId -Now $t1Now) -ne (New-RunId -Now $t1Now))
 
     $planJson = '{"run_id":"x","goal":"convert pdfs","budget_cap":null,"tasks":[{"id":"t1","desc":"research","command":"research-gate","capability":"research","model_pick":"claude-haiku","depends_on":[],"est_cost_tier":"free","reversible":true},{"id":"t2","desc":"build","command":"code-parallel","capability":"code-gen","depends_on":["t1"],"est_cost_tier":"paid"}]}'
     Check 'T2 json block extracted from prose' ((Get-JsonBlock -Raw ("noise " + $planJson + " tail")) -eq $planJson)

@@ -4,9 +4,9 @@
 Enforces the `publishing-guard` rule mechanically instead of hoping an agent
 remembers it. Two blocks:
 
- 1. `git add -A|.|-u` / `git commit -a` while unreviewed untracked files exist.
-    Blanket staging is how someone else's files get committed by accident.
- 2. `git push` whose pending commits carry risky file types into a PUBLIC repo.
+  1. `git add -A|.|-u` / `git commit -a` while unreviewed untracked files exist.
+     Blanket staging is how someone else's files get committed by accident.
+  2. `git push` whose pending commits carry risky file types into a PUBLIC repo.
 
 Fast path first: anything that is not a git add/commit/push exits immediately,
 so the per-Bash-call cost is a regex match. Fails OPEN on any internal error —
@@ -73,7 +73,7 @@ def main():
     if evt.get("tool_name") != "Bash":
         return 0
     cmd = (evt.get("tool_input") or {}).get("command") or ""
-    if "git" not in cmd:                              # fast path: ~every non-git call
+    if "git" not in cmd:                      # fast path: ~every non-git call
         return 0
 
     m = DASH_C.search(cmd)

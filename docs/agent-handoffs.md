@@ -280,3 +280,33 @@ must know:
   failed to produce a terse structured verdict twice in ~25min where codex/grok/fable
   each finished quickly. Seat it on bulk code-gen behind a review gate; do **not** claim
   `review` / `plan-review` / `judge` / `extract-json` capabilities for it.
+- **Research instruments — DESIGNED, not built (2026-08-21, d127–d131):** spec at
+  `docs/superpowers/specs/2026-08-21-research-tools-design.md` on branch
+  `docs/research-instruments-design`. Root finding: **`tools.yaml` has always been
+  select-only** — `tools/` reads (`registry.py`), probes (`doctor.py`) and prints
+  (`list.py`) it, and *nothing invokes it*; no call site for `tools_for_capability`
+  exists anywhere. So "least costly effective tool" was a policy with no executor.
+  Build is two layers: `tools/invoke.py` (rank enabled+host-compatible rows by
+  `cost_tier` then `priority`, try in order, fall through on failure) under a
+  `/baton:ingest <path-or-url>` surface for docs/OCR/audio/video.
+  Four transports: `python` (needs a new `entrypoint:` naming an adapter in
+  `tools/adapters/` — a bare `module:` can't express docling's real API), `cli`,
+  `http`, and a new `mcp`.
+  **n8n and MCP are transports, not subsystems** — an n8n webhook is `kind: http`,
+  an MCP container is `kind: mcp`, so boxes without either fall through to direct
+  calls with zero branching.
+  **MCP default is runner-consumption, NOT `.mcp.json`** (d130 amendment): the
+  `kind: mcp` path is Python and costs zero agent context; `.mcp.json` wiring costs
+  tool schemas every turn forever. Agent-facing wiring is opt-in and must be earned.
+  **Lab topology (d131):** Pi = services (n8n/db/Docker/MCP), 5090 = GPU inference
+  (ollama), M4 = local MLX. The Pi is never seated for model work.
+  ⚠️ **Two live bugs this exposed, both still unfixed:** (1) `deepseek-ocr`,
+  `nuextract` and `git-commit-message` are `ollama run <model>` = *local* ollama,
+  but local ollama on the M4 holds only `devstral:24b` — all three are pointed at a
+  machine that cannot serve them. (2) `doctor.py` probes `kind: cli` rows by
+  binary-on-PATH, so `ollama` being present makes all three report **`ok`** while
+  unrunnable. Needs a model-level probe (`probe_args`); ships with runner step 1.
+  Transcription seating is data not logic: MLX rows carry `host: darwin-arm64`,
+  `whisper-cpp` carries `host: any`, so whisper.cpp is the automatic portable
+  default. All pin large-v3-turbo. **`host:` is a NEW field — do not overload
+  `platform:`**, which already means provider identity (Lever 4).

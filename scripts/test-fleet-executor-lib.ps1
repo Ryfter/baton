@@ -642,6 +642,18 @@ tools:
         Check 'UF0 restore snapshot removes new untracked content' (-not (Test-Path -LiteralPath (Join-Path $wt2.worktree 'restore-drop.txt')))
         Check 'UF0 restore snapshot returns exact tree' ((Get-WorktreeTreeSha -Worktree $wt2.worktree) -eq $restoreTree)
         Check 'UF0 invalid snapshot fails closed' (-not (Restore-WorktreeTreeSnapshot -Worktree $wt2.worktree -TreeSha 'not-a-tree'))
+        # The top-level guard is what stops a `git clean` from running somewhere it
+        # should not. It is asserted here so a future cross-platform tidy of the path
+        # handling cannot quietly weaken it: a SUBDIRECTORY of the worktree is inside the
+        # same repo and resolves fine, but it is not the top level, so it must be refused.
+        $uf0Sub = Join-Path $wt2.worktree 'guard-subdir'
+        New-Item -ItemType Directory -Force -Path $uf0Sub | Out-Null
+        Set-Content -LiteralPath (Join-Path $uf0Sub 'keep.txt') -Value 'must survive' -Encoding utf8NoBOM
+        Check 'UF0 refuses a non-toplevel path inside the same repo' (
+            -not (Restore-WorktreeTreeSnapshot -Worktree $uf0Sub -TreeSha $restoreTree))
+        Check 'UF0 a refused restore cleans nothing' (
+            (Test-Path -LiteralPath (Join-Path $uf0Sub 'keep.txt')))
+        Remove-Item -Recurse -Force $uf0Sub -ErrorAction SilentlyContinue
 
         $failoverFleet = Join-Path $env:BATON_HOME 'fleet-failover.yaml'
         Set-Content -LiteralPath $failoverFleet -Encoding utf8NoBOM -Value @'

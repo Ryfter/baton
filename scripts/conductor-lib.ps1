@@ -22,8 +22,12 @@
 . "$PSScriptRoot/officers-lib.ps1"   # Efficiency (never blocks) + VRAM claim for local labor
 
 function New-RunId {
+    <# Second-resolution IDs collide when Maestro/screens fan out multiple
+       fleet-go processes in the same second (crossplatform Ox fan-out 2026-08-22).
+       Append milliseconds + 4 hex chars so parallel spawns get unique worktrees. #>
     param([datetime]$Now = (Get-Date))
-    return 'go-' + $Now.ToString('yyyy-MM-ddTHH-mm-ss')
+    $suffix = '{0:x4}' -f (Get-Random -Maximum 0x10000)
+    return 'go-' + $Now.ToString('yyyy-MM-ddTHH-mm-ss-fff') + '-' + $suffix
 }
 
 function Get-JsonBlock {

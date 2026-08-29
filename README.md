@@ -289,8 +289,8 @@ Replace `D:/Dev/Baton` with your actual repo clone path. Verify with `codex mcp 
       "command": "python",
       "args": ["-m", "baton_mcp"],
       "env": {
-        "PYTHONPATH": "D:\\Dev\\Baton",
-        "BATON_MCP_BRIDGE": "D:\\Dev\\Baton\\scripts\\mcp-bridge.ps1"
+        "PYTHONPATH": "$HOME/dev/Baton",
+        "BATON_MCP_BRIDGE": "$HOME/dev/Baton/scripts/mcp-bridge.ps1"
       }
     }
   }
