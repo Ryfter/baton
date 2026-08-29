@@ -20,6 +20,13 @@ of what they did, what it cost, what you decided, and what you learned.
 In one sentence: **Claude Code becomes the conductor, and a fleet of other models
 become the orchestra.**
 
+The routing bet behind that: pick the **least viable model** that can still do the
+work, and weigh **cost against run time**. For long-horizon coding, two or three
+cheap passes can beat one expensive call; when you are waiting interactively, you
+can force a higher-end seat. Baton collects outcome data over time so it can learn
+that tradeoff and test new models against historic runs — still not fully there,
+but that is the vision.
+
 You interact with it entirely through **slash commands** inside Claude Code (like
 `/baton:job-start` or `/baton:ensemble`) plus a **live web dashboard** in your browser.
 

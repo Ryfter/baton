@@ -191,29 +191,61 @@ function Format-BatonPassiveStatus {
     return @($line1, $line2, $line3)
 }
 
+function Resolve-MaestroFleetPath {
+    param(
+        [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' })
+    )
+    foreach ($rel in @('overnight/fleet.yaml', 'fleet.yaml')) {
+        $p = Join-Path $BatonHome $rel
+        if (Test-Path -LiteralPath $p) { return $p }
+    }
+    $seed = Join-Path (Split-Path $PSScriptRoot -Parent) 'references/fleet.yaml'
+    if (Test-Path -LiteralPath $seed) { return $seed }
+    return (Join-Path $BatonHome 'fleet.yaml')
+}
+
+function Select-MaestroRankedProviders {
+    <# Rank providers the same way fleet-go does: Select-Capability + usage route-around.
+       economy (standard): cheapest eligible tier, then quality + learned cost.
+       champion (high): best quality first. No hardcoded failover list. #>
+    param(
+        [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }),
+        [string]$Capability = 'code-gen',
+        [ValidateSet('local', 'free', 'paid')][string]$MaxCostTier = 'paid',
+        [ValidateSet('economy', 'champion')][string]$SelectionMode = 'economy',
+        [string]$FleetPath = ''
+    )
+    $routingLib = Join-Path $PSScriptRoot 'routing-lib.ps1'
+    if (-not (Test-Path -LiteralPath $routingLib)) { return @() }
+    . $routingLib
+    if ([string]::IsNullOrWhiteSpace($FleetPath)) {
+        $FleetPath = Resolve-MaestroFleetPath -BatonHome $BatonHome
+    }
+    if (-not (Test-Path -LiteralPath $FleetPath)) { return @() }
+    $toolsPath = Join-Path $BatonHome 'tools.yaml'
+    if (-not (Test-Path -LiteralPath $toolsPath)) {
+        $toolsPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'references/tools.yaml'
+    }
+    $ranked = Select-Capability -Capability $Capability -MaxCostTier $MaxCostTier `
+        -SelectionMode $SelectionMode -FleetPath $FleetPath -ToolsPath $toolsPath `
+        -UsagePath (Join-Path $BatonHome 'usage-journal.jsonl') `
+        -JournalPath (Join-Path $BatonHome 'routing-journal.jsonl') `
+        -RunsRoot (Join-Path $BatonHome 'runs')
+    return @($ranked | Where-Object {
+        -not [string]::IsNullOrWhiteSpace([string]$_.name) -and
+        (Test-MaestroInstrumentReady -Name ([string]$_.name))
+    })
+}
+
 function Get-MaestroUsableInstruments {
     param(
         [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }),
         [string[]]$Prefer = $script:MaestroDefaultUsable
     )
     $usable = [System.Collections.Generic.List[string]]::new()
-    $budgetLib = Join-Path $PSScriptRoot 'window-budget-lib.ps1'
-    if (Test-Path -LiteralPath $budgetLib) {
-        try {
-            . $budgetLib
-            $status = Get-WindowBudgetStatus -Window '5h' -BatonHome $BatonHome
-            foreach ($row in @($status.models)) {
-                if ($row.lockout) { continue }
-                $p = [string]$row.pressure
-                if ($p -eq 'hard') { continue }
-                $m = [string]$row.model
-                if ($m -and -not $usable.Contains($m)) { [void]$usable.Add($m) }
-            }
-        } catch { }
-    }
-    foreach ($name in $Prefer) {
-        if (-not (Test-MaestroInstrumentReady -Name $name)) { continue }
-        if (-not $usable.Contains($name)) { [void]$usable.Add($name) }
+    foreach ($c in (Select-MaestroRankedProviders -BatonHome $BatonHome)) {
+        $n = [string]$c.name
+        if ($n -and -not $usable.Contains($n)) { [void]$usable.Add($n) }
     }
     $instLib = Join-Path $PSScriptRoot 'instruments-lib.ps1'
     if (Test-Path -LiteralPath $instLib) {
@@ -223,6 +255,12 @@ function Get-MaestroUsableInstruments {
                 if ($seat -and -not $usable.Contains($seat)) { [void]$usable.Add($seat) }
             }
         } catch { }
+    }
+    if ($usable.Count -eq 0) {
+        foreach ($name in $Prefer) {
+            if (-not (Test-MaestroInstrumentReady -Name $name)) { continue }
+            if (-not $usable.Contains($name)) { [void]$usable.Add($name) }
+        }
     }
     return @($usable)
 }
@@ -293,28 +331,34 @@ function Get-MaestroFireMaxCostTier {
 }
 
 function Get-MaestroConductorSeat {
-    param([string]$Provider)
-    $name = if ($Provider) { $Provider.Trim() } else { '' }
-    if ($name) {
-        $tier = if ($name -in $script:MaestroFreeSeats -or $name -match '^(openrouter|opencode)') { 'free' } else { 'paid' }
-        return [pscustomobject]@{
-            Name     = $name
-            CostTier = $tier
-            Ready    = [bool](Test-MaestroInstrumentReady -Name $name)
-        }
-    }
-    foreach ($n in $script:MaestroFreeSeats) {
-        if (Test-MaestroInstrumentReady -Name $n) {
+    param(
+        [string]$Provider,
+        [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }),
+        [ValidateSet('local', 'free', 'paid')][string]$MaxCostTier = 'paid'
+    )
+    $ranked = Select-MaestroRankedProviders -BatonHome $BatonHome -MaxCostTier $MaxCostTier
+    $hint = if ($Provider) { $Provider.Trim() } else { '' }
+    if ($hint) {
+        $match = @($ranked | Where-Object { [string]$_.name -eq $hint } | Select-Object -First 1)
+        if ($match.Count -gt 0) {
             return [pscustomobject]@{
-                Name     = $n
-                CostTier = 'free'
+                Name     = $hint
+                CostTier = [string]$match[0].cost_tier
                 Ready    = $true
             }
         }
     }
+    if ($ranked.Count -gt 0) {
+        $best = $ranked[0]
+        return [pscustomobject]@{
+            Name     = [string]$best.name
+            CostTier = [string]$best.cost_tier
+            Ready    = $true
+        }
+    }
     return [pscustomobject]@{
-        Name     = 'openrouter-ox-alpha'
-        CostTier = 'free'
+        Name     = if ($hint) { $hint } else { 'none' }
+        CostTier = 'paid'
         Ready    = $false
     }
 }
@@ -340,6 +384,7 @@ $script:MaestroProjectAliases = [ordered]@{
 function Get-MaestroRoomKeywords {
     return @(
         [pscustomobject]@{ Name = 'projects';  Hint = 'registered projects — type a number to pick one' }
+        [pscustomobject]@{ Name = 'new project'; Hint = 'create folder + private GitHub + Grimdex/Grimlore — new project Foo — what it is' }
         [pscustomobject]@{ Name = 'worktrees'; Hint = 'all worktrees — type a number to pick one' }
         [pscustomobject]@{ Name = 'status';    Hint = "this project's jobs and worktrees" }
         [pscustomobject]@{ Name = 'quota';     Hint = 'Claude 5h + Cursor billing cycle' }

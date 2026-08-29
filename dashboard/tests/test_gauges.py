@@ -144,6 +144,8 @@ def test_read_gauges_end_to_end(tmp_path: Path):
     assert payload["projects"][0]["name"] == "Baton"
     assert payload["clock"]["is_claude_clock"] is True
     assert len(payload["caps"]) == 1
+    assert "health" in payload
+    assert payload["health"]["has_alerts"] is False
 
 
 def test_gauges_page_no_stub_strings(tmp_path: Path):

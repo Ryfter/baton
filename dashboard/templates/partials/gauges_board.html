@@ -1,5 +1,33 @@
 {% set g = gauges %}
+{% set h = g.health %}
 {% set c = g.clock %}
+
+{% if h and h.has_alerts %}
+<section class="gauges-health-banner" aria-live="polite">
+  <p class="gauges-health-banner__title">Factory health — {{ h.summary }}</p>
+  <ul class="gauges-health-banner__list">
+    {% for row in h.loops %}
+    <li class="gauges-health-banner__item gauges-health-banner__item--loop">
+      <a href="/?project={{ row.project_id }}#project-{{ row.project_id }}">{{ row.label }}</a>
+    </li>
+    {% endfor %}
+    {% for row in h.regressions %}
+    <li class="gauges-health-banner__item gauges-health-banner__item--regression">
+      <a href="/?project={{ row.project_id }}#project-{{ row.project_id }}">{{ row.label }}</a>
+    </li>
+    {% endfor %}
+    {% for row in h.blocked %}
+    <li class="gauges-health-banner__item gauges-health-banner__item--blocked">
+      <a href="/?project={{ row.project_id }}#project-{{ row.project_id }}">{{ row.label }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% else %}
+<section class="gauges-health-banner gauges-health-banner--clean" aria-live="polite">
+  <p class="gauges-health-banner__clean">No loops or regressions detected in active projects.</p>
+</section>
+{% endif %}
 
 <section class="gauges-clock" aria-live="polite">
   <p class="gauges-clock__line">

@@ -1,7 +1,8 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-  Project registry (d076): scan the D:\dev home base, fold the scan over
+  Project registry (d076): scan the dev home base (`~/Dev` or `D:\Dev`, override
+  with `BATON_PROJECTS_ROOT`), fold the scan over
   start-lib's per-project project.json records, resolve a project name to a
   folder, and roster projects by active/inactive/archived lifecycle.
   Neutral core — no harness dependency. Fail-open throughout.
@@ -12,7 +13,8 @@
 
 function Get-ProjectHomeRoot {
     if ($env:BATON_PROJECTS_ROOT) { return [string]$env:BATON_PROJECTS_ROOT }
-    return 'D:\dev'
+    if ($IsWindows) { return 'D:\Dev' }
+    return (Join-Path $HOME 'Dev')
 }
 
 function Get-FolderSlug {

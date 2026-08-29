@@ -11,16 +11,18 @@
     </li>
     {% endfor %}
   </ul>
+  {% elif b.stale_count %}
+  <p class="attention-rail__clean">{{ b.stale_count }} stale job{{ 's' if b.stale_count != 1 else '' }} queued &gt;12h ago — no live emergency.</p>
   {% else %}
-  <p class="attention-rail__clean">Floor clean — nothing needs you.</p>
+  <p class="attention-rail__clean"><span class="pulse-dot pulse-dot--green" aria-hidden="true"></span> Floor clean — all workers nominal.</p>
   {% endif %}
 </section>
 
 <section class="capacity-strip">
   <a href="/gauges" class="capacity-strip__link">
-    {% if b.capacity.claude_label %}<span>Claude 5h: {{ b.capacity.claude_label }}</span>{% endif %}
-    {% if b.capacity.window_label %}<span class="capacity-strip__sep">·</span><span>{{ b.capacity.window_label }}</span>{% endif %}
-    <span class="capacity-strip__sep">·</span><span>{{ b.capacity.window_tokens_display }} tok</span>
+    <span>Claude 5h: {{ b.capacity.claude_label }}</span>
+    <span class="capacity-strip__sep">·</span>
+    <span>{{ b.capacity.window_label }}: {{ b.capacity.window_tokens_display }} tok</span>
     {% if b.capacity.savings_display %}<span class="capacity-strip__sep">·</span><span>{{ b.capacity.savings_display }}</span>{% endif %}
     {% if b.capacity.next_fire %}<span class="capacity-strip__sep">·</span><span>{{ b.capacity.next_fire }}</span>{% endif %}
     <span class="capacity-strip__sep">·</span><span class="capacity-strip__more">Gauges →</span>

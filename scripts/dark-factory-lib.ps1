@@ -148,6 +148,35 @@ function Test-DarkFactoryLaneActive {
     return $false
 }
 
+function Start-DarkFactoryObservabilitySidecar {
+    <# Fail-open AgentTrail start for a registry project. Skipped when BATON_AGENTTRAIL=0. #>
+    param(
+        [Parameter(Mandatory)][string]$ProjectId,
+        [string]$BatonHome = (Get-BatonHome)
+    )
+    if ($env:BATON_AGENTTRAIL -eq '0') {
+        return [ordered]@{ ok = $true; skipped = $true; reason = 'BATON_AGENTTRAIL=0' }
+    }
+    $script = Join-Path $PSScriptRoot 'fleet-agenttrail.ps1'
+    if (-not (Test-Path -LiteralPath $script)) {
+        return [ordered]@{ ok = $false; skipped = $true; reason = 'fleet-agenttrail.ps1 missing' }
+    }
+    try {
+        $raw = & pwsh -NoProfile -File $script -Action start -Project $ProjectId -Json 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            return [ordered]@{ ok = $false; skipped = $false; error = $raw.Trim() }
+        }
+        try {
+            $doc = $raw | ConvertFrom-Json
+            return [ordered]@{ ok = [bool]$doc.ok; skipped = $false; detail = $doc }
+        } catch {
+            return [ordered]@{ ok = $true; skipped = $false; raw = $raw.Trim() }
+        }
+    } catch {
+        return [ordered]@{ ok = $false; skipped = $false; error = $_.Exception.Message }
+    }
+}
+
 function Invoke-DarkFactorySeed {
     param(
         [string]$BatonHome = (Get-BatonHome),
@@ -157,6 +186,7 @@ function Invoke-DarkFactorySeed {
     Ensure-DarkFactoryProjectRegistry -BatonHome $BatonHome | Out-Null
     $created = [System.Collections.ArrayList]@()
     $skipped = [System.Collections.ArrayList]@()
+    $sidecars = [System.Collections.ArrayList]@()
     foreach ($lane in @(Get-DarkFactoryLanes)) {
         $proj = [string]$lane.project
         $name = [string]$lane.lane
@@ -171,6 +201,8 @@ function Invoke-DarkFactorySeed {
         $markedGoal = "<!-- dark-factory:lane=$name -->`n$([string]$lane.goal)"
         $job = New-DarkFactoryMaestroJob -Project $proj -Goal $markedGoal -Stakes ([string]$lane.stakes) -BatonHome $BatonHome
         [void]$created.Add([ordered]@{ lane = $name; job_id = [string]$job.id; project = $proj })
+        $side = Start-DarkFactoryObservabilitySidecar -ProjectId $proj -BatonHome $BatonHome
+        [void]$sidecars.Add([ordered]@{ project = $proj; lane = $name; sidecar = $side })
     }
     $admitted = @()
     if ($Admit -and -not $DryRun) {
@@ -184,6 +216,7 @@ function Invoke-DarkFactorySeed {
         created  = @($created)
         skipped  = @($skipped)
         admitted = $admitted
+        sidecars = @($sidecars)
     }
 }
 
@@ -236,17 +269,20 @@ function Get-DarkFactoryStatus {
 
 function Get-DarkFactoryRouteAroundText {
     return @'
-## Provider failover — Baton's superpower
+## Provider route-around — Baton's superpower
 
-When **any** seat is out (Grok quota, Codex lockout, Claude window, etc.):
+When a seat hits its cap (Grok dry, Fable 100%, Codex lockout, Claude window, etc.):
 
-1. **Do not halt.** Route around automatically — that is why Baton exists.
-2. **Order:** ``openrouter-ox-alpha`` → ``opencode`` → ``codex`` → ``claude-*`` → ``cursor-*`` → local.
-3. Usage journal + ``Select-Capability`` skip exhausted workers; pick the next cheapest eligible seat.
-4. Log which worker was skipped and which seat took the task (handoff + ``report-<project>.md``).
-5. **Never** wait for Kevin to swap models or ask which backup to use.
-
-Grok is secondary muscle only. If Grok is dry, Ox Alpha (or Codex under 40% usage) owns the work.
+1. **Do not halt.** Route around — that is why Baton exists.
+2. **No fixed failover list.** Use the same rules as every other dispatch:
+   - ``Select-Capability`` ranks eligible providers for the capability + stakes policy
+   - **economy** (standard/low): cheapest tier that clears the bar, then quality + learned cost
+   - **champion** (high): best quality first, cost tier tiebreak
+   - Usage journal excludes exhausted/cooling workers only — everything else competes on the ranking
+   - ``Invoke-CapabilityFailover`` walks that ranked list until one produces usable output
+3. Kevin's Cursor example applies: when Fable is 100% used, keep going with Cursor auto,
+   another Cursor seat, or whatever ``Select-Capability`` ranks next — not a memorized sequence.
+4. Log skips in handoff + ``report-<project>.md``; never ask Kevin to pick a backup model.
 '@
 }
 
@@ -297,7 +333,7 @@ Kevin is offline. **Keep working tonight.** Level 4 dark factory is active.
 - **Primary seat:** ``openrouter-ox-alpha`` (stealth/ox-alpha on OpenRouter) for Conductor,
   planning, diff_apply, verify loops, research, and writing.
 - **Secondary:** Grok 4.6 agentic when Ox cannot edit; Codex review only if usage < 40%.
-- **Grok out?** Route to Ox Alpha or the next eligible agent — never stop the factory.
+- **Seat exhausted?** ``Select-Capability`` picks the next best eligible provider — never halt.
 - **Never:** Fable or GPT-5.6 Sol for security/adversarial work.
 - **Never** paste private Grimlore bodies into Ox/OpenRouter prompts.
 
@@ -379,7 +415,7 @@ Keep prompts to roster facts; never paste private card bodies into OpenRouter.
             return @"
 Continue this project's highest-value backlog tonight.
 Use openrouter-ox-alpha heavily for planning and labor; Grok only when Ox cannot edit.
-If Grok (or any seat) is out of quota, route to the next eligible agent — never halt.
+If a preferred seat is out of quota, ``Select-Capability`` picks the next best eligible provider.
 Work in WT-<project>-<slug> worktrees; leave baton/run-* branches for Kevin.
 Maintain context aggressively: handoff after each claim, fresh orchestrator per slice.
 "@
@@ -409,7 +445,7 @@ function Invoke-DarkFactoryBroadcast {
         '# goal-next — dark factory tonight (auto-broadcast)',
         '',
         '**Ox Alpha heavily.** Primary seat: ``openrouter-ox-alpha``.',
-        '**Grok out?** Route to Ox or the next eligible agent — never halt the factory.',
+        '**Seat exhausted?** Route via ``Select-Capability`` — next best eligible provider, not a fixed list.',
         '',
         'Kevin is asleep. Continue all active Maestro threads. Do not stop for approval.',
         '',

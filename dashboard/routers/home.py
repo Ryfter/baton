@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from dashboard.paths import baton_home
 from dashboard.readers.home_board import read_home_floor, read_home_header
-from dashboard.readers.maestro_jobs import maestro_root
+from dashboard.readers.maestro_jobs import list_registry_projects, maestro_root
 from dashboard.readers.stats import compute_stats
 
 
@@ -71,6 +71,17 @@ def build_router(templates: Jinja2Templates) -> APIRouter:
                 jobs_root=jobs,
                 runs_root=runs,
             ),
+        }
+
+    @router.get("/api/command-palette")
+    async def command_palette_api(request: Request) -> dict:
+        home, _, _, _ = _paths(request)
+        projects = list_registry_projects(home)
+        return {
+            "projects": [
+                {"id": p["id"], "name": p.get("name") or p["id"]}
+                for p in projects
+            ],
         }
 
     return router

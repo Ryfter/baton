@@ -1,7 +1,7 @@
 # Maestro Home redesign — shift board + project economics
 
 **Date:** 2026-08-23
-**Status:** approved — implementation in progress on `WT-front-door`
+**Status:** approved — shipped (Home + Gauges + parked backlog on `WT-front-door`)
 **Audience:** dashboard implementer on `WT-front-door` (claim: `dashboard/` only)
 **Companions:** `2026-08-15-maestro-front-door-design.md`, `2026-08-23-gauges-page-design.md`
 **Visual review:** Antigravity + Gemini 3.7 Flash High (`scratch/antigravity-dashboard-research.txt`, 2026-08-23)
@@ -331,12 +331,12 @@ Reuse: `journal.py`, `maestro_jobs.py`, `claude_quota.py`, `gauges.resolve_windo
 
 ---
 
-## Parked (explicit backlog)
+## Parked (explicit backlog) — shipped 2026-08-28
 
-- Theme / appearance setting (user request — bottom priority)
-- Loop detector + regression banner (Siddique pattern) on Gauges first
-- Global `Cmd+K` palette for KB/admit
-- Pane-truth “needs permission” beyond Maestro status JSON
+- ~~Theme / appearance setting~~ — header theme picker (`brass` / `slate` / `ember`), persisted in localStorage
+- ~~Loop detector + regression banner (Siddique pattern) on Gauges first~~ — `factory_health` + Gauges banner; Home already uses AgentTrail/AgentPulse observability
+- ~~Global `Cmd+K` palette for KB/admit~~ — command palette in `base.html` + `/api/command-palette`
+- ~~Pane-truth “needs permission” beyond Maestro status JSON~~ — `pane_truth.py` scans events + `$BATON_HOME/observability/pane-truth.json`
 
 ---
 

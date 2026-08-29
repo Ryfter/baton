@@ -18,7 +18,7 @@ param(
     [string]$Goal,
     [Alias('goal-file')][string]$GoalFile,
     [string]$Provider,
-    [Alias('max-tier')][ValidateSet('local', 'free', 'paid')][string]$MaxCostTier = 'free',
+    [Alias('max-tier')][ValidateSet('local', 'free', 'paid')][string]$MaxCostTier = 'paid',
     [Alias('bin-dir')][string]$BinDir,
     [string]$BatonHome = $(if ($env:BATON_HOME) { $env:BATON_HOME } else { Join-Path $HOME '.baton' }),
     [switch]$Json,

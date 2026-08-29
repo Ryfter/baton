@@ -17,26 +17,28 @@ from dashboard.readers.stats import compute_stats
 def build_router(templates: Jinja2Templates) -> APIRouter:
     router = APIRouter(tags=["gauges"])
 
-    def _paths(req: Request) -> tuple[Path, Path, Path, Path]:
+    def _paths(req: Request) -> tuple[Path, Path, Path, Path, Path]:
         home = Path(getattr(req.app.state, "baton_home", None) or baton_home())
         journal = Path(
             getattr(req.app.state, "journal_path", None) or home / "model-routing-log.md"
         )
         jobs = Path(getattr(req.app.state, "jobs_root", None) or home / "jobs")
+        runs = Path(getattr(req.app.state, "runs_root", None) or home / "runs")
         maestro = Path(getattr(req.app.state, "maestro_jobs_root", None) or maestro_root(home))
-        return home, journal, jobs, maestro
+        return home, journal, jobs, runs, maestro
 
     def _payload(req: Request) -> dict:
-        home, journal, jobs, maestro = _paths(req)
+        home, journal, jobs, runs, maestro = _paths(req)
         return read_gauges(
             journal_path=journal,
             baton_home=home,
             jobs_root=jobs,
             maestro_jobs_root=maestro,
+            runs_root=runs,
         )
 
     def _ctx(req: Request) -> dict:
-        home, journal, _, _ = _paths(req)
+        home, journal, _, _, _ = _paths(req)
         stats = compute_stats(journal)
         return {
             "stats": stats,

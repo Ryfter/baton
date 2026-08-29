@@ -15,6 +15,17 @@ lines to every model, per-model token telemetry, plan/research/acceptance gates,
 that keeps spend legible. **MIT licensed.** An early/experimental personal project, shared in the hope
 it's useful — not a turnkey product.
 
+### The routing bet
+
+Baton looks for the **least viable model** that can still do the job — and it also
+weighs **cost against run time**. For long-horizon coding, running a cheaper model two
+or three times for a good result is fine when that costs less than one higher-end call.
+When you are sitting and waiting, you can force a stronger seat. That tradeoff is what
+Baton is automating: collect outcome data over time, learn which models earn their keep,
+and test new models against that history. Still not quite there — that is the vision,
+and it is getting a lot closer. (`Select-Capability`, economy vs champion stakes, usage
+governor, and learned-cost re-ranking are the machinery behind it.)
+
 ### 📖 New here? Read these
 
 - **[Full guide (start to finish)](docs/GUIDE.md)** — what it is, how to install, and a worked walkthrough.

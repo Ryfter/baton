@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="brass">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Baton Command Center{% endblock %}</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%233b82f6'/><stop offset='1' stop-color='%23fbbf24'/></linearGradient></defs><rect width='100' height='100' rx='18' fill='%23080b11'/><text x='50' y='68' text-anchor='middle' font-size='52' font-weight='700' fill='url(%23g)'>B</text></svg>">
+  <script src="/static/theme.js"></script>
   <script src="/static/vendor/htmx.min.js"></script>
   <script src="/static/vendor/chart.umd.min.js"></script>
   <script src="/static/maestro-voice.js" defer></script>
@@ -24,10 +25,35 @@
       <a href="/gauges" class="{% if request.url.path.startswith('/gauges') %}active{% endif %}">Gauges</a>
       <a href="http://127.0.0.1:8765/" target="_blank" rel="noopener" class="topnav-external">MyDashboard ↗</a>
     </nav>
-    <span class="server-time">{{ server_time }}</span>
+    <div class="site-header__tools">
+      <label class="theme-picker" title="Appearance">
+        <span class="sr-only">Theme</span>
+        <select id="theme-picker" aria-label="Theme">
+          <option value="brass">Brass</option>
+          <option value="slate">Slate</option>
+          <option value="ember">Ember</option>
+        </select>
+      </label>
+      <button type="button" class="command-palette-trigger" id="command-palette-trigger" title="Command palette (⌘K)">⌘K</button>
+      <span class="server-time">{{ server_time }}</span>
+    </div>
   </header>
   <main class="command-main">
     {% block content %}{% endblock %}
   </main>
+
+  <div id="command-palette" class="command-palette" hidden role="dialog" aria-modal="true" aria-label="Command palette">
+    <div class="command-palette__panel">
+      <input id="command-palette-input" class="command-palette__input" type="search" placeholder="Search projects, KB, or jump…" autocomplete="off" spellcheck="false" />
+      <p id="command-palette-hint" class="command-palette__hint muted">Press Esc to close</p>
+      <ul id="command-palette-list" class="command-palette__list"></ul>
+    </div>
+  </div>
+  <script src="/static/command-palette.js" defer></script>
+  <script>
+    document.getElementById("command-palette-trigger")?.addEventListener("click", function () {
+      window.BatonCommandPalette && window.BatonCommandPalette.open();
+    });
+  </script>
 </body>
 </html>

@@ -35,6 +35,18 @@ Roadmap: `Grimdex-edu/docs/curriculum-roadmap.md`
 - Worktrees: `WT-<project≤7>-<goal-slug>` under `.baton-worktrees/`
 - Branches: `baton/run-<run-id>` left for human review
 - **Context windows:** maintain aggressively on long runs — handoff-first prompts, Efficiency select/delta before each dispatch, fresh orchestrator per claim, fold completed work to `report-<project>.md`
+## Observability
+
+- **Observability:** optional AgentTrail sidecar per active worktree + AgentPulse snapshot for stuck/drift on the Home rail — see [`docs/agent-observability.md`](../docs/agent-observability.md)
+- Seed fail-open starts AgentTrail (`BATON_AGENTTRAIL=0` to skip); night runner fail-open refreshes AgentPulse snapshot
+
+```powershell
+# Start live map on a factory lane (registry project id + folder)
+pwsh -NoProfile -File scripts/fleet-agenttrail.ps1 -Action start -Project baton -Json
+
+# Refresh trajectory snapshot for the dashboard
+pwsh -NoProfile -File scripts/fleet-agenttrail.ps1 -Action snapshot -Json
+```
 
 ```powershell
 # Push standing order + handoffs to every active thread

@@ -3,27 +3,31 @@ from __future__ import annotations
 
 import re
 
-_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
-_PREAMBLE_RE = re.compile(
-    r"^(?:Tonight\s+\d{4}-\d{2}-\d{2}\s*[—–-]\s*|Kevin:\s*|Repo:\s*|Worktree:\s*)+",
-    re.IGNORECASE,
-)
-_REPO_LINE_RE = re.compile(r"\bRepo:\s*/[^\s]+", re.IGNORECASE)
-_WORKTREE_RE = re.compile(r"\bWorktree:\s*/[^\s]+", re.IGNORECASE)
+_NOISE_PATTERNS = [
+    re.compile(r"<!--.*?-->", re.DOTALL),
+    re.compile(r"^Tonight\s+\d{4}-\d{2}-\d{2}\s*[—–-]\s*", re.IGNORECASE),
+    re.compile(r"^Kevin:\s*", re.IGNORECASE),
+    re.compile(r"\bWorktree(?:\s+preferred)?:\s*(?:/[^\s]+|\S+)", re.IGNORECASE),
+    re.compile(r"\bWork\s+only\s+in:\s*(?:/[^\s]+|\S+)", re.IGNORECASE),
+    re.compile(r"\bRepo:\s*(?:/[^\s]+|\S+)", re.IGNORECASE),
+    re.compile(r"\bBranch:\s*[\w.\-/]+", re.IGNORECASE),
+    re.compile(r"/(?:Users|home|var|tmp)/[\w.\-/]+", re.IGNORECASE),
+    re.compile(r"\bDo\s+NOT\b.*?(?=\.|$)", re.IGNORECASE),
+]
 
 
 def sanitize_goal(text: str, *, max_len: int = 90) -> str:
     g = (text or "").strip()
     if not g:
         return ""
-    g = _HTML_COMMENT_RE.sub("", g).strip()
-    g = _REPO_LINE_RE.sub("", g)
-    g = _WORKTREE_RE.sub("", g)
-    while True:
-        cleaned = _PREAMBLE_RE.sub("", g).strip()
-        if cleaned == g:
-            break
-        g = cleaned
+    changed = True
+    while changed:
+        changed = False
+        for pattern in _NOISE_PATTERNS:
+            cleaned = pattern.sub("", g).strip()
+            if cleaned != g:
+                g = cleaned
+                changed = True
     g = " ".join(g.split())
     if len(g) <= max_len:
         return g

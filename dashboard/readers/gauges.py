@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from dashboard.models.events import OtelEntry
 from dashboard.readers.claude_quota import _label, _parse_dt, format_remaining, read_claude_quota
 from dashboard.readers.journal import read_journal
+from dashboard.readers.factory_health import read_factory_health_alerts
 from dashboard.readers.maestro_jobs import list_registry_projects, maestro_root
 
 LOCAL_TZ = ZoneInfo("America/Boise")
@@ -391,6 +392,7 @@ def read_gauges(
     baton_home: Path,
     jobs_root: Path,
     maestro_jobs_root: Optional[Path] = None,
+    runs_root: Optional[Path] = None,
     now: Optional[datetime] = None,
 ) -> dict[str, Any]:
     clock = _ensure_utc(now or datetime.now(timezone.utc))
@@ -406,6 +408,8 @@ def read_gauges(
         registry,
     )
     caps = read_cap_gauges(baton_home, now=clock)
+    runs = runs_root or (baton_home / "runs")
+    health = read_factory_health_alerts(baton_home=baton_home, runs_root=runs, now=clock)
 
     empty_message = ""
     if not projects:
@@ -422,5 +426,6 @@ def read_gauges(
         },
         "projects": projects,
         "caps": caps,
+        "health": health,
         "empty_message": empty_message,
     }

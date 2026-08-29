@@ -177,6 +177,7 @@ Grimlore's. **Baton's decision-capture rule is unchanged:** d-records keep going
 
 ## Related
 
+- [`docs/agent-observability.md`](agent-observability.md) — AgentTrail + AgentPulse sidecars (invoke, don't absorb); Home rail steals stuck/drift/regression signals.
 - [`docs/glossary.md`](glossary.md) — the ecosystem terms are defined at the top.
 - [`docs/DECISIONS.md`](DECISIONS.md) — Baton's decision log; `d033` (Grimdex ↔ Baton mutual
   independence) and `d086` (the golden path spine) are the load-bearing prior art.
