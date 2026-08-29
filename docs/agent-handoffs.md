@@ -58,6 +58,12 @@ private data repo — see the Grimdex split section below).
 Shared rules live HERE. Model files should **reference** this section, not re-copy
 it — re-copying is how drift starts.
 
+9. **Plan execution default: subagent-driven.** When a superpowers implementation
+   plan exists, execute it with **subagent-driven-development** (fresh implementer
+   subagent per task + task review). Do **not** offer inline vs subagent choice at
+   handoff — Kevin's standing preference is subagent-driven only. Use
+   **executing-plans** (inline, same session) only if Kevin explicitly asks for it.
+
 ## Model-specific registry (what each file adds, and why)
 - **`CLAUDE.md` — Claude = orchestrator / conductor.** Full superpowers + skills;
   drives the fleet concurrently and synthesizes; consults Codex when stuck. Canonical
