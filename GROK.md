@@ -11,7 +11,11 @@
 - **`grok` invocation (fleet headless):**
   - Single-turn: `grok -p "<prompt>"` (stdout + exit)
   - Long / quote-heavy prompts: `--prompt-file <path>` (respect the 965-byte shell-arg ceiling — write the body to a file)
-  - Agentic edits without interactive prompts: `--always-approve` and/or `--permission-mode acceptEdits`
+  - Agentic edits without interactive prompts: **`--permission-mode auto`** — verified
+    2026-08-29 (grok 1.0.13). `acceptEdits` and `dontAsk` are **silent no-ops**: the
+    agent narrates the write, writes nothing, and exits 0. `--always-approve` is
+    correctly blocked by the permission classifier. Never trust exit code — verify
+    the artifact on disk.
   - Model pin: `-m <model>` (default on this box is typically `grok-4.5`)
 - **Edit eligibility:** when registered in the fleet, set `agentic: true` (platform `grok` is not in the d078 auto-infer set `{claude,codex,gemini}`).
 - **Also auto-loads** `AGENTS.md` / `CLAUDE.md` in this repo (Grok's project-rules discovery). Prefer Grok-specific notes here; keep shared rules in `docs/agent-handoffs.md`.
