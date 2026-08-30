@@ -175,7 +175,7 @@ Two-level table inside the card:
 |---|---|---|---|---|---|
 | Provider / instrument | Model name | in+out | journal sum | % of project window | free / local / paid |
 
-- **Provider** = fleet provider name when known (`openrouter-ox-alpha`, `codex`, `cursor-agent`, …)
+- **Provider** = fleet provider name when known (`openrouter-glm`, `codex`, `cursor-agent`, …)
 - **Model** = OTel `model` field
 - **Actual $** = sum of `cost_usd` on matching lines in the **current 5h window** (same clock as Gauges)
 - **Tier** = fleet `cost_tier` + policy state at line time (see Savings)

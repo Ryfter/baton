@@ -74,7 +74,7 @@ Current hops finish; loops exit between rounds.
 
 | Layer | Seat |
 |---|---|
-| Mouth / Composer / Conductor talk | Ox Alpha (`openrouter-ox-alpha` / `stealth/ox-alpha`) |
+| Mouth / Composer / Conductor talk | Ox Alpha (`openrouter-glm` / `stealth/ox-alpha`) |
 | Orchestrator (in-project) | Opus (`cursor-opus`) |
 | Plan + sprint-review | Fable (`cursor-fable`) — needs Cursor data-policy ack |
 | Instruments | Ox Alpha diff_apply + Codex/Grok/Kiro/Cursor agentic |

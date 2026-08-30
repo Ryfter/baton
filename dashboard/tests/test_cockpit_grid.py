@@ -53,7 +53,7 @@ def test_read_cockpit_grid_merges_job_and_run(tmp_path: Path):
     _seed_registry(home, "canvas", "Canvas Toolchain")
     jobs_root = mj.maestro_root(home)
     job = mj.create_job(jobs_root, project="baton", goal="ship cockpit grid hero")
-    mj.update_job_fields(jobs_root, job["id"], status="running", provider="openrouter-ox-alpha")
+    mj.update_job_fields(jobs_root, job["id"], status="running", provider="openrouter-glm")
     runs_root = home / "runs"
     _seed_run(runs_root, "run-2026-08-22-a", "baton")
 

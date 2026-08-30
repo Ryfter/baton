@@ -21,7 +21,7 @@ Kevin
 
 | Capability | Who claims it | Router rule |
 |---|---|---|
-| `converse` | `openrouter-ox-alpha` (and healthy Opencode Ox twin) | local/free only auto (`d119`) |
+| `converse` | `openrouter-glm` (and healthy Opencode Ox twin) | local/free only auto (`d119`) |
 | `orchestrate` | Opus seat (`cursor-opus` / claude-opus class) | paid OK |
 | `sprint-review` | Fable seat (`cursor-fable`) | paid/promo; end of sprint + plan once-over |
 | `plan-review` | Fable (+ Codex peer when staffing a panel) | ≥2 unique providers (`d118`) |

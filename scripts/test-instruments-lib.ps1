@@ -16,7 +16,7 @@ Check 'coding instrument exists' (@($rows | Where-Object { $_.name -eq 'coding' 
 Check 'security-researcher scheduled' (@($rows | Where-Object { $_.name -eq 'security-researcher' -and $_.kind -eq 'scheduled' }).Count -eq 1)
 
 $coding = Get-InstrumentByName -Name 'coding' -Path $path
-Check 'Get-InstrumentByName seat' ([string]$coding.default_seat -eq 'openrouter-ox-alpha')
+Check 'Get-InstrumentByName seat' ([string]$coding.default_seat -eq 'openrouter-glm')
 
 $job = [pscustomobject]@{ instrument = 'research'; goal = 'scan docs' }
 $res = Resolve-InstrumentForJob -Job $job -Path $path

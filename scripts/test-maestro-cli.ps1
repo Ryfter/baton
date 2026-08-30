@@ -163,7 +163,7 @@ try {
     Assert 'G14 box line is 64 cells wide' ((Get-MaestroDisplayWidth $box) -eq 64)
     Assert 'G15 card has no █░ meter' ($card0 -notmatch '[█░]')
     Assert 'G16 run rows keep the useful icons' ($card0 -match '🌳' -and $card0 -match '📊')
-    Assert 'G17 seat label drops the openrouter- prefix' ((Format-MaestroSeatLabel -Name 'openrouter-ox-alpha') -eq 'ox-alpha')
+    Assert 'G17 seat label drops the openrouter- prefix' ((Format-MaestroSeatLabel -Name 'openrouter-glm') -eq 'ox-alpha')
 
     $miniFleet = Join-Path $home2 'overnight/fleet.yaml'
     New-Item -ItemType Directory -Force -Path (Split-Path $miniFleet -Parent) | Out-Null
@@ -178,7 +178,7 @@ providers:
     agentic: true
     capabilities: [code-gen]
     command_template: 'echo "{{prompt}}"'
-  - name: openrouter-ox-alpha
+  - name: openrouter-glm
     kind: http
     enabled: true
     cost_tier: free

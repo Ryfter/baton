@@ -19,7 +19,7 @@ def test_command_hero_reader_shape(tmp_path: Path):
     hero = read_command_hero(home, journal)
     assert hero["mode"] == "Dark factory L4"
     assert "jobs_running" in hero
-    assert hero["primary_seat"] == "openrouter-ox-alpha"
+    assert hero["primary_seat"] == "openrouter-glm"
 
 
 def test_command_hero_partial_route(tmp_path: Path):

@@ -18,7 +18,7 @@ def test_free_tier_shows_savings(tmp_path: Path):
     fleet = tmp_path / "fleet.yaml"
     fleet.write_text(
         "providers:\n"
-        "  - name: openrouter-ox-alpha\n"
+        "  - name: openrouter-glm\n"
         "    kind: http\n"
         "    enabled: true\n"
         "    cost_tier: free\n"
@@ -31,7 +31,7 @@ def test_free_tier_shows_savings(tmp_path: Path):
     )
     mj = maestro_root(tmp_path)
     mj.mkdir(parents=True)
-    job = create_job(mj, project="baton", goal="test", provider="openrouter-ox-alpha")
+    job = create_job(mj, project="baton", goal="test", provider="openrouter-glm")
     inside = now - timedelta(minutes=20)
     journal = tmp_path / "model-routing-log.md"
     _write_journal(

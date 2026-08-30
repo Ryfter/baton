@@ -94,7 +94,7 @@ def test_resolve_pill_stale_vs_stalled():
 
 def test_classify_lifecycle_output():
     cell = {"status": "queued", "turns": [{"kind": "status", "detail": "created · queued"}]}
-    activity = _classify_activity(cell, "created · queued · openrouter-ox-alpha")
+    activity = _classify_activity(cell, "created · queued · openrouter-glm")
     assert activity["kind"] == "lifecycle"
 
 

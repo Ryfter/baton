@@ -250,7 +250,7 @@ function New-BatonProject {
         github_repo = if ($github.url) { "$GitHubOrg/$repoLeaf" } else { $null }
     }
 
-    Set-MaestroProjectSession -Project $projectId -Provider 'openrouter-ox-alpha' -Kind 'openrouter' -BatonHome $BatonHome | Out-Null
+    Set-MaestroProjectSession -Project $projectId -Provider 'openrouter-glm' -Kind 'openrouter' -BatonHome $BatonHome | Out-Null
 
     $grimdexPath = $null
     if (-not $SkipGrimdex) {

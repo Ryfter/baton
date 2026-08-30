@@ -18,7 +18,7 @@ instruments:
     capability: code-gen
     kind: lm-fleet
     enabled: true
-    default_seat: openrouter-ox-alpha
+    default_seat: openrouter-glm
     profile: python
     init_brief: references/coding-profiles/python.md
     verify: pytest -q
@@ -27,7 +27,7 @@ instruments:
     capability: code-gen
     kind: lm-fleet
     enabled: true
-    default_seat: openrouter-ox-alpha
+    default_seat: openrouter-glm
     profile: pwsh
     init_brief: references/coding-profiles/pwsh.md
     verify: pwsh -NoProfile -File scripts/test-all.ps1
@@ -36,14 +36,14 @@ instruments:
     capability: research
     kind: lm-fleet
     enabled: true
-    default_seat: openrouter-ox-alpha
+    default_seat: openrouter-glm
     init_brief: prompts/research-instrument.txt
 
   - name: security-researcher
     capability: security-sweep
     kind: scheduled
     enabled: true
-    default_seat: openrouter-ox-alpha
+    default_seat: openrouter-glm
     init_brief: prompts/security-researcher.txt
 
   - name: efficiency-officer

@@ -160,7 +160,7 @@ function Invoke-SecurityResearcherTick {
     }
     return [ordered]@{
         instrument = if ($inst) { [string]$inst.name } else { 'security-researcher' }
-        seat       = if ($inst) { [string]$inst.default_seat } else { 'openrouter-ox-alpha' }
+        seat       = if ($inst) { [string]$inst.default_seat } else { 'openrouter-glm' }
         due        = $due
         count      = $due.Count
     }

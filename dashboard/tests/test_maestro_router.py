@@ -42,14 +42,14 @@ def test_update_job_fields(tmp_path: Path):
         job["id"],
         status="running",
         run_id="run-2026-08-21-abc",
-        provider="openrouter-ox-alpha",
+        provider="openrouter-glm",
     )
     assert updated["status"] == "running"
     assert updated["run_id"] == "run-2026-08-21-abc"
-    assert updated["provider"] == "openrouter-ox-alpha"
+    assert updated["provider"] == "openrouter-glm"
     events = (root / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
     assert "updated" in events[-1]
-    assert "openrouter-ox-alpha" in events[-1]
+    assert "openrouter-glm" in events[-1]
 
 
 def test_create_rejects_empty_goal(tmp_path: Path):

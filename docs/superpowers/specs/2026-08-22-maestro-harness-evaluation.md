@@ -13,7 +13,7 @@
 | **Conductor** | **Baton Maestro** (building) | Admit/fire jobs, parallel cap, project registry, cockpit dashboard |
 | **Runtime** | **[Herdr](https://herdr.dev/)** | Persistent agent panes, blocked/idle detection, socket API — agents survive laptop close |
 | **Agentic labor** | **Codex CLI + Grok CLI** | File edits without Cursor IDE; already in `~/.baton/overnight/fleet.yaml` |
-| **Bulk free labor** | **openrouter-ox-alpha** | Promo window; diff_apply path for non-agentic edits |
+| **Bulk free labor** | **openrouter-glm** | Promo window; diff_apply path for non-agentic edits |
 | **Orchestration seat** | **cursor-agent** (optional) | Only when you want Cursor models headless — not the IDE |
 
 **Cursor IDE** is optional front-end. Your pain (no right-click paste, vendor lock-in) is IDE-level — Herdr + terminal CLIs sidestep it.

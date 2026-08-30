@@ -27,7 +27,7 @@ def read_command_hero(baton_home: Path, journal_path: Path) -> dict:
         "curriculum_shipped": factory.get("curriculum_shipped") or 0,
         "curriculum_pending": factory.get("curriculum_pending") or 0,
         "security_due": factory.get("security_count") or 0,
-        "primary_seat": "openrouter-ox-alpha",
+        "primary_seat": "openrouter-glm",
         "mode": "Dark factory L4",
         "mydashboard_url": intel.get("url") or "http://127.0.0.1:8765",
     }

@@ -330,7 +330,7 @@ Kevin is offline. **Keep working tonight.** Level 4 dark factory is active.
 
 ## Seating (baton-d124) — USE OX ALPHA HEAVILY
 
-- **Primary seat:** ``openrouter-ox-alpha`` (stealth/ox-alpha on OpenRouter) for Conductor,
+- **Primary seat:** ``openrouter-glm`` (stealth/ox-alpha on OpenRouter) for Conductor,
   planning, diff_apply, verify loops, research, and writing.
 - **Secondary:** Grok 4.6 agentic when Ox cannot edit; Codex review only if usage < 40%.
 - **Seat exhausted?** ``Select-Capability`` picks the next best eligible provider — never halt.
@@ -384,7 +384,7 @@ Continue dark factory tonight on Baton:
 - Automation: fleet-dark-factory broadcast/seed/night; maestro-admit queued dark-factory jobs.
 - Officers/instruments wedge: Ox Alpha default seat on all instrument rows.
 - Refresh handoffs after each claim; Efficiency select before every fleet-go --execute.
-Use openrouter-ox-alpha heavily for every labor run.
+Use openrouter-glm heavily for every labor run.
 '@
         }
         '^grimdex-edu' {
@@ -395,7 +395,7 @@ Continue Grimdex-edu Learn curriculum build-out ($eduRoot):
 - Ship grimdex-harness module first: what-is-grimdex, learn-module-verbosity, student-zone-layout, install-and-bootstrap.
 - Each page: front matter, ## In plain terms, ## Official sources, pass-through links.
 - One lesson batch per fresh orchestrator; handoff between batches.
-Use openrouter-ox-alpha for all writing labor. No course wiki content (D41).
+Use openrouter-glm for all writing labor. No course wiki content (D41).
 "@
         }
         '^grimdex-know|^grimdex' {
@@ -414,7 +414,7 @@ Keep prompts to roster facts; never paste private card bodies into OpenRouter.
         default {
             return @"
 Continue this project's highest-value backlog tonight.
-Use openrouter-ox-alpha heavily for planning and labor; Grok only when Ox cannot edit.
+Use openrouter-glm heavily for planning and labor; Grok only when Ox cannot edit.
 If a preferred seat is out of quota, ``Select-Capability`` picks the next best eligible provider.
 Work in WT-<project>-<slug> worktrees; leave baton/run-* branches for Kevin.
 Maintain context aggressively: handoff after each claim, fresh orchestrator per slice.
@@ -444,7 +444,7 @@ function Invoke-DarkFactoryBroadcast {
     @(
         '# goal-next — dark factory tonight (auto-broadcast)',
         '',
-        '**Ox Alpha heavily.** Primary seat: ``openrouter-ox-alpha``.',
+        '**Ox Alpha heavily.** Primary seat: ``openrouter-glm``.',
         '**Seat exhausted?** Route via ``Select-Capability`` — next best eligible provider, not a fixed list.',
         '',
         'Kevin is asleep. Continue all active Maestro threads. Do not stop for approval.',
@@ -463,7 +463,7 @@ function Invoke-DarkFactoryBroadcast {
         foreach ($pj in Get-ChildItem -LiteralPath $projDir -Directory) {
             $projId = $pj.Name
             try {
-                Set-MaestroProjectSession -Project $projId -Provider 'openrouter-ox-alpha' -Kind 'openrouter' -BatonHome $BatonHome | Out-Null
+                Set-MaestroProjectSession -Project $projId -Provider 'openrouter-glm' -Kind 'openrouter' -BatonHome $BatonHome | Out-Null
                 [void]$sessions.Add($projId)
             } catch { }
         }

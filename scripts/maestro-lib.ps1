@@ -3,7 +3,7 @@
 . (Join-Path $PSScriptRoot 'maestro-session-lib.ps1')
 
 $script:MaestroDefaultUsable = @(
-    'openrouter-ox-alpha',
+    'openrouter-glm',
     'opencode',
     'opencode-free',
     'grok-cli',
@@ -14,7 +14,7 @@ $script:MaestroDefaultUsable = @(
 )
 
 $script:MaestroFreeSeats = @(
-    'openrouter-ox-alpha',
+    'openrouter-glm',
     'opencode',
     'opencode-free'
 )

@@ -170,7 +170,7 @@ function Invoke-OfficerBattery {
 
         Check "$tag fable seat forbidden" (Test-SecuritySeatForbidden -Seat 'cursor-fable')
         Check "$tag sol seat forbidden" (Test-SecuritySeatForbidden -Seat 'gpt-5.6-sol')
-        Check "$tag ox seat allowed" (-not (Test-SecuritySeatForbidden -Seat 'openrouter-ox-alpha'))
+        Check "$tag ox seat allowed" (-not (Test-SecuritySeatForbidden -Seat 'openrouter-glm'))
         $nowS = [datetime]'2026-08-23T12:00:00Z'
         $hotRec = [pscustomobject]@{ last_touched = '2026-08-23T10:00:00Z'; last_run = '2026-08-22T10:00:00Z' }
         Check "$tag touched-since-run is hot" ((Get-SecurityBand -Record $hotRec -Now $nowS) -eq 'hot')
@@ -179,7 +179,7 @@ function Invoke-OfficerBattery {
         $coldRec = [pscustomobject]@{ last_touched = '2026-07-01T12:00:00Z'; last_run = '2026-07-15T12:00:00Z'; last_clean = '2026-07-15T12:00:00Z' }
         Check "$tag stale+clean is cold" ((Get-SecurityBand -Record $coldRec -Now $nowS) -eq 'cold')
         $hotDue = Get-SecurityRecipe -Project 'baton' -Record $hotRec -Now $nowS
-        Check "$tag hot recipe nightly ox" ($hotDue.due -eq $true -and $hotDue.cadence -eq 'nightly' -and $hotDue.seat -eq 'openrouter-ox-alpha')
+        Check "$tag hot recipe nightly ox" ($hotDue.due -eq $true -and $hotDue.cadence -eq 'nightly' -and $hotDue.seat -eq 'openrouter-glm')
         Check "$tag recipe denies fable" ($hotDue.deny_seats -contains 'fable' -and $hotDue.grimlore_to_ox -eq $false)
         $deep = Get-SecurityRecipe -Project 'baton' -Record $warmRec -Now $nowS -Deep
         Check "$tag deep seats opus not fable" ($deep.seat -eq 'opus' -and -not (Test-SecuritySeatForbidden -Seat $deep.seat))

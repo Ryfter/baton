@@ -66,7 +66,7 @@ function Set-MaestroProjectSession {
     param(
         [Parameter(Mandatory)][string]$Project,
         [string]$HerdrTarget,
-        [string]$Provider = 'openrouter-ox-alpha',
+        [string]$Provider = 'openrouter-glm',
         [string]$Kind = 'openrouter',
         [string]$BatonHome = (Get-BatonHome)
     )
@@ -210,6 +210,6 @@ function Update-MaestroSessionAfterFire {
     $sess = Get-MaestroProjectSession -Project $Project -BatonHome $BatonHome
     $target = Resolve-MaestroHerdrTarget -Project $Project -BatonHome $BatonHome
     $kind = if ($sess -and $sess.kind) { [string]$sess.kind } else { 'openrouter' }
-    $prov = if ($Provider) { $Provider } elseif ($sess -and $sess.provider) { [string]$sess.provider } else { 'openrouter-ox-alpha' }
+    $prov = if ($Provider) { $Provider } elseif ($sess -and $sess.provider) { [string]$sess.provider } else { 'openrouter-glm' }
     Set-MaestroProjectSession -Project $Project -HerdrTarget $target -Provider $prov -Kind $kind -BatonHome $BatonHome | Out-Null
 }

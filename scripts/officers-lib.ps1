@@ -598,9 +598,9 @@ function Resolve-SecurityFleetProvider {
     $s = ([string]$Seat).ToLowerInvariant()
     if ($s -match 'opus') { return 'cursor-opus' }
     if ($s -eq 'local') { return 'lm-studio' }
-    if ($s -match 'ox-alpha') { return 'openrouter-ox-alpha' }
-    if ($s -match 'openrouter') { return 'openrouter-ox-alpha' }
-    return 'openrouter-ox-alpha'
+    if ($s -match 'ox-alpha') { return 'openrouter-glm' }
+    if ($s -match 'openrouter') { return 'openrouter-glm' }
+    return 'openrouter-glm'
 }
 
 function Format-SecurityInterpretPrompt {
@@ -696,10 +696,10 @@ function Get-SecuritySeat {
     )
     if ($Deep) { return 'opus' }
     switch ($Band) {
-        'hot'  { return 'openrouter-ox-alpha' }
-        'warm' { return 'openrouter-ox-alpha' }
+        'hot'  { return 'openrouter-glm' }
+        'warm' { return 'openrouter-glm' }
         'cold' { return 'local' }
-        default { return 'openrouter-ox-alpha' }
+        default { return 'openrouter-glm' }
     }
 }
 
@@ -732,7 +732,7 @@ function Get-SecurityRecipe {
         }
     }
     $seat = Get-SecuritySeat -Band $band -Deep:$Deep
-    if (Test-SecuritySeatForbidden -Seat $seat) { $seat = 'openrouter-ox-alpha' }
+    if (Test-SecuritySeatForbidden -Seat $seat) { $seat = 'openrouter-glm' }
     $cadence = switch ($band) {
         'hot'  { 'nightly' }
         'warm' { 'weekly' }

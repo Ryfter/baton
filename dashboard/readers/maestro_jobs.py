@@ -296,7 +296,7 @@ def board_status(
 def budget_stub(usable: Optional[Iterable[str]] = None) -> dict[str, Any]:
     """Usable-instrument list. Claude remaining comes from budget_for()."""
     names = list(usable) if usable is not None else [
-        "openrouter-ox-alpha",
+        "openrouter-glm",
         "codex",
         "grok-cli",
         "kiro",
