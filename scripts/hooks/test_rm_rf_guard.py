@@ -78,21 +78,28 @@ ALLOW = [
 ]
 
 
-def denied(cmd):
+def run_guard(cmd):
+    """Return (is_denied, returncode). BLOCK => JSON deny + exit 2; ALLOW => exit 0."""
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
     p = subprocess.run([sys.executable, str(GUARD)], input=payload,
                        capture_output=True, text=True)
-    return bool(p.stdout.strip()) and '"deny"' in p.stdout
+    return (bool(p.stdout.strip()) and '"deny"' in p.stdout), p.returncode
 
 
 def main():
     bad = []
     for c in BLOCK:
-        if not denied(c):
+        d, rc = run_guard(c)
+        if not d:
             bad.append(("should BLOCK, allowed", c))
+        elif rc != 2:
+            bad.append((f"blocked but exit {rc}, want 2", c))
     for c in ALLOW:
-        if denied(c):
+        d, rc = run_guard(c)
+        if d:
             bad.append(("should ALLOW, blocked", c))
+        elif rc != 0:
+            bad.append((f"allowed but exit {rc}, want 0", c))
     for kind, c in bad:
         print(f"FAIL  {kind}: {c!r}")
     total = len(BLOCK) + len(ALLOW)

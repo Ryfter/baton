@@ -13,8 +13,11 @@ in the session's cwd:
 
 Design (matches publish-guard.py / rm-rf-guard.py house style):
   - `stop_hook_active` short-circuit FIRST, or a blocked stop loops.
-  - Fails OPEN on every internal error -- missing bash, timeout, exception,
-    unreadable payload. A broken gate must never wedge a session.
+  - Fails OPEN on internal error -- missing bash, an unreadable payload, an
+    unhandled exception. A broken gate must never wedge a session.
+  - A run that EXCEEDS RUN_TIMEOUT blocks, not fails open: an unfinished suite
+    is red until proven otherwise, and a gate that opens on timeout is not a
+    gate. `stop_hook_active` short-circuits the retry, so it blocks once.
   - Block protocol: {"decision": "block", "reason": ...} on stdout, exit 0.
 
 The project script runs verbatim in the project cwd, so it uses the project's
@@ -26,8 +29,9 @@ import subprocess
 import sys
 
 GATE_SCRIPT = ".claude/test-gate.sh"
-RUN_TIMEOUT = 180          # settings.json wires this hook at ~200; stay under it
+RUN_TIMEOUT = 540         # hooks.json wires this Stop hook at 600; stay under it
 TAIL_CHARS = 3000
+BASH = "/bin/bash" if sys.platform == "darwin" else "bash"  # macOS: system 3.2
 
 
 def block(reason):
@@ -54,11 +58,22 @@ def main():
 
     try:
         p = subprocess.run(
-            ["bash", script], cwd=cwd, capture_output=True,
+            [BASH, script], cwd=cwd, capture_output=True,
             text=True, errors="replace", timeout=RUN_TIMEOUT,
         )
+    except subprocess.TimeoutExpired:
+        # a gate that fails OPEN on timeout is not a gate -- an unfinished
+        # suite is red until proven otherwise. (stop_hook_active short-circuits
+        # the retry, so this blocks once, not forever.)
+        block(
+            f"BLOCKED by test-gate: {GATE_SCRIPT} did not finish within "
+            f"{RUN_TIMEOUT}s in {cwd}.\n"
+            "Treat an unfinished gate as red -- speed up or split the suite, or "
+            f"make {GATE_SCRIPT} exit 0 / drop its +x bit to bypass."
+        )
+        return 0
     except Exception:
-        return 0                                    # missing bash, timeout, ...
+        return 0                                    # missing bash, unreadable, ...
 
     if p.returncode == 0:
         return 0

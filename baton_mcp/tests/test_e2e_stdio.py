@@ -166,9 +166,21 @@ async def _run_mcp_json_launch(home: Path, repo_root: Path) -> None:
     env["BATON_HOME"] = str(home)
     env["CLAUDE_PLUGIN_ROOT"] = str(repo_root)  # what Claude sets at runtime
 
+    cmd = server["command"]
+    # Consume the launch command EXACTLY as .mcp.json specifies -- never
+    # substitute sys.executable. A command that is not spawnable is the bug
+    # this test exists to catch (that is how `command: "python"` shipped green).
+    if shutil.which(cmd) is None:
+        if cmd in ("uv", "uvx"):
+            pytest.skip(f".mcp.json needs {cmd!r}; not installed in this env")
+        pytest.fail(
+            f".mcp.json command {cmd!r} is not on PATH -- Claude Code could not "
+            "spawn this MCP server"
+        )
+
     params = StdioServerParameters(
-        command=sys.executable if server["command"] == "python" else server["command"],
-        args=server["args"],
+        command=cmd,
+        args=list(server["args"]),
         env=env,
         cwd=str(home),  # NOT the repo — module must resolve via the bootstrap
     )

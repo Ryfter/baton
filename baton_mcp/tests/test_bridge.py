@@ -173,6 +173,7 @@ class TestRunOpCommandShape:
         monkeypatch.setattr(subprocess, "Popen", fake_popen)
         monkeypatch.setattr(subprocess, "run", fake_run)
         monkeypatch.setattr(Path, "unlink", tracking_unlink)
+        monkeypatch.setattr(os, "killpg", lambda *a, **k: None)  # no live syscall on the mock pid
         result = run_op("fleet-test", {"name": "stub", "prompt": "hi"}, timeout=10)
         assert result["ok"] is False
         # File should still be cleaned up
@@ -232,6 +233,7 @@ class TestRunOpStdoutParsing:
 
         monkeypatch.setattr(subprocess, "Popen", fake_popen)
         monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(os, "killpg", lambda *a, **k: None)  # no live syscall on the mock pid
         result = run_op("fleet-test", {"name": "stub", "prompt": "hi"}, timeout=10)
         assert result["ok"] is False
         assert "timed out" in result["error"].lower()
@@ -281,17 +283,18 @@ class TestTimeoutKill:
             for c in taskkill_calls
         ), f"expected taskkill call with PID 99999, got: {taskkill_calls}"
 
-    def test_timeout_uses_kill_on_non_win32(self, monkeypatch):
-        """On non-win32 the bridge falls back to proc.kill() instead of taskkill."""
+    def test_timeout_uses_killpg_on_non_win32(self, monkeypatch):
+        """On non-win32 the bridge kills the process GROUP via os.killpg (the
+        child is started with start_new_session, so pid == pgid), not taskkill."""
         from baton_mcp import bridge as bridge_mod
+        import signal
 
         taskkill_calls: list[list] = []
-        kill_called = []
+        killpg_calls: list[tuple] = []
 
         def fake_popen(cmd, **kwargs):
             proc = _make_popen_timeout(cmd)
             proc.pid = 88888
-            proc.kill = lambda: kill_called.append(True)
             return proc
 
         def fake_run(cmd, **kwargs):
@@ -300,11 +303,14 @@ class TestTimeoutKill:
 
         monkeypatch.setattr(subprocess, "Popen", fake_popen)
         monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(bridge_mod.os, "killpg",
+                            lambda pid, sig: killpg_calls.append((pid, sig)))
         monkeypatch.setattr(bridge_mod.sys, "platform", "linux")
 
         result = bridge_mod.run_op("capabilities", timeout=5)
         assert result["ok"] is False
         assert "timed out" in result["error"].lower()
-        assert kill_called, "proc.kill() should have been called on non-win32"
+        assert (88888, signal.SIGKILL) in killpg_calls, \
+            f"expected os.killpg(88888, SIGKILL), got {killpg_calls}"
         assert not any("taskkill" in str(c[0]).lower() for c in taskkill_calls), \
             "taskkill should NOT be called on non-win32"

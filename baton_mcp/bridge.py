@@ -7,12 +7,36 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 DEFAULT_TIMEOUT_S = 240
+_DRAIN_TIMEOUT_S = 5
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill the whole child tree -- a grandchild (fleet CLI, curl) keeps the
+    stdout pipe open, so signalling only `pwsh` leaves communicate() blocked.
+
+    POSIX: the child was started with `start_new_session`, so its pid IS its
+    process-group id -- kill the group by pid directly. `os.getpgid()` first
+    would raise ProcessLookupError once the session leader has exited even
+    while a grandchild in the group still holds the pipe, and the proc.kill()
+    fallback is then a no-op on the zombie."""
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           capture_output=True)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 def bridge_script() -> Path:
@@ -39,24 +63,27 @@ def run_op(op: str, args: dict | None = None, timeout: int = DEFAULT_TIMEOUT_S) 
             cmd += ["-ArgsPath", argpath]
         proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,        # never inherit the stdio MCP parent's fd 0
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
+            start_new_session=(sys.platform != "win32"),  # own group, for killpg
         )
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            # Windows: kill the whole process tree; Unix: fallback to proc.kill()
-            if sys.platform == "win32":
-                subprocess.run(
-                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                    capture_output=True,
-                )
-            else:
-                proc.kill()
-            proc.communicate()
+            _kill_tree(proc)
+            try:
+                proc.communicate(timeout=_DRAIN_TIMEOUT_S)  # reap; may still be held
+            except subprocess.TimeoutExpired:
+                for stream in (proc.stdout, proc.stderr):   # killpg missed; a leaked
+                    try:                                     # grandchild holds these
+                        if stream is not None:
+                            stream.close()
+                    except Exception:
+                        pass
             return {"ok": False, "error": f"bridge op '{op}' timed out after {timeout}s"}
         out = (stdout or "").strip()
         if not out:

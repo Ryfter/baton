@@ -13,6 +13,10 @@ Usage from hooks.json:
 
 One pwsh spawn per call. Hook stdin is forwarded intact; hook stdout/stderr
 pass through unchanged unless the runtime itself failed.
+
+Fail-open is absolute: a hung pwsh (timeout), a decode error on odd output,
+any non-zero exit (every wrapped hook is advisory / "exit 0 always" by
+design), or an unhandled exception -- all log a line and return 0.
 """
 import os, sys, subprocess, datetime, shutil
 
@@ -22,6 +26,7 @@ FATAL = (
     "An error has occurred that was not properly handled",
     "Unhandled exception.",
 )
+TIMEOUT_S = 60
 
 def note(msg):
     try:
@@ -44,12 +49,19 @@ def main():
         note("pwsh not on PATH; skipped %s" % name)
         return 0
 
-    payload = sys.stdin.read() if not sys.stdin.isatty() else ""
+    try:
+        payload = sys.stdin.read() if not sys.stdin.isatty() else ""
+    except Exception:
+        payload = ""
     try:
         p = subprocess.run(
             [exe, "-NoProfile", "-File", hook] + sys.argv[2:],
             input=payload, capture_output=True, text=True,
+            errors="replace", timeout=TIMEOUT_S,
         )
+    except subprocess.TimeoutExpired:
+        note("pwsh hook timed out after %ss; skipped %s" % (TIMEOUT_S, name))
+        return 0
     except OSError as e:
         note("pwsh launch failed (%s); skipped %s" % (type(e).__name__, name))
         return 0
@@ -58,13 +70,20 @@ def main():
     if any(sig in blob for sig in FATAL):
         note("pwsh runtime failure; skipped %s (rc=%s)" % (name, p.returncode))
         return 0
-    if p.returncode in (126, 127):
-        note("pwsh unavailable (rc=%s); skipped %s" % (p.returncode, name))
+    if p.returncode != 0:
+        # every pwsh-guard-wrapped hook is advisory / "exit 0 always" by
+        # design, so any non-zero is a runtime failure, not a hook verdict.
+        note("pwsh hook exited %s; skipped %s" % (p.returncode, name))
         return 0
 
     if p.stdout: sys.stdout.write(p.stdout)
     if p.stderr: sys.stderr.write(p.stderr)
-    return p.returncode
+    return 0
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        sys.exit(0)          # fail open, always

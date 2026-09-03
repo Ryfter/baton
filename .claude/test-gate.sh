@@ -15,26 +15,31 @@ set -u
 cd "$(dirname "$0")/.." || exit 0                 # repo root; fail open
 command -v pwsh >/dev/null 2>&1 || exit 0         # no pwsh -> fail open
 
-# Changed paths under scripts/ (staged, unstaged, untracked). Strip the porcelain
-# "XY " prefix and any rename "old -> new" arrow.
-changed=$(git status --porcelain -- scripts/ 2>/dev/null | sed 's/^...//' | sed 's/.* -> //')
+# Changed *.ps1 under scripts/ (staged, unstaged, untracked). `-z` avoids the
+# porcelain quoting that a `sed 's/^...//'` prefix-strip mangled for odd names;
+# in -z mode a rename is "new\0old" (no " -> " arrow), and the bare "old" line
+# fails the "^status path" match below and is dropped (we don't test old names).
+changed=$(git status -z -- scripts/ 2>/dev/null | tr '\0' '\n' \
+          | sed -n 's|^..[ ]\(scripts/.*\.ps1\)$|\1|p')
 [ -z "$changed" ] && exit 0
 
 # Resolve each changed script to the test suite(s) that cover it. A changed
 # script with no matching suite file is skipped, so a new lib without a test yet
-# never wedges the gate.
+# never wedges the gate. test-all.ps1 is never selected -- it IS the runner.
 suites=""
 while IFS= read -r f; do
     [ -n "$f" ] || continue
-    base=$(basename "$f"); base=${base%.ps1}
+    base=${f##*/}; base=${base%.ps1}
     case "$base" in
-        test-*) pat="$base" ;;
-        *-lib)  pat="test-${base%-lib}" ;;
-        *)      pat="test-$base" ;;
+        test-all) continue ;;
+        test-*)   pat="$base" ;;
+        *-lib)    pat="test-${base%-lib}" ;;
+        *)        pat="test-$base" ;;
     esac
-    for s in scripts/${pat}*.ps1; do
+    for s in scripts/"$pat"*.ps1; do
         [ -e "$s" ] || continue
-        sb=$(basename "$s")
+        sb=${s##*/}
+        [ "$sb" = "test-all.ps1" ] && continue
         case " $suites " in *" $sb "*) ;; *) suites="$suites $sb" ;; esac
     done
 done <<EOF

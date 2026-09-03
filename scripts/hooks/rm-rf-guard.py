@@ -142,7 +142,11 @@ def deny(reason):
         "permissionDecision": "deny",
         "permissionDecisionReason": reason}}))
     sys.stderr.write(reason + "\n")
-    sys.exit(0)
+    sys.exit(2)          # JSON decision + exit 2 -- match publish-guard, cover hosts
+                         # that honour only one of the two signals
+
+
+
 
 
 def main():

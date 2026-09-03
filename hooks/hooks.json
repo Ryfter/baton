@@ -74,7 +74,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/test-gate.py\"",
-            "timeout": 200
+            "timeout": 600
           }
         ]
       }
