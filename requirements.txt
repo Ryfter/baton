@@ -1,5 +1,5 @@
 # Core dependency for the baton MCP server (baton_mcp package).
 # For dashboard extras (fastapi, uvicorn, etc.) see dashboard/requirements.txt.
-mcp>=1.25
+mcp>=1.25,<2  # server.py uses mcp.server.fastmcp.FastMCP, removed in mcp 2.x
 numpy
 httpx
