@@ -61,6 +61,19 @@ BLOCK = [
     "xargs -I {} rm -rf {}",
     "find . -exec rm -rf {} +",
     "find . -execdir rm -rf {} \\;",
+    # H1 -- wrappers between -exec and rm (were bypassing: -exec only matched
+    # rm as the immediate next token).
+    "find . -exec sudo rm -rf {} +",
+    "find . -exec env rm -rf {} \\;",
+    "find . -exec timeout 5 rm -rf {} +",
+    "find . -exec sh -c 'rm -rf \"$1\"' _ {} \\;",
+    "find . -execdir bash -c 'rm -rf .' \\;",
+    # M1 -- privilege / namespace wrappers.
+    "doas rm -rf /tmp/x",
+    "doas -u root rm -rf /tmp/x",
+    "setsid rm -rf /tmp/x",
+    "unshare -m rm -rf /tmp/x",
+    "chroot /jail rm -rf /tmp/x",
 ]
 
 ALLOW = [
@@ -75,6 +88,9 @@ ALLOW = [
     "echo 'sudo rm -fr /var/data'",       # the false-positive that bit this session
     'git commit -m "harden rm -rf guard"',
     "python3 -c 'import shutil; shutil.rmtree(x)'",
+    "find . -name '*.log' -exec cat {} +",       # -exec, but not rm
+    "find . -exec ls -la {} \\;",
+    "doas systemctl restart nginx",              # wrapper, but not rm
 ]
 
 
