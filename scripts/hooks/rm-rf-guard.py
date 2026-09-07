@@ -33,8 +33,11 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # resolve symlinked deploys
-import _cmdscan as cs
+try:                                              # a broken/missing helper must
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # (symlinked deploys)
+    import _cmdscan as cs
+except Exception:
+    sys.exit(0)                                   # ...fail OPEN, like everything else
 
 
 def read_command():
@@ -105,10 +108,14 @@ def deny(reason):
 
 
 def main():
-    cmd = cs.unquote(read_command())          # unquote FIRST -- `r\m`, `'r'm`, r"m" are rm
-    if not cmd or "rm" not in cmd.lower():
+    raw = read_command()
+    if not raw or "rm" not in cs.unquote(raw).lower():
         return
-    for seg in cs.segments(cmd):
+    # Split the RAW string on *unquoted* operators, THEN unquote each segment --
+    # so `echo 'true && rm -rf x'` is one (harmless) segment, while `\rm`, `'r'm`
+    # and `r"m"` still collapse to the token `rm`.
+    for raw_seg in cs.segments(raw):
+        seg = cs.unquote(raw_seg)
         if "rm" not in seg.lower():
             continue
         targets = scan_segment(seg)

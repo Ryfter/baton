@@ -63,7 +63,7 @@ def check_settings(issues):
         if not sp.is_file():
             continue
         try:
-            obj = json.loads(sp.read_text(encoding="utf-8"))
+            obj = json.loads(sp.read_text(encoding="utf-8-sig"))  # tolerate a BOM
         except Exception as e:
             issues.append("Could not parse %s as JSON: %s" % (sp, e))
             continue

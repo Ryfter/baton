@@ -9,19 +9,23 @@ remembers it. Two blocks:
      accident.
   2. `git push` whose pending commits carry risky file types into a PUBLIC repo.
 
-Fast path first: anything without the literal word `git` exits immediately, so
-the per-Bash-call cost is a substring check. The `git` command line is then
-*tokenized* (shlex per segment, lossy fallback) rather than regex-matched, so
-`git add -- .`, `git add -v --all`, `git commit --all`, quoted `-C <path>`, and
-`echo git add -A` are all read correctly. Segment-split / wrapper-strip come
-from _cmdscan.py, shared with rm-rf-guard.py.
+Fast path first: a command with no `git` substring (case-folded) exits
+immediately. The `git` command line is then *tokenized* (shlex per segment,
+lossy fallback) rather than regex-matched, so `git add -- .`, `git add -v
+--all`, `git commit --all`, quoted `-C <path>`, `echo git add -A`, and a
+`git ...` nested in `sh -c '...'` / `eval` / `git submodule foreach` are all
+read correctly. Quote-aware segment-split / wrapper-strip come from _cmdscan.py,
+shared with rm-rf-guard.py.
 
 Fails OPEN on any internal error -- a broken guard must never wedge the session.
 """
 import json, os, re, shlex, subprocess, sys, time
 
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # resolve symlinked deploys
-import _cmdscan as cs
+try:
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # symlinked deploys
+    import _cmdscan as cs
+except Exception:
+    sys.exit(0)                                   # broken helper -> fail OPEN
 
 CACHE = os.path.expanduser("~/.baton/cache/repo-visibility.json")
 CACHE_TTL = 86400
@@ -30,12 +34,19 @@ CACHE_TTL = 86400
 RISKY_EXT = re.compile(r"\.(docx|doc|pptx|pdf|eml|msg|mbox|epub|mp4|mov|mp3|m4a|wav)$", re.I)
 
 # `git` global options that consume the following token as their value.
-GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                  "--exec-path", "--config-env", "--super-prefix", "--attr-source"}
+# `git commit` options that consume the following token (so `git commit -m --all`
+# is a message, not a flag).
+COMMIT_VALUE_OPTS = {"-m", "--message", "-F", "--file", "-c", "--reedit-message",
+                     "-C", "--reuse-message", "--author", "--date", "-t", "--template",
+                     "--squash", "--fixup", "--trailer", "-S", "--gpg-sign"}
 
-# `git add` args that stage broadly (long forms + the `.` / `:/` pathspecs).
+# `git add` args that stage broadly (long forms + the `.` / `..` / `:/` pathspecs).
 # NB: --ignore-removal is `--no-all`, the opposite of blanket -- not listed.
 ADD_BLANKET_LONG = {"-A", "--all", "-u", "--update"}
-ADD_BLANKET_PATHSPEC = {".", "./", "*", ":/", ":/.", ":/*"}
+ADD_BLANKET_PATHSPEC = {".", "./", "..", "../", "*", ":/", ":/.", ":/*"}
+NESTING_SUBCMDS = {"submodule", "!", "sh", "bash"}
 
 
 def sh(args, cwd=None, timeout=8):
@@ -55,24 +66,34 @@ def deny(reason):
     sys.exit(2)
 
 
-def _git_invocations(cmd):
-    """Yield (subcommand, arg_tokens, cwd_override) for each real `git` call.
+def _tok(seg):
+    try:
+        return shlex.split(seg)
+    except ValueError:
+        return cs.unquote(seg).split()
 
-    A segment whose head token (past assignments + wrappers) is not `git` is
-    skipped -- that kills the `echo git add -A` false positive.
+
+def _git_invocations(cmd, _depth=0):
+    """Yield (subcommand, arg_tokens, cwd_override) for each real `git` call --
+    including one nested inside `sh -c '...'`, `eval ...`, or `git submodule
+    foreach git ...`. A segment whose head token (past assignments + wrappers)
+    is not `git` is skipped -- that kills the `echo git add -A` false positive.
     """
-    for seg in cs.BOUNDARY.split(cmd):
-        seg = seg.strip()
-        if not seg:
+    if _depth > 3:
+        return
+    for seg in cs.segments(cmd):
+        tokens = _tok(seg)
+        if not tokens:
             continue
-        try:
-            tokens = shlex.split(seg)
-        except ValueError:
-            tokens = cs.unquote(seg).split()
-        i = cs.strip_prefix(tokens, 0, heads=("git",))
-        if i >= len(tokens) or cs.basename(tokens[i]).lower() != "git":
+
+        # git nested in a shell/eval wrapper: sh -c 'git add -A', eval git add -A
+        head_i = cs.strip_prefix(tokens, 0, heads=("git",))
+        if head_i >= len(tokens) or cs.basename(tokens[head_i]).lower() != "git":
+            for body in cs.nested_command_bodies(tokens):
+                yield from _git_invocations(body, _depth + 1)
             continue
-        j = i + 1
+
+        j = head_i + 1
         cwd_override = None
         while j < len(tokens) and tokens[j].startswith("-"):
             opt = tokens[j]
@@ -86,8 +107,14 @@ def _git_invocations(cmd):
                 j += 2
             else:
                 j += 1                            # bare global flag (--no-pager, --bare, -p)
-        if j < len(tokens):
-            yield tokens[j].lower(), tokens[j + 1:], cwd_override
+        if j >= len(tokens):
+            continue
+        sub, rest = tokens[j].lower(), tokens[j + 1:]
+        yield sub, rest, cwd_override
+        # git submodule foreach git add -A  /  git ! 'git add -A'
+        if sub in NESTING_SUBCMDS:
+            tail = rest[1:] if rest[:1] == ["foreach"] else rest
+            yield from _git_invocations(" ".join(tail), _depth + 1)
 
 
 def _is_blanket_add(args):
@@ -108,11 +135,18 @@ def _is_blanket_add(args):
 
 
 def _is_commit_all(args):
+    skip = False
     for a in args:
+        if skip:                                  # this token is a flag's value
+            skip = False
+            continue
         if a == "--":
             break
         if a == "--all":
             return True
+        if a in COMMIT_VALUE_OPTS:
+            skip = True
+            continue
         if a.startswith("-") and not a.startswith("--") and "a" in a[1:]:
             return True                           # -a, -am, -va
     return False

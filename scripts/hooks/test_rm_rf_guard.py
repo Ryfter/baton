@@ -90,6 +90,13 @@ BLOCK = [
     "chroot --userspec=x /jail rm -rf /tmp/x",
     # L5 (Opus) -- find -ok / -okdir also run the command.
     "find . -ok rm -rf {} \\;",
+    # Grok round 2 -- more wrappers + path-arg wrappers + =flags + nested -c.
+    "setarch x86_64 rm -rf /tmp/x",
+    "find . -exec setarch x86_64 rm -rf {} +",
+    "busybox rm -rf /tmp/x",
+    "nsenter -t 1 -m rm -rf /tmp/x",
+    "script -c 'rm -rf /tmp/x' /dev/null",
+    "chroot --userspec=0:0 /jail sh -c 'rm -rf /tmp/x'",
 ]
 
 ALLOW = [
@@ -110,6 +117,10 @@ ALLOW = [
     "timeout -s KILL 5 ls -la",                  # wrapper + flag-value + dur, not rm
     "timeout 5 echo done",
     "chroot /jail /bin/sh",                      # chroot, but not rm
+    # Grok round 2 -- operators INSIDE quotes must not spawn a real rm segment.
+    "echo 'true && rm -rf /tmp/x'",
+    "git commit -m 'chore: rm -rf cleanup; then run it'",
+    'git commit -m "drop rm -rf from the script && ship"',
 ]
 
 

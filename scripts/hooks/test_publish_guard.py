@@ -44,6 +44,14 @@ BLANKET = [
     "sudo git add -A",                    # behind a wrapper
     "foo && git add -A",                  # second segment of a compound
     "git add -A -- src/",                 # blanket flag before the -- pathspec sep
+    # Grok round 2 -- git nested in a shell wrapper / submodule / global value-opt
+    "sh -c 'git add -A'",
+    "bash -c \"git add --all\"",
+    "eval 'git add -A'",
+    "sudo sh -c 'git add -A'",
+    "git submodule foreach git add -A",
+    "git --config-env NAME=file add -A",
+    "git add ..",                          # stages the parent tree
 ]
 
 NOT_BLANKET = [
@@ -60,6 +68,10 @@ NOT_BLANKET = [
     "git status",
     "git push origin main",
     "git diff --stat",
+    # Grok round 2 -- an operator inside the commit message is not a new segment
+    "git commit -m 'fixed; git add -A'",
+    "git commit -m \"foo && git add --all\"",
+    "git commit -m --all",                # message literally '--all', not a flag
 ]
 
 
