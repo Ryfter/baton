@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/pwsh-guard.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/baton-health-canary.ps1\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/baton-health-canary.py\""
           },
           {
             "type": "command",
@@ -69,7 +69,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/pwsh-guard.py\" \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/decision-detect.ps1\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/decision-detect.py\""
           },
           {
             "type": "command",
