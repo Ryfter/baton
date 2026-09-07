@@ -30,8 +30,10 @@ To loosen (e.g. allow deletes under a scratch dir), add a path allow-list
 check just before deny() in main().
 """
 import json
+import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # resolve symlinked deploys
 import _cmdscan as cs
 
 
@@ -83,7 +85,7 @@ def scan_segment(seg):
         if hit is not None:
             return hit
     for j, t in enumerate(tokens):            # find ... -exec [wrapper ...] rm -rf {} \;
-        if t in ("-exec", "-execdir"):
+        if t in ("-exec", "-execdir", "-ok", "-okdir"):
             k = cs.strip_prefix(tokens, j + 1, heads=("rm",))
             if k < len(tokens) and _is_rm(tokens[k]):
                 hit = _check_rm(tokens[k + 1:])
@@ -103,10 +105,10 @@ def deny(reason):
 
 
 def main():
-    cmd = read_command()
+    cmd = cs.unquote(read_command())          # unquote FIRST -- `r\m`, `'r'm`, r"m" are rm
     if not cmd or "rm" not in cmd.lower():
         return
-    for seg in cs.segments(cs.unquote(cmd)):
+    for seg in cs.segments(cmd):
         if "rm" not in seg.lower():
             continue
         targets = scan_segment(seg)

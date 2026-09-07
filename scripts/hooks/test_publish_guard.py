@@ -43,10 +43,13 @@ BLANKET = [
     "git -C '/path with space' add -A",   # quoted global -C arg
     "sudo git add -A",                    # behind a wrapper
     "foo && git add -A",                  # second segment of a compound
+    "git add -A -- src/",                 # blanket flag before the -- pathspec sep
 ]
 
 NOT_BLANKET = [
     "git add -- src/foo.py",             # explicit path after --
+    "git add -- -A",                     # a file literally named -A, after --
+    "git add --ignore-removal foo.txt",  # --ignore-removal is --no-all, not blanket
     "git add src/",
     "git add -p",
     "git commit -m 'amend the docs'",    # 'a' inside the message, not a flag
@@ -68,6 +71,13 @@ def main():
     for c in NOT_BLANKET:
         if _blanket(c):
             bad.append(("should PASS, flagged", c))
+    # H3 (Opus): the tokenizer is case-insensitive, so `GIT add -A` must still
+    # be seen as blanket -- main()'s fast-path guard must lower-case too.
+    if not _blanket("GIT add -A"):
+        bad.append(("case-folded git not recognised", "GIT add -A"))
+    src = GUARD.read_text()
+    if 'if "git" not in cmd.lower()' not in src and 'if "git" not in cmd:' in src:
+        bad.append(("main() fast path is case-sensitive", 'if "git" not in cmd'))
     for kind, c in bad:
         print(f"FAIL  {kind}: {c!r}")
     total = len(BLANKET) + len(NOT_BLANKET)

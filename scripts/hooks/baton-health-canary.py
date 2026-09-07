@@ -30,7 +30,7 @@ def probe_pwsh(issues):
             return
         proc = subprocess.run(
             ["pwsh", "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8,
         )
         ver = proc.stdout.decode("utf-8", "replace").strip()
         if proc.returncode != 0 or not ver:
@@ -42,9 +42,21 @@ def probe_pwsh(issues):
         issues.append("pwsh probe threw: %s. Baton hooks that shell to pwsh are dead." % e)
 
 
+def _iter_strings(obj):
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _iter_strings(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _iter_strings(v)
+
+
 def check_settings(issues):
     # 2) Parse Claude settings as JSON; flag real Windows path separators in string
-    #    values (pattern: /Users/...\<name-char>), which will not resolve on macOS.
+    #    values (/Users/...\<name-char>). Test each parsed string -- NOT a JSON
+    #    re-dump, where a real "\" is escaped to "\\" and never matches.
     win_sep = re.compile(r'/Users/[^\\"]*\\[A-Za-z]')
     for sp in (Path.home() / ".claude" / "settings.json",
                Path.home() / ".claude" / "settings.local.json"):
@@ -52,13 +64,13 @@ def check_settings(issues):
             continue
         try:
             obj = json.loads(sp.read_text(encoding="utf-8"))
-            compact = json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
-            if win_sep.search(compact):
-                issues.append(
-                    "Windows-style path separators in %s -- hooks/config will not resolve on macOS." % sp
-                )
         except Exception as e:
             issues.append("Could not parse %s as JSON: %s" % (sp, e))
+            continue
+        if any(win_sep.search(s) for s in _iter_strings(obj)):
+            issues.append(
+                "Windows-style path separators in %s -- hooks/config will not resolve on macOS." % sp
+            )
 
 
 def check_guard(issues):

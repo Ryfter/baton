@@ -74,6 +74,22 @@ BLOCK = [
     "setsid rm -rf /tmp/x",
     "unshare -m rm -rf /tmp/x",
     "chroot /jail rm -rf /tmp/x",
+    # C1 (Opus) -- interior quote/escape splitting the command name; the
+    # substring prefilter must run AFTER unquote, not before.
+    "r\\m -rf /tmp/x",
+    "'r'm -rf /tmp/x",
+    'r"m" -rf /tmp/x',
+    # H1 (Opus) -- a wrapper flag whose value is not a duration stranded the
+    # scan on the flag value.
+    "timeout -s KILL 5 rm -rf /tmp/x",
+    "timeout --signal KILL 5 rm -rf /tmp/x",
+    "timeout -k 5 -s KILL 10 rm -rf /tmp/x",
+    "find . -exec timeout -s KILL 5 rm -rf {} +",
+    # H2 (Opus) -- chroot's NEWROOT consumption stacked on flag-value
+    # consumption and ate `rm` itself.
+    "chroot --userspec=x /jail rm -rf /tmp/x",
+    # L5 (Opus) -- find -ok / -okdir also run the command.
+    "find . -ok rm -rf {} \\;",
 ]
 
 ALLOW = [
@@ -91,6 +107,9 @@ ALLOW = [
     "find . -name '*.log' -exec cat {} +",       # -exec, but not rm
     "find . -exec ls -la {} \\;",
     "doas systemctl restart nginx",              # wrapper, but not rm
+    "timeout -s KILL 5 ls -la",                  # wrapper + flag-value + dur, not rm
+    "timeout 5 echo done",
+    "chroot /jail /bin/sh",                      # chroot, but not rm
 ]
 
 

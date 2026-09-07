@@ -5,14 +5,25 @@
 # under ~/.claude/knowledge/, starts `python -m kb.index --file <path>` in the
 # background, re-indexing only the touched file rather than rescanning a scope.
 #
-# Ported from kb-autoindex.ps1 (2026-09-07). Behaviour identical except the
-# background worker is launched with sys.executable (this hook's interpreter)
-# instead of a bare `python` -- macOS/Homebrew ships only `python3`.
+# Ported from kb-autoindex.ps1 (2026-09-07). The background worker is launched
+# with <repo>/.venv/bin/python when that exists (kb.index needs yaml/httpx/numpy,
+# which neither a bare `python` nor the hook's own python3 carries), else
+# sys.executable as a last resort.
 
 import json
 import os
 import subprocess
 import sys
+
+
+def _worker_python(repo_root):
+    if repo_root:
+        venv = os.path.join(repo_root, ".venv",
+                            "Scripts" if os.name == "nt" else "bin",
+                            "python.exe" if os.name == "nt" else "python")
+        if os.path.isfile(venv):
+            return venv
+    return sys.executable
 
 
 def main() -> int:
@@ -60,7 +71,7 @@ def main() -> int:
     if repo_root:
         kwargs["cwd"] = repo_root
     try:
-        subprocess.Popen([sys.executable, "-m", "kb.index", "--file", touched], **kwargs)
+        subprocess.Popen([_worker_python(repo_root), "-m", "kb.index", "--file", touched], **kwargs)
     except Exception:
         return 0
     return 0

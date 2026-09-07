@@ -20,6 +20,7 @@ Fails OPEN on any internal error -- a broken guard must never wedge the session.
 """
 import json, os, re, shlex, subprocess, sys, time
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # resolve symlinked deploys
 import _cmdscan as cs
 
 CACHE = os.path.expanduser("~/.baton/cache/repo-visibility.json")
@@ -32,7 +33,8 @@ RISKY_EXT = re.compile(r"\.(docx|doc|pptx|pdf|eml|msg|mbox|epub|mp4|mov|mp3|m4a|
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
 
 # `git add` args that stage broadly (long forms + the `.` / `:/` pathspecs).
-ADD_BLANKET_LONG = {"-A", "--all", "-u", "--update", "--no-ignore-removal", "--ignore-removal"}
+# NB: --ignore-removal is `--no-all`, the opposite of blanket -- not listed.
+ADD_BLANKET_LONG = {"-A", "--all", "-u", "--update"}
 ADD_BLANKET_PATHSPEC = {".", "./", "*", ":/", ":/.", ":/*"}
 
 
@@ -94,12 +96,13 @@ def _is_blanket_add(args):
         if a == "--":
             after_ddash = True
             continue
-        if a in ADD_BLANKET_LONG:
+        if after_ddash:                           # everything here is a pathspec
+            if a in ADD_BLANKET_PATHSPEC:
+                return True
+            continue
+        if a in ADD_BLANKET_LONG or a in ADD_BLANKET_PATHSPEC:
             return True
-        if a in ADD_BLANKET_PATHSPEC:
-            return True
-        if not after_ddash and a.startswith("-") and not a.startswith("--") \
-                and ("A" in a[1:] or "u" in a[1:]):
+        if a.startswith("-") and not a.startswith("--") and ("A" in a[1:] or "u" in a[1:]):
             return True                           # clustered: -Av, -uv
     return False
 
@@ -157,13 +160,29 @@ def visibility(cwd):
     return slug, vis
 
 
+def _pending_files(cwd):
+    """Files about to be published. With an upstream, the @{u}..HEAD delta;
+    without one (`git push -u origin <new-branch>` -- the first-publish moment),
+    every file in commits not on any remote. Returns None if undeterminable."""
+    rc, up, _ = sh(["git", "rev-parse", "--abbrev-ref", "@{u}"], cwd)
+    if rc == 0 and up:
+        rc, files, _ = sh(["git", "log", "--name-only", "--pretty=format:",
+                           "--diff-filter=AM", f"{up}..HEAD"], cwd)
+    else:
+        # HEAD must be explicit -- `--not --remotes` alone gives git no positive
+        # ref and it prints nothing instead of defaulting to HEAD.
+        rc, files, _ = sh(["git", "log", "--name-only", "--pretty=format:",
+                           "--diff-filter=AM", "HEAD", "--not", "--remotes"], cwd)
+    if rc != 0:
+        return None
+    return sorted({f for f in files.splitlines() if f.strip()})
+
+
 def _push_deny(cwd):
-    rc, out, _ = sh(["git", "rev-parse", "--abbrev-ref", "@{u}"], cwd)
-    rng = f"{out}..HEAD" if rc == 0 and out else "origin/HEAD..HEAD"
-    rc, files, _ = sh(["git", "diff", "--name-only", rng], cwd)
-    if rc != 0 or not files:
+    files = _pending_files(cwd)
+    if not files:
         return
-    risky = [f for f in files.splitlines() if RISKY_EXT.search(f)]
+    risky = [f for f in files if RISKY_EXT.search(f)]
     if not risky:
         return
     slug, vis = visibility(cwd)
@@ -189,14 +208,14 @@ def main():
     if evt.get("tool_name") != "Bash":
         return 0
     cmd = (evt.get("tool_input") or {}).get("command") or ""
-    if "git" not in cmd:                      # fast path: ~every non-git call
+    if "git" not in cmd.lower():              # fast path: ~every non-git call
         return 0
     default_cwd = evt.get("cwd") or os.getcwd()
 
     for sub, args, cwd_override in _git_invocations(cmd):
         if sub not in ("add", "stage", "commit", "push"):
             continue
-        cwd = (cwd_override or "").strip("'\"") or default_cwd
+        cwd = cwd_override or default_cwd
         if not os.path.isdir(cwd):
             continue
         if sh(["git", "rev-parse", "--is-inside-work-tree"], cwd)[0] != 0:

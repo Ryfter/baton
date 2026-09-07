@@ -56,12 +56,25 @@ def direct_assistant_text(payload):
     return ""
 
 
+def _tail_lines(path, n=200, blk=256 * 1024):
+    """Last n lines without reading the whole file (transcripts reach MBs)."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        end = f.tell()
+        buf = b""
+        while end > 0 and buf.count(b"\n") <= n:
+            step = min(blk, end)
+            end -= step
+            f.seek(end)
+            buf = f.read(step) + buf
+    return buf.decode("utf-8", "replace").splitlines()[-n:]
+
+
 def transcript_assistant_text(path):
     if not path or not os.path.isfile(path):
         return ""
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            tail = f.readlines()[-200:]
+        tail = _tail_lines(path)
     except OSError:
         return ""
     last = ""

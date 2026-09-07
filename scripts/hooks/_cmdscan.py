@@ -52,7 +52,7 @@ def basename(tok):
     return tok.lstrip("\\").rsplit("/", 1)[-1]
 
 
-def strip_prefix(tokens, start=0, heads=()):
+def strip_prefix(tokens, start, heads):
     """Index of the real command head in ``tokens``, at or after ``start``,
     past env-assignments and wrapper commands (with their flags, an optional
     flag value, `timeout` durations, and one `chroot` path arg).
@@ -80,22 +80,20 @@ def strip_prefix(tokens, start=0, heads=()):
             ti = tokens[i]
             if ti.startswith("-"):
                 i += 1
-                # A flag may consume the next token as its value -- skip it
-                # only if doing so still lands us on the real command / a flag
-                # / another wrapper (so bare toggles like `env -i` / `sudo -n`
-                # don't swallow `rm`).
-                if (i + 1 < len(tokens)
+                # A flag consumes the next token as its value unless that token
+                # is itself a flag, the command we're hunting (`env -i rm`), or
+                # another wrapper -- then the flag was a bare toggle. This skips
+                # `-s KILL`, `-u kev`, `-n 10` without ever swallowing `rm`.
+                if (i < len(tokens)
                         and not tokens[i].startswith("-")
                         and not is_head(tokens[i])
-                        and basename(tokens[i]).lower() not in WRAPPERS
-                        and (is_head(tokens[i + 1])
-                             or tokens[i + 1].startswith("-")
-                             or basename(tokens[i + 1]).lower() in WRAPPERS)):
+                        and basename(tokens[i]).lower() not in WRAPPERS):
                     i += 1
             elif DURATION.match(ti):                # `timeout 5 rm ...`
                 i += 1
             else:
                 break
-        if w in PATHARG_WRAPPERS and i < len(tokens) and not tokens[i].startswith("-"):
+        if (w in PATHARG_WRAPPERS and i < len(tokens)
+                and not tokens[i].startswith("-") and not is_head(tokens[i])):
             i += 1                                  # `chroot NEWROOT rm ...`
     return i
