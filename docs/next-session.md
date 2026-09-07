@@ -2,7 +2,32 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
-## ⚑ RESUME HERE — 2026-08-21 (Layer LM seating LOCKED — `baton-d124`)
+## ⚑ RESUME HERE — 2026-09-07 (hooks + MCP-launch hardening; guard reviews)
+
+Infra-hardening session (not architecture — nothing above is reopened). Five
+commits on `master`, all pushed:
+
+| Commit | What |
+|---|---|
+| `9ab8382` | `.mcp.json` off bare `python` (superseded by `1c48035`) |
+| `bdec01b` | `rm-rf-guard.py` rewrite — catches wrapper/quote/case bypasses (`/bin/rm`, `\rm`, `RM`, `FOO=1 rm`, `command`/`env`/`sudo -u`/`timeout N`/`bash -c`, `$()`, backticks, newline segments). Probe table `scripts/hooks/test_rm_rf_guard.py` (58 rows). `deny()` now exits 2. |
+| `92f6782` | **wired both guards into `hooks/hooks.json`** (were dead code for plugin installs); `git update-index --chmod=+x .claude/test-gate.sh` (was 100644 → Stop gate inert on fresh clone) |
+| `fa703f6` | High-severity batch: `bridge.py` `stdin=DEVNULL` + `start_new_session`/`killpg` tree-kill + bounded drain; `pwsh-guard.py` 60s timeout + `errors=replace` + non-zero→fail-open + outer wrapper; `test-gate.py` timeout→**block** (not fail-open), `/bin/bash` on darwin, `RUN_TIMEOUT` 540; `test-gate.sh` `git status -z` + quoted globs + never selects `test-all.ps1`; `test_e2e_stdio.py` stops faking `.mcp.json`'s `command` |
+| `1c48035` | `.mcp.json` → `python3` bootstrap → **`baton_mcp/_launch.py`** fallback chain (ambient → `uv run --with-requirements` → repo `.venv` → clear diagnostic). `uv` no longer required. `requirements.txt` is now load-bearing for launch — keep it synced repo↔plugin-cache. |
+
+**Reviewed by** Grok (per-batch) + cloud Opus routines. Review docs: **PR #212** (initial), **PR #213** (verification pass, `docs/reviews/2026-09-03-hooks-mcp-review.md`) — both open, unmerged.
+
+**Still open (all in `rm-rf-guard.py` / `publish-guard.py`, one tokenizer job):**
+- **H1** — `find -exec` doesn't strip wrappers: `find . -exec sudo|env|timeout 5 rm -rf {} +` and `find . -exec sh -c 'rm -rf "$1"' _ {} \;` bypass `rm-rf-guard`. Bare `-exec rm -rf {} +` IS blocked (hides the gap).
+- **M1** — `_WRAPPERS` missing `doas` (direct `sudo` analogue), `setsid`, `unshare`, `chroot`.
+- **M2** — `test_e2e_stdio.py` spawnability assert sits under the module `pwsh` skipif → can't fire without pwsh (how `command: python` shipped green).
+- **Grok #12** — `publish-guard.py` `git add` matcher holes: `git add -- .`, `git add -v --all`, `git commit --all`, `git -C '/path with space' add -A` all bypass; `echo git add -A` false-positives.
+
+**Notes:** pwsh had a `FileLoadException` crash 2026-09-03, self-healed by 2026-09-07 — rewrite the ~8 pwsh hooks in stdlib Python so pwsh is off the session hot path. `openrouter-glm` (GLM 5.3 Flash) needs `reasoning:{max_tokens:4000}` + `max_tokens:16000` in `~/.baton/fleet.yaml` or it burns its budget on reasoning and returns null. Directional refs to evaluate: `vercel-labs/skills` (cross-harness skill packaging), `affaan-m/ECC`, `kunchenguid/no-mistakes` (pre-push gate). Test-bank / regression-corpus brainstorm is paused mid-design.
+
+---
+
+## Prior — 2026-08-21 (Layer LM seating LOCKED — `baton-d124`)
 
 **Architecture is seated.** Do not reopen the four-layer scope split (`baton-d108`) or the one front door (`baton-d111`). Build against seating, not against inventing new layers.
 
