@@ -10,16 +10,18 @@ Continuation of the infra-hardening below. Three more commits on `master`, pushe
 |---|---|
 | `610252e` | **H1 + M1 + Grok #12 closed.** New shared `scripts/hooks/_cmdscan.py` (boundary-split, unquote, `strip_prefix` over assignments + wrappers). rm-rf-guard: `-exec`/`-execdir` route through the same wrapper-strip as the segment head; added `doas`/`setsid`/`unshare`/`chroot NEWROOT`. publish-guard: regex → tokenized (`shlex` per segment). Decision **`baton-d156`**. |
 | `71de785` | **3 standalone pwsh hooks → stdlib Python** (`baton-health-canary`, `kb-autoindex`, `decision-detect`), wired direct (no `pwsh-guard.py` wrapper). The other 6 dot-source the ~40kloc `scripts/` lib layer — that port is its own project. Decision **`baton-d157`**. GLM-drafted ($0.0011), reviewed here. |
-| `ddbf4d3` | **Opus adversarial review fixes** — 15 defects the probe tables missed. C-1 (rm-rf prefilter ran pre-unquote: `r\m -rf` bypassed, verified deleting a real dir — pre-existing). H-1 (`timeout -s KILL 5 rm -rf` stranded the scan on the flag value). H-2 (`chroot --userspec=x /jail rm -rf` double-consume ate `rm`). H-3 (`GIT add -A` past a case-sensitive fast path). H-4 (`git push -u origin <new-branch>` skipped the risky-ext check — no upstream → treated as clean; now `git log --diff-filter=AM HEAD --not --remotes`). M-1..M-4, Lows, Nits — see commit body. |
+| `ddbf4d3` | **Opus adversarial review fixes** — 15 defects. C-1 (rm-rf prefilter ran pre-unquote: `r\m -rf` bypassed, verified deleting a real dir — pre-existing). H-1 (`timeout -s KILL 5 rm -rf`). H-2 (`chroot --userspec=x /jail rm -rf` double-consume). H-3 (`GIT add -A` past a case-sensitive fast path). H-4 (`git push -u origin <new-branch>` skipped the risky-ext check). M-1..M-4, Lows, Nits — see commit body. |
+| `59328d2` | **Grok round-2 fixes** — 4 residuals Opus missed + FP/coverage. #2/#10 (segment split was quote-blind → `git commit -m 'fix; git add -A'` false-denied; now a real char scanner splitting only on UNQUOTED operators). #1 (`sh -c 'git add -A'` / `eval` / `git submodule foreach git add -A` invisible to publish-guard → `nested_command_bodies` + recursive `_git_invocations`). #3 (`setarch ARCH rm -rf`). #4 (`chroot --x=y NEWROOT sh -c 'rm -rf'` — `=`-flags now consume nothing). #5 (`import _cmdscan` now inside the fail-open try). #6/#7/#8/#11/#12/#14 — see body. |
 
-Probes: `test_rm_rf_guard.py` **83/83**, `test_publish_guard.py` **29/29** (new file). C-1/H-1/H-2/H-4 E2E-verified against real repos.
+Probes: `test_rm_rf_guard.py` **92/92**, `test_publish_guard.py` **39/39**. Opus C-1/H-1/H-2/H-4 and Grok #1/#2/#5 E2E-verified against real repos.
+
+**Both review passes (Opus adversarial + Grok round-2) are folded in.** Accepted, not fixed: command-substitution *contents* (`git add $(echo .)`, `R=rm; $R -rf`) — needs shell expansion, out of scope for a lossy pre-exec guard.
 
 **pwsh is broken again on this machine** (canary logs `pwsh probe failed (exit=-6)` — SIGABRT, the .NET assembly corruption class, intermittent: worked at 21:26 + for the d156/d157 capture ~21:35, crashing by 21:43). `pwsh-guard.py` still wraps the remaining 6 hooks; this is why. Reinforces `baton-d157` and the migration direction.
 
 **Still open after this batch:**
 - **M2** — `test_e2e_stdio.py` spawnability assert still under the module `pwsh` skipif (unchanged this session).
 - **6 lib-coupled pwsh hooks** — `baton-init/coach/session-start/session-stop`, `run-feed`, `log-tool-call`. Need the `scripts/*-lib.ps1` layer ported (coach-lib→fleet/prompt-pool/start/usage-lib; registry-lib→session-markers/start-lib; window-service-lib→heartbeat-lib). Tracked backlog, not a batch.
-- **Grok cross-check** of `610252e`+`71de785` was still running at handoff — check `/tasks` / the background task; fold any new finding into a follow-up commit.
 - **PR #212 / #213** — review docs, still open/unmerged; Kevin's call to merge or close.
 - `~/.baton/fleet.yaml` `openrouter-glm` — add `reasoning:{max_tokens:4000}` + `max_tokens:16000`.
 - Test-bank / regression-corpus brainstorm — still paused mid-design.
