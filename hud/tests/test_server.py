@@ -123,6 +123,17 @@ def test_version_chooser_links_are_scoped(client):
     assert client.get("/v99").status_code == 404
 
 
+def test_v3_snapshot_serves_scoped_themes(client):
+    r = client.get("/v3/v/deck")
+    assert r.status_code == 200
+    # theme links in the frozen snapshot must be version-scoped, not the live /themes/
+    assert "/v3/themes/" in r.text
+    css = client.get("/v3/themes/dark.css")
+    assert css.status_code == 200
+    assert "text/css" in css.headers.get("content-type", "")
+    assert client.get("/v3/themes/bogus.css").status_code == 404
+
+
 def test_healthz(client):
     r = client.get("/healthz")
     assert r.status_code == 200

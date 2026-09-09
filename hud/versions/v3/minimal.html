@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HUD · minimal</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" id="hud-theme" href="/v3/themes/dark.css">
+  <script>
+    (function () {
+      var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
+      var q = new URLSearchParams(location.search);
+      var t = q.get("theme");
+      if (t && ALLOWED.indexOf(t) >= 0) localStorage.setItem("hud-theme", t);
+      else t = localStorage.getItem("hud-theme") || "sandstone";
+      if (ALLOWED.indexOf(t) < 0) t = "sandstone";
+      document.getElementById("hud-theme").href = "/v3/themes/" + t + ".css";
+    })();
+  </script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background: var(--hud-bg);
+      color: var(--hud-text);
+      font-family: var(--hud-font-sans);
+      font-size: 14px;
+    }
+    .hud-header {
+      display: flex; align-items: center; gap: var(--hud-space-3);
+      padding: var(--hud-space-3) var(--hud-space-4);
+      border-bottom: 1px solid var(--hud-header-border);
+      background: var(--hud-header-bg);
+      position: sticky; top: 0; z-index: 10;
+    }
+    .hud-brand { display: flex; flex-direction: column; gap: 2px; }
+    .hud-title {
+      letter-spacing: .14em; font-weight: 700; font-size: 11px;
+      text-transform: uppercase; color: var(--hud-text-strong);
+    }
+    .hud-subtitle { font-size: 10px; color: var(--hud-text-faint); }
+    .hud-dot {
+      width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto;
+      background: var(--hud-recon);
+    }
+    .hud-dot.live { background: var(--hud-live); }
+    .hud-meta {
+      font-variant-numeric: tabular-nums; color: var(--hud-text-muted);
+    }
+    .hud-meta strong { color: var(--hud-text-strong); }
+    .hud-spacer { margin-left: auto; }
+    .hud-link {
+      color: var(--hud-link); text-decoration: none; font-size: 12px;
+      border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
+      padding: 4px 10px;
+    }
+    .hud-theme {
+      background: var(--hud-surface); color: var(--hud-text);
+      border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
+      font: inherit; font-size: 11px; padding: 4px 8px; cursor: pointer;
+    }
+    .table-wrap {
+      margin: var(--hud-space-4);
+      border: 1px solid var(--hud-border);
+      border-radius: var(--hud-radius-md);
+      overflow: hidden;
+      background: var(--hud-surface);
+    }
+    table { width: 100%; border-collapse: collapse; }
+    caption {
+      text-align: left; padding: var(--hud-space-3) var(--hud-space-4);
+      font-size: 12px; color: var(--hud-text-muted);
+      border-bottom: 1px solid var(--hud-border);
+    }
+    th, td {
+      text-align: left; padding: 8px var(--hud-space-4);
+      border-bottom: 1px solid var(--hud-border);
+    }
+    th {
+      font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+      color: var(--hud-text-muted); font-weight: 600;
+      background: var(--hud-surface-2);
+    }
+    tbody tr { transition: background .15s; }
+    tbody tr:nth-child(even) { background: var(--hud-surface-2); }
+    tbody tr:hover { background: var(--hud-surface-3); }
+    td.time {
+      font-family: var(--hud-font-mono); font-size: 12px;
+      font-variant-numeric: tabular-nums; color: var(--hud-text-faint);
+      white-space: nowrap;
+    }
+    td.session {
+      font-family: var(--hud-font-mono); font-size: 12px;
+      color: var(--hud-link);
+    }
+    td.kind { font-size: 12px; }
+    td.detail {
+      font-family: var(--hud-font-mono); font-size: 12px;
+      max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    tr.err td { color: var(--hud-error); }
+    tr.err td.session { color: var(--hud-error); }
+  </style>
+</head>
+<body>
+  <header class="hud-header">
+    <span id="dot" class="hud-dot" aria-label="connection"></span>
+    <div class="hud-brand">
+      <span class="hud-title">Minimal</span>
+      <span class="hud-subtitle">accessible event log</span>
+    </div>
+    <span class="hud-meta">events <strong id="count">0</strong></span>
+    <span class="hud-spacer"></span>
+    <select id="theme-pick" class="hud-theme" aria-label="Theme">
+      <option value="dark">dark</option>
+      <option value="sapphire">sapphire</option>
+      <option value="lapis-velvet">lapis-velvet</option>
+      <option value="sandstone">sandstone</option>
+    </select>
+    <a class="hud-link" href="/">views</a>
+  </header>
+  <div class="table-wrap">
+    <table>
+      <caption>Live agent events — newest first</caption>
+      <thead>
+        <tr><th scope="col">time</th><th scope="col">session</th><th scope="col">kind</th><th scope="col">detail</th></tr>
+      </thead>
+      <tbody id="body" aria-live="polite"></tbody>
+    </table>
+  </div>
+  <script>
+    var MAX = 500;
+    var total = 0;
+    var tbody = document.getElementById("body");
+    var countEl = document.getElementById("count");
+    var dot = document.getElementById("dot");
+    var themePick = document.getElementById("theme-pick");
+
+    function isError(ev) {
+      return ev.kind === "post_tool_use" && ev.payload && ev.payload.ok === false;
+    }
+    function detail(ev) {
+      var p = ev.payload || {};
+      if (p.error) return String(p.tool_name || "") + " " + p.error;
+      if (p.tool_name) return p.tool_name;
+      if (p.message) return p.message;
+      if (p.prompt) return p.prompt;
+      if (p.trigger) return String(p.trigger);
+      if (p.source) return String(p.source);
+      if (p.cwd) return p.cwd;
+      if (p.agent) return p.agent;
+      return "";
+    }
+    function clock(ts) {
+      if (!ts) return "";
+      var d = new Date(Date.parse(ts));
+      if (isNaN(d.getTime())) return String(ts);
+      return d.toISOString().slice(11, 19);
+    }
+    function shortId(id) {
+      id = String(id || "");
+      return id.length > 12 ? id.slice(0, 10) + "…" : id;
+    }
+    function onEvent(ev) {
+      var tr = document.createElement("tr");
+      if (isError(ev)) tr.className = "err";
+      var cells = [
+        { cls: "time", text: clock(ev.ts) },
+        { cls: "session", text: shortId(ev.session_id) },
+        { cls: "kind", text: ev.kind || "" },
+        { cls: "detail", text: detail(ev) }
+      ];
+      for (var i = 0; i < cells.length; i++) {
+        var td = document.createElement("td");
+        td.className = cells[i].cls;
+        td.textContent = cells[i].text;
+        tr.appendChild(td);
+      }
+      tbody.insertBefore(tr, tbody.firstChild);
+      while (tbody.rows.length > MAX) tbody.deleteRow(-1);
+      total++;
+      countEl.textContent = String(total);
+    }
+
+    themePick.value = localStorage.getItem("hud-theme") || "sandstone";
+    themePick.addEventListener("change", function () {
+      localStorage.setItem("hud-theme", themePick.value);
+      document.getElementById("hud-theme").href = "/v3/themes/" + themePick.value + ".css";
+    });
+
+    var es = new EventSource('/stream?replay=200');
+    es.addEventListener("open", function () { dot.className = "hud-dot live"; });
+    es.addEventListener("error", function () { dot.className = "hud-dot"; });
+    es.addEventListener("hud", function (e) {
+      try { onEvent(JSON.parse(e.data)); } catch (err) {}
+    });
+  </script>
+</body>
+</html>
