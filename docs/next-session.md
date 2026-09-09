@@ -13,6 +13,8 @@ at **`db8efff`** (`docs/stack-research-2026-09/`):
 | `00-DECISION-consolidated.md` | 3-pass fleet audit (GLM 5.3 Flash + grok-4.6 Job A harnesses + Job B memory/validation/converters + Claude fetches) of ~60 candidate repos. Convergence table, **5 open forks**, recommended stack, sequencing, risks, punch list. |
 | `01-architecture-audit-2026-09-07.md` | Prior audit: collapse Baton to ~5–6k core (learned router + Governor + Grimdex loop + GitHub Projects projection); adopt tools for crew/worktrees/quota/validation/overnight. |
 | `raw-grok-A/B-*.md`, `raw-glm-*.md` | Unedited model outputs. |
+| `raw-grok-C-kun-stack-run.md` | The Kun stack (firstmate/gnhf/quota-axi/treehouse/no-mistakes) walked as a real `baton go` run — 3 layers + 1 sibling, 6 human gates, the Baton-core seam. |
+| `raw-grok-D-followups.md` | why-not on deepseek-harness/Pi/t3code/KunAgent(PolyForm-NC); ai-software-factory→ADD; LMCache SKIP; skill set; **$0/month memory arch**; gstack SKIP; no ink TUI. `00-DECISION` §"2026-09-08 evening" folds it in + the devboardai-vs-GitHub-Projects call. |
 
 **Converged recommendation (nothing decided):** Herdr substrate (its `agent` API replaces
 crew-dispatch) · always-multiple workers · **Archon** YAML DAG replaces the pwsh phase glue
