@@ -15,6 +15,7 @@ at **`db8efff`** (`docs/stack-research-2026-09/`):
 | `raw-grok-A/B-*.md`, `raw-glm-*.md` | Unedited model outputs. |
 | `raw-grok-C-kun-stack-run.md` | The Kun stack (firstmate/gnhf/quota-axi/treehouse/no-mistakes) walked as a real `baton go` run — 3 layers + 1 sibling, 6 human gates, the Baton-core seam. |
 | `raw-grok-D-followups.md` | why-not on deepseek-harness/Pi/t3code/KunAgent(PolyForm-NC); ai-software-factory→ADD; LMCache SKIP; skill set; **$0/month memory arch**; gstack SKIP; no ink TUI. `00-DECISION` §"2026-09-08 evening" folds it in + the devboardai-vs-GitHub-Projects call. |
+| `raw-grok-E-dashboards.md` + `QUEUE.md` | 7 coding dashboards (session-pilot, squan, agent-mission-control, Untrivial/agent-orchestrator, burrthemenace/devboardAI, Helicone, disler) — none replace the GitHub-Projects + 200-line-table plan; all STUDY-ONLY / SKIP / ADD-later-sidecar. **`QUEUE.md` = the running list of every open decision for Kevin.** |
 
 **Converged recommendation (nothing decided):** Herdr substrate (its `agent` API replaces
 crew-dispatch) · always-multiple workers · **Archon** YAML DAG replaces the pwsh phase glue
