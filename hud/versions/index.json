@@ -1,0 +1,6 @@
+{
+  "versions": [
+    {"id": "v1", "label": "Grok · round 1", "date": "2026-09-09", "note": "First build from spec. deck/board/cockpit/minimal. Flat colours, plain light board."},
+    {"id": "v2", "label": "Grok · round 2", "date": "2026-09-09", "note": "Visual redesign + cards.html. Mission-board, cockpit accents + sparkline, 9-hue deck chips + tooltips."}
+  ]
+}

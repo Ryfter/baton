@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HUD · board</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: #f4f1ea;
+      color: #1b1b1b;
+      font-family: "Iowan Old Style", Palatino, Georgia, serif;
+    }
+    header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 14px 20px; border-bottom: 1px solid #ddd4c4;
+      background: #faf8f3;
+    }
+    .title { font-size: 18px; letter-spacing: .08em; text-transform: uppercase; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #c0392b; }
+    .dot.live { background: #1e8a4c; }
+    .dot.recon { background: #c0392b; }
+    .meta { color: #5c574d; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px; }
+    .meta a { color: #1b1b1b; }
+    .board {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;
+      padding: 20px; align-items: start;
+    }
+    .col { background: #fff; border: 1px solid #e2d9cb; border-radius: 10px; min-height: 60vh; padding: 12px; }
+    .col h2 {
+      margin: 0 0 12px; font-size: 13px; letter-spacing: .14em;
+      text-transform: uppercase; color: #6a6458;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+    }
+    .card {
+      background: #fffdf8; border: 1px solid #e2d9cb; border-radius: 8px;
+      padding: 10px 12px; margin-bottom: 10px;
+      box-shadow: 0 1px 0 #eee7db;
+      animation: pop .25s ease;
+      transition: transform .25s ease, opacity .25s ease;
+    }
+    @keyframes pop { from { transform: scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
+    .sid { font-family: ui-monospace, Menlo, monospace; font-size: 13px; font-weight: 700; }
+    .row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px;
+           font-family: ui-sans-serif, system-ui, sans-serif; color: #5c574d; margin-top: 4px; }
+    #needs-you { background: #fff6e8; }
+    #stopped { background: #f3f3f3; }
+    @media (max-width: 800px) { .board { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="title">Board</span>
+    <span id="dot" class="dot recon"></span>
+    <span class="meta">events <strong id="count">0</strong></span>
+    <span class="meta" style="margin-left:auto"><a href="/">⚙ views</a></span>
+  </header>
+  <div class="board">
+    <section class="col" id="running"><h2>Running</h2></section>
+    <section class="col" id="needs-you"><h2>Needs You</h2></section>
+    <section class="col" id="stopped"><h2>Stopped</h2></section>
+  </div>
+  <script>
+    var MAX = 500;
+    var total = 0;
+    var cards = {};
+    var eventLog = [];
+    var cols = {
+      running: document.getElementById("running"),
+      needs: document.getElementById("needs-you"),
+      stopped: document.getElementById("stopped")
+    };
+    var countEl = document.getElementById("count");
+    var dot = document.getElementById("dot");
+
+    function shortId(id) {
+      id = String(id || "");
+      return id.length > 10 ? id.slice(0, 8) : id;
+    }
+    function age(ts) {
+      var t = Date.parse(ts);
+      if (isNaN(t)) t = Date.now();
+      var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+      if (s < 60) return s + "s ago";
+      if (s < 3600) return Math.round(s / 60) + "m ago";
+      return Math.round(s / 3600) + "h ago";
+    }
+    function columnFor(state) {
+      if (state.kind === "stop") return cols.stopped;
+      if (state.kind === "notification") return cols.needs;
+      return cols.running;
+    }
+    function lastTool(state) {
+      return state.lastTool || "—";
+    }
+    function renderCard(sid) {
+      var state = cards[sid];
+      var el = state.el;
+      el.querySelector(".sid").textContent = shortId(sid);
+      el.querySelector(".machine").textContent = state.machine || "—";
+      el.querySelector(".tool").textContent = lastTool(state);
+      el.querySelector(".n").textContent = state.count + " events";
+      el.querySelector(".age").textContent = age(state.ts);
+      var dest = columnFor(state);
+      if (el.parentNode !== dest) dest.appendChild(el);
+    }
+    function onEvent(ev) {
+      var sid = ev.session_id || "unknown";
+      eventLog.push(ev);
+      if (eventLog.length > MAX) eventLog.shift();
+      if (!cards[sid]) {
+        var el = document.createElement("article");
+        el.className = "card";
+        el.innerHTML = '<div class="sid"></div>' +
+          '<div class="row"><span class="machine"></span><span class="age"></span></div>' +
+          '<div class="row"><span class="tool"></span><span class="n"></span></div>';
+        cards[sid] = { el: el, count: 0, kind: "", lastTool: "", machine: "", ts: ev.ts };
+        cols.running.appendChild(el);
+      }
+      var st = cards[sid];
+      st.count += 1;
+      st.kind = ev.kind;
+      st.machine = ev.machine || st.machine;
+      st.ts = ev.ts;
+      if (ev.payload && ev.payload.tool_name) st.lastTool = ev.payload.tool_name;
+      total++;
+      countEl.textContent = String(total);
+      renderCard(sid);
+    }
+    setInterval(function () {
+      Object.keys(cards).forEach(renderCard);
+    }, 5000);
+
+    var es = new EventSource('/stream?replay=200');
+    es.addEventListener("open", function () { dot.className = "dot live"; });
+    es.addEventListener("error", function () { dot.className = "dot recon"; });
+    es.addEventListener("hud", function (e) {
+      try { onEvent(JSON.parse(e.data)); } catch (err) {}
+    });
+  </script>
+</body>
+</html>

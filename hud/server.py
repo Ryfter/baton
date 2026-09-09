@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import socket
 import time
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ from hud import store
 from hud.schema import SCHEMA_ID, validate_envelope
 
 FRONTENDS_DIR = Path(__file__).resolve().parent / "frontends"
+VERSIONS_DIR = Path(__file__).resolve().parent / "versions"
+_VID_RE = re.compile(r"^v\d+$")
 STARTED_AT = time.time()
 
 _subscribers: set[asyncio.Queue] = set()
@@ -53,6 +56,65 @@ def _frontend_path(name: str) -> Optional[Path]:
     if path.is_file():
         return path
     return None
+
+
+def _safe_seg(name: str) -> bool:
+    return bool(name) and "/" not in name and "\\" not in name and ".." not in name
+
+
+def _version_ids() -> list[str]:
+    if not VERSIONS_DIR.is_dir():
+        return []
+    ids = [p.name for p in VERSIONS_DIR.iterdir() if p.is_dir() and _VID_RE.match(p.name)]
+    return sorted(ids, key=lambda s: int(s[1:]))
+
+
+def _version_index() -> list[dict[str, Any]]:
+    idx = VERSIONS_DIR / "index.json"
+    meta: dict[str, dict[str, Any]] = {}
+    if idx.is_file():
+        try:
+            raw = json.loads(idx.read_text("utf-8"))
+            for row in raw.get("versions", []):
+                if isinstance(row, dict) and row.get("id"):
+                    meta[str(row["id"])] = row
+        except (json.JSONDecodeError, OSError):
+            pass
+    out = []
+    for vid in _version_ids():
+        row = dict(meta.get(vid, {}))
+        row["id"] = vid
+        row.setdefault("label", vid)
+        row["layouts"] = sorted(p.stem for p in (VERSIONS_DIR / vid).glob("*.html"))
+        out.append(row)
+    return out
+
+
+def _version_file(vid: str, name: str, sub: str = "") -> Optional[Path]:
+    if not (_VID_RE.match(vid) and _safe_seg(name)):
+        return None
+    base = (VERSIONS_DIR / vid).resolve()
+    rel = ("%s/%s.html" % (sub, name)) if sub else ("%s.html" % name)
+    if sub and not _safe_seg(sub):
+        return None
+    path = (base / rel).resolve() if not sub else (base / sub / ("%s.html" % name)).resolve()
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return None
+    return path if path.is_file() else None
+
+
+def _version_css(vid: str, name: str) -> Optional[Path]:
+    if not (_VID_RE.match(vid) and _safe_seg(name)):
+        return None
+    base = (VERSIONS_DIR / vid / "themes").resolve()
+    path = (base / ("%s.css" % name)).resolve()
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return None
+    return path if path.is_file() else None
 
 
 def _fill(body: dict[str, Any]) -> dict[str, Any]:
@@ -316,3 +378,55 @@ async def healthz() -> dict[str, Any]:
         "events": store.count_events(),
         "uptime_s": int(time.time() - STARTED_AT),
     }
+
+
+def _versions_index_html(rows: list[dict[str, Any]]) -> str:
+    items = []
+    for r in rows:
+        links = " · ".join(
+            '<a href="/%s/v/%s">%s</a>' % (r["id"], lay, lay) for lay in r["layouts"]
+        )
+        items.append(
+            '<li><b>%s</b> <span class="d">%s</span><br><span class="n">%s</span>'
+            '<br><a href="/%s/">chooser</a> — %s</li>'
+            % (r.get("label", r["id"]), r.get("date", ""), r.get("note", ""), r["id"], links)
+        )
+    return (
+        "<!doctype html><meta charset=utf-8><title>HUD — versions</title>"
+        "<style>body{background:#0b0e14;color:#dbe4f0;font:14px/1.5 ui-sans-serif,system-ui;"
+        "margin:0;padding:32px}h1{margin:0 0 4px}a{color:#6aa8ff}li{margin:0 0 20px;list-style:none}"
+        "ul{padding:0;max-width:820px}.d{color:#6b7787}.n{color:#9aa7b6}</style>"
+        "<h1>HUD versions</h1><p><a href=\"/\">→ latest</a></p><ul>%s</ul>"
+        % "\n".join(items)
+    )
+
+
+@app.get("/versions")
+async def versions() -> Any:
+    return HTMLResponse(_versions_index_html(_version_index()))
+
+
+@app.get("/{vid}")
+async def version_chooser(vid: str) -> Any:
+    if not _VID_RE.match(vid) or vid not in _version_ids():
+        raise HTTPException(status_code=404, detail="unknown version")
+    names = sorted(p.stem for p in (VERSIONS_DIR / vid).glob("*.html"))
+    html = _chooser_html(names).replace('href="/v/', 'href="/%s/v/' % vid)
+    html = html.replace("<body>", '<body><p style="padding:0 20px"><a href="/versions">← all versions</a> · %s</p>' % vid)
+    return HTMLResponse(html)
+
+
+@app.get("/{vid}/v/{name}")
+async def version_view(vid: str, name: str) -> Any:
+    path = _version_file(vid, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="unknown version front-end")
+    return FileResponse(path, media_type="text/html; charset=utf-8")
+
+
+@app.get("/{vid}/themes/{name}.css")
+async def version_theme(vid: str, name: str) -> Any:
+    path = _version_css(vid, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="unknown version theme")
+    return FileResponse(path, media_type="text/css; charset=utf-8")

@@ -94,6 +94,35 @@ def test_v_deck_serves_v_bogus_404(client):
     assert r404.status_code == 404
 
 
+def test_versions_index_lists_snapshots(client):
+    r = client.get("/versions")
+    assert r.status_code == 200
+    assert "text/html" in r.headers.get("content-type", "")
+    assert "/v1/v/deck" in r.text
+    assert "/v2/v/cards" in r.text
+
+
+def test_versioned_view_serves_snapshot(client):
+    r = client.get("/v2/v/cards")
+    assert r.status_code == 200
+    assert "text/html" in r.headers.get("content-type", "")
+    r1 = client.get("/v1/v/deck")
+    assert r1.status_code == 200
+    # v1 predates cards.html
+    assert client.get("/v1/v/cards").status_code == 404
+    # unknown version id
+    assert client.get("/v9/v/deck").status_code == 404
+    # path traversal rejected
+    assert client.get("/v1/v/..%2f..%2fserver").status_code == 404
+
+
+def test_version_chooser_links_are_scoped(client):
+    r = client.get("/v2")
+    assert r.status_code == 200
+    assert 'href="/v2/v/' in r.text
+    assert client.get("/v99").status_code == 404
+
+
 def test_healthz(client):
     r = client.get("/healthz")
     assert r.status_code == 200

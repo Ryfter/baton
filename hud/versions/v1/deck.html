@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HUD · deck</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: #0b0e14;
+      color: #c9d1d9;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+    header {
+      display: flex; align-items: center; gap: 14px;
+      padding: 10px 16px;
+      border-bottom: 1px solid #1c2330;
+      position: sticky; top: 0; background: #0b0e14; z-index: 2;
+    }
+    .title { letter-spacing: .12em; font-weight: 700; color: #e6edf3; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #e45858; flex: 0 0 auto; }
+    .dot.live { background: #3ddc8e; box-shadow: 0 0 8px #3ddc8e88; }
+    .dot.recon { background: #e45858; }
+    .meta { color: #8b949e; }
+    .meta a { color: #8ec8ff; text-decoration: none; }
+    .lanes { display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 40px; }
+    .lane {
+      display: grid; grid-template-columns: 150px 1fr; gap: 8px;
+      background: #11161f; border: 1px solid #1c2330; border-radius: 6px;
+      padding: 8px; min-height: 52px;
+      animation: slidein .28s ease;
+      transition: opacity .4s;
+    }
+    .lane.idle { opacity: .35; }
+    @keyframes slidein { from { transform: translateY(-10px); opacity: 0; } to { transform: none; opacity: 1; } }
+    .sid { color: #8ec8ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 6px 4px; }
+    .sid small { display: block; color: #6e7681; font-size: 11px; }
+    .strip { display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px; }
+    .chip {
+      flex: 0 0 auto; border-radius: 4px; padding: 4px 8px; font-size: 12px;
+      background: #1a1f28; color: #c9d1d9; white-space: nowrap;
+    }
+    .chip.tool { background: #16324d; color: #8ec8ff; }
+    .chip.notification { background: #3d2f0e; color: #ffc14d; }
+    .chip.stop { background: #2a2e35; color: #9aa3ad; }
+    .chip.error { background: #4a1515; color: #ff6b6b; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="title">HUD DECK</span>
+    <span id="dot" class="dot recon" title="connection"></span>
+    <span class="meta">events <strong id="count">0</strong></span>
+    <span class="meta" style="margin-left:auto"><a href="/">⚙ views</a></span>
+  </header>
+  <div class="lanes" id="lanes"></div>
+  <script>
+    var MAX = 500;
+    var IDLE_MS = 5 * 60 * 1000;
+    var total = 0;
+    var sessions = {};
+    var order = [];
+    var chipCount = 0;
+    var lanesEl = document.getElementById("lanes");
+    var countEl = document.getElementById("count");
+    var dot = document.getElementById("dot");
+
+    function shortId(id) {
+      id = String(id || "");
+      return id.length > 10 ? id.slice(0, 8) : id;
+    }
+    function chipClass(ev) {
+      var kind = ev.kind || "";
+      var payload = ev.payload || {};
+      if (payload.ok === false || kind.indexOf("error") !== -1) return "error";
+      if (kind === "notification") return "notification";
+      if (kind === "stop" || kind === "subagent_stop") return "stop";
+      if (kind === "pre_tool_use" || kind === "post_tool_use") return "tool";
+      return "";
+    }
+    function chipText(ev) {
+      var tool = (ev.payload && ev.payload.tool_name) || "";
+      return tool ? (ev.kind + " " + tool) : ev.kind;
+    }
+    function parseTs(ev) {
+      if (!ev.ts) return Date.now();
+      var t = Date.parse(ev.ts);
+      return isNaN(t) ? Date.now() : t;
+    }
+    function ensureLane(sid, ev) {
+      if (!sessions[sid]) {
+        var lane = document.createElement("div");
+        lane.className = "lane";
+        var label = document.createElement("div");
+        label.className = "sid";
+        label.innerHTML = "<span></span><small></small>";
+        label.querySelector("span").textContent = shortId(sid);
+        label.querySelector("small").textContent = ev.machine || "";
+        var strip = document.createElement("div");
+        strip.className = "strip";
+        lane.appendChild(label);
+        lane.appendChild(strip);
+        sessions[sid] = { el: lane, strip: strip, last: Date.now(), chips: [] };
+        order.unshift(sid);
+        lanesEl.insertBefore(lane, lanesEl.firstChild);
+      }
+      return sessions[sid];
+    }
+    function bumpLane(sid) {
+      var idx = order.indexOf(sid);
+      if (idx > 0) {
+        order.splice(idx, 1);
+        order.unshift(sid);
+        lanesEl.insertBefore(sessions[sid].el, lanesEl.firstChild);
+      }
+    }
+    function trimOldest() {
+      while (chipCount > MAX) {
+        for (var i = order.length - 1; i >= 0; i--) {
+          var s = sessions[order[i]];
+          if (s.chips.length) {
+            var node = s.chips.shift();
+            if (node.parentNode) node.parentNode.removeChild(node);
+            chipCount--;
+            break;
+          }
+        }
+      }
+    }
+    function onEvent(ev) {
+      var sid = ev.session_id || "unknown";
+      var lane = ensureLane(sid, ev);
+      lane.last = parseTs(ev);
+      lane.el.classList.remove("idle");
+      bumpLane(sid);
+      var chip = document.createElement("span");
+      chip.className = "chip " + chipClass(ev);
+      chip.textContent = chipText(ev);
+      lane.strip.appendChild(chip);
+      lane.chips.push(chip);
+      chipCount++;
+      lane.strip.scrollLeft = lane.strip.scrollWidth;
+      total++;
+      countEl.textContent = String(total);
+      trimOldest();
+    }
+    setInterval(function () {
+      var now = Date.now();
+      Object.keys(sessions).forEach(function (sid) {
+        var s = sessions[sid];
+        if (now - s.last > IDLE_MS) s.el.classList.add("idle");
+        else s.el.classList.remove("idle");
+      });
+    }, 10000);
+
+    var es = new EventSource('/stream?replay=200');
+    es.addEventListener("open", function () { dot.className = "dot live"; });
+    es.addEventListener("error", function () { dot.className = "dot recon"; });
+    es.addEventListener("hud", function (e) {
+      try { onEvent(JSON.parse(e.data)); } catch (err) {}
+    });
+  </script>
+</body>
+</html>
