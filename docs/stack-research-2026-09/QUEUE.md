@@ -71,6 +71,29 @@ ADD-later-sidecar:
 Net: coordination = GitHub Projects + the 200-line table (unchanged). Observability = Ringside
 now, Helicone as an async sidecar later if needed.
 
+### Follow-up — new candidates + visual-design notes (2026-09-09, not yet run)
+
+Kevin's reactions to the pass + two repos it didn't cover. Nothing decided; queued for a
+grok-F pass whenever he returns to it.
+
+**New repos to evaluate (grok-F):**
+- **`builderz-labs/mission-control`** — NEW. Kevin: *"looks really good — up there with
+  session-pilot."* README/UI reportedly **not in English** → if the visual language is worth
+  keeping, plan a translated re-skin, not a fork. Check: license, stack (DB deps?), whether it
+  assigns work or is view-only, Claude-only vs fleet-aware.
+- **`ComposioHQ/agent-orchestrator`** — from the @agent_wrapper post (Feb 2026): "2.5k bash →
+  40k TS in 8 days, agents wrote it." Same arc as Baton's own story. Distinct from
+  `Untrivial-ai/agent-orchestrator`. Check: is it a real coordination layer or a demo; license;
+  how it decomposes/monitors; does it lean on Composio's hosted tool platform (vendor pull).
+
+**Visual-design reference set** (Kevin likes the *look*, not necessarily the code):
+- **session-pilot** — screenshots are the strongest reference even though the code is thin.
+- **builderz-labs/mission-control** — same tier of visual appeal; translate strings.
+- **Untrivial-ai/agent-orchestrator** — "solid, especially the agent dashboard / kanban view."
+- **disler's observability** — "I like the look of it" (event-stream / multi-agent timeline).
+- Action when Baton's HUD gets built: pull layout/IA from these four, don't adopt any wholesale;
+  the system of record stays GitHub Projects.
+
 ## Already answered (don't re-litigate)
 
 Converged stack, the Kun-stack run walkthrough, the "why not" list (deepseek-harness / Pi /
