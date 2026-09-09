@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>HUD · deck</title>
+  <link rel="icon" href="data:,">
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -42,10 +43,15 @@
       flex: 0 0 auto; border-radius: 4px; padding: 4px 8px; font-size: 12px;
       background: #1a1f28; color: #c9d1d9; white-space: nowrap;
     }
-    .chip.tool { background: #16324d; color: #8ec8ff; }
-    .chip.notification { background: #3d2f0e; color: #ffc14d; }
-    .chip.stop { background: #2a2e35; color: #9aa3ad; }
-    .chip.error { background: #4a1515; color: #ff6b6b; }
+    .chip.session_start { background: #0f2f2c; color: #5eead4; }
+    .chip.user_prompt   { background: #2a1f4a; color: #c4b5fd; }
+    .chip.pre_tool_use  { background: #16324d; color: #8ec8ff; }
+    .chip.post_tool_use { background: #123d38; color: #5ee0c4; }
+    .chip.error         { background: #4a1515; color: #ff6b6b; }
+    .chip.notification  { background: #3d2f0e; color: #ffc14d; }
+    .chip.stop          { background: #2a2e35; color: #9aa3ad; }
+    .chip.subagent_stop { background: #25202e; color: #b8a4c9; }
+    .chip.pre_compact   { background: #2d2040; color: #d8b4fe; }
   </style>
 </head>
 <body>
@@ -74,15 +80,26 @@
     function chipClass(ev) {
       var kind = ev.kind || "";
       var payload = ev.payload || {};
-      if (payload.ok === false || kind.indexOf("error") !== -1) return "error";
-      if (kind === "notification") return "notification";
-      if (kind === "stop" || kind === "subagent_stop") return "stop";
-      if (kind === "pre_tool_use" || kind === "post_tool_use") return "tool";
-      return "";
+      if (kind === "post_tool_use" && payload.ok === false) return "error";
+      if (kind.indexOf("error") !== -1) return "error";
+      return kind;
     }
     function chipText(ev) {
       var tool = (ev.payload && ev.payload.tool_name) || "";
       return tool ? (ev.kind + " " + tool) : ev.kind;
+    }
+    function chipTitle(ev) {
+      var p = ev.payload || {};
+      if (p.error) return String(p.error);
+      if (p.tool_input_summary) return String(p.tool_input_summary);
+      if (p.prompt) return String(p.prompt);
+      if (p.message) return String(p.message);
+      if (p.cwd) return String(p.cwd);
+      if (p.trigger) return String(p.trigger);
+      if (p.agent) return String(p.agent);
+      if (p.source) return String(p.source);
+      if (p.tool_name) return String(p.tool_name);
+      return ev.kind || "";
     }
     function parseTs(ev) {
       if (!ev.ts) return Date.now();
@@ -138,6 +155,7 @@
       var chip = document.createElement("span");
       chip.className = "chip " + chipClass(ev);
       chip.textContent = chipText(ev);
+      chip.title = chipTitle(ev);
       lane.strip.appendChild(chip);
       lane.chips.push(chip);
       chipCount++;

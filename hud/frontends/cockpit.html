@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <title>HUD · cockpit</title>
+  <link rel="icon" href="data:,">
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; }
     body {
-      background: #151922;
+      background: #12151c;
       color: #d5dbe6;
       font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
     }
@@ -18,21 +19,50 @@
     }
     .title { letter-spacing: .1em; text-transform: uppercase; font-size: 14px; color: #9aa6b8; }
     .dot { width: 9px; height: 9px; border-radius: 50%; background: #e45858; }
-    .dot.live { background: #3ddc8e; }
+    .dot.live { background: #3ddc8e; box-shadow: 0 0 8px #3ddc8e88; }
     .dot.recon { background: #e45858; }
     .meta a { color: #8ec8ff; text-decoration: none; font-size: 13px; }
     .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px 18px 8px; }
     .tile {
-      background: #1c2230; border: 1px solid #2a3140; border-radius: 10px; padding: 14px 16px;
+      background: #1c2230; border: 1px solid #2a3140; border-radius: 10px;
+      padding: 14px 16px 14px 18px; position: relative; overflow: hidden;
     }
-    .tile .n { font-size: 28px; font-variant-numeric: tabular-nums; color: #f2f5fa; }
+    .tile::before {
+      content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+      background: var(--accent);
+    }
+    .tile .n { font-size: 28px; font-variant-numeric: tabular-nums; color: var(--accent); }
     .tile .l { font-size: 12px; color: #8b95a8; margin-top: 4px; letter-spacing: .04em; }
-    .spark-wrap { padding: 4px 18px 12px; }
-    svg { width: 100%; height: 72px; display: block; }
+    .tile-sessions { --accent: #5eead4; }
+    .tile-rate     { --accent: #8ec8ff; }
+    .tile-tools    { --accent: #5ee0c4; }
+    .tile-errors   { --accent: #ff6b6b; }
+    .spark-wrap {
+      margin: 8px 18px 16px; padding: 12px 14px 8px;
+      background: #1c2230; border: 1px solid #2a3140; border-radius: 10px;
+    }
+    .spark-label {
+      font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+      color: #8b95a8; margin-bottom: 8px;
+    }
+    svg { width: 100%; height: 128px; display: block; }
     .feed { padding: 0 18px 32px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
-    .line { display: grid; grid-template-columns: 72px 90px 140px 1fr; gap: 10px;
-            padding: 4px 0; border-bottom: 1px solid #232a38; color: #b7c0ce; }
-    .line.err { color: #ff6b6b; }
+    .line { display: grid; grid-template-columns: 72px 90px 150px 1fr; gap: 10px;
+            padding: 5px 0; border-bottom: 1px solid #232a38; color: #b7c0ce; }
+    .kind {
+      display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px;
+      background: #1a1f28; color: #c9d1d9;
+    }
+    .kind.session_start { background: #0f2f2c; color: #5eead4; }
+    .kind.user_prompt   { background: #2a1f4a; color: #c4b5fd; }
+    .kind.pre_tool_use  { background: #16324d; color: #8ec8ff; }
+    .kind.post_tool_use { background: #123d38; color: #5ee0c4; }
+    .kind.error         { background: #4a1515; color: #ff6b6b; }
+    .kind.notification  { background: #3d2f0e; color: #ffc14d; }
+    .kind.stop          { background: #2a2e35; color: #9aa3ad; }
+    .kind.subagent_stop { background: #25202e; color: #b8a4c9; }
+    .kind.pre_compact   { background: #2d2040; color: #d8b4fe; }
+    .line.err .detail { color: #ff6b6b; }
     @media (max-width: 800px) {
       .tiles { grid-template-columns: 1fr 1fr; }
       .line { grid-template-columns: 1fr; }
@@ -46,14 +76,22 @@
     <span class="meta" style="margin-left:auto"><a href="/">⚙ views</a></span>
   </header>
   <div class="tiles">
-    <div class="tile"><div class="n" id="t-active">0</div><div class="l">Active sessions</div></div>
-    <div class="tile"><div class="n" id="t-epm">0</div><div class="l">Events/min</div></div>
-    <div class="tile"><div class="n" id="t-tools">0</div><div class="l">Tool calls</div></div>
-    <div class="tile"><div class="n" id="t-err">0</div><div class="l">Errors</div></div>
+    <div class="tile tile-sessions"><div class="n" id="t-active">0</div><div class="l">Active sessions</div></div>
+    <div class="tile tile-rate"><div class="n" id="t-epm">0</div><div class="l">Events/min</div></div>
+    <div class="tile tile-tools"><div class="n" id="t-tools">0</div><div class="l">Tool calls</div></div>
+    <div class="tile tile-errors"><div class="n" id="t-err">0</div><div class="l">Errors</div></div>
   </div>
   <div class="spark-wrap">
-    <svg id="spark" viewBox="0 0 300 60" preserveAspectRatio="none" aria-hidden="true">
-      <polyline id="spark-line" fill="none" stroke="#8ec8ff" stroke-width="1.6"
+    <div class="spark-label">Events / min</div>
+    <svg id="spark" viewBox="0 0 600 120" preserveAspectRatio="none" aria-hidden="true">
+      <defs>
+        <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#8ec8ff" stop-opacity="0.45"/>
+          <stop offset="100%" stop-color="#8ec8ff" stop-opacity="0.02"/>
+        </linearGradient>
+      </defs>
+      <polygon id="spark-area" fill="url(#sparkFill)" points="0,120 600,120"/>
+      <polyline id="spark-line" fill="none" stroke="#8ec8ff" stroke-width="2.2"
                 stroke-linejoin="round" stroke-linecap="round" points=""/>
     </svg>
   </div>
@@ -64,16 +102,20 @@
     var lastKind = {};
     var toolCalls = 0;
     var errors = 0;
-    var buckets = [];
     var BUCKETS = 30;
     var BUCKET_MS = 2000;
     var feed = document.getElementById("feed");
     var dot = document.getElementById("dot");
     var poly = document.getElementById("spark-line");
+    var area = document.getElementById("spark-area");
 
     function jitter(n) { return n + (Math.random() * 1.4 - 0.7); }
     function isError(ev) {
       return ev.kind === "post_tool_use" && ev.payload && ev.payload.ok === false;
+    }
+    function kindClass(ev) {
+      if (isError(ev)) return "error";
+      return ev.kind || "";
     }
     function detail(ev) {
       var p = ev.payload || {};
@@ -116,7 +158,8 @@
     }
     function drawSpark(now) {
       var counts = [];
-      var i, b;
+      var i;
+      var W = 600, H = 120, pad = 8;
       for (i = 0; i < BUCKETS; i++) counts[i] = 0;
       for (i = 0; i < events.length; i++) {
         var t = Date.parse(events[i].ts);
@@ -129,11 +172,16 @@
       for (i = 0; i < counts.length; i++) if (counts[i] > max) max = counts[i];
       var pts = [];
       for (i = 0; i < counts.length; i++) {
-        var x = jitter((i / (BUCKETS - 1)) * 300);
-        var y = jitter(56 - (counts[i] / max) * 50);
+        var x = (i / (BUCKETS - 1)) * W;
+        var y = H - pad - (counts[i] / max) * (H - pad * 2);
+        if (counts[i] > 0) {
+          x = jitter(x);
+          y = jitter(y);
+        }
         pts.push(x.toFixed(1) + "," + y.toFixed(1));
       }
       poly.setAttribute("points", pts.join(" "));
+      area.setAttribute("points", pts.join(" ") + " " + W + "," + H + " 0," + H);
     }
     function onEvent(ev) {
       events.push(ev);
@@ -142,12 +190,20 @@
       if (isError(ev)) errors++;
       var line = document.createElement("div");
       line.className = "line" + (isError(ev) ? " err" : "");
-      var cells = [clock(ev.ts), shortId(ev.session_id), ev.kind, detail(ev)];
-      cells.forEach(function (text) {
-        var s = document.createElement("span");
-        s.textContent = text;
-        line.appendChild(s);
-      });
+      var timeEl = document.createElement("span");
+      timeEl.textContent = clock(ev.ts);
+      var sidEl = document.createElement("span");
+      sidEl.textContent = shortId(ev.session_id);
+      var kindEl = document.createElement("span");
+      kindEl.className = "kind " + kindClass(ev);
+      kindEl.textContent = ev.kind || "";
+      var detEl = document.createElement("span");
+      detEl.className = "detail";
+      detEl.textContent = detail(ev);
+      line.appendChild(timeEl);
+      line.appendChild(sidEl);
+      line.appendChild(kindEl);
+      line.appendChild(detEl);
       feed.insertBefore(line, feed.firstChild);
       while (feed.childNodes.length > MAX) feed.removeChild(feed.lastChild);
       recompute();

@@ -94,6 +94,15 @@ def test_v_deck_serves_v_bogus_404(client):
     assert r404.status_code == 404
 
 
+def test_healthz(client):
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert isinstance(body["events"], int)
+    assert isinstance(body["uptime_s"], int)
+
+
 def test_config_round_trip(client):
     r = client.post("/config", json={"default_frontend": "deck"})
     assert r.status_code == 200

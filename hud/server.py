@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 
 from hud import config as hud_config
 from hud import store
@@ -24,8 +24,9 @@ _QUEUE_MAX = 256
 
 CHOOSER_DESCRIPTIONS = {
     "deck": "Dark monospace swim-lanes, one per session — the disler-flavored look.",
-    "board": "Light mission-control cards in Running / Needs You / Stopped.",
+    "board": "Mission-control bays: Running / Needs You / Stopped, with status-striped cards.",
     "cockpit": "Stat tiles, a hand-drawn events/min sparkline, and a compact feed.",
+    "cards": "Deck's chip language as a session card grid — same dark canvas, wrapping chips.",
     "minimal": "Accessible table, system font, colour only for errors.",
 }
 
@@ -301,6 +302,11 @@ async def post_config(request: Request) -> dict[str, Any]:
         elif _frontend_path(val) is None:
             raise HTTPException(status_code=422, detail="unknown front-end")
     return hud_config.write_config(val)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    return Response(status_code=204)
 
 
 @app.get("/healthz")
