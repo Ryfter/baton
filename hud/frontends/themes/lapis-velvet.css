@@ -1,0 +1,79 @@
+/* HUD theme: lapis-velvet — deep blue + plum luxury */
+:root {
+  color-scheme: dark;
+
+  --hud-bg: #0a0a14;
+  --hud-bg-elevated: #100e1a;
+  --hud-surface: #141022;
+  --hud-surface-2: #1a142c;
+  --hud-surface-3: #221838;
+  --hud-border: #2a2040;
+  --hud-border-strong: #3a2858;
+  --hud-header-bg: rgba(10, 10, 20, 0.94);
+  --hud-header-border: #2a2040;
+  --hud-accent: #c4a8e8;
+  --hud-accent-dim: #5a4080;
+
+  --hud-text: #e8dcc8;
+  --hud-text-strong: #f5efe6;
+  --hud-text-muted: #a89888;
+  --hud-text-faint: #786858;
+  --hud-link: #c4a8e8;
+
+  --hud-live: #86efac;
+  --hud-live-glow: rgba(134, 239, 172, 0.35);
+  --hud-recon: #f87171;
+  --hud-running: #a7f3d0;
+  --hud-needs: #fcd34d;
+  --hud-stopped: #a8a29e;
+  --hud-error: #fca5a5;
+
+  --chip-default-bg: #1c1428;
+  --chip-default-fg: #e8dcc8;
+  --chip-session-start-bg: #142028;
+  --chip-session-start-fg: #a7f3d0;
+  --chip-user-prompt-bg: #281838;
+  --chip-user-prompt-fg: #e9d5ff;
+  --chip-pre-tool-bg: #182040;
+  --chip-pre-tool-fg: #93c5fd;
+  --chip-post-tool-bg: #142830;
+  --chip-post-tool-fg: #86efac;
+  --chip-error-bg: #401818;
+  --chip-error-fg: #fca5a5;
+  --chip-notification-bg: #382810;
+  --chip-notification-fg: #fcd34d;
+  --chip-stop-bg: #242028;
+  --chip-stop-fg: #a8a29e;
+  --chip-subagent-bg: #2a1838;
+  --chip-subagent-fg: #d8b4fe;
+  --chip-compact-bg: #301840;
+  --chip-compact-fg: #f0abfc;
+
+  --tile-sessions: #a7f3d0;
+  --tile-rate: #93c5fd;
+  --tile-tools: #86efac;
+  --tile-errors: #fca5a5;
+  --spark-stroke: #c4a8e8;
+  --spark-fill-top: rgba(196, 168, 232, 0.38);
+  --spark-fill-bot: rgba(196, 168, 232, 0.02);
+
+  --board-col-running: #059669;
+  --board-col-running-bg: rgba(5, 150, 105, 0.14);
+  --board-col-needs: #ca8a04;
+  --board-col-needs-bg: rgba(202, 138, 4, 0.14);
+  --board-col-stopped: #78716c;
+  --board-col-stopped-bg: rgba(120, 113, 108, 0.14);
+  --board-card-bg: #141022;
+  --board-card-shadow: rgba(0, 0, 0, 0.45);
+
+  --hud-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --hud-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --hud-radius-sm: 4px;
+  --hud-radius-md: 8px;
+  --hud-radius-lg: 12px;
+  --hud-space-1: 4px;
+  --hud-space-2: 8px;
+  --hud-space-3: 12px;
+  --hud-space-4: 16px;
+  --hud-space-5: 24px;
+}
