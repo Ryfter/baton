@@ -29,3 +29,6 @@ scratch/
 # Root-scoped so tracked zips under dashboard/ are unaffected.
 /token-saver-skill.zip
 /tools/token_saver/
+
+hud/hud.db
+hud/*.db

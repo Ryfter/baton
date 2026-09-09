@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HUD · cockpit</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: #151922;
+      color: #d5dbe6;
+      font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 18px; border-bottom: 1px solid #2a3140;
+    }
+    .title { letter-spacing: .1em; text-transform: uppercase; font-size: 14px; color: #9aa6b8; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #e45858; }
+    .dot.live { background: #3ddc8e; }
+    .dot.recon { background: #e45858; }
+    .meta a { color: #8ec8ff; text-decoration: none; font-size: 13px; }
+    .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px 18px 8px; }
+    .tile {
+      background: #1c2230; border: 1px solid #2a3140; border-radius: 10px; padding: 14px 16px;
+    }
+    .tile .n { font-size: 28px; font-variant-numeric: tabular-nums; color: #f2f5fa; }
+    .tile .l { font-size: 12px; color: #8b95a8; margin-top: 4px; letter-spacing: .04em; }
+    .spark-wrap { padding: 4px 18px 12px; }
+    svg { width: 100%; height: 72px; display: block; }
+    .feed { padding: 0 18px 32px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+    .line { display: grid; grid-template-columns: 72px 90px 140px 1fr; gap: 10px;
+            padding: 4px 0; border-bottom: 1px solid #232a38; color: #b7c0ce; }
+    .line.err { color: #ff6b6b; }
+    @media (max-width: 800px) {
+      .tiles { grid-template-columns: 1fr 1fr; }
+      .line { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="title">Cockpit</span>
+    <span id="dot" class="dot recon"></span>
+    <span class="meta" style="margin-left:auto"><a href="/">⚙ views</a></span>
+  </header>
+  <div class="tiles">
+    <div class="tile"><div class="n" id="t-active">0</div><div class="l">Active sessions</div></div>
+    <div class="tile"><div class="n" id="t-epm">0</div><div class="l">Events/min</div></div>
+    <div class="tile"><div class="n" id="t-tools">0</div><div class="l">Tool calls</div></div>
+    <div class="tile"><div class="n" id="t-err">0</div><div class="l">Errors</div></div>
+  </div>
+  <div class="spark-wrap">
+    <svg id="spark" viewBox="0 0 300 60" preserveAspectRatio="none" aria-hidden="true">
+      <polyline id="spark-line" fill="none" stroke="#8ec8ff" stroke-width="1.6"
+                stroke-linejoin="round" stroke-linecap="round" points=""/>
+    </svg>
+  </div>
+  <div class="feed" id="feed"></div>
+  <script>
+    var MAX = 500;
+    var events = [];
+    var lastKind = {};
+    var toolCalls = 0;
+    var errors = 0;
+    var buckets = [];
+    var BUCKETS = 30;
+    var BUCKET_MS = 2000;
+    var feed = document.getElementById("feed");
+    var dot = document.getElementById("dot");
+    var poly = document.getElementById("spark-line");
+
+    function jitter(n) { return n + (Math.random() * 1.4 - 0.7); }
+    function isError(ev) {
+      return ev.kind === "post_tool_use" && ev.payload && ev.payload.ok === false;
+    }
+    function detail(ev) {
+      var p = ev.payload || {};
+      if (p.tool_name) return p.tool_name + (p.ok === false ? " FAIL" : "");
+      if (p.message) return p.message;
+      if (p.prompt) return p.prompt;
+      if (p.trigger) return String(p.trigger);
+      if (p.source) return String(p.source);
+      return "";
+    }
+    function shortId(id) {
+      id = String(id || "");
+      return id.length > 10 ? id.slice(0, 8) : id;
+    }
+    function clock(ts) {
+      var d = new Date(Date.parse(ts) || Date.now());
+      return d.toISOString().slice(11, 19);
+    }
+    function recompute() {
+      var now = Date.now();
+      var cutoff = now - 60000;
+      var epm = 0;
+      var active = {};
+      lastKind = {};
+      for (var i = 0; i < events.length; i++) {
+        var ev = events[i];
+        lastKind[ev.session_id] = ev.kind;
+        var t = Date.parse(ev.ts);
+        if (!isNaN(t) && t >= cutoff) epm++;
+        else if (isNaN(t)) epm++;
+      }
+      Object.keys(lastKind).forEach(function (sid) {
+        if (lastKind[sid] !== "stop") active[sid] = true;
+      });
+      document.getElementById("t-active").textContent = String(Object.keys(active).length);
+      document.getElementById("t-epm").textContent = String(epm);
+      document.getElementById("t-tools").textContent = String(toolCalls);
+      document.getElementById("t-err").textContent = String(errors);
+      drawSpark(now);
+    }
+    function drawSpark(now) {
+      var counts = [];
+      var i, b;
+      for (i = 0; i < BUCKETS; i++) counts[i] = 0;
+      for (i = 0; i < events.length; i++) {
+        var t = Date.parse(events[i].ts);
+        if (isNaN(t)) t = now;
+        var ago = now - t;
+        var idx = BUCKETS - 1 - Math.floor(ago / BUCKET_MS);
+        if (idx >= 0 && idx < BUCKETS) counts[idx]++;
+      }
+      var max = 1;
+      for (i = 0; i < counts.length; i++) if (counts[i] > max) max = counts[i];
+      var pts = [];
+      for (i = 0; i < counts.length; i++) {
+        var x = jitter((i / (BUCKETS - 1)) * 300);
+        var y = jitter(56 - (counts[i] / max) * 50);
+        pts.push(x.toFixed(1) + "," + y.toFixed(1));
+      }
+      poly.setAttribute("points", pts.join(" "));
+    }
+    function onEvent(ev) {
+      events.push(ev);
+      if (events.length > MAX) events.shift();
+      if (ev.kind === "pre_tool_use") toolCalls++;
+      if (isError(ev)) errors++;
+      var line = document.createElement("div");
+      line.className = "line" + (isError(ev) ? " err" : "");
+      var cells = [clock(ev.ts), shortId(ev.session_id), ev.kind, detail(ev)];
+      cells.forEach(function (text) {
+        var s = document.createElement("span");
+        s.textContent = text;
+        line.appendChild(s);
+      });
+      feed.insertBefore(line, feed.firstChild);
+      while (feed.childNodes.length > MAX) feed.removeChild(feed.lastChild);
+      recompute();
+    }
+
+    var es = new EventSource('/stream?replay=200');
+    es.addEventListener("open", function () { dot.className = "dot live"; });
+    es.addEventListener("error", function () { dot.className = "dot recon"; });
+    es.addEventListener("hud", function (e) {
+      try { onEvent(JSON.parse(e.data)); } catch (err) {}
+    });
+    setInterval(recompute, 2000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HUD · minimal</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body { background: #fff; color: #000; font-family: system-ui, sans-serif; }
+    header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px; border-bottom: 1px solid #000;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #c00; }
+    .dot.live { background: #080; }
+    .dot.recon { background: #c00; }
+    a { color: #000; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #ddd; font-size: 14px; }
+    th { border-bottom: 1px solid #000; font-weight: 600; }
+    tr.err td { color: #c00; }
+    caption { text-align: left; padding: 8px 10px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>minimal</strong>
+    <span id="dot" class="dot recon" aria-label="connection"></span>
+    <span>events <span id="count">0</span></span>
+    <span style="margin-left:auto"><a href="/">⚙ views</a></span>
+  </header>
+  <table>
+    <caption>Live agent events</caption>
+    <thead>
+      <tr><th>time</th><th>session</th><th>kind</th><th>detail</th></tr>
+    </thead>
+    <tbody id="body" aria-live="polite"></tbody>
+  </table>
+  <script>
+    var MAX = 500;
+    var total = 0;
+    var tbody = document.getElementById("body");
+    var countEl = document.getElementById("count");
+    var dot = document.getElementById("dot");
+
+    function isError(ev) {
+      return ev.kind === "post_tool_use" && ev.payload && ev.payload.ok === false;
+    }
+    function detail(ev) {
+      var p = ev.payload || {};
+      if (p.error) return String(p.tool_name || "") + " " + p.error;
+      if (p.tool_name) return p.tool_name;
+      if (p.message) return p.message;
+      if (p.prompt) return p.prompt;
+      if (p.trigger) return String(p.trigger);
+      if (p.source) return String(p.source);
+      if (p.cwd) return p.cwd;
+      if (p.agent) return p.agent;
+      return "";
+    }
+    function onEvent(ev) {
+      var tr = document.createElement("tr");
+      if (isError(ev)) tr.className = "err";
+      var vals = [ev.ts || "", ev.session_id || "", ev.kind || "", detail(ev)];
+      for (var i = 0; i < vals.length; i++) {
+        var td = document.createElement("td");
+        td.textContent = vals[i];
+        tr.appendChild(td);
+      }
+      tbody.insertBefore(tr, tbody.firstChild);
+      while (tbody.rows.length > MAX) tbody.deleteRow(-1);
+      total++;
+      countEl.textContent = String(total);
+    }
+
+    var es = new EventSource('/stream?replay=200');
+    es.addEventListener("open", function () { dot.className = "dot live"; });
+    es.addEventListener("error", function () { dot.className = "dot recon"; });
+    es.addEventListener("hud", function (e) {
+      try { onEvent(JSON.parse(e.data)); } catch (err) {}
+    });
+  </script>
+</body>
+</html>
