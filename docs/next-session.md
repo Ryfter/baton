@@ -2,6 +2,49 @@
 
 How to pick **Baton** back up and use it on its own backlog.
 
+## ⚑ RESUME HERE — 2026-09-08 (stack-restructure research, NOT the backlog)
+
+This session did **no code** — it's a strategic review of whether Baton continues as a
+60k-LOC pwsh harness or collapses to a small core + adopted tools. Committed to `master`
+at **`db8efff`** (`docs/stack-research-2026-09/`):
+
+| File | What |
+|---|---|
+| `00-DECISION-consolidated.md` | 3-pass fleet audit (GLM 5.3 Flash + grok-4.6 Job A harnesses + Job B memory/validation/converters + Claude fetches) of ~60 candidate repos. Convergence table, **5 open forks**, recommended stack, sequencing, risks, punch list. |
+| `01-architecture-audit-2026-09-07.md` | Prior audit: collapse Baton to ~5–6k core (learned router + Governor + Grimdex loop + GitHub Projects projection); adopt tools for crew/worktrees/quota/validation/overnight. |
+| `raw-grok-A/B-*.md`, `raw-glm-*.md` | Unedited model outputs. |
+
+**Converged recommendation (nothing decided):** Herdr substrate (its `agent` API replaces
+crew-dispatch) · always-multiple workers · **Archon** YAML DAG replaces the pwsh phase glue
+(pin `cleanup/sdlc-workflows-only`) · **Ringer** = the work-checking layer · no-mistakes
+pre-merge · deepsec security · Grimdex canonical + **OpenWiki** as the Grimlore engine +
+projectmem · pdf-inspector→Docling→Pandoc + Presidio on egress · quota-axi feeds the
+Governor. Omnigent / gastown / ruflo are NOT the OS.
+
+**5 forks need Kevin** (§2 of 00-DECISION): (1) lead orchestrator Grok Build vs Claude Code
+— Kevin leans Grok; (2) keep `baton go` front door with Archon underneath; (3) adopt Archon
+now vs one more cycle on a thin conductor; (4) defer caura until an OpenWiki spike; (5)
+build the GitHub-Projects table view vs adopt a GUI (Untrivial/agent-orchestrator or
+builderz/mission-control for the OpenClaw boxes).
+
+**Method findings (in memory + `docs/stack-research-2026-09/00-DECISION` §7):**
+- **grok headless research only works via Herdr** — `grok -p` is single-turn; bare grok
+  needs a TTY. Driver: `herdr agent start --kind grok --pane <id>` → `agent prompt --wait`
+  → read a file. Same loop drives all 22 Herdr agent kinds — candidate replacement for
+  `fleet-executor-lib`.
+- Kevin wants Herdr sub-agents in their **own workspace** (`herdr workspace create`), not
+  pane-split.
+
+**Open loose ends:** leaked OpenRouter key still `ps`-visible in Cursor Helper's env —
+rotate. Cloud routine `trig_01HmCyNfNu7jyNjGCssvJ1Cz` fires **2026-09-09 05:51 UTC**,
+extends 00-DECISION + drafts a Week-1 plan + migration-spec skeleton on branch
+`stack-research-cloud-2026-09-09` (review, don't auto-merge).
+
+The `docs/next-session.md` **backlog work below is unchanged** — the 32 GitHub issues, the
+guard/hook hardening, etc. are on hold pending the stack decision.
+
+---
+
 ## ⚑ RESUME HERE — 2026-09-07 pm (guard tokenizer + pwsh port + Opus fixes)
 
 Continuation of the infra-hardening below. Three more commits on `master`, pushed:
