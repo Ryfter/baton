@@ -148,3 +148,103 @@ is a working, headless dispatcher for **all 22 agent kinds Herdr knows** (`claud
 That is exactly what `fleet-executor-lib` (2,512 LOC of flaky PowerShell) tries to do. **Strong signal for the stack decision: Herdr's `agent` API replaces Baton's crew-dispatch layer outright** — Baton keeps only the routing *policy* (which kind, which model, cost gate) and calls Herdr to execute.
 
 *Tonight's fleet spend: GLM ~$0.003; grok — 3 jobs on grok-4.6-high (probe ~87k tokens; A+B larger), against your Grok Build plan quota.*
+
+---
+
+## 2026-09-08 evening — deep-dives (Kun-stack run, follow-ups, devboardai)
+
+Two more grok-4.6 passes (raws: `raw-grok-C-kun-stack-run.md`, `raw-grok-D-followups.md`),
+run via the Herdr `agent` driver, each in its own workspace.
+
+### A. The Kun stack, as an actual run
+
+The 4 Kun tools + no-mistakes are **not a 5-deep stack** — 3 layers + 1 sibling:
+`firstmate` (crew: decompose, pick model, supervise, PR) → uses `treehouse` (leases a pooled
+worktree) + Herdr (the tab) + `no-mistakes` (its OWN disposable worktree: review→test→docs→
+lint→origin→PR→CI). `gnhf` is a sibling overnight loop that calls **none** of the others and
+opens **no PR** (you wake to a branch + `notes.md`, then push it through the gate).
+
+`baton go "add rate-limit middleware…"` → firstmate intake (1 expensive turn, reads
+`quota-axi` once, judges "1 ship task not a fan-out") → `treehouse get --lease` → `fm-spawn.sh`
+→ Herdr tab → `codex exec -m gpt-5.4` medium effort → worker `git push no-mistakes` → daemon
+gate → `gh pr create` → firstmate watcher wakes → you say "merge it" → `gh-axi pr merge` →
+`treehouse return`. **6 human gates** (install consent · project-mode+merge-autonomy ·
+dispatch tie-break · mid-task judgment · no-mistakes findings · merge); `+yolo` removes some.
+
+**Three facts that matter:**
+- **firstmate is macOS/Linux** — but Kevin has WSL on all Windows boxes and the Mac Mini is
+  the primary dev box, so this is not a blocker. Windows/WSL + Omarchy boxes = LM Studio
+  model servers + optional `gnhf`/worker runners over Tailscale; Mac Mini drives firstmate+Herdr.
+- **quota-axi sees ZERO local models** (Claude/Codex/Cursor/Copilot/Grok/Kimi/Z.AI/Alibaba/
+  OpenCode/agy only). Its `spendPriority` = subscription-forfeiture, not quality-per-dollar.
+  Adopt it as-is and you route as if the 4090/5090 don't exist. Baton's router calls quota-axi
+  for cloud seats, then **overlays measured local scores**.
+- **firstmate = a workflow religion + bash** (76k-char `AGENTS.md`, 1,182 open issues, 3 months
+  old). Pin SHAs, vendor the `bin/` scripts you call. Telemetry: `gnhf` + `no-mistakes` phone
+  home by default (`GNHF_TELEMETRY=0`, `NO_MISTAKES_TELEMETRY=0`; `go install` builds clean).
+
+**The seam:** Baton-core = Governor + learned local router + Grimdex ingest, sitting **in
+front of** `fm-spawn.sh`, pre-resolving harness/model/effort and passing them in. It must NOT
+fork firstmate's watcher or reimplement no-mistakes' pipeline. *"If the core is expected to
+also be the crew supervisor, you'd be reimplementing firstmate and shouldn't bother adopting
+it."*
+
+### B. Follow-up verdicts
+
+| Item | Verdict |
+|---|---|
+| **deepseek-harness** | SKIP — competing session-runtime+web-UI on a plugin kernel; 216k★ in 4 weeks; issues disabled. |
+| **Pi / oh-my-pi** | SKIP both — same lineage (omp = hard fork of Pi). Pi is *already in the fleet under OpenClaw*. Steal omp's `hashline` edit format for a worker; don't install. |
+| **t3code** | SKIP — Node WS server wrapping the CLIs you have + web/mobile. Herdr's job. |
+| **KunAgent/Kun** | SKIP — **PolyForm-Noncommercial-1.0.0**; integration into a commercial product needs written auth. Also an Electron OS duplicating Herdr. (≠ Kun Chen's `/kun`.) |
+| **coleam00/ai-software-factory** | **ADD (patterns)** — reversal. It's the overnight operating skin on Archon (MISSION.md + out-of-scope + holdout + `consumer.py tick`). Steal the files; don't vendor (no LICENSE yet). |
+| **LMCache** | SKIP — KV-cache for vLLM/SGLang only; not LM Studio, not general. Revisit only if a GPU box becomes a dedicated single-model vLLM server serving ≥5 concurrent agents with a >8k shared prefix. |
+| **Skills set** | `superpowers` (full, every worker, `SUPERPOWERS_DISABLE_TELEMETRY=1`) + `mattpocock` `grill-with-docs`+`domain-modeling` only + `/kun` (on-demand) + `coleam00 build-dark-factory` as a *doc*. SKIP Cole's other 32, Superdesign, Gas Town skills, **gstack wholesale**. |
+| **gstack** (garrytan) | SKIP wholesale — 23 always-on skills = token bomb, Claude-first, fights Superpowers, GBrain = Supabase/2nd datastore. Read `/office-hours`, `/cso`, `/qa` as ideas. |
+| **ai-engineering-toolkit gaps** | **Outlines/Instructor** (constrained decoding so local models return schema-valid JSON for the router), **LiteLLM** (fleet gateway *if* the router still does ad-hoc base_url switching — not both), **Garak** (one-shot prompt-injection red-team). Docling only if Grimlore ingests PDFs; Phoenix/Langfuse only if Governor needs traces. |
+| **ink CLI** | NO bespoke TUI. Herdr = session UI, Projects = board, Archon/Ringside = workflow UI, workers are TUIs. Thin `baton status`/`halt` = **Python Typer + Rich** (same language, no Node on Pi/WSL). Not ink, not Textual. |
+
+### C. Zero-cost memory ($0/month) — hard constraint, resolved
+
+- **Operational recall = `projectmem`** (MIT, local; `events.jsonl` → distilled `summary.md`
+  the agent reads via MCP; `pjm precheck` pre-commit = "don't repeat the failed fix").
+  Baton's `remember`/`recall` become a shell wrapper over `pjm`. Not a Pi service, not raw git.
+- **Grimlore wiki = Karpathy-wiki pattern by default** — plain markdown in the knowledge repo,
+  written by the agent session already running, edited in Obsidian on the git folder.
+  **OpenWiki *can* run against LM Studio** (`OPENWIKI_PROVIDER=openai-compatible`,
+  `OPENAI_COMPATIBLE_BASE_URL=http://127.0.0.1:1234/v1`, `OPENWIKI_TELEMETRY_DISABLED=1`) but
+  its per-page Deep-Agents tool loop burns GPU-hours on a local 7–32B and stalls if the model
+  can't emit tools — **opt-in later for one code repo**, not the backbone. Its connectors want
+  a paid Tavily key — skip those.
+- **Semantic search = `nomic-embed-text-v1.5` GGUF (~84 MB) + `sqlite-vec`** (pure C, runs on
+  the Pi, no FAISS build pain). Index *files* (Grimdex decisions + projectmem summary +
+  Grimlore md). Nightly on the Mac Mini: embed via LM Studio `/v1/embeddings` → `scp kb.sqlite pi:`
+  → webhost gets a read-only copy. Point existing `kb-index`/`kb-search` at it; don't grow a
+  second indexer.
+- **Placement:** Mac Mini = LM Studio + projectmem MCP + nightly index (+ OpenWiki opt-in);
+  Pi = sqlite-vec + tiny HTTP search; webhost = static md mirror + read-only `kb.sqlite`;
+  workers read git + call projectmem over Tailscale. **Total $0/month.**
+
+### D. devboardai vs GitHub Projects
+
+devboardai ($24, closed, macOS, Claude Code/Codex/Kimi only) is an **execution engine with a
+kanban bolted on** — the value is NL→sprint→parallel-worktree-agents→cards-auto-move-from-
+agent-state→auto-QA→retry. GitHub Projects is a **passive tracker** (board/roadmap/table/
+fields/automation) that dispatches nothing.
+
+- **The board is redundant** with GitHub Projects — don't adopt devboardai for it.
+- **Can't be infrastructure** — single-machine, closed, can't see the WSL boxes / LM Studio
+  fleet / Grok-Copilot-Cursor-Kiro workers / Grimdex.
+- **Buy it for $24 as a UX study** — the `Backlog → In Progress → QA → Done → Failed` column
+  set (the "Failed" lane is worth copying) and how agent-state card movement reads. Then build
+  the thin layer on GitHub Projects: fields (`assigned_worker`, `model_tier`, `queue_position`,
+  `run_id`, `blocked_reason`), status set (Backlog→Queued→In Flight→In Review→**Needs You**→
+  Failed→Done), Baton-core writing them via `gh` on dispatch (~200 lines). The task DAG view
+  comes from Archon's own UI.
+- If a GUI beyond raw Projects is wanted: **Untrivial/agent-orchestrator** (11k★ Go, open) or
+  **builderz/mission-control** (6k★, drives OpenClaw) — fleet-aware, unlike devboardai.
+
+### Updated punch list (supersedes §6 items where they overlap)
+- [ ] Buy devboardai ($24) — **yes, as a UX study only**, not infrastructure.
+- [ ] Confirm zero-cost memory arch (projectmem + Karpathy wiki + nomic/sqlite-vec on Pi).
+- [ ] The 5 forks from §2 still stand; the cloud pass (2026-09-09 05:51 UTC) takes a swing at them.
