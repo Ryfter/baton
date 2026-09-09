@@ -248,3 +248,217 @@ fields/automation) that dispatches nothing.
 - [ ] Buy devboardai ($24) — **yes, as a UX study only**, not infrastructure.
 - [ ] Confirm zero-cost memory arch (projectmem + Karpathy wiki + nomic/sqlite-vec on Pi).
 - [ ] The 5 forks from §2 still stand; the cloud pass (2026-09-09 05:51 UTC) takes a swing at them.
+
+---
+
+## 2026-09-09 cloud pass
+
+**Method:** no new model fleet spend — read the four committed docs + Kevin's two raw-notes files
+(`How should I rearrange the stack.txt`, `Links-Harnesses and more.txt`) in full, then ran targeted
+WebFetch checks (GitHub HTML pages; `api.github.com` returned 403 through this session's proxy, so
+verification used the rendered repo pages instead) against the specific items §2 flagged as
+uncertain. Thinking/research only — no code, no subagents, no PRs, per this pass's brief.
+
+### A. The 5 forks — resolved or evidenced
+
+**Fork 1 — Lead orchestrator (Claude Code vs Grok Build): still open, leaning Claude Code.**
+No web evidence resolves a preference call, so this stays with Kevin. But two facts already in
+`01-architecture-audit` and this doc's §7 push the lean toward **Claude Code as lead**, not Grok
+Build: (a) grok is confirmed non-viable *headless* without the Herdr `agent` driver workaround
+(`grok -p` = one turn, bare `grok` needs a TTY — risk #4 in §5); routing the lead role through a
+provider that needs a workaround to run unattended is fragile. (b) Every other convergent finding
+in this doc (Archon default assistant, ai-software-factory's `tick`, Superpowers' plugin surface)
+treats Claude Code as the reference integration and Grok/Codex as one-of-several workers — going
+against that grain adds integration tax for no demonstrated benefit. Grok Build's token-discipline
+argument (grok A/B's rationale) is real but is a *cost* argument, not a *reliability* one — and the
+Governor already exists to enforce cost discipline regardless of which model leads. **Recommend:
+Claude Code lead, Grok Build as a first-class worker + the viability-debate consultant** (splits
+the difference the grok passes wanted without betting the spine on grok's headless story).
+**Still needs Kevin's yes/no** — this is a preference call about which subscription anchors the
+factory, not a technical one.
+
+**Fork 2 — Keep `baton go` front door: RESOLVED, yes.** All three original passes already agreed
+(grok A, GLM, and the lean in §2 itself); nothing in this pass's research contradicts it. Archon
+becomes the engine Nick `baton go` dispatches into, per §3. Closing this fork — no further debate
+needed unless Kevin objects.
+
+**Fork 3 — Adopt caura now vs defer: RESOLVED, defer — confirmed harder than assumed.**
+WebFetch against `caura-ai/caura`'s current README confirms the self-host footprint is a real
+production service, not a docker-compose toy: **Postgres 16+ with pgvector, Redis, a
+`core-storage-api` service, and a `core-api` REST/MCP gateway** — four moving parts minimum, with
+optional reader/writer splitting for scale. New and material: **Caura shipped a v2.0 that widened
+embeddings from 768→1024 dimensions**, and the README calls the upgrade path explicitly
+**destructive** — existing installs must opt in, snapshot the DB, and re-embed everything before
+running v2 images. That's a second migration hazard on top of the ops footprint the original passes
+already flagged. This raises, not lowers, the bar for adopting caura before the OpenWiki spike.
+**Defer stands, with more confidence than 09-08.** Caura is still 491★, Apache-2.0, actively
+committed (1,152 commits) — abandonment isn't the risk here, operational weight and a destructive
+migration on a tool you haven't even piloted yet is.
+
+**Fork 4 — Adopt Archon now vs keep thin conductor: RESOLVED, adopt now via the same pin
+`coleam00/ai-software-factory` already uses.** The SDLC workflow pack is **still not merged to
+Archon's `dev` (default) branch as of today** — `cleanup/sdlc-workflows-only` is a live branch,
+last pushed *today* (2026-09-09), and `ai-software-factory`'s own README states plainly: *"the
+default uses the workflow additions on Archon's `cleanup/sdlc-workflows-only` branch. They are not
+merged upstream yet, and this integration still needs a live end-to-end run."* That confirms the
+09-08 finding, not new — but it also surfaces the actual mitigation already in the wild:
+`ai-software-factory`'s installer **pins a specific revision of that branch via `pack.json`**
+rather than waiting for the merge. That's the same "pin exact commits" mitigation this doc's §5
+Risk 1 already prescribes. **Verdict: don't wait for the merge — pin the same branch at a known-good
+SHA (copy `ai-software-factory`'s pinned revision as the starting point, or re-pin after your own
+smoke test) and start on it in Week 1.** Re-check merge status monthly; re-pin when it lands on
+`dev`.
+
+**Fork 5 — GitHub Projects table vs GUI: RESOLVED, GitHub Projects table.** Unchanged from §2/§3 —
+no new evidence surfaced a reason to add a GUI before the core ships one PR. Still stands: build the
+~200-line table (fields below), keep Untrivial/agent-orchestrator and builderz/mission-control as
+GUI options to *reconsider*, not adopt, if the plain table proves insufficient after real use.
+
+**Net:** 4 of 5 forks resolve to a concrete default action; only Fork 1 (lead orchestrator) is a
+genuine preference call still needing Kevin's word — everything else can proceed on the
+recommendations above without blocking on him.
+
+### B. Week-1 plan — Herdr + driver + Ringer, one real PR
+
+Goal restated from §4 step 2: prove cheap workers implement, executed checks gate, and a premium
+model reviews — on ONE real Baton issue, end to end, before touching the pwsh core.
+
+**Day 1 — stand up the driver and pick the target issue.**
+1. Confirm Herdr is current: `herdr --version`; update if stale.
+2. Pick the smallest currently-open, well-scoped issue from the 32 open issues in
+   `01-architecture-audit-2026-09-07.md` §3 that is tagged CORE-trivial or FIXED-BY-ADOPTION-adjacent
+   — good candidates: **#209** (docs task), **#178** (doctor check), **#183** (roster capability
+   flag). Small, real, low-blast-radius — exactly what a first strangler PR should be.
+3. Smoke-test the Herdr agent driver on that issue's repo:
+   ```
+   herdr workspace create baton-week1
+   herdr agent start w1-worker --kind codex --pane <id>
+   herdr agent prompt w1-worker "Read issue #<N> in Ryfter/baton. Implement it. Write your diff summary to /tmp/w1-report.md" --wait
+   cat /tmp/w1-report.md
+   ```
+   This is the exact pattern this doc's §7 already validated for grok; repeat it for whichever
+   worker (Codex, Grok, OpenCode) is cheapest today per quota-axi / CodexBar.
+
+**Day 2 — add Ringer as the executed-check gate.**
+4. Install pinned Ringer: `git clone` at a known commit (per Risk 1 — do not `go install @latest`
+   in the factory path). Confirm `ringer demo` runs clean.
+5. Write a one-swarm Ringer manifest for the picked issue: worker = whatever ran in step 3, `check`
+   = the repo's actual test/lint command for the touched files (not a stub — exit 0 must mean
+   something).
+6. Run it: `ringer run --manifest <path>`; watch Ringside HUD; confirm `runs.jsonl` records a real
+   pass/fail, not an agent's self-report.
+
+**Day 3 — pre-merge gate + premium review, then ship.**
+7. Push the worker's branch through `no-mistakes` (pinned commit, `NO_MISTAKES_TELEMETRY=0`):
+   disposable worktree → test/lint/docs → only then `origin` + `gh pr create`.
+8. Have Claude Code (Opus, per d111 seating) review the diff before merge — this is the "premium
+   model reviews" leg; a script or a manual `/code-review` pass both satisfy it for week 1.
+9. Merge. Record what broke, what the driver commands actually were (they will differ from the
+   pseudocode above at least once), and how much of the ~6 human gates in §7's Kun-stack account
+   showed up in practice.
+
+**First concrete command to actually run** (this is the literal Week-1 first step — everything
+above is sequencing around it):
+```
+herdr workspace create baton-week1 && herdr agent start w1-worker --kind codex --pane 1
+```
+
+**Exit criterion for Week 1:** one real PR, merged, where a cheap worker implemented, an executed
+check (not a self-report) gated it, and a premium model reviewed it — with Herdr, Ringer, and
+no-mistakes all pinned to known commits. Do not port any CORE pwsh lib yet; that's Week 3+ per §4.
+
+### C. Migration-spec skeleton — what Baton-core must still contain
+
+Full detail already exists in `01-architecture-audit-2026-09-07.md` (file-by-file CORE/ADOPT/DROP
+buckets, the `baton` command surface, on-disk state layout, golden-path steps 1–7, the 32-issue
+disposition table). This is the skeleton a real spec document should follow — not a rewrite of that
+audit, a table of contents for turning it into `docs/superpowers/specs/2026-0X-XX-baton-core-migration.md`.
+
+```
+# Baton core migration spec (skeleton)
+
+## 1. Scope
+   - What ships: ~5-6k LOC Python core replacing 36,120 LOC pwsh
+   - What does NOT ship: MCP server (dies), 54 of 56 command files (die),
+     6 pwsh hooks (die — 7 pure-Python hooks survive as-is)
+
+## 2. Command surface (verbatim from audit §2)
+   baton go / status / fleet list|probe / route / jobs list|show|retry /
+   decide / kb search / doctor
+
+## 3. On-disk state (verbatim from audit §2)
+   ~/.baton/config.toml, runs/<id>/{events.jsonl, plan.json, state/},
+   decisions/, kb/
+   -- event log (#206) is the foundation, not a feature; every other
+      projection (status, dashboard/) reads it, nothing else is authoritative
+
+## 4. DROP / ADOPT / KEEP map (per scripts/*.ps1 file)
+   -- pull directly from audit §1 tables (CORE/ADOPT/DROP), unchanged --
+   CORE (~13,500 LOC → ~5-6k Python):
+     conductor-lib, maestro-lib, fleet-lib, window-budget-lib (Governor),
+     window-service-lib, fleet-backlog, routing-lib, effective-cost-lib,
+     officers-lib (Fable scheduler split, NOT wholesale), gate-lib (panel
+     verdict logic split), verification-lib (contract carve-out),
+     coordination-lib (claim/lock/liveness carve-out), dark-factory-lib
+     (lane/standing-order config carve-out), decisions-lib, plan-gate-lib,
+     project(s)-lib, job-lib, small glue cluster (~2,600 LOC)
+   ADOPT (~8,700 LOC deleted via 5 external tools):
+     fleet-executor-lib, diff-apply-lib → firstmate + treehouse
+     usage-probe-lib, cursor-quota-lib, usage-classify-lib,
+       copilot-credit-lib, usage-lib → quota-axi
+     verification-lib (runner half), gate-lib (mechanical half) → no-mistakes
+     dark-factory-lib (loop half) → gnhf
+     coordination-lib (crew-fanout half) → firstmate
+     heartbeat-lib → firstmate watchers
+   DROP (~13,900 LOC deleted outright):
+     officers-lib is NOT here (corrected from GLM's first pass — see audit
+     A1); ship-report-lib, start-lib, optimize-prompt-lib, bootstrap.ps1,
+     coach-lib, prompt-pool-lib, research-gate-lib, fleet-ensemble,
+     the routing-learn/observe/calibrate cluster, otel/misc experiment
+     cluster, mcp-bridge.ps1
+   KEEP AS-IS (already Python, not pwsh):
+     kb/ (1,734 LOC), dashboard/ (8,721 LOC, freeze — read-only projection
+     once #206 lands)
+
+## 5. Architecture decision this spec must open with
+   -- the still-unanswered question from audit's bottom line: does `baton go`
+      shell out to firstmate, or does firstmate's liaison call `baton`?
+      Week-1 plan (§B above) answers this empirically: `baton`-side driver
+      calls Herdr directly for week 1 (bypassing firstmate entirely) to
+      prove the spine; firstmate integration is a Week 3+ decision made
+      from that evidence, not guessed up front.
+
+## 6. Issue disposition
+   -- pull verbatim from audit §3's 32-issue table; re-triage only the ones
+      whose status changed since 09-07 (none did — scripts/ is untouched
+      as of this pass, confirmed via git log)
+
+## 7. Sequencing
+   -- this doc's §4, unchanged: Week 1 (Herdr+Ringer+no-mistakes, one PR,
+      per §B above) → Weeks 3-4 (Archon pinned per Fork 4 above, port
+      router, freeze scripts/) → Week 5+ (overnight loop, caura/Omnigent
+      re-evaluation)
+```
+
+The one addition this pass makes to the audit's content: **§5 above should be the spec's opening
+section, not an aside** — Week 1 is deliberately designed to answer "who owns the loop" with a
+working PR instead of a whiteboard debate, and the spec should say so explicitly so nobody re-opens
+that debate in the abstract during Week 3.
+
+### D. New decisions this pass surfaces — still need Kevin
+
+1. **Fork 1 (lead orchestrator) is the only fork left genuinely open.** This pass's lean is Claude
+   Code lead / Grok Build as worker + viability consultant (reasoning in §A above) — needs Kevin's
+   explicit yes/no, since it's a subscription/workflow preference, not something evidence settles.
+2. **Which issue is the Week-1 target.** §B suggests #209, #178, or #183 as candidates (small,
+   real, already triaged CORE-trivial in the audit) — Kevin should confirm or pick a different one;
+   whichever it is should be genuinely useful, not a throwaway, since it's also the first real test
+   of "does the strangler spine ship code."
+3. **Whether to pin Archon's `cleanup/sdlc-workflows-only` at `ai-software-factory`'s existing
+   pinned revision, or cut a fresh pin after Baton's own Week-1 smoke test.** Reusing
+   `ai-software-factory`'s pin is faster; a fresh pin is safer if Baton's usage pattern diverges
+   from theirs. Low stakes, but it's a concrete choice someone has to make before Week 3.
+4. **Confirm the Fork-4 resolution itself (adopt Archon now via pin, don't wait for merge).** The
+   evidence supports it, but "start depending on an unmerged branch of someone else's in-flux repo"
+   is exactly the Risk 1 pattern this doc already flags — worth Kevin's explicit sign-off given it's
+   the biggest structural bet in the Week 3+ plan.
