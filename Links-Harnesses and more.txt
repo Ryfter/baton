@@ -1,0 +1,85 @@
+AI Dev Harnesses: https://github.com/stars/Ryfter/lists/ai-dev-harness
+- https://github.com/coleam00/adversarial-dev
+- https://github.com/Chachamaru127/claude-code-harness
+- https://github.com/wshobson/agents
+- https://github.com/affaan-m/ECC
+- https://github.com/ai-genius-automations/octoally
+- https://github.com/coleam00/Archon
+- https://github.com/omnigent-ai/omnigent
+- https://github.com/Untrivial-ai/agent-orchestrator
+- https://github.com/deepseek-ai/deepseek-harness
+  - https://github.com/nexu-io/open-design
+- https://github.com/CommandCodeAI/command-code
+- https://github.com/can1357/oh-my-pi
+- https://github.com/HarnessRouter/harnessrouter
+- https://github.com/NVIDIA-NeMo/Switchyard
+- https://github.com/kunchenguid/no-mistakes
+- https://github.com/Factory-AI/factory
+- https://github.com/vercel-labs/skills
+- https://github.com/nexu-io/open-design
+- https://github.com/xai-org/grok-build
+- https://github.com/adhikari-sandeep/ship-harness
+- https://github.com/pingdotgg/t3code
+- https://github.com/vadimdemedes/ink (CLI dev tool)
+- https://github.com/KunAgent/Kun (This almost sounds like what I have been trying to build)
+  - https://github.com/KunAgent/KunUIExtend
+- https://github.com/earendil-works/pi
+- https://github.com/coleam00/ai-software-factory (The AI Dark Factory) 
+
+AI Programming/Dev: https://github.com/stars/Ryfter/lists/ai-programming-dev
+- https://github.com/nesszer/Win-CodexBar
+- https://github.com/steipete/CodexBar
+- https://github.com/github/spec-kit
+- https://github.com/Fission-AI/OpenSpec
+- https://github.com/obra/superpowers
+- https://github.com/prime-radiant-inc/iterative-development
+- https://github.com/prime-radiant-inc/evener
+- https://github.com/LMCache/LMCache
+- https://github.com/gastownhall/gastown
+- https://github.com/duolahypercho/codex-router
+- https://github.com/mattpocock/skills
+- https://github.com/coleam00/skills  (There is a dark factory skill system in here) 
+- https://github.com/superdesigndev/superdesign-skill
+- https://github.com/scabench-org/hound
+- https://github.com/kunchenguid/kun
+
+AI Memory: https://github.com/stars/Ryfter/lists/ai-memory
+- https://github.com/riponcm/projectmem
+- https://github.com/thedotmack/claude-mem
+- https://github.com/rohitg00/agentmemory
+- https://github.com/letta-ai/letta
+- https://github.com/letta-ai/letta-code
+- https://github.com/letta-ai/letta-obsidian
+- https://github.com/supermemoryai/supermemory
+- https://github.com/agent0ai/dox
+- https://github.com/opendatalab/MinerU
+- https://github.com/caura-ai/caura
+- https://github.com/ai-genius-automations/hindsight
+- https://github.com/TencentCloud/TencentDB-Agent-Memory
+- https://github.com/swarajbachu/cachezero
+- https://github.com/NateBJones-Projects/OB1
+- https://github.com/langchain-ai/openwiki
+
+Other Links:
+- https://github.com/Sumanth077/ai-engineering-toolkit 
+- https://github.com/garrytan/gstack
+- https://github.com/kunchenguid/firstmate
+- https://github.com/data-privacy-stack/presidio (Data Privacy)
+- https://github.com/kunchenguid?tab=repositories (Kun Chen has a ton of stuff)
+- https://github.com/kunchenguid/firstmate
+- https://github.com/kunchenguid/gnhf
+- https://github.com/kunchenguid/quota-axi
+- https://github.com/kunchenguid/no-mistakes
+- https://github.com/kunchenguid/treehouse
+
+Document Converters:
+- https://github.com/docling-project/docling
+- https://github.com/microsoft/markitdown
+- https://github.com/datalab-to/marker 
+- https://github.com/firecrawl/pdf-inspector (Fast)
+- https://github.com/jgm/pandoc (universal, not best for Markdown)
+
+
+
+
+
