@@ -32,3 +32,4 @@ scratch/
 
 hud/hud.db
 hud/*.db
+hud/hud.db*
