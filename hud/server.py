@@ -119,6 +119,7 @@ def _clamp_payload(payload: dict[str, Any]) -> dict[str, Any]:
 FRONTENDS_DIR = Path(__file__).resolve().parent / "frontends"
 VERSIONS_DIR = Path(__file__).resolve().parent / "versions"
 _VID_RE = re.compile(r"^v\d+$")
+_SEG_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 THEMES_DIR = FRONTENDS_DIR / "themes"
 THEME_NAMES = ("dark", "sapphire", "lapis-velvet", "sandstone")
 STARTED_AT = time.time()
@@ -153,21 +154,21 @@ def _frontend_names() -> list[str]:
     return names
 
 
+def _safe_seg(name: str) -> bool:
+    return bool(_SEG_RE.match(name or "")) and ".." not in name
+
+
 def _frontend_path(name: str) -> Optional[Path]:
-    if not name or "/" in name or "\\" in name or ".." in name:
+    if not _safe_seg(name):
         return None
-    path = (FRONTENDS_DIR / ("%s.html" % name)).resolve()
     try:
+        path = (FRONTENDS_DIR / ("%s.html" % name)).resolve()
         path.relative_to(FRONTENDS_DIR.resolve())
     except ValueError:
         return None
     if path.is_file():
         return path
     return None
-
-
-def _safe_seg(name: str) -> bool:
-    return bool(name) and "/" not in name and "\\" not in name and ".." not in name
 
 
 def _version_ids() -> list[str]:
@@ -201,12 +202,12 @@ def _version_index() -> list[dict[str, Any]]:
 def _version_file(vid: str, name: str, sub: str = "") -> Optional[Path]:
     if not (_VID_RE.match(vid) and _safe_seg(name)):
         return None
-    base = (VERSIONS_DIR / vid).resolve()
-    rel = ("%s/%s.html" % (sub, name)) if sub else ("%s.html" % name)
     if sub and not _safe_seg(sub):
         return None
-    path = (base / rel).resolve() if not sub else (base / sub / ("%s.html" % name)).resolve()
     try:
+        base = (VERSIONS_DIR / vid).resolve()
+        rel = ("%s/%s.html" % (sub, name)) if sub else ("%s.html" % name)
+        path = (base / rel).resolve() if not sub else (base / sub / ("%s.html" % name)).resolve()
         path.relative_to(base)
     except ValueError:
         return None
@@ -216,9 +217,9 @@ def _version_file(vid: str, name: str, sub: str = "") -> Optional[Path]:
 def _version_css(vid: str, name: str) -> Optional[Path]:
     if not (_VID_RE.match(vid) and _safe_seg(name)):
         return None
-    base = (VERSIONS_DIR / vid / "themes").resolve()
-    path = (base / ("%s.css" % name)).resolve()
     try:
+        base = (VERSIONS_DIR / vid / "themes").resolve()
+        path = (base / ("%s.css" % name)).resolve()
         path.relative_to(base)
     except ValueError:
         return None
@@ -226,14 +227,12 @@ def _version_css(vid: str, name: str) -> Optional[Path]:
 
 
 def _theme_path(name: str) -> Optional[Path]:
-    if not name or "/" in name or "\\" in name or ".." in name:
-        return None
     if name.endswith(".css"):
         name = name[:-4]
-    if name not in THEME_NAMES:
+    if not _safe_seg(name) or name not in THEME_NAMES:
         return None
-    path = (THEMES_DIR / ("%s.css" % name)).resolve()
     try:
+        path = (THEMES_DIR / ("%s.css" % name)).resolve()
         path.relative_to(THEMES_DIR.resolve())
     except ValueError:
         return None

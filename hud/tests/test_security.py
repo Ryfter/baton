@@ -72,6 +72,11 @@ def test_cross_origin_write_403(client):
     assert r.status_code == 403
 
 
+def test_null_byte_path_404(client):
+    assert client.get("/v/%00deck").status_code == 404
+    assert client.get("/v1/themes/a%00b.css").status_code == 404
+
+
 def test_oversized_body_413(client):
     big = {"session_id": "s", "kind": "stop", "payload": {"x": "a" * (65 * 1024)}}
     r = client.post("/ingest", json=big)
