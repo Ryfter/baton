@@ -141,39 +141,44 @@ def normalize_hook(hook: Any) -> dict:
 
     if kind == "session_start":
         payload = {
-            "source": hook.get("source") or "startup",
-            "cwd": hook.get("cwd") or "",
+            "source": str(hook.get("source") or "startup")[:64],
+            "cwd": str(hook.get("cwd") or "")[:500],
         }
     elif kind == "user_prompt":
         payload = {"prompt": str(hook.get("prompt") or "")[:500]}
     elif kind == "pre_tool_use":
-        tool_name = str(hook.get("tool_name") or "")
+        tool_name = str(hook.get("tool_name") or "")[:120]
         payload = {
             "tool_name": tool_name,
             "tool_input_summary": _summarize_tool_input(tool_name, hook.get("tool_input")),
         }
     elif kind == "post_tool_use":
-        tool_name = str(hook.get("tool_name") or "")
+        tool_name = str(hook.get("tool_name") or "")[:120]
         ok, error = _post_tool_ok_error(hook)
         payload = {"tool_name": tool_name, "ok": ok}
         if error:
             payload["error"] = error
     elif kind == "notification":
-        payload = {"message": str(hook.get("message") or "")}
+        payload = {"message": str(hook.get("message") or "")[:500]}
     elif kind == "stop":
         payload = {}
     elif kind == "subagent_stop":
         payload = {"agent": agent}
     elif kind == "pre_compact":
-        payload = {"trigger": hook.get("trigger") or "auto"}
+        payload = {"trigger": str(hook.get("trigger") or "auto")[:64]}
     else:
         payload = {}
+        caps = {
+            "message": 500,
+            "prompt": 500,
+            "tool_name": 120,
+            "cwd": 500,
+            "source": 64,
+            "trigger": 64,
+        }
         for key in ("message", "prompt", "tool_name", "cwd", "source", "trigger"):
             if key in hook and hook[key] is not None:
-                val = hook[key]
-                if key == "prompt":
-                    val = str(val)[:500]
-                payload[key] = val
+                payload[key] = str(hook[key])[: caps[key]]
 
     envelope: dict[str, Any] = {
         "session_id": session_id,

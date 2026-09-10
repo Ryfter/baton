@@ -22,7 +22,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from hud import config as hud_config
 from hud import store
-from hud.schema import SCHEMA_ID, validate_envelope
+from hud.schema import SCHEMA_ID
 
 logger = logging.getLogger("hud")
 
@@ -133,6 +133,8 @@ _PAYLOAD_CAPS = {
     "tool_input_summary": 120,
     "message": 500,
     "prompt": 500,
+    "error": 200,
+    "cwd": 500,
 }
 
 CHOOSER_DESCRIPTIONS = {
@@ -146,6 +148,17 @@ CHOOSER_DESCRIPTIONS = {
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _coerce_ts(value: Any) -> str:
+    if not value:
+        return _utcnow()
+    s = str(value).strip()
+    try:
+        datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return _utcnow()
+    return s
 
 
 def _frontend_names() -> list[str]:
@@ -200,15 +213,12 @@ def _version_index() -> list[dict[str, Any]]:
     return out
 
 
-def _version_file(vid: str, name: str, sub: str = "") -> Optional[Path]:
+def _version_file(vid: str, name: str) -> Optional[Path]:
     if not (_VID_RE.match(vid) and _safe_seg(name)):
-        return None
-    if sub and not _safe_seg(sub):
         return None
     try:
         base = (VERSIONS_DIR / vid).resolve()
-        rel = ("%s/%s.html" % (sub, name)) if sub else ("%s.html" % name)
-        path = (base / rel).resolve() if not sub else (base / sub / ("%s.html" % name)).resolve()
+        path = (base / ("%s.html" % name)).resolve()
         path.relative_to(base)
     except ValueError:
         return None
@@ -257,9 +267,9 @@ def _fill(body: dict[str, Any]) -> dict[str, Any]:
         agent = "main"
     return {
         "schema": SCHEMA_ID,
-        "ts": body.get("ts") or _utcnow(),
+        "ts": _coerce_ts(body.get("ts")),
         "session_id": str(session_id),
-        "source": body.get("source") or "claude-hook",
+        "source": "claude-hook",
         "kind": str(kind),
         "agent": agent,
         "machine": body.get("machine") or socket.gethostname(),
@@ -482,7 +492,6 @@ async def ingest(request: Request) -> dict[str, Any]:
         event = _fill(body)
         event_id = await asyncio.to_thread(store.insert_event, event)
         event["id"] = event_id
-        validate_envelope(event)
     except HTTPException:
         raise
     except Exception as exc:
@@ -504,15 +513,15 @@ async def stream(replay: int = Query(default=200)) -> StreamingResponse:
     async def gen():
         q: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAX)
         _subscribers.add(q)
-        max_id = 0
+        replayed_ids: set[int] = set()
         try:
             replayed = await asyncio.to_thread(store.replay_events, n)
             if not replayed:
                 yield ": stream-open\n\n"
             for ev in replayed:
                 eid = int(ev.get("id") or 0)
-                if eid > max_id:
-                    max_id = eid
+                if eid:
+                    replayed_ids.add(eid)
                 yield _sse(ev)
             while True:
                 try:
@@ -523,7 +532,7 @@ async def stream(replay: int = Query(default=200)) -> StreamingResponse:
                 if item is None:
                     break
                 eid = int(item.get("id") or 0)
-                if eid and eid <= max_id:
+                if eid and eid in replayed_ids:
                     continue
                 yield _sse(item)
         except asyncio.CancelledError:

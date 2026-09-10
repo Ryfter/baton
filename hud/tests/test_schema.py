@@ -159,3 +159,18 @@ def test_normalize_unknown_hook_fallback_not_dropped():
     assert out["session_id"] == "keep-me"
     assert out["kind"] == "something_else"
     assert out["payload"]["message"] == "still stored"
+
+
+def test_normalize_unknown_hook_truncates_unbounded_fields():
+    out = normalize_hook(
+        {
+            "hook_event_name": "SomethingElse",
+            "session_id": "keep-me",
+            "message": "m" * 800,
+            "cwd": "c" * 800,
+            "prompt": "p" * 800,
+        }
+    )
+    assert out["payload"]["message"] == "m" * 500
+    assert out["payload"]["cwd"] == "c" * 500
+    assert out["payload"]["prompt"] == "p" * 500

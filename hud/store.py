@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS ix_events_session ON events(session_id);
 CREATE INDEX IF NOT EXISTS ix_events_kind    ON events(kind);
 CREATE INDEX IF NOT EXISTS ix_events_ts      ON events(ts);
+CREATE INDEX IF NOT EXISTS ix_events_session_seq ON events(session_id, seq);
 """
 
 _lock = threading.Lock()
