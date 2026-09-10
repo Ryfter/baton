@@ -72,6 +72,12 @@ def test_cross_origin_write_403(client):
     assert r.status_code == 403
 
 
+def test_oversized_body_413(client):
+    big = {"session_id": "s", "kind": "stop", "payload": {"x": "a" * (65 * 1024)}}
+    r = client.post("/ingest", json=big)
+    assert r.status_code == 413
+
+
 def test_same_host_origin_write_allowed(client):
     r = client.post(
         "/ingest",

@@ -94,6 +94,28 @@ def _require_json_write(request: Request) -> None:
         if not host or host.lower() not in allowed_hosts():
             raise HTTPException(status_code=403, detail="cross-origin write refused")
 
+
+async def _read_json_object(request: Request) -> dict[str, Any]:
+    _require_json_write(request)
+    raw = await request.body()
+    if len(raw) > MAX_BODY:
+        raise HTTPException(status_code=413, detail="payload too large")
+    try:
+        body = json.loads(raw)
+    except Exception:
+        raise HTTPException(status_code=422, detail="invalid json")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="invalid body")
+    return body
+
+
+def _clamp_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    for key, cap in _PAYLOAD_CAPS.items():
+        if key in out and out[key] is not None:
+            out[key] = str(out[key])[:cap]
+    return out
+
 FRONTENDS_DIR = Path(__file__).resolve().parent / "frontends"
 VERSIONS_DIR = Path(__file__).resolve().parent / "versions"
 _VID_RE = re.compile(r"^v\d+$")
@@ -103,6 +125,13 @@ STARTED_AT = time.time()
 
 _subscribers: set[asyncio.Queue] = set()
 _QUEUE_MAX = 256
+MAX_BODY = 64 * 1024
+EVENTS_LIMIT = 500
+_PAYLOAD_CAPS = {
+    "tool_input_summary": 120,
+    "message": 500,
+    "prompt": 500,
+}
 
 CHOOSER_DESCRIPTIONS = {
     "deck": "Flight deck — one swim-lane per session; origin pinned, short verb chips, newest grows right.",
@@ -234,7 +263,7 @@ def _fill(body: dict[str, Any]) -> dict[str, Any]:
         "kind": str(kind),
         "agent": agent,
         "machine": body.get("machine") or socket.gethostname(),
-        "payload": payload,
+        "payload": _clamp_payload(payload),
     }
 
 
@@ -447,13 +476,7 @@ async def _auth(request: Request, call_next):
 
 @app.post("/ingest")
 async def ingest(request: Request) -> dict[str, Any]:
-    _require_json_write(request)
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=422, detail="invalid json")
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=422, detail="invalid body")
+    body = await _read_json_object(request)
     try:
         event = _fill(body)
         event_id = store.insert_event(event)
@@ -522,15 +545,15 @@ async def stream(replay: int = Query(default=200)) -> StreamingResponse:
 @app.get("/events")
 async def events(
     since: Optional[int] = None,
-    limit: int = 2000,
+    limit: int = EVENTS_LIMIT,
     session: Optional[str] = None,
     kind: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     try:
-        cap = 2000 if limit is None else int(limit)
+        cap = EVENTS_LIMIT if limit is None else int(limit)
     except (TypeError, ValueError):
-        cap = 2000
-    cap = max(0, min(cap, 2000))
+        cap = EVENTS_LIMIT
+    cap = max(0, min(cap, EVENTS_LIMIT))
     return store.query_events(since=since, limit=cap, session=session, kind=kind)
 
 
@@ -568,13 +591,7 @@ async def theme_css(name: str) -> Any:
 
 @app.post("/config")
 async def post_config(request: Request) -> dict[str, Any]:
-    _require_json_write(request)
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=422, detail="invalid json")
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=422, detail="invalid body")
+    body = await _read_json_object(request)
     if "default_frontend" not in body:
         raise HTTPException(status_code=422, detail="default_frontend required")
     val = body.get("default_frontend")
