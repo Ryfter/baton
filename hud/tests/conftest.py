@@ -32,6 +32,8 @@ def isolated_state(tmp_path, monkeypatch):
     cfg.write_text('{"default_frontend": null}\n', encoding="utf-8")
     monkeypatch.setenv("HUD_DB", str(db))
     monkeypatch.setenv("HUD_CONFIG", str(cfg))
+    monkeypatch.setenv("HUD_HOST", "127.0.0.1")
+    monkeypatch.delenv("HUD_TOKEN", raising=False)
     import hud.store as store
 
     store.reset()

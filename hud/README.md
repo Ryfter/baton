@@ -8,14 +8,35 @@ Throwaway-or-keep live agent-activity HUD. Separate from the legacy `dashboard/`
 ```
 cd /Users/kev/Dev/Baton              # or this build worktree
 pip install -r hud/requirements.txt
-python -m hud                         # binds 0.0.0.0:8765
+python -m hud                         # binds 127.0.0.1:8765
 ```
 
-Kevin views from another PC. The server binds **all interfaces** on port **8765**.
-Open **http://droid:8765/** (not localhost).
+Default bind is **loopback only** (`127.0.0.1:8765`). That is the safe default.
 
-CLI overrides: `python -m hud --host 0.0.0.0 --port 8765`
-Env: `HUD_HOST` (default `0.0.0.0`), `HUD_PORT` (default `8765`).
+### LAN access (view from another PC)
+
+Kevin views from another PC at **http://droid:8765/**. That is opt-in — bind all
+interfaces **and** set a shared token:
+
+```
+HUD_HOST=0.0.0.0 HUD_TOKEN=pick-a-long-secret python -m hud
+# equivalent: python -m hud --host 0.0.0.0
+```
+
+When bound off-loopback, `HUD_TOKEN` is **required**. Without it the process logs a
+loud warning and every request returns 401.
+
+Pass the token:
+
+- Browser: open `http://droid:8765/?t=pick-a-long-secret`. Front-ends keep `?t=`
+  on the SSE URL (`/stream`) and on chooser links.
+- `hook_emit.py` / `fake_traffic.py`: send `X-HUD-Token` from the same
+  `HUD_TOKEN` env var. Export it in the environment Claude Code inherits so
+  hooks can ingest.
+
+CLI: `python -m hud --host 0.0.0.0 --port 8765`
+Env: `HUD_HOST` (default `127.0.0.1`), `HUD_PORT` (default `8765`), `HUD_TOKEN`
+(required when `HUD_HOST` is not loopback).
 
 Demo traffic without a live Claude session:
 
@@ -49,4 +70,5 @@ Global install means every Claude Code session on droid emits — intended.
 Chooser at `/`. Direct: `/v/deck`, `/v/board`, `/v/cockpit`, `/v/minimal`.
 POST `/config` with `{"default_frontend":"deck"}` (or `null`) sets the default.
 Each page is one self-contained HTML file (inline CSS/JS, no CDN, no libraries).
-They connect with `new EventSource('/stream?replay=200')`.
+They connect with `new EventSource('/stream?replay=200')` (and `&t=` when a
+token is present in the page URL).

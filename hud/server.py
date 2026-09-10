@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
+import logging
+import os
 import re
 import socket
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
@@ -16,6 +21,40 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from hud import config as hud_config
 from hud import store
 from hud.schema import SCHEMA_ID, validate_envelope
+
+logger = logging.getLogger("hud")
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def host_is_loopback(host: str | None = None) -> bool:
+    h = (host if host is not None else os.environ.get("HUD_HOST", "127.0.0.1")).strip().lower()
+    return h in _LOOPBACK_HOSTS
+
+
+def warn_if_unauthed_lan(host: str | None = None) -> None:
+    h = (host if host is not None else os.environ.get("HUD_HOST", "127.0.0.1")).strip()
+    if host_is_loopback(h) or os.environ.get("HUD_TOKEN"):
+        return
+    msg = (
+        "WARNING: HUD is bound to %s (not loopback) without HUD_TOKEN. "
+        "All requests will be rejected with 401. Set HUD_TOKEN and pass it "
+        "as the X-HUD-Token header or ?t= query parameter. "
+        "Example: HUD_HOST=0.0.0.0 HUD_TOKEN=secret python -m hud\n" % (h or "?",)
+    )
+    try:
+        sys.stderr.write(msg)
+        sys.stderr.flush()
+    except Exception:
+        pass
+    logger.warning(msg.strip())
+
+
+def _with_t(path: str, token: str) -> str:
+    if not token:
+        return path
+    sep = "&" if "?" in path else "?"
+    return path + sep + "t=" + quote(token, safe="")
 
 FRONTENDS_DIR = Path(__file__).resolve().parent / "frontends"
 VERSIONS_DIR = Path(__file__).resolve().parent / "versions"
@@ -182,7 +221,7 @@ async def _broadcast(event: dict[str, Any]) -> None:
             pass
 
 
-def _chooser_html(names: list[str]) -> str:
+def _chooser_html(names: list[str], token: str = "") -> str:
     cards = []
     for name in names:
         desc = CHOOSER_DESCRIPTIONS.get(name, "HUD front-end variant.")
@@ -192,12 +231,12 @@ def _chooser_html(names: list[str]) -> str:
               <h2>%s</h2>
               <p>%s</p>
               <div class="row">
-                <a href="/v/%s">just view once</a>
+                <a href="%s">just view once</a>
                 <button type="button" data-name="%s">Set as default</button>
               </div>
             </article>
             """
-            % (name, desc, name, name)
+            % (name, desc, _with_t("/v/%s" % name, token), name)
         )
     return """<!DOCTYPE html>
 <html lang="en">
@@ -330,11 +369,17 @@ def _chooser_html(names: list[str]) -> str:
     document.querySelectorAll("button[data-name]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var name = btn.getAttribute("data-name");
-        fetch("/config", {
+        var tok = new URLSearchParams(location.search).get("t") || "";
+        var headers = { "Content-Type": "application/json" };
+        if (tok) headers["X-HUD-Token"] = tok;
+        var cfgUrl = "/config" + (tok ? "?t=" + encodeURIComponent(tok) : "");
+        fetch(cfgUrl, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: headers,
           body: JSON.stringify({ default_frontend: name })
-        }).then(function () { location.href = "/v/" + name; });
+        }).then(function () {
+          location.href = "/v/" + name + (tok ? "?t=" + encodeURIComponent(tok) : "");
+        });
       });
     });
   </script>
@@ -344,6 +389,17 @@ def _chooser_html(names: list[str]) -> str:
 
 
 app = FastAPI(title="hud", docs_url=None, redoc_url=None)
+
+
+@app.middleware("http")
+async def _auth(request: Request, call_next):
+    token = os.environ.get("HUD_TOKEN") or ""
+    off_loopback = not host_is_loopback()
+    if token or off_loopback:
+        provided = request.headers.get("x-hud-token") or request.query_params.get("t") or ""
+        if not token or not hmac.compare_digest(provided, token):
+            return Response(status_code=401)
+    return await call_next(request)
 
 
 @app.post("/ingest")
@@ -435,8 +491,9 @@ async def events(
 
 
 @app.get("/")
-async def root() -> Any:
+async def root(request: Request) -> Any:
     cfg = hud_config.read_config()
+    token = request.query_params.get("t") or ""
     name = cfg.get("default_frontend")
     if name:
         raw = str(name)
@@ -444,9 +501,9 @@ async def root() -> Any:
             raw = raw[:-5]
         path = _frontend_path(raw)
         if path is not None:
-            return RedirectResponse(url="/v/%s" % path.stem, status_code=302)
+            return RedirectResponse(url=_with_t("/v/%s" % path.stem, token), status_code=302)
     names = _frontend_names()
-    return HTMLResponse(_chooser_html(names))
+    return HTMLResponse(_chooser_html(names, token=token))
 
 
 @app.get("/v/{name}")
@@ -528,11 +585,12 @@ async def versions() -> Any:
 
 
 @app.get("/{vid}")
-async def version_chooser(vid: str) -> Any:
+async def version_chooser(vid: str, request: Request) -> Any:
     if not _VID_RE.match(vid) or vid not in _version_ids():
         raise HTTPException(status_code=404, detail="unknown version")
     names = sorted(p.stem for p in (VERSIONS_DIR / vid).glob("*.html"))
-    html = _chooser_html(names).replace('href="/v/', 'href="/%s/v/' % vid)
+    token = request.query_params.get("t") or ""
+    html = _chooser_html(names, token=token).replace('href="/v/', 'href="/%s/v/' % vid)
     html = html.replace("<body>", '<body><p style="padding:0 20px"><a href="/versions">← all versions</a> · %s</p>' % vid)
     return HTMLResponse(html)
 

@@ -361,7 +361,16 @@
     themePick.value = currentTheme();
     themePick.addEventListener("change", function () { applyTheme(themePick.value); });
 
-    var es = new EventSource('/stream?replay=200');
+    var hudTok = new URLSearchParams(location.search).get("t") || "";
+    if (hudTok) {
+      document.querySelectorAll("a.hud-link").forEach(function (a) {
+        var href = a.getAttribute("href") || "";
+        if (href && href.indexOf("t=") < 0) {
+          a.setAttribute("href", href + (href.indexOf("?") >= 0 ? "&" : "?") + "t=" + encodeURIComponent(hudTok));
+        }
+      });
+    }
+    var es = new EventSource('/stream?replay=200' + (hudTok ? '&t=' + encodeURIComponent(hudTok) : ''));
     es.addEventListener("open", function () { dot.className = "hud-dot live"; });
     es.addEventListener("error", function () { dot.className = "hud-dot"; });
     es.addEventListener("hud", function (e) {

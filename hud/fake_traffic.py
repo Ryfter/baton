@@ -79,10 +79,14 @@ def _url(port: str) -> str:
 
 def post_event(url: str, event: dict) -> None:
     body = json.dumps(event).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("HUD_TOKEN")
+    if token:
+        headers["X-HUD-Token"] = token
     req = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     urllib.request.urlopen(req, timeout=5)

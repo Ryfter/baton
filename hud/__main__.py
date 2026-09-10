@@ -6,13 +6,15 @@ import os
 
 import uvicorn
 
+from hud.server import warn_if_unauthed_lan
+
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="hud", description="Baton HUD prototype")
     parser.add_argument(
         "--host",
-        default=os.environ.get("HUD_HOST", "0.0.0.0"),
-        help="bind host (env HUD_HOST, default 0.0.0.0)",
+        default=os.environ.get("HUD_HOST", "127.0.0.1"),
+        help="bind host (env HUD_HOST, default 127.0.0.1; use 0.0.0.0 for LAN)",
     )
     parser.add_argument(
         "--port",
@@ -21,6 +23,8 @@ def main(argv: list[str] | None = None) -> None:
         help="bind port (env HUD_PORT, default 8765)",
     )
     args = parser.parse_args(argv)
+    os.environ["HUD_HOST"] = args.host
+    warn_if_unauthed_lan(args.host)
     uvicorn.run("hud.server:app", host=args.host, port=args.port)
 
 

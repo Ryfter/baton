@@ -89,7 +89,7 @@ def test_v_deck_serves_v_bogus_404(client):
     r = client.get("/v/deck")
     assert r.status_code == 200
     assert "text/html" in r.headers.get("content-type", "")
-    assert "EventSource('/stream?replay=200')" in r.text
+    assert "EventSource('/stream?replay=200'" in r.text
     r404 = client.get("/v/bogus")
     assert r404.status_code == 404
 

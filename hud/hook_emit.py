@@ -37,10 +37,14 @@ def _ingest_url() -> str:
 def _post(envelope: dict) -> None:
     url = _ingest_url()
     body = json.dumps(envelope).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("HUD_TOKEN")
+    if token:
+        headers["X-HUD-Token"] = token
     req = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
 
