@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import html
 import json
 import logging
 import os
@@ -310,8 +311,8 @@ def _chooser_html(names: list[str], token: str = "") -> str:
   <meta charset="utf-8">
   <title>HUD — choose a view</title>
   <script>
+    var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
     (function () {
-      var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
       var q = new URLSearchParams(location.search);
       var t = q.get("theme");
       if (t && ALLOWED.indexOf(t) >= 0) localStorage.setItem("hud-theme", t);
@@ -422,6 +423,7 @@ def _chooser_html(names: list[str], token: str = "") -> str:
       var link = document.getElementById("hud-theme");
       var q = new URLSearchParams(location.search).get("theme");
       var t = q || localStorage.getItem("hud-theme") || "dark";
+      if (ALLOWED.indexOf(t) < 0) t = "dark";
       pick.value = t;
       if (link) link.href = "/themes/" + t + ".css";
       pick.addEventListener("change", function () {
@@ -454,7 +456,7 @@ def _chooser_html(names: list[str], token: str = "") -> str:
 """ % "\n".join(cards)
 
 
-app = FastAPI(title="hud", docs_url=None, redoc_url=None)
+app = FastAPI(title="hud", docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=list(allowed_hosts()) + ["*.local"],
@@ -484,7 +486,8 @@ async def ingest(request: Request) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=str(exc) or "invalid event") from exc
+        logger.warning("ingest rejected: %s", exc)
+        raise HTTPException(status_code=422, detail="invalid event") from exc
     await _broadcast(event)
     return {"ok": True, "id": event_id, "seq": event["seq"]}
 
@@ -624,13 +627,22 @@ async def healthz() -> dict[str, Any]:
 def _versions_index_html(rows: list[dict[str, Any]]) -> str:
     items = []
     for r in rows:
+        vid = html.escape(str(r["id"]))
         links = " · ".join(
-            '<a href="/%s/v/%s">%s</a>' % (r["id"], lay, lay) for lay in r["layouts"]
+            '<a href="/%s/v/%s">%s</a>'
+            % (vid, html.escape(str(lay)), html.escape(str(lay)))
+            for lay in r["layouts"]
         )
         items.append(
             '<li><b>%s</b> <span class="d">%s</span><br><span class="n">%s</span>'
             '<br><a href="/%s/">chooser</a> — %s</li>'
-            % (r.get("label", r["id"]), r.get("date", ""), r.get("note", ""), r["id"], links)
+            % (
+                html.escape(str(r.get("label", r["id"]))),
+                html.escape(str(r.get("date", "") or "")),
+                html.escape(str(r.get("note", "") or "")),
+                html.escape(str(r["id"])),
+                links,
+            )
         )
     return (
         "<!doctype html><meta charset=utf-8><title>HUD — versions</title>"

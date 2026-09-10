@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import socket
 import sys
 import threading
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 # `python3 hud/hook_emit.py` puts this file's dir on sys.path[0], not the repo root.
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -26,12 +28,33 @@ def _debug(msg: object) -> None:
             pass
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
 def _ingest_url() -> str:
     override = os.environ.get("HUD_INGEST_URL")
     if override:
-        return override
+        host = (urlsplit(override).hostname or "").lower()
+        if host in _LOOPBACK_HOSTS:
+            return override
+        _debug("HUD_INGEST_URL host %r is not loopback; ignoring" % (host,))
     port = os.environ.get("HUD_PORT", "8765")
     return "http://127.0.0.1:%s/ingest" % (port,)
+
+
+def _read_stdin() -> str:
+    try:
+        if sys.stdin.isatty():
+            return ""
+    except Exception:
+        pass
+    try:
+        ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+        if not ready:
+            return ""
+    except Exception:
+        pass
+    return sys.stdin.read()
 
 
 def _post(envelope: dict) -> None:
@@ -61,7 +84,7 @@ def _post(envelope: dict) -> None:
 
 def main() -> None:
     try:
-        raw = sys.stdin.read()
+        raw = _read_stdin()
         if raw and raw.strip():
             data = json.loads(raw)
             envelope = normalize_hook(data)
