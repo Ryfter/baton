@@ -28,11 +28,11 @@ _subscribers: set[asyncio.Queue] = set()
 _QUEUE_MAX = 256
 
 CHOOSER_DESCRIPTIONS = {
-    "deck": "Flight-deck swim-lanes — one horizontal strip per session, colour-coded event chips scrolling right.",
-    "board": "Mission board with three bays: Running, Needs You, Stopped. Cards slide between columns on state change.",
-    "cockpit": "Instrument panel: four stat tiles, hand-drawn throughput sparkline, compact reverse-chron feed.",
-    "cards": "Session cards in a vertical stack — deck chip language, status pill, most-recent session on top.",
-    "minimal": "Accessible structured table — tabular time, session, kind, detail. Errors in red only.",
+    "deck": "Flight deck — one swim-lane per session; origin pinned, short verb chips, newest grows right.",
+    "board": "Mission board — Running / Needs You / Stopped. Cards show why they moved.",
+    "cockpit": "Instrument panel — four stats, 60s throughput ribbon, click-to-filter feed.",
+    "cards": "Session cards on a responsive grid — compare sessions as objects, last chips inside each card.",
+    "minimal": "Accessible event table — time, session, kind, detail. Colour only for errors.",
 }
 
 
@@ -204,7 +204,17 @@ def _chooser_html(names: list[str]) -> str:
 <head>
   <meta charset="utf-8">
   <title>HUD — choose a view</title>
-  <link rel="stylesheet" id="hud-theme" href="/themes/dark.css">
+  <script>
+    (function () {
+      var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
+      var q = new URLSearchParams(location.search);
+      var t = q.get("theme");
+      if (t && ALLOWED.indexOf(t) >= 0) localStorage.setItem("hud-theme", t);
+      else t = localStorage.getItem("hud-theme") || "dark";
+      if (ALLOWED.indexOf(t) < 0) t = "dark";
+      document.write('<link rel="stylesheet" id="hud-theme" href="/themes/' + t + '.css">');
+    })();
+  </script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body {
@@ -224,8 +234,9 @@ def _chooser_html(names: list[str]) -> str:
       gap: 16px; flex-wrap: wrap;
     }
     h1 {
-      margin: 0 0 6px; font-size: 11px; letter-spacing: .22em;
-      text-transform: uppercase; color: var(--hud-text-strong, #e6edf3);
+      margin: 0 0 6px; font-size: 18px; font-weight: 650;
+      font-family: var(--hud-font-display, var(--hud-font-sans, sans-serif));
+      color: var(--hud-text-strong, #e6edf3);
     }
     .sub { color: var(--hud-text-muted, #8b949e); font-size: 14px; margin: 0; max-width: 520px; line-height: 1.5; }
     .theme-bar {
@@ -238,6 +249,9 @@ def _chooser_html(names: list[str]) -> str:
       border: 1px solid var(--hud-border, #1c2330);
       border-radius: 4px; font: inherit; font-size: 12px;
       padding: 6px 10px; cursor: pointer;
+    }
+    .theme-bar select:focus-visible, a:focus-visible, button:focus-visible {
+      outline: 2px solid var(--hud-accent, #8ec8ff); outline-offset: 2px;
     }
     main {
       display: flex; flex-direction: column; gap: 14px;
@@ -280,7 +294,7 @@ def _chooser_html(names: list[str]) -> str:
   <header>
     <div class="top-row">
       <div>
-        <h1>Mission Control HUD</h1>
+        <h1>Mission control HUD</h1>
         <p class="sub">Pick a layout for live agent telemetry. Set as default remembers your choice on this machine.</p>
       </div>
       <div class="theme-bar">
@@ -301,12 +315,16 @@ def _chooser_html(names: list[str]) -> str:
     (function () {
       var pick = document.getElementById("theme-pick");
       var link = document.getElementById("hud-theme");
-      var t = localStorage.getItem("hud-theme") || "dark";
+      var q = new URLSearchParams(location.search).get("theme");
+      var t = q || localStorage.getItem("hud-theme") || "dark";
       pick.value = t;
-      link.href = "/themes/" + t + ".css";
+      if (link) link.href = "/themes/" + t + ".css";
       pick.addEventListener("change", function () {
         localStorage.setItem("hud-theme", pick.value);
-        link.href = "/themes/" + pick.value + ".css";
+        if (link) link.href = "/themes/" + pick.value + ".css";
+        var u = new URL(location.href);
+        u.searchParams.set("theme", pick.value);
+        history.replaceState(null, "", u);
       });
     })();
     document.querySelectorAll("button[data-name]").forEach(function (btn) {

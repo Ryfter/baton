@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <title>HUD · deck</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" id="hud-theme" href="/themes/dark.css">
   <script>
     (function () {
       var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
@@ -13,7 +12,7 @@
       if (t && ALLOWED.indexOf(t) >= 0) localStorage.setItem("hud-theme", t);
       else t = localStorage.getItem("hud-theme") || "dark";
       if (ALLOWED.indexOf(t) < 0) t = "dark";
-      document.getElementById("hud-theme").href = "/themes/" + t + ".css";
+      document.write('<link rel="stylesheet" id="hud-theme" href="/themes/' + t + '.css">');
     })();
   </script>
   <style>
@@ -31,17 +30,13 @@
       padding: var(--hud-space-3) var(--hud-space-4);
       border-bottom: 1px solid var(--hud-header-border);
       background: var(--hud-header-bg);
-      backdrop-filter: blur(8px);
       position: sticky; top: 0; z-index: 10;
     }
-    .hud-brand {
-      display: flex; flex-direction: column; gap: 2px;
-    }
     .hud-title {
-      letter-spacing: .18em; font-weight: 700; font-size: 11px;
-      text-transform: uppercase; color: var(--hud-text-strong);
+      font-family: var(--hud-font-display, var(--hud-font-sans));
+      font-weight: 650; font-size: 15px;
+      color: var(--hud-text-strong);
     }
-    .hud-subtitle { font-size: 10px; color: var(--hud-text-faint); letter-spacing: .06em; }
     .hud-dot {
       width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
       background: var(--hud-recon); transition: background .2s, box-shadow .2s;
@@ -59,25 +54,28 @@
     .hud-link {
       color: var(--hud-link); text-decoration: none; font-size: 12px;
       border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
-      padding: 4px 10px; transition: border-color .15s;
+      padding: 4px 10px;
     }
-    .hud-link:hover { border-color: var(--hud-accent); }
     .hud-theme {
       background: var(--hud-surface); color: var(--hud-text);
       border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
       font: inherit; font-size: 11px; padding: 4px 8px; cursor: pointer;
     }
+    .hud-theme:focus-visible, .hud-link:focus-visible {
+      outline: 2px solid var(--hud-accent); outline-offset: 2px;
+    }
     .lanes {
-      display: flex; flex-direction: column; gap: var(--hud-space-2);
+      display: flex; flex-direction: column; gap: var(--lane-gap, var(--hud-space-2));
       padding: var(--hud-space-3) var(--hud-space-3) 48px;
     }
     .lane {
-      display: grid; grid-template-columns: 148px 1fr; gap: var(--hud-space-2);
+      display: grid; grid-template-columns: minmax(140px, 220px) 1fr;
+      gap: var(--hud-space-2);
       background: var(--hud-surface);
       border: 1px solid var(--hud-border);
       border-left: 3px solid var(--hud-accent-dim);
       border-radius: var(--hud-radius-md);
-      padding: var(--hud-space-2) var(--hud-space-3);
+      padding: var(--lane-pad-y, var(--hud-space-2)) var(--lane-pad-x, var(--hud-space-3));
       min-height: 56px;
       animation: lane-in .32s cubic-bezier(.22, 1, .36, 1);
       transition: opacity .45s, border-left-color .3s;
@@ -95,43 +93,57 @@
     }
     .lane-meta {
       display: block; margin-top: 4px; font-size: 10px;
-      color: var(--hud-text-faint); letter-spacing: .04em;
+      color: var(--hud-text-faint);
     }
+    .strip-wrap {
+      display: flex; align-items: center; gap: 6px; min-width: 0;
+    }
+    .pin-slot { flex: 0 0 auto; display: flex; gap: 6px; align-items: center; }
+    .pin-slot:empty { display: none; }
     .strip {
-      display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px;
-      scrollbar-width: thin; scrollbar-color: var(--hud-border) transparent;
+      display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px 10px;
+      min-width: 0; flex: 1;
+      scrollbar-width: auto;
+      scrollbar-color: var(--strip-thumb, var(--hud-border-strong)) var(--strip-track, var(--hud-surface-2));
+    }
+    .strip-wrap.scrolled .strip {
+      -webkit-mask-image: linear-gradient(to right, transparent, #000 24px);
+      mask-image: linear-gradient(to right, transparent, #000 24px);
+    }
+    .strip::-webkit-scrollbar { height: 8px; }
+    .strip::-webkit-scrollbar-track { background: var(--strip-track, var(--hud-surface-2)); }
+    .strip::-webkit-scrollbar-thumb {
+      background: var(--strip-thumb, var(--hud-border-strong));
+      border-radius: 4px;
     }
     .chip {
-      flex: 0 0 auto; border-radius: var(--hud-radius-sm);
-      padding: 5px 9px; font-size: 11px; white-space: nowrap;
-      background: var(--chip-default-bg); color: var(--chip-default-fg);
-      border: 1px solid transparent;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+      flex: 0 0 auto; border-radius: var(--chip-radius, var(--hud-radius-sm));
+      padding: var(--chip-pad-y, 5px) var(--chip-pad-x, 9px);
+      font-size: var(--chip-font, 11px); white-space: nowrap;
+      background: var(--chip-meta-bg); color: var(--chip-meta-fg);
+      border: 1px solid var(--chip-border, transparent);
+      box-shadow: var(--chip-shadow, none);
     }
-    .chip.session_start { background: var(--chip-session-start-bg); color: var(--chip-session-start-fg); }
-    .chip.user_prompt   { background: var(--chip-user-prompt-bg); color: var(--chip-user-prompt-fg); }
-    .chip.pre_tool_use  { background: var(--chip-pre-tool-bg); color: var(--chip-pre-tool-fg); }
-    .chip.post_tool_use { background: var(--chip-post-tool-bg); color: var(--chip-post-tool-fg); }
-    .chip.error         { background: var(--chip-error-bg); color: var(--chip-error-fg); border-color: var(--hud-error); }
-    .chip.notification  { background: var(--chip-notification-bg); color: var(--chip-notification-fg); }
-    .chip.stop          { background: var(--chip-stop-bg); color: var(--chip-stop-fg); }
-    .chip.subagent_stop { background: var(--chip-subagent-bg); color: var(--chip-subagent-fg); }
-    .chip.pre_compact   { background: var(--chip-compact-bg); color: var(--chip-compact-fg); }
+    .chip.tool { background: var(--chip-tool-bg); color: var(--chip-tool-fg); }
+    .chip.tool-fail {
+      background: var(--chip-tool-fail-bg); color: var(--chip-tool-fail-fg);
+      border-color: var(--chip-fail-border, var(--hud-error));
+    }
+    .chip.wait { background: var(--chip-wait-bg); color: var(--chip-wait-fg); }
+    .chip.end { background: var(--chip-end-bg); color: var(--chip-end-fg); }
+    .chip.meta { background: var(--chip-meta-bg); color: var(--chip-meta-fg); }
     .empty-state {
       margin: var(--hud-space-5); padding: var(--hud-space-5);
       text-align: center; color: var(--hud-text-faint);
       border: 1px dashed var(--hud-border); border-radius: var(--hud-radius-lg);
-      letter-spacing: .08em; font-size: 12px;
+      font-size: 12px;
     }
   </style>
 </head>
 <body>
   <header class="hud-header">
-    <span id="dot" class="hud-dot" title="connection"></span>
-    <div class="hud-brand">
-      <span class="hud-title">Flight Deck</span>
-      <span class="hud-subtitle">session swim-lanes</span>
-    </div>
+    <span id="dot" class="hud-dot" title="connection" aria-label="connection"></span>
+    <span class="hud-title">Flight deck</span>
     <span class="hud-meta">events <strong id="count">0</strong></span>
     <span class="hud-meta">lanes <strong id="lane-count">0</strong></span>
     <span class="hud-spacer"></span>
@@ -149,6 +161,7 @@
   <script>
     var MAX = 500;
     var IDLE_MS = 5 * 60 * 1000;
+    var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
     var total = 0;
     var sessions = {};
     var order = [];
@@ -162,31 +175,44 @@
 
     function shortId(id) {
       id = String(id || "");
-      return id.length > 10 ? id.slice(0, 8) + "…" : id;
+      if (id.length <= 14) return id;
+      return "…" + id.slice(-13);
     }
-    function chipClass(ev) {
+    function chipFamily(ev) {
       var kind = ev.kind || "";
-      var payload = ev.payload || {};
-      if (kind === "post_tool_use" && payload.ok === false) return "error";
-      if (kind.indexOf("error") !== -1) return "error";
-      return kind;
+      if (kind === "post_tool_use" && ev.payload && ev.payload.ok === false) return "tool-fail";
+      if (kind === "pre_tool_use" || kind === "post_tool_use") return "tool";
+      if (kind === "notification") return "wait";
+      if (kind === "stop" || kind === "subagent_stop") return "end";
+      return "meta";
+    }
+    function truncate(s, n) {
+      s = String(s || "").replace(/\s+/g, " ").trim();
+      if (s.length <= n) return s;
+      return s.slice(0, n - 1) + "…";
     }
     function chipText(ev) {
-      var tool = (ev.payload && ev.payload.tool_name) || "";
-      return tool ? ev.kind + " · " + tool : ev.kind;
+      var p = ev.payload || {};
+      var kind = ev.kind || "";
+      var tool = p.tool_name || "";
+      if (kind === "session_start") return "start";
+      if (kind === "user_prompt") return truncate(p.prompt || "", 22) || "prompt";
+      if (kind === "pre_tool_use") return tool || "tool";
+      if (kind === "post_tool_use") return (tool || "tool") + (p.ok === false ? " ✗" : " ✓");
+      if (kind === "notification") return "notify";
+      if (kind === "stop") return "stop";
+      if (kind === "subagent_stop") return "sub ✓";
+      if (kind === "pre_compact") return "compact";
+      return kind;
     }
     function chipTitle(ev) {
       var p = ev.payload || {};
-      if (p.error) return String(p.error);
-      if (p.tool_input_summary) return String(p.tool_input_summary);
-      if (p.prompt) return String(p.prompt);
-      if (p.message) return String(p.message);
-      if (p.cwd) return String(p.cwd);
-      if (p.trigger) return String(p.trigger);
-      if (p.agent) return String(p.agent);
-      if (p.source) return String(p.source);
-      if (p.tool_name) return String(p.tool_name);
-      return ev.kind || "";
+      var kind = ev.kind || "";
+      var tool = p.tool_name || "";
+      var head = tool ? kind + " · " + tool : kind;
+      var extra = p.error || p.tool_input_summary || p.prompt || p.message || p.cwd || p.trigger || p.agent || p.source || "";
+      if (extra && String(extra) !== tool) return head + " — " + extra;
+      return head;
     }
     function parseTs(ev) {
       if (!ev.ts) return Date.now();
@@ -198,6 +224,31 @@
       if (emptyEl) emptyEl.hidden = n > 0;
       laneCountEl.textContent = String(n);
     }
+    function updatePin(lane) {
+      var slot = lane.pin;
+      slot.textContent = "";
+      if (lane.origin) {
+        var origin = document.createElement("span");
+        origin.className = "chip " + lane.origin.family;
+        origin.textContent = lane.origin.text;
+        origin.title = lane.origin.title;
+        slot.appendChild(origin);
+      } else if (lane.hidden > 0) {
+        var older = document.createElement("span");
+        older.className = "chip meta";
+        older.textContent = "+" + lane.hidden + " older";
+        older.title = lane.hidden + " earlier events not shown";
+        slot.appendChild(older);
+      }
+    }
+    function bindStripFade(strip, wrap) {
+      function sync() {
+        if (strip.scrollLeft > 4) wrap.classList.add("scrolled");
+        else wrap.classList.remove("scrolled");
+      }
+      strip.addEventListener("scroll", sync, { passive: true });
+      return sync;
+    }
     function ensureLane(sid, ev) {
       if (!sessions[sid]) {
         var lane = document.createElement("div");
@@ -206,12 +257,23 @@
         label.className = "lane-label";
         label.innerHTML = '<div class="lane-id"></div><small class="lane-meta"></small>';
         label.querySelector(".lane-id").textContent = shortId(sid);
+        label.querySelector(".lane-id").title = sid;
         label.querySelector(".lane-meta").textContent = ev.machine || "—";
+        var wrap = document.createElement("div");
+        wrap.className = "strip-wrap";
+        var pin = document.createElement("div");
+        pin.className = "pin-slot";
         var strip = document.createElement("div");
         strip.className = "strip";
+        wrap.appendChild(pin);
+        wrap.appendChild(strip);
         lane.appendChild(label);
-        lane.appendChild(strip);
-        sessions[sid] = { el: lane, strip: strip, last: Date.now(), chips: [] };
+        lane.appendChild(wrap);
+        sessions[sid] = {
+          el: lane, strip: strip, wrap: wrap, pin: pin,
+          last: Date.now(), chips: [], hidden: 0, origin: null,
+          syncFade: bindStripFade(strip, wrap)
+        };
         order.unshift(sid);
         lanesEl.insertBefore(lane, lanesEl.firstChild);
         syncEmpty();
@@ -233,7 +295,9 @@
           if (s.chips.length) {
             var node = s.chips.shift();
             if (node.parentNode) node.parentNode.removeChild(node);
+            s.hidden += 1;
             chipCount--;
+            updatePin(s);
             break;
           }
         }
@@ -246,14 +310,24 @@
       lane.el.classList.remove("idle");
       lane.el.classList.add("active");
       bumpLane(sid);
-      var chip = document.createElement("span");
-      chip.className = "chip " + chipClass(ev);
-      chip.textContent = chipText(ev);
-      chip.title = chipTitle(ev);
-      lane.strip.appendChild(chip);
-      lane.chips.push(chip);
-      chipCount++;
-      lane.strip.scrollLeft = lane.strip.scrollWidth;
+      if (ev.kind === "session_start" && !lane.origin) {
+        lane.origin = {
+          text: chipText(ev),
+          title: chipTitle(ev),
+          family: chipFamily(ev)
+        };
+        updatePin(lane);
+      } else {
+        var chip = document.createElement("span");
+        chip.className = "chip " + chipFamily(ev);
+        chip.textContent = chipText(ev);
+        chip.title = chipTitle(ev);
+        lane.strip.appendChild(chip);
+        lane.chips.push(chip);
+        chipCount++;
+        lane.strip.scrollLeft = lane.strip.scrollWidth;
+        if (lane.syncFade) lane.syncFade();
+      }
       total++;
       countEl.textContent = String(total);
       trimOldest();
@@ -272,11 +346,20 @@
       });
     }, 10000);
 
-    themePick.value = localStorage.getItem("hud-theme") || "dark";
-    themePick.addEventListener("change", function () {
-      localStorage.setItem("hud-theme", themePick.value);
-      document.getElementById("hud-theme").href = "/themes/" + themePick.value + ".css";
-    });
+    function currentTheme() {
+      var q = new URLSearchParams(location.search).get("theme");
+      var t = q || localStorage.getItem("hud-theme") || "dark";
+      return ALLOWED.indexOf(t) >= 0 ? t : "dark";
+    }
+    function applyTheme(t) {
+      localStorage.setItem("hud-theme", t);
+      document.getElementById("hud-theme").href = "/themes/" + t + ".css";
+      var u = new URL(location.href);
+      u.searchParams.set("theme", t);
+      history.replaceState(null, "", u);
+    }
+    themePick.value = currentTheme();
+    themePick.addEventListener("change", function () { applyTheme(themePick.value); });
 
     var es = new EventSource('/stream?replay=200');
     es.addEventListener("open", function () { dot.className = "hud-dot live"; });
