@@ -43,3 +43,39 @@ def test_token_required_on_loopback_when_set(client, monkeypatch):
     monkeypatch.setenv("HUD_TOKEN", "secret")
     assert client.get("/healthz").status_code == 401
     assert client.get("/healthz", headers={"X-HUD-Token": "secret"}).status_code == 200
+
+
+def test_non_json_content_type_415(client):
+    body = b'{"session_id":"s","kind":"stop","payload":{}}'
+    r = client.post("/ingest", content=body, headers={"Content-Type": "text/plain"})
+    assert r.status_code == 415
+    r = client.post(
+        "/config",
+        content=b'{"default_frontend":"deck"}',
+        headers={"Content-Type": "text/plain;charset=UTF-8"},
+    )
+    assert r.status_code == 415
+
+
+def test_cross_origin_write_403(client):
+    r = client.post(
+        "/ingest",
+        json={"session_id": "s", "kind": "stop", "payload": {}},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert r.status_code == 403
+    r = client.post(
+        "/config",
+        json={"default_frontend": "deck"},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert r.status_code == 403
+
+
+def test_same_host_origin_write_allowed(client):
+    r = client.post(
+        "/ingest",
+        json={"session_id": "s", "kind": "stop", "payload": {}},
+        headers={"Origin": "http://droid:8765"},
+    )
+    assert r.status_code == 200

@@ -36,7 +36,8 @@ Pass the token:
 
 CLI: `python -m hud --host 0.0.0.0 --port 8765`
 Env: `HUD_HOST` (default `127.0.0.1`), `HUD_PORT` (default `8765`), `HUD_TOKEN`
-(required when `HUD_HOST` is not loopback).
+(required when `HUD_HOST` is not loopback). Extra `Host` names (beyond
+`droid` / `droid.local` / localhost) go in `HUD_ALLOWED_HOSTS` (comma-separated).
 
 Demo traffic without a live Claude session:
 

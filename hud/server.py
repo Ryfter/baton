@@ -13,10 +13,11 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from hud import config as hud_config
 from hud import store
@@ -55,6 +56,43 @@ def _with_t(path: str, token: str) -> str:
         return path
     sep = "&" if "?" in path else "?"
     return path + sep + "t=" + quote(token, safe="")
+
+
+def allowed_hosts() -> set[str]:
+    hosts = {
+        "testserver",
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "[::1]",
+        "droid",
+        "droid.local",
+    }
+    extra = os.environ.get("HUD_ALLOWED_HOSTS", "")
+    for part in extra.split(","):
+        h = part.strip().lower()
+        if h:
+            hosts.add(h)
+    try:
+        hn = socket.gethostname().strip().lower()
+        if hn:
+            hosts.add(hn)
+            if "." not in hn:
+                hosts.add(hn + ".local")
+    except Exception:
+        pass
+    return hosts
+
+
+def _require_json_write(request: Request) -> None:
+    ctype = (request.headers.get("content-type") or "").lower()
+    if not ctype.startswith("application/json"):
+        raise HTTPException(status_code=415, detail="application/json required")
+    origin = request.headers.get("origin")
+    if origin:
+        host = urlsplit(origin).hostname
+        if not host or host.lower() not in allowed_hosts():
+            raise HTTPException(status_code=403, detail="cross-origin write refused")
 
 FRONTENDS_DIR = Path(__file__).resolve().parent / "frontends"
 VERSIONS_DIR = Path(__file__).resolve().parent / "versions"
@@ -389,6 +427,11 @@ def _chooser_html(names: list[str], token: str = "") -> str:
 
 
 app = FastAPI(title="hud", docs_url=None, redoc_url=None)
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=list(allowed_hosts()) + ["*.local"],
+    www_redirect=False,
+)
 
 
 @app.middleware("http")
@@ -404,6 +447,7 @@ async def _auth(request: Request, call_next):
 
 @app.post("/ingest")
 async def ingest(request: Request) -> dict[str, Any]:
+    _require_json_write(request)
     try:
         body = await request.json()
     except Exception:
@@ -524,6 +568,7 @@ async def theme_css(name: str) -> Any:
 
 @app.post("/config")
 async def post_config(request: Request) -> dict[str, Any]:
+    _require_json_write(request)
     try:
         body = await request.json()
     except Exception:
