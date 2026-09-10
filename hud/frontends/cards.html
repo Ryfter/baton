@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <title>HUD · cards</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" id="hud-theme" href="/themes/dark.css">
   <script>
     (function () {
       var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
@@ -13,7 +12,7 @@
       if (t && ALLOWED.indexOf(t) >= 0) localStorage.setItem("hud-theme", t);
       else t = localStorage.getItem("hud-theme") || "dark";
       if (ALLOWED.indexOf(t) < 0) t = "dark";
-      document.getElementById("hud-theme").href = "/themes/" + t + ".css";
+      document.write('<link rel="stylesheet" id="hud-theme" href="/themes/' + t + '.css">');
     })();
   </script>
   <style>
@@ -30,15 +29,13 @@
       padding: var(--hud-space-3) var(--hud-space-4);
       border-bottom: 1px solid var(--hud-header-border);
       background: var(--hud-header-bg);
-      backdrop-filter: blur(8px);
       position: sticky; top: 0; z-index: 10;
     }
-    .hud-brand { display: flex; flex-direction: column; gap: 2px; }
     .hud-title {
-      letter-spacing: .18em; font-weight: 700; font-size: 11px;
-      text-transform: uppercase; color: var(--hud-text-strong);
+      font-family: var(--hud-font-display, var(--hud-font-sans));
+      font-weight: 650; font-size: 15px;
+      color: var(--hud-text-strong);
     }
-    .hud-subtitle { font-size: 10px; color: var(--hud-text-faint); letter-spacing: .06em; }
     .hud-dot {
       width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
       background: var(--hud-recon);
@@ -63,15 +60,27 @@
       border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
       font: inherit; font-size: 11px; padding: 4px 8px; cursor: pointer;
     }
+    .hud-theme:focus-visible, .hud-link:focus-visible {
+      outline: 2px solid var(--hud-accent); outline-offset: 2px;
+    }
+    .page { padding: var(--hud-space-3) var(--hud-space-4) 48px; }
+    .empty-state {
+      margin: var(--hud-space-5); padding: var(--hud-space-5);
+      text-align: center; color: var(--hud-text-faint);
+      border: 1px dashed var(--hud-border); border-radius: var(--hud-radius-lg);
+    }
     .deck {
-      display: flex; flex-direction: column; gap: var(--hud-space-3);
-      padding: var(--hud-space-3) var(--hud-space-4) 48px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: var(--hud-space-3);
+      align-items: start;
     }
     .card {
       background: var(--hud-surface);
       border: 1px solid var(--hud-border);
       border-radius: var(--hud-radius-md);
       padding: var(--hud-space-3);
+      min-width: 0;
       animation: card-in .3s cubic-bezier(.22, 1, .36, 1);
     }
     @keyframes card-in {
@@ -80,37 +89,40 @@
     }
     .card-head {
       display: flex; align-items: center; gap: var(--hud-space-2);
-      margin-bottom: var(--hud-space-2);
+      margin-bottom: var(--hud-space-2); min-width: 0;
     }
-    .sid { color: var(--hud-link); font-weight: 700; font-size: 14px; }
-    .machine { color: var(--hud-text-faint); font-size: 10px; margin-left: var(--hud-space-2); }
+    .sid {
+      color: var(--hud-link); font-weight: 700; font-size: 13px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .machine { color: var(--hud-text-faint); font-size: 10px; }
     .pill {
-      margin-left: auto;
-      font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
-      padding: 3px 9px; border-radius: 999px; font-weight: 700;
+      margin-left: auto; flex: 0 0 auto;
+      font-size: 10px; padding: 3px 9px; border-radius: 999px; font-weight: 650;
     }
-    .pill.running { background: var(--chip-session-start-bg); color: var(--chip-session-start-fg); }
-    .pill.needs   { background: var(--chip-notification-bg); color: var(--chip-notification-fg); }
-    .pill.stopped { background: var(--chip-stop-bg); color: var(--chip-stop-fg); }
+    .pill.running { background: var(--chip-tool-bg); color: var(--chip-tool-fg); }
+    .pill.needs   { background: var(--chip-wait-bg); color: var(--chip-wait-fg); }
+    .pill.stopped { background: var(--chip-end-bg); color: var(--chip-end-fg); }
     .chips {
       display: flex; flex-wrap: wrap; gap: 6px;
       padding: var(--hud-space-2) 0;
-      min-height: 36px;
     }
     .chip {
-      flex: 0 0 auto; border-radius: var(--hud-radius-sm);
-      padding: 4px 8px; font-size: 11px; white-space: nowrap;
-      background: var(--chip-default-bg); color: var(--chip-default-fg);
+      flex: 0 0 auto; border-radius: var(--chip-radius, var(--hud-radius-sm));
+      padding: var(--chip-pad-y, 4px) var(--chip-pad-x, 8px);
+      font-size: var(--chip-font, 11px); white-space: nowrap;
+      background: var(--chip-meta-bg); color: var(--chip-meta-fg);
+      border: 1px solid var(--chip-border, transparent);
+      box-shadow: var(--chip-shadow, none);
     }
-    .chip.session_start { background: var(--chip-session-start-bg); color: var(--chip-session-start-fg); }
-    .chip.user_prompt   { background: var(--chip-user-prompt-bg); color: var(--chip-user-prompt-fg); }
-    .chip.pre_tool_use  { background: var(--chip-pre-tool-bg); color: var(--chip-pre-tool-fg); }
-    .chip.post_tool_use { background: var(--chip-post-tool-bg); color: var(--chip-post-tool-fg); }
-    .chip.error         { background: var(--chip-error-bg); color: var(--chip-error-fg); }
-    .chip.notification  { background: var(--chip-notification-bg); color: var(--chip-notification-fg); }
-    .chip.stop          { background: var(--chip-stop-bg); color: var(--chip-stop-fg); }
-    .chip.subagent_stop { background: var(--chip-subagent-bg); color: var(--chip-subagent-fg); }
-    .chip.pre_compact   { background: var(--chip-compact-bg); color: var(--chip-compact-fg); }
+    .chip.tool { background: var(--chip-tool-bg); color: var(--chip-tool-fg); }
+    .chip.tool-fail {
+      background: var(--chip-tool-fail-bg); color: var(--chip-tool-fail-fg);
+      border-color: var(--chip-fail-border, var(--hud-error));
+    }
+    .chip.wait { background: var(--chip-wait-bg); color: var(--chip-wait-fg); }
+    .chip.end { background: var(--chip-end-bg); color: var(--chip-end-fg); }
+    .chip.meta { background: var(--chip-meta-bg); color: var(--chip-meta-fg); }
     .foot {
       display: flex; justify-content: space-between; align-items: center;
       border-top: 1px solid var(--hud-border);
@@ -118,20 +130,12 @@
       color: var(--hud-text-faint); font-size: 10px;
       font-variant-numeric: tabular-nums;
     }
-    .empty-state {
-      margin: var(--hud-space-5); padding: var(--hud-space-5);
-      text-align: center; color: var(--hud-text-faint);
-      border: 1px dashed var(--hud-border); border-radius: var(--hud-radius-lg);
-    }
   </style>
 </head>
 <body>
   <header class="hud-header">
-    <span id="dot" class="hud-dot"></span>
-    <div class="hud-brand">
-      <span class="hud-title">Session Cards</span>
-      <span class="hud-subtitle">deck chips · one card per lane</span>
-    </div>
+    <span id="dot" class="hud-dot" aria-label="connection"></span>
+    <span class="hud-title">Session cards</span>
     <span class="hud-meta">events <strong id="count">0</strong></span>
     <span class="hud-meta">sessions <strong id="session-count">0</strong></span>
     <span class="hud-spacer"></span>
@@ -143,12 +147,14 @@
     </select>
     <a class="hud-link" href="/">views</a>
   </header>
-  <div class="deck" id="deck">
+  <div class="page">
     <p class="empty-state" id="empty">Awaiting telemetry…</p>
+    <div class="deck" id="deck"></div>
   </div>
   <script>
     var MAX = 500;
-    var CHIP_CAP = 14;
+    var CHIP_CAP = 12;
+    var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
     var total = 0;
     var chipCount = 0;
     var sessions = {};
@@ -162,31 +168,44 @@
 
     function shortId(id) {
       id = String(id || "");
-      return id.length > 10 ? id.slice(0, 8) + "…" : id;
+      if (id.length <= 14) return id;
+      return "…" + id.slice(-13);
     }
-    function chipClass(ev) {
+    function chipFamily(ev) {
       var kind = ev.kind || "";
-      var payload = ev.payload || {};
-      if (kind === "post_tool_use" && payload.ok === false) return "error";
-      if (kind.indexOf("error") !== -1) return "error";
-      return kind;
+      if (kind === "post_tool_use" && ev.payload && ev.payload.ok === false) return "tool-fail";
+      if (kind === "pre_tool_use" || kind === "post_tool_use") return "tool";
+      if (kind === "notification") return "wait";
+      if (kind === "stop" || kind === "subagent_stop") return "end";
+      return "meta";
+    }
+    function truncate(s, n) {
+      s = String(s || "").replace(/\s+/g, " ").trim();
+      if (s.length <= n) return s;
+      return s.slice(0, n - 1) + "…";
     }
     function chipText(ev) {
-      var tool = (ev.payload && ev.payload.tool_name) || "";
-      return tool ? ev.kind + " · " + tool : ev.kind;
+      var p = ev.payload || {};
+      var kind = ev.kind || "";
+      var tool = p.tool_name || "";
+      if (kind === "session_start") return "start";
+      if (kind === "user_prompt") return truncate(p.prompt || "", 22) || "prompt";
+      if (kind === "pre_tool_use") return tool || "tool";
+      if (kind === "post_tool_use") return (tool || "tool") + (p.ok === false ? " ✗" : " ✓");
+      if (kind === "notification") return "notify";
+      if (kind === "stop") return "stop";
+      if (kind === "subagent_stop") return "sub ✓";
+      if (kind === "pre_compact") return "compact";
+      return kind;
     }
     function chipTitle(ev) {
       var p = ev.payload || {};
-      if (p.error) return String(p.error);
-      if (p.tool_input_summary) return String(p.tool_input_summary);
-      if (p.prompt) return String(p.prompt);
-      if (p.message) return String(p.message);
-      if (p.cwd) return String(p.cwd);
-      if (p.trigger) return String(p.trigger);
-      if (p.agent) return String(p.agent);
-      if (p.source) return String(p.source);
-      if (p.tool_name) return String(p.tool_name);
-      return ev.kind || "";
+      var kind = ev.kind || "";
+      var tool = p.tool_name || "";
+      var head = tool ? kind + " · " + tool : kind;
+      var extra = p.error || p.tool_input_summary || p.prompt || p.message || p.cwd || p.trigger || p.agent || p.source || "";
+      if (extra && String(extra) !== tool) return head + " — " + extra;
+      return head;
     }
     function statusOf(kind) {
       if (kind === "stop") return "stopped";
@@ -218,7 +237,7 @@
     }
     function makeChip(ev) {
       var chip = document.createElement("span");
-      chip.className = "chip " + chipClass(ev);
+      chip.className = "chip " + chipFamily(ev);
       chip.textContent = chipText(ev);
       chip.title = chipTitle(ev);
       return chip;
@@ -231,7 +250,9 @@
           '<div class="card-head"><span class="sid"></span><span class="machine"></span><span class="pill running">running</span></div>' +
           '<div class="chips"></div>' +
           '<div class="foot"><span class="n"></span><span class="age"></span></div>';
-        card.querySelector(".sid").textContent = shortId(sid);
+        var sidEl = card.querySelector(".sid");
+        sidEl.textContent = shortId(sid);
+        sidEl.title = sid;
         card.querySelector(".machine").textContent = ev.machine || "";
         sessions[sid] = {
           el: card,
@@ -283,8 +304,7 @@
       st.pill.className = "pill " + pillClass(status);
       st.pill.textContent = pillLabel(status);
       st.events.push(ev);
-      var chip = makeChip(ev);
-      st.chipsEl.appendChild(chip);
+      st.chipsEl.appendChild(makeChip(ev));
       chipCount++;
       while (st.events.length > CHIP_CAP) {
         st.events.shift();
@@ -304,11 +324,20 @@
       });
     }, 5000);
 
-    themePick.value = localStorage.getItem("hud-theme") || "dark";
-    themePick.addEventListener("change", function () {
-      localStorage.setItem("hud-theme", themePick.value);
-      document.getElementById("hud-theme").href = "/themes/" + themePick.value + ".css";
-    });
+    function currentTheme() {
+      var q = new URLSearchParams(location.search).get("theme");
+      var t = q || localStorage.getItem("hud-theme") || "dark";
+      return ALLOWED.indexOf(t) >= 0 ? t : "dark";
+    }
+    function applyTheme(t) {
+      localStorage.setItem("hud-theme", t);
+      document.getElementById("hud-theme").href = "/themes/" + t + ".css";
+      var u = new URL(location.href);
+      u.searchParams.set("theme", t);
+      history.replaceState(null, "", u);
+    }
+    themePick.value = currentTheme();
+    themePick.addEventListener("change", function () { applyTheme(themePick.value); });
 
     var es = new EventSource('/stream?replay=200');
     es.addEventListener("open", function () { dot.className = "hud-dot live"; });

@@ -4,16 +4,15 @@
   <meta charset="utf-8">
   <title>HUD · minimal</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" id="hud-theme" href="/themes/dark.css">
   <script>
     (function () {
       var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
       var q = new URLSearchParams(location.search);
       var t = q.get("theme");
       if (t && ALLOWED.indexOf(t) >= 0) localStorage.setItem("hud-theme", t);
-      else t = localStorage.getItem("hud-theme") || "sandstone";
-      if (ALLOWED.indexOf(t) < 0) t = "sandstone";
-      document.getElementById("hud-theme").href = "/themes/" + t + ".css";
+      else t = localStorage.getItem("hud-theme") || "dark";
+      if (ALLOWED.indexOf(t) < 0) t = "dark";
+      document.write('<link rel="stylesheet" id="hud-theme" href="/themes/' + t + '.css">');
     })();
   </script>
   <style>
@@ -32,12 +31,11 @@
       background: var(--hud-header-bg);
       position: sticky; top: 0; z-index: 10;
     }
-    .hud-brand { display: flex; flex-direction: column; gap: 2px; }
     .hud-title {
-      letter-spacing: .14em; font-weight: 700; font-size: 11px;
-      text-transform: uppercase; color: var(--hud-text-strong);
+      font-family: var(--hud-font-display, var(--hud-font-sans));
+      font-weight: 650; font-size: 15px;
+      color: var(--hud-text-strong);
     }
-    .hud-subtitle { font-size: 10px; color: var(--hud-text-faint); }
     .hud-dot {
       width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto;
       background: var(--hud-recon);
@@ -49,7 +47,7 @@
     .hud-meta strong { color: var(--hud-text-strong); }
     .hud-spacer { margin-left: auto; }
     .hud-link {
-      color: var(--hud-link); text-decoration: none; font-size: 12px;
+      color: inherit; text-decoration: none; font-size: 12px;
       border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
       padding: 4px 10px;
     }
@@ -57,6 +55,9 @@
       background: var(--hud-surface); color: var(--hud-text);
       border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
       font: inherit; font-size: 11px; padding: 4px 8px; cursor: pointer;
+    }
+    .hud-theme:focus-visible, .hud-link:focus-visible, table:focus-visible {
+      outline: 2px solid currentColor; outline-offset: 2px;
     }
     .table-wrap {
       margin: var(--hud-space-4);
@@ -76,13 +77,10 @@
       border-bottom: 1px solid var(--hud-border);
     }
     th {
-      font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
-      color: var(--hud-text-muted); font-weight: 600;
+      font-size: 12px; color: var(--hud-text-muted); font-weight: 600;
       background: var(--hud-surface-2);
     }
-    tbody tr { transition: background .15s; }
     tbody tr:nth-child(even) { background: var(--hud-surface-2); }
-    tbody tr:hover { background: var(--hud-surface-3); }
     td.time {
       font-family: var(--hud-font-mono); font-size: 12px;
       font-variant-numeric: tabular-nums; color: var(--hud-text-faint);
@@ -90,7 +88,7 @@
     }
     td.session {
       font-family: var(--hud-font-mono); font-size: 12px;
-      color: var(--hud-link);
+      color: var(--hud-text-strong);
     }
     td.kind { font-size: 12px; }
     td.detail {
@@ -99,15 +97,19 @@
     }
     tr.err td { color: var(--hud-error); }
     tr.err td.session { color: var(--hud-error); }
+    .visually-hidden {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation: none !important; }
+    }
   </style>
 </head>
 <body>
   <header class="hud-header">
     <span id="dot" class="hud-dot" aria-label="connection"></span>
-    <div class="hud-brand">
-      <span class="hud-title">Minimal</span>
-      <span class="hud-subtitle">accessible event log</span>
-    </div>
+    <span class="hud-title">Minimal</span>
     <span class="hud-meta">events <strong id="count">0</strong></span>
     <span class="hud-spacer"></span>
     <select id="theme-pick" class="hud-theme" aria-label="Theme">
@@ -118,19 +120,22 @@
     </select>
     <a class="hud-link" href="/">views</a>
   </header>
+  <div id="live" class="visually-hidden" aria-live="polite"></div>
   <div class="table-wrap">
-    <table>
+    <table tabindex="0">
       <caption>Live agent events — newest first</caption>
       <thead>
         <tr><th scope="col">time</th><th scope="col">session</th><th scope="col">kind</th><th scope="col">detail</th></tr>
       </thead>
-      <tbody id="body" aria-live="polite"></tbody>
+      <tbody id="body"></tbody>
     </table>
   </div>
   <script>
     var MAX = 500;
+    var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
     var total = 0;
     var tbody = document.getElementById("body");
+    var live = document.getElementById("live");
     var countEl = document.getElementById("count");
     var dot = document.getElementById("dot");
     var themePick = document.getElementById("theme-pick");
@@ -138,16 +143,36 @@
     function isError(ev) {
       return ev.kind === "post_tool_use" && ev.payload && ev.payload.ok === false;
     }
+    function truncate(s, n) {
+      s = String(s || "").replace(/\s+/g, " ").trim();
+      if (s.length <= n) return s;
+      return s.slice(0, n - 1) + "…";
+    }
+    function chipText(ev) {
+      var p = ev.payload || {};
+      var kind = ev.kind || "";
+      var tool = p.tool_name || "";
+      if (kind === "session_start") return "start";
+      if (kind === "user_prompt") return truncate(p.prompt || "", 22) || "prompt";
+      if (kind === "pre_tool_use") return tool || "tool";
+      if (kind === "post_tool_use") return (tool || "tool") + (p.ok === false ? " ✗" : " ✓");
+      if (kind === "notification") return "notify";
+      if (kind === "stop") return "stop";
+      if (kind === "subagent_stop") return "sub ✓";
+      if (kind === "pre_compact") return "compact";
+      return kind;
+    }
     function detail(ev) {
       var p = ev.payload || {};
       if (p.error) return String(p.tool_name || "") + " " + p.error;
-      if (p.tool_name) return p.tool_name;
       if (p.message) return p.message;
+      if (p.tool_input_summary) return p.tool_input_summary;
       if (p.prompt) return p.prompt;
       if (p.trigger) return String(p.trigger);
       if (p.source) return String(p.source);
       if (p.cwd) return p.cwd;
       if (p.agent) return p.agent;
+      if (p.tool_name) return p.tool_name;
       return "";
     }
     function clock(ts) {
@@ -158,7 +183,8 @@
     }
     function shortId(id) {
       id = String(id || "");
-      return id.length > 12 ? id.slice(0, 10) + "…" : id;
+      if (id.length <= 14) return id;
+      return "…" + id.slice(-13);
     }
     function onEvent(ev) {
       var tr = document.createElement("tr");
@@ -166,26 +192,37 @@
       var cells = [
         { cls: "time", text: clock(ev.ts) },
         { cls: "session", text: shortId(ev.session_id) },
-        { cls: "kind", text: ev.kind || "" },
+        { cls: "kind", text: chipText(ev) },
         { cls: "detail", text: detail(ev) }
       ];
       for (var i = 0; i < cells.length; i++) {
         var td = document.createElement("td");
         td.className = cells[i].cls;
         td.textContent = cells[i].text;
+        if (cells[i].cls === "session") td.title = ev.session_id || "";
         tr.appendChild(td);
       }
       tbody.insertBefore(tr, tbody.firstChild);
       while (tbody.rows.length > MAX) tbody.deleteRow(-1);
       total++;
       countEl.textContent = String(total);
+      live.textContent = clock(ev.ts) + " " + shortId(ev.session_id) + " " + chipText(ev) + " " + detail(ev);
     }
 
-    themePick.value = localStorage.getItem("hud-theme") || "sandstone";
-    themePick.addEventListener("change", function () {
-      localStorage.setItem("hud-theme", themePick.value);
-      document.getElementById("hud-theme").href = "/themes/" + themePick.value + ".css";
-    });
+    function currentTheme() {
+      var q = new URLSearchParams(location.search).get("theme");
+      var t = q || localStorage.getItem("hud-theme") || "dark";
+      return ALLOWED.indexOf(t) >= 0 ? t : "dark";
+    }
+    function applyTheme(t) {
+      localStorage.setItem("hud-theme", t);
+      document.getElementById("hud-theme").href = "/themes/" + t + ".css";
+      var u = new URL(location.href);
+      u.searchParams.set("theme", t);
+      history.replaceState(null, "", u);
+    }
+    themePick.value = currentTheme();
+    themePick.addEventListener("change", function () { applyTheme(themePick.value); });
 
     var es = new EventSource('/stream?replay=200');
     es.addEventListener("open", function () { dot.className = "hud-dot live"; });

@@ -1,4 +1,4 @@
-/* HUD theme: dark — flight-deck default (#0b0e14) */
+/* HUD theme: dark — dense mono night deck (default) */
 :root {
   color-scheme: dark;
 
@@ -28,30 +28,28 @@
   --hud-stopped: #9aa3ad;
   --hud-error: #ff6b6b;
 
-  --chip-default-bg: #1a1f28;
-  --chip-default-fg: #c9d1d9;
-  --chip-session-start-bg: #0f2f2c;
-  --chip-session-start-fg: #5eead4;
-  --chip-user-prompt-bg: #2a1f4a;
-  --chip-user-prompt-fg: #c4b5fd;
-  --chip-pre-tool-bg: #16324d;
-  --chip-pre-tool-fg: #8ec8ff;
-  --chip-post-tool-bg: #123d38;
-  --chip-post-tool-fg: #5ee0c4;
-  --chip-error-bg: #4a1515;
-  --chip-error-fg: #ff6b6b;
-  --chip-notification-bg: #3d2f0e;
-  --chip-notification-fg: #ffc14d;
-  --chip-stop-bg: #2a2e35;
-  --chip-stop-fg: #9aa3ad;
-  --chip-subagent-bg: #25202e;
-  --chip-subagent-fg: #b8a4c9;
-  --chip-compact-bg: #2d2040;
-  --chip-compact-fg: #d8b4fe;
+  /* 4 chip families — fail red + notify amber are the only alarms */
+  --chip-tool-bg: #16324d;
+  --chip-tool-fg: #8ec8ff;
+  --chip-tool-fail-bg: #4a1515;
+  --chip-tool-fail-fg: #ff6b6b;
+  --chip-wait-bg: #3d2f0e;
+  --chip-wait-fg: #ffc14d;
+  --chip-end-bg: #2a2e35;
+  --chip-end-fg: #9aa3ad;
+  --chip-meta-bg: #1a2130;
+  --chip-meta-fg: #8b949e;
+  --chip-border: transparent;
+  --chip-fail-border: #ff6b6b;
+  --chip-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --chip-pad-y: 5px;
+  --chip-pad-x: 9px;
+  --chip-font: 11px;
+  --chip-radius: 4px;
 
   --tile-sessions: #5eead4;
   --tile-rate: #8ec8ff;
-  --tile-tools: #5ee0c4;
+  --tile-tools: #c9d1d9;
   --tile-errors: #ff6b6b;
   --spark-stroke: #8ec8ff;
   --spark-fill-top: rgba(142, 200, 255, 0.42);
@@ -68,6 +66,7 @@
 
   --hud-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --hud-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --hud-font-display: var(--hud-font-sans);
   --hud-radius-sm: 4px;
   --hud-radius-md: 8px;
   --hud-radius-lg: 12px;
@@ -76,4 +75,9 @@
   --hud-space-3: 12px;
   --hud-space-4: 16px;
   --hud-space-5: 24px;
+  --lane-gap: 8px;
+  --lane-pad-y: 8px;
+  --lane-pad-x: 12px;
+  --strip-thumb: #4a5568;
+  --strip-track: #161c27;
 }
