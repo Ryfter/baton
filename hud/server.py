@@ -478,7 +478,7 @@ async def ingest(request: Request) -> dict[str, Any]:
     body = await _read_json_object(request)
     try:
         event = _fill(body)
-        event_id = store.insert_event(event)
+        event_id = await asyncio.to_thread(store.insert_event, event)
         event["id"] = event_id
         validate_envelope(event)
     except HTTPException:
@@ -553,7 +553,9 @@ async def events(
     except (TypeError, ValueError):
         cap = EVENTS_LIMIT
     cap = max(0, min(cap, EVENTS_LIMIT))
-    return store.query_events(since=since, limit=cap, session=session, kind=kind)
+    return await asyncio.to_thread(
+        store.query_events, since=since, limit=cap, session=session, kind=kind
+    )
 
 
 @app.get("/")
@@ -614,7 +616,7 @@ async def favicon() -> Response:
 async def healthz() -> dict[str, Any]:
     return {
         "ok": True,
-        "events": store.count_events(),
+        "events": await asyncio.to_thread(store.count_events),
         "uptime_s": int(time.time() - STARTED_AT),
     }
 
