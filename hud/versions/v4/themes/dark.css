@@ -1,0 +1,83 @@
+/* HUD theme: dark — dense mono night deck (default) */
+:root {
+  color-scheme: dark;
+
+  --hud-bg: #0b0e14;
+  --hud-bg-elevated: #10141c;
+  --hud-surface: #11161f;
+  --hud-surface-2: #161c27;
+  --hud-surface-3: #1a2130;
+  --hud-border: #1c2330;
+  --hud-border-strong: #2a3548;
+  --hud-header-bg: rgba(11, 14, 20, 0.92);
+  --hud-header-border: #1c2330;
+  --hud-accent: #8ec8ff;
+  --hud-accent-dim: #3d5a80;
+
+  --hud-text: #c9d1d9;
+  --hud-text-strong: #e6edf3;
+  --hud-text-muted: #8b949e;
+  --hud-text-faint: #6e7681;
+  --hud-link: #8ec8ff;
+
+  --hud-live: #3ddc8e;
+  --hud-live-glow: rgba(61, 220, 142, 0.45);
+  --hud-recon: #e45858;
+  --hud-running: #5eead4;
+  --hud-needs: #ffc14d;
+  --hud-stopped: #9aa3ad;
+  --hud-error: #ff6b6b;
+
+  /* 4 chip families — fail red + notify amber are the only alarms */
+  --chip-tool-bg: #16324d;
+  --chip-tool-fg: #8ec8ff;
+  --chip-tool-fail-bg: #4a1515;
+  --chip-tool-fail-fg: #ff6b6b;
+  --chip-wait-bg: #3d2f0e;
+  --chip-wait-fg: #ffc14d;
+  --chip-end-bg: #2a2e35;
+  --chip-end-fg: #9aa3ad;
+  --chip-meta-bg: #1a2130;
+  --chip-meta-fg: #8b949e;
+  --chip-border: transparent;
+  --chip-fail-border: #ff6b6b;
+  --chip-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --chip-pad-y: 5px;
+  --chip-pad-x: 9px;
+  --chip-font: 11px;
+  --chip-radius: 4px;
+
+  --tile-sessions: #5eead4;
+  --tile-rate: #8ec8ff;
+  --tile-tools: #c9d1d9;
+  --tile-errors: #ff6b6b;
+  --spark-stroke: #8ec8ff;
+  --spark-fill-top: rgba(142, 200, 255, 0.42);
+  --spark-fill-bot: rgba(142, 200, 255, 0.02);
+
+  --board-col-running: #0f766e;
+  --board-col-running-bg: rgba(15, 118, 110, 0.12);
+  --board-col-needs: #d97706;
+  --board-col-needs-bg: rgba(217, 119, 6, 0.12);
+  --board-col-stopped: #64748b;
+  --board-col-stopped-bg: rgba(100, 116, 139, 0.12);
+  --board-card-bg: #11161f;
+  --board-card-shadow: rgba(0, 0, 0, 0.35);
+
+  --hud-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --hud-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --hud-font-display: var(--hud-font-sans);
+  --hud-radius-sm: 4px;
+  --hud-radius-md: 8px;
+  --hud-radius-lg: 12px;
+  --hud-space-1: 4px;
+  --hud-space-2: 8px;
+  --hud-space-3: 12px;
+  --hud-space-4: 16px;
+  --hud-space-5: 24px;
+  --lane-gap: 8px;
+  --lane-pad-y: 8px;
+  --lane-pad-x: 12px;
+  --strip-thumb: #4a5568;
+  --strip-track: #161c27;
+}

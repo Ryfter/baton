@@ -1,0 +1,82 @@
+/* HUD theme: sandstone — ink on drafting paper; serif titles, flat chips */
+:root {
+  color-scheme: light;
+
+  --hud-bg: #f4ebe0;
+  --hud-bg-elevated: #faf6f0;
+  --hud-surface: #fffaf4;
+  --hud-surface-2: #f0e8dc;
+  --hud-surface-3: #e8dfd2;
+  --hud-border: #c8b8a4;
+  --hud-border-strong: #8a7a68;
+  --hud-header-bg: rgba(244, 235, 224, 0.96);
+  --hud-header-border: #c8b8a4;
+  --hud-accent: #3d5a40;
+  --hud-accent-dim: #8aa090;
+
+  --hud-text: #3a3028;
+  --hud-text-strong: #1c1612;
+  --hud-text-muted: #6a5c50;
+  --hud-text-faint: #8a7c70;
+  --hud-link: #2a4a38;
+
+  --hud-live: #1f6b3a;
+  --hud-live-glow: rgba(31, 107, 58, 0.28);
+  --hud-recon: #8b1a1a;
+  --hud-running: #2a4a38;
+  --hud-needs: #8a4b12;
+  --hud-stopped: #57534e;
+  --hud-error: #8b1a1a;
+
+  --chip-tool-bg: #fffaf4;
+  --chip-tool-fg: #2a4a38;
+  --chip-tool-fail-bg: #fffaf4;
+  --chip-tool-fail-fg: #8b1a1a;
+  --chip-wait-bg: #fffaf4;
+  --chip-wait-fg: #8a4b12;
+  --chip-end-bg: #fffaf4;
+  --chip-end-fg: #57534e;
+  --chip-meta-bg: #fffaf4;
+  --chip-meta-fg: #3a3028;
+  --chip-border: #8a7a68;
+  --chip-fail-border: #8b1a1a;
+  --chip-shadow: none;
+  --chip-pad-y: 4px;
+  --chip-pad-x: 8px;
+  --chip-font: 11px;
+  --chip-radius: 2px;
+
+  --tile-sessions: #2a4a38;
+  --tile-rate: #3a3028;
+  --tile-tools: #4a3c30;
+  --tile-errors: #8b1a1a;
+  --spark-stroke: #3d5a40;
+  --spark-fill-top: rgba(61, 90, 64, 0.22);
+  --spark-fill-bot: rgba(61, 90, 64, 0.02);
+
+  --board-col-running: #2a4a38;
+  --board-col-running-bg: rgba(42, 74, 56, 0.08);
+  --board-col-needs: #8a4b12;
+  --board-col-needs-bg: rgba(138, 75, 18, 0.08);
+  --board-col-stopped: #57534e;
+  --board-col-stopped-bg: rgba(87, 83, 78, 0.08);
+  --board-card-bg: #fffaf4;
+  --board-card-shadow: rgba(58, 48, 40, 0.08);
+
+  --hud-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --hud-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --hud-font-display: Palatino, "Palatino Linotype", "Iowan Old Style", "Book Antiqua", Georgia, serif;
+  --hud-radius-sm: 2px;
+  --hud-radius-md: 4px;
+  --hud-radius-lg: 6px;
+  --hud-space-1: 4px;
+  --hud-space-2: 8px;
+  --hud-space-3: 12px;
+  --hud-space-4: 16px;
+  --hud-space-5: 24px;
+  --lane-gap: 8px;
+  --lane-pad-y: 8px;
+  --lane-pad-x: 12px;
+  --strip-thumb: #8a7a68;
+  --strip-track: #e8dfd2;
+}

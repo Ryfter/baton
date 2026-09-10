@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HUD · board</title>
+  <link rel="icon" href="data:,">
+  <script>
+    (function () {
+      var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
+      var q = new URLSearchParams(location.search);
+      var t = q.get("theme");
+      if (t && ALLOWED.indexOf(t) >= 0) localStorage.setItem("hud-theme", t);
+      else t = localStorage.getItem("hud-theme") || "dark";
+      if (ALLOWED.indexOf(t) < 0) t = "dark";
+      document.write('<link rel="stylesheet" id="hud-theme" href="/v4/themes/' + t + '.css">');
+    })();
+  </script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background: var(--hud-bg);
+      color: var(--hud-text);
+      font-family: var(--hud-font-sans);
+      font-size: 13px;
+    }
+    .hud-header {
+      display: flex; align-items: center; gap: var(--hud-space-3);
+      padding: var(--hud-space-3) var(--hud-space-4);
+      border-bottom: 1px solid var(--hud-header-border);
+      background: var(--hud-header-bg);
+      position: sticky; top: 0; z-index: 10;
+    }
+    .hud-title {
+      font-family: var(--hud-font-display, var(--hud-font-sans));
+      font-weight: 650; font-size: 15px;
+      color: var(--hud-text-strong);
+    }
+    .hud-dot {
+      width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+      background: var(--hud-recon); transition: background .2s, box-shadow .2s;
+    }
+    .hud-dot.live {
+      background: var(--hud-live);
+      box-shadow: 0 0 0 3px var(--hud-live-glow), 0 0 12px var(--hud-live-glow);
+    }
+    .hud-meta {
+      color: var(--hud-text-muted); font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .hud-meta strong { color: var(--hud-text-strong); }
+    .hud-spacer { margin-left: auto; }
+    .hud-link {
+      color: var(--hud-link); text-decoration: none; font-size: 12px;
+      border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
+      padding: 4px 10px;
+    }
+    .hud-theme {
+      background: var(--hud-surface); color: var(--hud-text);
+      border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
+      font: inherit; font-size: 11px; padding: 4px 8px; cursor: pointer;
+    }
+    .hud-theme:focus-visible, .hud-link:focus-visible {
+      outline: 2px solid var(--hud-accent); outline-offset: 2px;
+    }
+    .board {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--hud-space-4);
+      padding: var(--hud-space-4); align-items: start;
+    }
+    .bay {
+      background: var(--hud-surface);
+      border: 1px solid var(--hud-border);
+      border-radius: var(--hud-radius-lg);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    .bay-head {
+      padding: var(--hud-space-3) var(--hud-space-4);
+      border-bottom: 1px solid var(--hud-border);
+      display: flex; align-items: baseline; justify-content: space-between;
+    }
+    .bay-head h2 {
+      margin: 0; font-size: 13px; font-weight: 700;
+      font-family: var(--hud-font-display, var(--hud-font-sans));
+    }
+    .bay-count {
+      font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 700;
+      font-family: var(--hud-font-mono);
+    }
+    .bay-running { border-top: 3px solid var(--board-col-running); }
+    .bay-running .bay-head { background: var(--board-col-running-bg); }
+    .bay-running h2, .bay-running .bay-count { color: var(--board-col-running); }
+    .bay-needs { border-top: 3px solid var(--board-col-needs); }
+    .bay-needs .bay-head { background: var(--board-col-needs-bg); }
+    .bay-needs h2, .bay-needs .bay-count { color: var(--board-col-needs); }
+    .bay-stopped { border-top: 3px solid var(--board-col-stopped); }
+    .bay-stopped .bay-head { background: var(--board-col-stopped-bg); }
+    .bay-stopped h2, .bay-stopped .bay-count { color: var(--board-col-stopped); }
+    .bay-body {
+      padding: var(--hud-space-3);
+      display: flex; flex-direction: column;
+      min-height: 88px;
+    }
+    .bay-empty {
+      margin: auto; padding: var(--hud-space-4) 0;
+      text-align: center; color: var(--hud-text-faint);
+      font-size: 12px; font-style: italic;
+    }
+    .card {
+      background: var(--board-card-bg);
+      border: 1px solid var(--hud-border);
+      border-radius: var(--hud-radius-md);
+      padding: var(--hud-space-3) var(--hud-space-3) var(--hud-space-3) 18px;
+      margin-bottom: var(--hud-space-2);
+      position: relative;
+      box-shadow: 0 4px 16px var(--board-card-shadow);
+      animation: card-in .28s cubic-bezier(.22, 1, .36, 1);
+    }
+    .card:last-child { margin-bottom: 0; }
+    .card::before {
+      content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+      border-radius: var(--hud-radius-md) 0 0 var(--hud-radius-md);
+      background: currentColor;
+    }
+    .card.st-running { color: var(--board-col-running); }
+    .card.st-needs   { color: var(--board-col-needs); }
+    .card.st-stopped { color: var(--board-col-stopped); }
+    @keyframes card-in {
+      from { transform: translateY(6px); opacity: 0; }
+      to { transform: none; opacity: 1; }
+    }
+    .card-top {
+      display: flex; align-items: center; gap: var(--hud-space-2);
+      color: var(--hud-text-strong);
+    }
+    .led {
+      width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+      background: currentColor;
+      box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 20%, transparent);
+    }
+    .sid {
+      font-family: var(--hud-font-mono); font-size: 14px; font-weight: 700;
+    }
+    .age {
+      margin-left: auto; font-size: 10px; color: var(--hud-text-faint);
+      font-variant-numeric: tabular-nums;
+    }
+    .prompt {
+      margin: 4px 0 0 15px; font-size: 11px; color: var(--hud-text-faint);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .machine {
+      margin: 4px 0 0 15px; font-size: 11px; color: var(--hud-text-muted);
+      font-family: var(--hud-font-mono);
+    }
+    .why {
+      margin: 8px 0 0 15px; font-size: 13px; line-height: 1.35;
+      color: var(--hud-text-strong);
+    }
+    .card.st-needs .why { color: var(--board-col-needs); font-weight: 650; }
+    .fail-mark { color: var(--hud-error); font-size: 11px; font-weight: 650; }
+    .card-foot {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: var(--hud-space-2); margin: 10px 0 0 15px;
+    }
+    .tool {
+      font-family: var(--hud-font-mono); font-size: 10px;
+      padding: 3px 8px; border-radius: var(--chip-radius, 999px);
+      background: var(--chip-tool-bg); color: var(--chip-tool-fg);
+      border: 1px solid var(--chip-border, transparent);
+    }
+    .evt-count {
+      font-size: 10px; color: var(--hud-text-faint);
+      font-variant-numeric: tabular-nums;
+    }
+    @media (max-width: 900px) { .board { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header class="hud-header">
+    <span id="dot" class="hud-dot" aria-label="connection"></span>
+    <span class="hud-title">Mission board</span>
+    <span class="hud-meta">events <strong id="count">0</strong></span>
+    <span class="hud-spacer"></span>
+    <select id="theme-pick" class="hud-theme" aria-label="Theme">
+      <option value="dark">dark</option>
+      <option value="sapphire">sapphire</option>
+      <option value="lapis-velvet">lapis-velvet</option>
+      <option value="sandstone">sandstone</option>
+    </select>
+    <a class="hud-link" href="/">views</a>
+  </header>
+  <div class="board">
+    <section class="bay bay-running" id="running">
+      <div class="bay-head"><h2>Running</h2><span class="bay-count" data-count>0</span></div>
+      <div class="bay-body">
+        <p class="bay-empty">No active sessions</p>
+      </div>
+    </section>
+    <section class="bay bay-needs" id="needs-you">
+      <div class="bay-head"><h2>Needs You</h2><span class="bay-count" data-count>0</span></div>
+      <div class="bay-body">
+        <p class="bay-empty">Nothing waiting</p>
+      </div>
+    </section>
+    <section class="bay bay-stopped" id="stopped">
+      <div class="bay-head"><h2>Stopped</h2><span class="bay-count" data-count>0</span></div>
+      <div class="bay-body">
+        <p class="bay-empty">No stopped sessions</p>
+      </div>
+    </section>
+  </div>
+  <script>
+    var MAX = 500;
+    var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
+    var total = 0;
+    var cards = {};
+    var eventLog = [];
+    var cols = {
+      running: document.getElementById("running"),
+      needs: document.getElementById("needs-you"),
+      stopped: document.getElementById("stopped")
+    };
+    var countEl = document.getElementById("count");
+    var dot = document.getElementById("dot");
+    var themePick = document.getElementById("theme-pick");
+
+    function shortId(id) {
+      id = String(id || "");
+      if (id.length <= 14) return id;
+      return "…" + id.slice(-13);
+    }
+    function truncate(s, n) {
+      s = String(s || "").replace(/\s+/g, " ").trim();
+      if (s.length <= n) return s;
+      return s.slice(0, n - 1) + "…";
+    }
+    function chipText(ev) {
+      var p = ev.payload || {};
+      var kind = ev.kind || "";
+      var tool = p.tool_name || "";
+      if (kind === "session_start") return "start";
+      if (kind === "user_prompt") return truncate(p.prompt || "", 22) || "prompt";
+      if (kind === "pre_tool_use") return tool || "tool";
+      if (kind === "post_tool_use") return (tool || "tool") + (p.ok === false ? " ✗" : " ✓");
+      if (kind === "notification") return "notify";
+      if (kind === "stop") return "stop";
+      if (kind === "subagent_stop") return "sub ✓";
+      if (kind === "pre_compact") return "compact";
+      return kind;
+    }
+    function fileTail(s) {
+      s = String(s || "").trim();
+      if (!s) return "";
+      var parts = s.split(/[/\\]\s*/);
+      return parts[parts.length - 1] || s;
+    }
+    function age(ts) {
+      var t = Date.parse(ts);
+      if (isNaN(t)) t = Date.now();
+      var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+      if (s < 60) return s + "s";
+      if (s < 3600) return Math.round(s / 60) + "m";
+      return Math.round(s / 3600) + "h";
+    }
+    function statusOf(state) {
+      if (state.kind === "stop") return "stopped";
+      if (state.kind === "notification") return "needs";
+      return "running";
+    }
+    function columnFor(status) {
+      if (status === "stopped") return cols.stopped;
+      if (status === "needs") return cols.needs;
+      return cols.running;
+    }
+    function whyText(state) {
+      if (state.kind === "notification") return state.lastMessage || "Needs attention";
+      if (state.kind === "stop") return state.lastLabel || "stop";
+      if (state.lastTool) {
+        var target = fileTail(state.lastTarget);
+        return target ? state.lastTool + ": " + target : state.lastTool;
+      }
+      return state.lastLabel || "—";
+    }
+    function syncEmpty() {
+      ["running", "needs", "stopped"].forEach(function (k) {
+        var col = cols[k];
+        var n = col.querySelectorAll(".card").length;
+        var empty = col.querySelector(".bay-empty");
+        var badge = col.querySelector("[data-count]");
+        if (empty) empty.hidden = n > 0;
+        if (badge) badge.textContent = String(n);
+      });
+    }
+    function renderCard(sid) {
+      var state = cards[sid];
+      var el = state.el;
+      var status = statusOf(state);
+      el.className = "card st-" + status;
+      el.querySelector(".sid").textContent = shortId(sid);
+      el.querySelector(".sid").title = sid;
+      el.querySelector(".machine").textContent = state.machine || "—";
+      var promptEl = el.querySelector(".prompt");
+      if (state.lastPrompt) {
+        promptEl.textContent = truncate(state.lastPrompt, 64);
+        promptEl.hidden = false;
+      } else {
+        promptEl.hidden = true;
+      }
+      var whyEl = el.querySelector(".why");
+      whyEl.textContent = whyText(state);
+      var failEl = el.querySelector(".fail-mark");
+      if (status === "stopped" && state.hadFail) {
+        failEl.textContent = "had a fail";
+        failEl.hidden = false;
+      } else {
+        failEl.textContent = "";
+        failEl.hidden = true;
+      }
+      var foot = el.querySelector(".tool");
+      if (status === "needs") {
+        foot.textContent = "notify";
+      } else if (status === "stopped") {
+        foot.textContent = state.lastLabel || "stop";
+      } else {
+        foot.textContent = state.lastTool || state.lastLabel || "—";
+      }
+      el.querySelector(".evt-count").textContent = state.count + " evt";
+      el.querySelector(".age").textContent = age(state.ts);
+      var dest = columnFor(status);
+      if (el.parentNode !== dest.querySelector(".bay-body")) {
+        dest.querySelector(".bay-body").appendChild(el);
+      }
+      syncEmpty();
+    }
+    function onEvent(ev) {
+      var sid = ev.session_id || "unknown";
+      var p = ev.payload || {};
+      eventLog.push(ev);
+      if (eventLog.length > MAX) eventLog.shift();
+      if (!cards[sid]) {
+        var el = document.createElement("article");
+        el.className = "card st-running";
+        el.innerHTML =
+          '<div class="card-top"><span class="led"></span><span class="sid"></span><span class="age"></span></div>' +
+          '<div class="prompt" hidden></div>' +
+          '<div class="machine"></div>' +
+          '<div class="why"></div>' +
+          '<div class="card-foot"><span class="tool"></span><span class="fail-mark" hidden></span><span class="evt-count"></span></div>';
+        cards[sid] = {
+          el: el, count: 0, kind: "", lastTool: "", lastTarget: "",
+          lastMessage: "", lastPrompt: "", lastLabel: "", hadFail: false,
+          machine: "", ts: ev.ts
+        };
+        cols.running.querySelector(".bay-body").appendChild(el);
+      }
+      var st = cards[sid];
+      st.count += 1;
+      st.kind = ev.kind;
+      st.machine = ev.machine || st.machine;
+      st.ts = ev.ts;
+      st.lastLabel = chipText(ev);
+      if (ev.kind === "user_prompt" && p.prompt) st.lastPrompt = p.prompt;
+      if (ev.kind === "notification" && p.message) st.lastMessage = p.message;
+      if (p.tool_name) {
+        st.lastTool = p.tool_name;
+        if (p.tool_input_summary) st.lastTarget = p.tool_input_summary;
+      }
+      if (ev.kind === "post_tool_use" && p.ok === false) st.hadFail = true;
+      total++;
+      countEl.textContent = String(total);
+      renderCard(sid);
+    }
+    setInterval(function () { Object.keys(cards).forEach(renderCard); }, 5000);
+    syncEmpty();
+
+    function currentTheme() {
+      var q = new URLSearchParams(location.search).get("theme");
+      var t = q || localStorage.getItem("hud-theme") || "dark";
+      return ALLOWED.indexOf(t) >= 0 ? t : "dark";
+    }
+    function applyTheme(t) {
+      localStorage.setItem("hud-theme", t);
+      document.getElementById("hud-theme").href = "/v4/themes/" + t + ".css";
+      var u = new URL(location.href);
+      u.searchParams.set("theme", t);
+      history.replaceState(null, "", u);
+    }
+    themePick.value = currentTheme();
+    themePick.addEventListener("change", function () { applyTheme(themePick.value); });
+
+    var es = new EventSource('/stream?replay=200');
+    es.addEventListener("open", function () { dot.className = "hud-dot live"; });
+    es.addEventListener("error", function () { dot.className = "hud-dot"; });
+    es.addEventListener("hud", function (e) {
+      try { onEvent(JSON.parse(e.data)); } catch (err) {}
+    });
+  </script>
+</body>
+</html>

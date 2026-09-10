@@ -145,6 +145,13 @@ def test_themes_css_serves(client):
     assert r_bad.status_code == 404
 
 
+def test_v4_snapshot_present(client):
+    assert client.get("/v4/v/deck").status_code == 200
+    assert "/v4/themes/" in client.get("/v4/v/board").text
+    assert client.get("/v4/themes/sandstone.css").status_code == 200
+    assert "/v4/v/deck" in client.get("/versions").text
+
+
 def test_healthz(client):
     r = client.get("/healthz")
     assert r.status_code == 200
