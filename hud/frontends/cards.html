@@ -153,6 +153,7 @@
   </div>
   <script>
     var MAX = 500;
+    var MAX_SESSIONS = 200;
     var CHIP_CAP = 12;
     var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
     var total = 0;
@@ -268,6 +269,12 @@
         };
         order.unshift(sid);
         deck.insertBefore(card, deck.firstChild);
+        while (order.length > MAX_SESSIONS) {
+          var dropped = order.pop();
+          var s = sessions[dropped];
+          if (s && s.el && s.el.parentNode) s.el.parentNode.removeChild(s.el);
+          delete sessions[dropped];
+        }
         syncEmpty();
       }
       return sessions[sid];

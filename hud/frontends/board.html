@@ -212,9 +212,11 @@
   </div>
   <script>
     var MAX = 500;
+    var MAX_SESSIONS = 200;
     var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
     var total = 0;
     var cards = {};
+    var order = [];
     var eventLog = [];
     var cols = {
       running: document.getElementById("running"),
@@ -331,7 +333,6 @@
       if (el.parentNode !== dest.querySelector(".bay-body")) {
         dest.querySelector(".bay-body").appendChild(el);
       }
-      syncEmpty();
     }
     function onEvent(ev) {
       var sid = ev.session_id || "unknown";
@@ -352,7 +353,14 @@
           lastMessage: "", lastPrompt: "", lastLabel: "", hadFail: false,
           machine: "", ts: ev.ts
         };
+        order.unshift(sid);
         cols.running.querySelector(".bay-body").appendChild(el);
+        while (order.length > MAX_SESSIONS) {
+          var dropped = order.pop();
+          var s = cards[dropped];
+          if (s && s.el && s.el.parentNode) s.el.parentNode.removeChild(s.el);
+          delete cards[dropped];
+        }
       }
       var st = cards[sid];
       st.count += 1;
@@ -370,8 +378,12 @@
       total++;
       countEl.textContent = String(total);
       renderCard(sid);
+      syncEmpty();
     }
-    setInterval(function () { Object.keys(cards).forEach(renderCard); }, 5000);
+    setInterval(function () {
+      Object.keys(cards).forEach(renderCard);
+      syncEmpty();
+    }, 5000);
     syncEmpty();
 
     function currentTheme() {

@@ -160,6 +160,7 @@
   </div>
   <script>
     var MAX = 500;
+    var MAX_SESSIONS = 200;
     var IDLE_MS = 5 * 60 * 1000;
     var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
     var total = 0;
@@ -276,6 +277,12 @@
         };
         order.unshift(sid);
         lanesEl.insertBefore(lane, lanesEl.firstChild);
+        while (order.length > MAX_SESSIONS) {
+          var dropped = order.pop();
+          var s = sessions[dropped];
+          if (s && s.el && s.el.parentNode) s.el.parentNode.removeChild(s.el);
+          delete sessions[dropped];
+        }
         syncEmpty();
       }
       return sessions[sid];
