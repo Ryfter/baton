@@ -20,17 +20,19 @@ from hud.schema import SCHEMA_ID, validate_envelope
 FRONTENDS_DIR = Path(__file__).resolve().parent / "frontends"
 VERSIONS_DIR = Path(__file__).resolve().parent / "versions"
 _VID_RE = re.compile(r"^v\d+$")
+THEMES_DIR = FRONTENDS_DIR / "themes"
+THEME_NAMES = ("dark", "sapphire", "lapis-velvet", "sandstone")
 STARTED_AT = time.time()
 
 _subscribers: set[asyncio.Queue] = set()
 _QUEUE_MAX = 256
 
 CHOOSER_DESCRIPTIONS = {
-    "deck": "Dark monospace swim-lanes, one per session — the disler-flavored look.",
-    "board": "Mission-control bays: Running / Needs You / Stopped, with status-striped cards.",
-    "cockpit": "Stat tiles, a hand-drawn events/min sparkline, and a compact feed.",
-    "cards": "Deck's chip language as a session card grid — same dark canvas, wrapping chips.",
-    "minimal": "Accessible table, system font, colour only for errors.",
+    "deck": "Flight-deck swim-lanes — one horizontal strip per session, colour-coded event chips scrolling right.",
+    "board": "Mission board with three bays: Running, Needs You, Stopped. Cards slide between columns on state change.",
+    "cockpit": "Instrument panel: four stat tiles, hand-drawn throughput sparkline, compact reverse-chron feed.",
+    "cards": "Session cards in a vertical stack — deck chip language, status pill, most-recent session on top.",
+    "minimal": "Accessible structured table — tabular time, session, kind, detail. Errors in red only.",
 }
 
 
@@ -117,6 +119,23 @@ def _version_css(vid: str, name: str) -> Optional[Path]:
     return path if path.is_file() else None
 
 
+def _theme_path(name: str) -> Optional[Path]:
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return None
+    if name.endswith(".css"):
+        name = name[:-4]
+    if name not in THEME_NAMES:
+        return None
+    path = (THEMES_DIR / ("%s.css" % name)).resolve()
+    try:
+        path.relative_to(THEMES_DIR.resolve())
+    except ValueError:
+        return None
+    if path.is_file():
+        return path
+    return None
+
+
 def _fill(body: dict[str, Any]) -> dict[str, Any]:
     session_id = body.get("session_id")
     kind = body.get("kind")
@@ -185,35 +204,111 @@ def _chooser_html(names: list[str]) -> str:
 <head>
   <meta charset="utf-8">
   <title>HUD — choose a view</title>
+  <link rel="stylesheet" id="hud-theme" href="/themes/dark.css">
   <style>
-    :root { color-scheme: dark; }
-    body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif;
-           background: #10141c; color: #e8edf5; }
-    header { padding: 28px 32px 8px; }
-    h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: .04em; }
-    .sub { color: #9aa6b8; font-size: 14px; }
-    main { display: grid; gap: 16px; padding: 24px 32px 48px;
-           grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
-    .card { background: #1a2130; border: 1px solid #2a3548; border-radius: 12px;
-            padding: 18px 18px 16px; }
-    h2 { margin: 0 0 8px; font-size: 18px; text-transform: lowercase; }
-    p { margin: 0 0 16px; color: #b7c2d3; font-size: 14px; line-height: 1.4; }
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--hud-font-sans, ui-sans-serif, system-ui, sans-serif);
+      background: var(--hud-bg, #0b0e14);
+      color: var(--hud-text, #c9d1d9);
+      min-height: 100vh;
+    }
+    header {
+      padding: 28px 32px 16px;
+      border-bottom: 1px solid var(--hud-border, #1c2330);
+      background: var(--hud-header-bg, rgba(11,14,20,.92));
+    }
+    .top-row {
+      display: flex; align-items: flex-end; justify-content: space-between;
+      gap: 16px; flex-wrap: wrap;
+    }
+    h1 {
+      margin: 0 0 6px; font-size: 11px; letter-spacing: .22em;
+      text-transform: uppercase; color: var(--hud-text-strong, #e6edf3);
+    }
+    .sub { color: var(--hud-text-muted, #8b949e); font-size: 14px; margin: 0; max-width: 520px; line-height: 1.5; }
+    .theme-bar {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 12px; color: var(--hud-text-muted, #8b949e);
+    }
+    .theme-bar select {
+      background: var(--hud-surface, #11161f);
+      color: var(--hud-text, #c9d1d9);
+      border: 1px solid var(--hud-border, #1c2330);
+      border-radius: 4px; font: inherit; font-size: 12px;
+      padding: 6px 10px; cursor: pointer;
+    }
+    main {
+      display: flex; flex-direction: column; gap: 14px;
+      padding: 24px 32px 48px; max-width: 920px;
+    }
+    .card {
+      background: var(--hud-surface, #11161f);
+      border: 1px solid var(--hud-border, #1c2330);
+      border-left: 3px solid var(--hud-accent-dim, #3d5a80);
+      border-radius: 8px;
+      padding: 18px 20px 16px;
+      transition: border-left-color .2s;
+    }
+    .card:hover { border-left-color: var(--hud-accent, #8ec8ff); }
+    h2 {
+      margin: 0 0 6px; font-size: 16px; font-family: var(--hud-font-mono, monospace);
+      color: var(--hud-link, #8ec8ff); letter-spacing: .04em;
+    }
+    p {
+      margin: 0 0 14px; color: var(--hud-text-muted, #8b949e);
+      font-size: 13px; line-height: 1.55;
+    }
     .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-    a { color: #8ec8ff; }
-    button { background: #e8edf5; color: #10141c; border: 0; border-radius: 8px;
-             padding: 8px 12px; cursor: pointer; font-weight: 600; }
-    button:hover { background: #fff; }
+    a {
+      color: var(--hud-link, #8ec8ff); text-decoration: none; font-size: 13px;
+      border: 1px solid var(--hud-border, #1c2330); border-radius: 4px;
+      padding: 7px 12px;
+    }
+    a:hover { border-color: var(--hud-accent, #8ec8ff); }
+    button {
+      background: var(--hud-text-strong, #e6edf3);
+      color: var(--hud-bg, #0b0e14);
+      border: 0; border-radius: 4px;
+      padding: 7px 12px; cursor: pointer; font-weight: 600; font-size: 13px;
+    }
+    button:hover { opacity: .92; }
   </style>
 </head>
 <body>
   <header>
-    <h1>HUD</h1>
-    <p class="sub">Pick a front-end. Set as default remembers it on this box.</p>
+    <div class="top-row">
+      <div>
+        <h1>Mission Control HUD</h1>
+        <p class="sub">Pick a layout for live agent telemetry. Set as default remembers your choice on this machine.</p>
+      </div>
+      <div class="theme-bar">
+        <label for="theme-pick">Theme</label>
+        <select id="theme-pick" aria-label="Theme">
+          <option value="dark">dark</option>
+          <option value="sapphire">sapphire</option>
+          <option value="lapis-velvet">lapis-velvet</option>
+          <option value="sandstone">sandstone</option>
+        </select>
+      </div>
+    </div>
   </header>
   <main>
     %s
   </main>
   <script>
+    (function () {
+      var pick = document.getElementById("theme-pick");
+      var link = document.getElementById("hud-theme");
+      var t = localStorage.getItem("hud-theme") || "dark";
+      pick.value = t;
+      link.href = "/themes/" + t + ".css";
+      pick.addEventListener("change", function () {
+        localStorage.setItem("hud-theme", pick.value);
+        link.href = "/themes/" + pick.value + ".css";
+      });
+    })();
     document.querySelectorAll("button[data-name]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var name = btn.getAttribute("data-name");
@@ -342,6 +437,14 @@ async def view(name: str) -> Any:
     if path is None:
         raise HTTPException(status_code=404, detail="unknown front-end")
     return FileResponse(path, media_type="text/html; charset=utf-8")
+
+
+@app.get("/themes/{name}.css")
+async def theme_css(name: str) -> Any:
+    path = _theme_path(name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="unknown theme")
+    return FileResponse(path, media_type="text/css; charset=utf-8")
 
 
 @app.post("/config")

@@ -134,6 +134,17 @@ def test_v3_snapshot_serves_scoped_themes(client):
     assert client.get("/v3/themes/bogus.css").status_code == 404
 
 
+def test_themes_css_serves(client):
+    r = client.get("/themes/dark.css")
+    assert r.status_code == 200
+    assert "text/css" in r.headers.get("content-type", "")
+    assert "--hud-bg" in r.text
+    r404 = client.get("/themes/bogus.css")
+    assert r404.status_code == 404
+    r_bad = client.get("/themes/../server.css")
+    assert r_bad.status_code == 404
+
+
 def test_healthz(client):
     r = client.get("/healthz")
     assert r.status_code == 200

@@ -4,150 +4,198 @@
   <meta charset="utf-8">
   <title>HUD · board</title>
   <link rel="icon" href="data:,">
+  <link rel="stylesheet" id="hud-theme" href="/themes/dark.css">
+  <script>
+    (function () {
+      var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
+      var q = new URLSearchParams(location.search);
+      var t = q.get("theme");
+      if (t && ALLOWED.indexOf(t) >= 0) localStorage.setItem("hud-theme", t);
+      else t = localStorage.getItem("hud-theme") || "dark";
+      if (ALLOWED.indexOf(t) < 0) t = "dark";
+      document.getElementById("hud-theme").href = "/themes/" + t + ".css";
+    })();
+  </script>
   <style>
-    :root { color-scheme: light; }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
     body {
-      background: #d5dee9;
-      color: #0f172a;
-      font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+      background: var(--hud-bg);
+      color: var(--hud-text);
+      font-family: var(--hud-font-sans);
+      font-size: 13px;
     }
-    header {
-      display: flex; align-items: center; gap: 14px;
-      padding: 14px 22px;
-      background: #0b1c2c;
-      color: #e8eef6;
-      border-bottom: 3px solid #14b8a6;
+    .hud-header {
+      display: flex; align-items: center; gap: var(--hud-space-3);
+      padding: var(--hud-space-3) var(--hud-space-4);
+      border-bottom: 1px solid var(--hud-header-border);
+      background: var(--hud-header-bg);
+      backdrop-filter: blur(8px);
+      position: sticky; top: 0; z-index: 10;
     }
-    .title {
-      font-size: 13px; letter-spacing: .22em; text-transform: uppercase;
-      font-weight: 700;
+    .hud-brand { display: flex; flex-direction: column; gap: 2px; }
+    .hud-title {
+      letter-spacing: .18em; font-weight: 700; font-size: 11px;
+      text-transform: uppercase; color: var(--hud-text-strong);
     }
-    .dot { width: 10px; height: 10px; border-radius: 50%; background: #f87171; }
-    .dot.live { background: #2dd4bf; box-shadow: 0 0 10px #2dd4bf99; }
-    .dot.recon { background: #f87171; }
-    .meta { color: #93a4b8; font-size: 13px; }
-    .meta strong { color: #e8eef6; font-variant-numeric: tabular-nums; }
-    .meta a { color: #99f6e4; text-decoration: none; }
+    .hud-subtitle { font-size: 10px; color: var(--hud-text-faint); letter-spacing: .06em; }
+    .hud-dot {
+      width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+      background: var(--hud-recon); transition: background .2s, box-shadow .2s;
+    }
+    .hud-dot.live {
+      background: var(--hud-live);
+      box-shadow: 0 0 0 3px var(--hud-live-glow), 0 0 12px var(--hud-live-glow);
+    }
+    .hud-meta {
+      color: var(--hud-text-muted); font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .hud-meta strong { color: var(--hud-text-strong); }
+    .hud-spacer { margin-left: auto; }
+    .hud-link {
+      color: var(--hud-link); text-decoration: none; font-size: 12px;
+      border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
+      padding: 4px 10px;
+    }
+    .hud-theme {
+      background: var(--hud-surface); color: var(--hud-text);
+      border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
+      font: inherit; font-size: 11px; padding: 4px 8px; cursor: pointer;
+    }
     .board {
-      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px;
-      padding: 22px; align-items: stretch;
-      min-height: calc(100vh - 54px);
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--hud-space-4);
+      padding: var(--hud-space-4); min-height: calc(100vh - 52px);
     }
-    .col {
-      background: #eef2f7;
-      border-radius: 12px;
-      padding: 0 0 14px;
-      min-height: 62vh;
-      box-shadow: 0 10px 30px rgba(15, 23, 42, .08);
-      overflow: hidden;
+    .bay {
+      background: var(--hud-surface);
+      border: 1px solid var(--hud-border);
+      border-radius: var(--hud-radius-lg);
       display: flex; flex-direction: column;
+      overflow: hidden; min-height: 58vh;
     }
-    .col h2 {
-      margin: 0;
-      padding: 14px 16px 12px;
-      font-size: 11px; letter-spacing: .18em;
-      text-transform: uppercase; font-weight: 700;
+    .bay-head {
+      padding: var(--hud-space-3) var(--hud-space-4);
+      border-bottom: 1px solid var(--hud-border);
       display: flex; align-items: baseline; justify-content: space-between;
-      border-top: 4px solid currentColor;
     }
-    .col h2 .n {
-      font-variant-numeric: tabular-nums; letter-spacing: 0;
-      font-size: 12px; opacity: .7;
+    .bay-head h2 {
+      margin: 0; font-size: 10px; letter-spacing: .2em;
+      text-transform: uppercase; font-weight: 700;
     }
-    .col-running { color: #0f766e; }
-    .col-running h2 { background: #ccfbf1; color: #0f766e; }
-    .col-needs   { color: #b45309; }
-    .col-needs h2 { background: #ffedd5; color: #b45309; }
-    .col-stopped { color: #475569; }
-    .col-stopped h2 { background: #e2e8f0; color: #334155; }
-    .cards { padding: 14px 12px 0; flex: 1; }
-    .empty {
-      margin: 8px 12px 0; padding: 18px 8px;
-      text-align: center; font-size: 13px; color: #94a3b8;
-      font-style: italic; letter-spacing: .02em;
+    .bay-count {
+      font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 700;
+      font-family: var(--hud-font-mono);
+    }
+    .bay-running { border-top: 3px solid var(--board-col-running); }
+    .bay-running .bay-head { background: var(--board-col-running-bg); }
+    .bay-running h2, .bay-running .bay-count { color: var(--board-col-running); }
+    .bay-needs { border-top: 3px solid var(--board-col-needs); }
+    .bay-needs .bay-head { background: var(--board-col-needs-bg); }
+    .bay-needs h2, .bay-needs .bay-count { color: var(--board-col-needs); }
+    .bay-stopped { border-top: 3px solid var(--board-col-stopped); }
+    .bay-stopped .bay-head { background: var(--board-col-stopped-bg); }
+    .bay-stopped h2, .bay-stopped .bay-count { color: var(--board-col-stopped); }
+    .bay-body { padding: var(--hud-space-3); flex: 1; overflow-y: auto; }
+    .bay-empty {
+      margin: var(--hud-space-4) 0; text-align: center;
+      color: var(--hud-text-faint); font-size: 12px; font-style: italic;
     }
     .card {
+      background: var(--board-card-bg);
+      border: 1px solid var(--hud-border);
+      border-radius: var(--hud-radius-md);
+      padding: var(--hud-space-3) var(--hud-space-3) var(--hud-space-3) 18px;
+      margin-bottom: var(--hud-space-2);
       position: relative;
-      background: #fff;
-      border-radius: 8px;
-      padding: 12px 14px 12px 18px;
-      margin-bottom: 10px;
-      box-shadow: 0 1px 0 rgba(15,23,42,.04), 0 8px 20px rgba(15,23,42,.06);
-      animation: pop .25s ease;
-      transition: transform .25s ease, opacity .25s ease, box-shadow .2s;
+      box-shadow: 0 4px 16px var(--board-card-shadow);
+      animation: card-in .28s cubic-bezier(.22, 1, .36, 1);
+      transition: transform .2s, box-shadow .2s;
     }
-    .card:hover { box-shadow: 0 12px 28px rgba(15,23,42,.12); }
+    .card:hover { transform: translateY(-1px); }
     .card::before {
-      content: "";
-      position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
-      border-radius: 8px 0 0 8px;
+      content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+      border-radius: var(--hud-radius-md) 0 0 var(--hud-radius-md);
       background: currentColor;
     }
-    .card.st-running { color: #0f766e; }
-    .card.st-needs   { color: #d97706; }
-    .card.st-stopped { color: #64748b; }
-    @keyframes pop { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
+    .card.st-running { color: var(--board-col-running); }
+    .card.st-needs   { color: var(--board-col-needs); }
+    .card.st-stopped { color: var(--board-col-stopped); }
+    @keyframes card-in {
+      from { transform: translateY(6px); opacity: 0; }
+      to { transform: none; opacity: 1; }
+    }
     .card-top {
-      display: flex; align-items: center; gap: 8px;
-      color: #0f172a;
+      display: flex; align-items: center; gap: var(--hud-space-2);
+      color: var(--hud-text-strong);
     }
     .led {
-      width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+      width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
       background: currentColor;
-      box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 20%, transparent);
     }
     .sid {
-      font-family: ui-monospace, Menlo, Consolas, monospace;
-      font-size: 15px; font-weight: 700; letter-spacing: .02em;
-      color: #0f172a;
+      font-family: var(--hud-font-mono); font-size: 14px; font-weight: 700;
+      letter-spacing: .02em;
     }
     .age {
-      margin-left: auto; font-size: 11px; color: #64748b;
+      margin-left: auto; font-size: 10px; color: var(--hud-text-faint);
       font-variant-numeric: tabular-nums; letter-spacing: .04em;
     }
     .machine {
-      margin: 6px 0 0 16px; font-size: 12px; color: #64748b;
+      margin: 6px 0 0 15px; font-size: 11px; color: var(--hud-text-muted);
+      font-family: var(--hud-font-mono);
     }
     .card-foot {
       display: flex; align-items: center; justify-content: space-between;
-      gap: 8px; margin: 12px 0 0 16px;
+      gap: var(--hud-space-2); margin: 10px 0 0 15px;
     }
     .tool {
-      font-family: ui-monospace, Menlo, Consolas, monospace;
-      font-size: 11px; padding: 3px 8px; border-radius: 999px;
-      background: #f1f5f9; color: #334155;
+      font-family: var(--hud-font-mono); font-size: 10px;
+      padding: 3px 8px; border-radius: 999px;
+      background: var(--hud-surface-2); color: var(--hud-text);
+      border: 1px solid var(--hud-border);
     }
-    .n {
-      font-size: 11px; color: #64748b; letter-spacing: .04em;
+    .evt-count {
+      font-size: 10px; color: var(--hud-text-faint);
+      font-variant-numeric: tabular-nums; letter-spacing: .06em;
       text-transform: uppercase;
     }
-    @media (max-width: 800px) { .board { grid-template-columns: 1fr; } }
+    @media (max-width: 900px) { .board { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
-  <header>
-    <span class="title">Mission board</span>
-    <span id="dot" class="dot recon"></span>
-    <span class="meta">events <strong id="count">0</strong></span>
-    <span class="meta" style="margin-left:auto"><a href="/">⚙ views</a></span>
+  <header class="hud-header">
+    <span id="dot" class="hud-dot"></span>
+    <div class="hud-brand">
+      <span class="hud-title">Mission Board</span>
+      <span class="hud-subtitle">running · needs you · stopped</span>
+    </div>
+    <span class="hud-meta">events <strong id="count">0</strong></span>
+    <span class="hud-spacer"></span>
+    <select id="theme-pick" class="hud-theme" aria-label="Theme">
+      <option value="dark">dark</option>
+      <option value="sapphire">sapphire</option>
+      <option value="lapis-velvet">lapis-velvet</option>
+      <option value="sandstone">sandstone</option>
+    </select>
+    <a class="hud-link" href="/">views</a>
   </header>
   <div class="board">
-    <section class="col col-running" id="running">
-      <h2>Running <span class="n" data-count>0</span></h2>
-      <div class="cards"></div>
-      <p class="empty">No active sessions</p>
+    <section class="bay bay-running" id="running">
+      <div class="bay-head"><h2>Running</h2><span class="bay-count" data-count>0</span></div>
+      <div class="bay-body cards"></div>
+      <p class="bay-empty">No active sessions</p>
     </section>
-    <section class="col col-needs" id="needs-you">
-      <h2>Needs You <span class="n" data-count>0</span></h2>
-      <div class="cards"></div>
-      <p class="empty">Nothing waiting</p>
+    <section class="bay bay-needs" id="needs-you">
+      <div class="bay-head"><h2>Needs You</h2><span class="bay-count" data-count>0</span></div>
+      <div class="bay-body cards"></div>
+      <p class="bay-empty">Nothing waiting</p>
     </section>
-    <section class="col col-stopped" id="stopped">
-      <h2>Stopped <span class="n" data-count>0</span></h2>
-      <div class="cards"></div>
-      <p class="empty">No stopped sessions</p>
+    <section class="bay bay-stopped" id="stopped">
+      <div class="bay-head"><h2>Stopped</h2><span class="bay-count" data-count>0</span></div>
+      <div class="bay-body cards"></div>
+      <p class="bay-empty">No stopped sessions</p>
     </section>
   </div>
   <script>
@@ -162,18 +210,19 @@
     };
     var countEl = document.getElementById("count");
     var dot = document.getElementById("dot");
+    var themePick = document.getElementById("theme-pick");
 
     function shortId(id) {
       id = String(id || "");
-      return id.length > 10 ? id.slice(0, 8) : id;
+      return id.length > 10 ? id.slice(0, 8) + "…" : id;
     }
     function age(ts) {
       var t = Date.parse(ts);
       if (isNaN(t)) t = Date.now();
       var s = Math.max(0, Math.round((Date.now() - t) / 1000));
-      if (s < 60) return s + "s ago";
-      if (s < 3600) return Math.round(s / 60) + "m ago";
-      return Math.round(s / 3600) + "h ago";
+      if (s < 60) return s + "s";
+      if (s < 3600) return Math.round(s / 60) + "m";
+      return Math.round(s / 3600) + "h";
     }
     function statusOf(state) {
       if (state.kind === "stop") return "stopped";
@@ -185,14 +234,11 @@
       if (status === "needs") return cols.needs;
       return cols.running;
     }
-    function lastTool(state) {
-      return state.lastTool || "—";
-    }
     function syncEmpty() {
       ["running", "needs", "stopped"].forEach(function (k) {
         var col = cols[k];
         var n = col.querySelectorAll(".card").length;
-        var empty = col.querySelector(".empty");
+        var empty = col.querySelector(".bay-empty");
         var badge = col.querySelector("[data-count]");
         if (empty) empty.hidden = n > 0;
         if (badge) badge.textContent = String(n);
@@ -205,8 +251,8 @@
       el.className = "card st-" + status;
       el.querySelector(".sid").textContent = shortId(sid);
       el.querySelector(".machine").textContent = state.machine || "—";
-      el.querySelector(".tool").textContent = lastTool(state);
-      el.querySelector(".n").textContent = state.count + " events";
+      el.querySelector(".tool").textContent = state.lastTool || "—";
+      el.querySelector(".evt-count").textContent = state.count + " evt";
       el.querySelector(".age").textContent = age(state.ts);
       var dest = columnFor(status).querySelector(".cards");
       if (el.parentNode !== dest) dest.appendChild(el);
@@ -219,9 +265,10 @@
       if (!cards[sid]) {
         var el = document.createElement("article");
         el.className = "card st-running";
-        el.innerHTML = '<div class="card-top"><span class="led"></span><span class="sid"></span><span class="age"></span></div>' +
+        el.innerHTML =
+          '<div class="card-top"><span class="led"></span><span class="sid"></span><span class="age"></span></div>' +
           '<div class="machine"></div>' +
-          '<div class="card-foot"><span class="tool"></span><span class="n"></span></div>';
+          '<div class="card-foot"><span class="tool"></span><span class="evt-count"></span></div>';
         cards[sid] = { el: el, count: 0, kind: "", lastTool: "", machine: "", ts: ev.ts };
         cols.running.querySelector(".cards").appendChild(el);
       }
@@ -235,14 +282,18 @@
       countEl.textContent = String(total);
       renderCard(sid);
     }
-    setInterval(function () {
-      Object.keys(cards).forEach(renderCard);
-    }, 5000);
+    setInterval(function () { Object.keys(cards).forEach(renderCard); }, 5000);
     syncEmpty();
 
+    themePick.value = localStorage.getItem("hud-theme") || "dark";
+    themePick.addEventListener("change", function () {
+      localStorage.setItem("hud-theme", themePick.value);
+      document.getElementById("hud-theme").href = "/themes/" + themePick.value + ".css";
+    });
+
     var es = new EventSource('/stream?replay=200');
-    es.addEventListener("open", function () { dot.className = "dot live"; });
-    es.addEventListener("error", function () { dot.className = "dot recon"; });
+    es.addEventListener("open", function () { dot.className = "hud-dot live"; });
+    es.addEventListener("error", function () { dot.className = "hud-dot"; });
     es.addEventListener("hud", function (e) {
       try { onEvent(JSON.parse(e.data)); } catch (err) {}
     });
