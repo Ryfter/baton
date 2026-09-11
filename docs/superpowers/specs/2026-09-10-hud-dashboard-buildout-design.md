@@ -1,7 +1,7 @@
 # HUD build-out — design spec (the HUD replaces `dashboard/`)
 
 **Date:** 2026-09-10
-**Status:** draft, for Kevin's review — rev. 2 folds in his answers to open questions 1/2/5/8/9 (theme, satellite OS, Maestro, write-back, 2.x)
+**Status:** draft, for Kevin's review — rev. 3 folds in his answers to the remaining open questions: Windows is in scope for M2 alongside macOS/Linux, `tailscale serve` confirmed, KB router and `mydashboard` dropped, a `dashboard/` access log lands at M4, 30-day retention confirmed. Only Maestro hold/release (§15) stays genuinely open, with a stated lean.
 **Author:** Claude (Opus 5, orchestrator)
 **Builds on:** `docs/superpowers/specs/2026-09-09-hud-prototype-design.md` (the prototype spec — envelope, kinds, routes, SSE+SQLite+static-front-end shape). Everything there still holds unless this document says otherwise.
 **Shipped code this extends:** branch `hud-prototype-grok` @ `3a5624a` (`origin`), worktree `/Users/kev/Dev/Baton/.worktrees/hud-prototype-grok`. 44 tests pass.
@@ -47,7 +47,7 @@ Two facts make the swap cheap and are worth stating up front:
 
 ### 1.3 Non-goals
 
-- **Not a control plane.** The HUD is observe-only for the whole of M1–M7: no write-back to agents, no fleet actions, no run answering. Control belongs to the CLI today and to a future Hermes / claw bot tomorrow (D13). The one candidate exception — Maestro hold/release — is scoped but gated on §15.5.
+- **Not a control plane.** The HUD is observe-only for the whole of M1–M7: no write-back to agents, no fleet actions, no run answering. Control belongs to the CLI today and to a future Hermes / claw bot tomorrow (D13). The one candidate exception — Maestro hold/release — is scoped but gated on §15.1.
 - **Not multi-tenant.** The HUD ships in 2.x and other Baton users can run it, but each install is single-operator: one collector, one token store, one `$BATON_HOME`. Nothing here precludes multi-tenant later — telemetry is opt-in (§8.7), paths are `$BATON_HOME`-relative, no hostname is hard-coded outside config — but no tenant model is built.
 - Not a replacement for `/baton:*` slash commands. The HUD observes the fleet; the commands drive it.
 - Not a log aggregator. Payloads are *summaries* with hard clamps, never transcripts.
@@ -124,6 +124,7 @@ hud/
     dev.baton.hud-forwarder.plist  # macOS satellite (launchd)
     hud.service                    # Linux collector (systemd --user)
     hud-forwarder.service          # Linux satellite (systemd --user)
+    hud-forwarder-task.xml  NEW    # Windows satellite (Task Scheduler)
   frontends/
     hud.js          NEW  # shared SSE client + theme + formatters (same-origin, no libs)
     board.html cockpit.html deck.html minimal.html
@@ -184,7 +185,7 @@ Every harness adapter emits `source: <harness>` and sets `session_id` per the co
 - `machine_sample` — `{cpu_pct, load1, mem_used_gb, mem_total_gb, disk_free_gb, disk_total_gb, gpu_gb, gpu_used_gb, uptime_s}`
 - `agent_alive` — roster: `{agents: [{kind, pid, session_id, cwd, last_seen}]}`, sourced from `$BATON_HOME/sessions/*.json` (the session-marker files — `{agent, session_id, cwd, started_at, last_seen_at, kind}`) plus a process scan for known harness binaries.
 
-Dependency policy: `psutil` if importable, else a stdlib fallback per platform — `os.getloadavg` and `shutil.disk_usage` everywhere, plus `sysctl -n hw.memsize` + `vm_stat` on darwin and `/proc/meminfo` + `/proc/stat` on Linux. Both platforms are first-class from M2 (§8.5). The GPU / LM Studio fields overlay `$BATON_HOME/systems/inventory.json` when present.
+Dependency policy: `psutil` if importable, else a stdlib fallback per platform — `os.getloadavg` and `shutil.disk_usage` everywhere, plus `sysctl -n hw.memsize` + `vm_stat` on darwin and `/proc/meminfo` + `/proc/stat` on Linux. Windows has no `os.getloadavg` equivalent, so `psutil` is effectively required there; the stdlib fallback (ctypes `GlobalMemoryStatusEx` for memory, `GetSystemTimes` deltas for a rough CPU%, no load-average concept) is best-effort only and flagged as such in the sample payload. All three platforms are first-class from M2 (§8.5). The GPU / LM Studio fields overlay `$BATON_HOME/systems/inventory.json` when present.
 
 ---
 
@@ -415,7 +416,7 @@ Consequences, applied throughout this spec:
 - The `control` kind (§4.2) stays defined but is **unused** — reserved so a future control layer emitting into the HUD does not need an envelope change.
 - `dashboard/routers/controls.py` and the `runs/{id}/answer` POST are **dropped, not ported** (§10.1).
 
-The one item still in play is Maestro hold/release, which Kevin asked to keep. It is a write, so it is scoped but gated — §10.1 and §15.5.
+The one item still in play is Maestro hold/release, which Kevin asked to keep. It is a write, so it is scoped but gated — §10.1 and §15.1.
 
 Whatever eventually owns control will very likely need to *see* what the HUD sees. The HUD's answer to that is `GET /api/*` + `/stream` with a `read`-scoped token, not a control endpoint bolted onto the collector.
 
@@ -463,7 +464,7 @@ Because a cookie is now ambient, the existing Origin + `Content-Type: applicatio
 
 ### 8.5 Service management
 
-Two supervisors, because the satellite may be **macOS or Linux** (Kevin, 2026-09-10: a few candidate machines, none committed; Windows unknown and unlikely). `baton hud install-service` detects the platform and installs the right unit; `baton hud status` reports supervisor state + `/healthz` from either.
+Three supervisors: one of Kevin's candidate satellite boxes is Windows (confirmed 2026-09-11), so macOS, Linux, and Windows are all first-class from M2 — see D15. `baton hud install-service` detects the platform and installs the right unit; `baton hud status` reports supervisor state + `/healthz` from any of the three.
 
 **macOS — `hud/service/dev.baton.hud{,-forwarder}.plist` → `~/Library/LaunchAgents/`:**
 
@@ -478,9 +479,15 @@ Two supervisors, because the satellite may be **macOS or Linux** (Kevin, 2026-09
 - Logs to the journal (`journalctl --user -u hud`); the file-rotation logic in `retention.py` is macOS-only and no-ops here
 - `systemctl --user enable --now hud`; needs `loginctl enable-linger $USER` so it survives logout — `install-service` checks for it and says so rather than silently installing something that dies at logout
 
-The **collector** unit is normally only installed on droid; the **forwarder** unit on every satellite. Nothing about the collector is macOS-specific, so a Linux box could take over as collector without a code change.
+**Windows — `hud/service/hud-forwarder-task.xml` → registered via `schtasks /create /xml`:**
 
-A Windows satellite would need a Scheduled Task and a Windows branch in the machine sampler. **Deferred** — not in M2, not blocking (§15.1: Kevin's answer was macOS or Linux; Windows unconfirmed but unlikely).
+- A Task Scheduler task, not a Windows Service — no admin rights and no MSI needed, matching the zero-install spirit of the launchd/systemd units.
+- Trigger `AtLogon` (the current user), `RestartOnFailure` with a 10 s interval and no retry cap (Task Scheduler's own restart policy, the closest analogue to `KeepAlive`/`Restart=always`).
+- Environment carried via a small `hud-forwarder.cmd` wrapper the task actually launches (Task Scheduler XML environment blocks are awkward to author by hand); the wrapper reads `%BATON_HOME%\hud.env` for `HUD_TOKENS` etc., mirroring the Linux `EnvironmentFile` pattern instead of inventing a third config shape.
+- Logs to `$BATON_HOME/logs/hud-forwarder.{out,err}.log`, same convention as macOS.
+- The **collector** role is not offered on Windows in M2 — only the forwarder. Running the actual event store + SSE server on a Windows box is not a design problem, just untested scope; nothing here prevents it later, but droid (or any Linux/macOS box) stays the collector for now.
+
+The **collector** unit is normally only installed on droid; the **forwarder** unit on every satellite, whatever its OS. Nothing about the collector is macOS-specific, so a Linux box could take over as collector without a code change.
 
 ### 8.6 Failure behaviour — stated explicitly
 
@@ -559,8 +566,8 @@ The contract for deleting `dashboard/`. Every router and reader is accounted for
 | `gauges.py` | `/gauges`, `/partials/gauges`, `/api/gauges` | `/api/gauges` | M5 | biggest reader (431 loc); the quota *probes* stay pwsh and feed `governor` events |
 | `dark_factory.py` | `/dark-factory/status`, `/dark-factory/partials/panel` | `/api/board?source=baton-journal` + a panel | M5 | legacy shells out to pwsh per request; HUD reads events |
 | `controls.py` | `POST /controls/ollama/stop-all`, `/controls/lmstudio/{load,unload,server/stop}` | **dropped for now** — the CLI (and a future Hermes/claw bot) owns control | — | D13. Not a capability loss: `/baton:models`, `/baton:fleet` and the LM Studio CLI already do all four. |
-| `kb.py` | `/kb/search`, `/partials/{kb-search,decision}` | **deferred** | — | blocked on open question §15.3 — port at M6, or drop in favour of `/baton:kb-search` (recommended) |
-| `maestro.py` (239 loc) | `/maestro/{status,jobs,budget}`, `/partials/{status,compose}`, `POST /maestro/jobs/{id}/{hold,release}`, `POST /maestro/transcribe` | **ported — read side at M5; hold/release conditional at M7** | M5 / M7 | Kevin: keep hold/release, drop voice. Read side (`/api/maestro`: job/assignment board, held vs released, budget) is plain observation and is unconditionally in at M5. `POST /transcribe` + `maestro-voice.js` **dropped** (§16). The two hold/release POSTs are writes and collide with D13 — scoped for M7, gated on §15.5. |
+| `kb.py` | `/kb/search`, `/partials/{kb-search,decision}` | **dropped** | — | confirmed (Kevin, 2026-09-11) — it's a search box, not a monitor; use `/baton:kb-search` |
+| `maestro.py` (239 loc) | `/maestro/{status,jobs,budget}`, `/partials/{status,compose}`, `POST /maestro/jobs/{id}/{hold,release}`, `POST /maestro/transcribe` | **ported — read side at M5; hold/release conditional at M7** | M5 / M7 | Kevin: keep hold/release, drop voice. Read side (`/api/maestro`: job/assignment board, held vs released, budget) is plain observation and is unconditionally in at M5. `POST /transcribe` + `maestro-voice.js` **dropped** (§16). The two hold/release POSTs are writes and collide with D13 — scoped for M7, gated on §15.1. |
 | `mydashboard.py` | `/mydashboard/*` | **dropped** | — | reads `~/Dev/MyDashboard`; outside Baton's scope |
 | `api.py` | `/api/stats` | `/api/cockpit` | M4 | |
 
@@ -614,8 +621,8 @@ Both run during M1–M6. `dashboard/` is untouched except for the port line — 
 
 ### 11.3 Retire checklist (M7)
 
-1. Every row in §10 is ported with a green gate, or explicitly dropped with Kevin's sign-off (§15.3 KB router, §15.4 `mydashboard`, §15.5 Maestro hold/release).
-2. Two weeks of parallel running with no legacy-only route needed. Honest note: there is no access log on `dashboard/`; this gate is Kevin's judgment, not telemetry. If that is not good enough, add a one-line access log at M4 and measure (§15.6).
+1. Every row in §10 is ported with a green gate, or explicitly dropped with Kevin's sign-off. KB router and `mydashboard` are resolved (both dropped); Maestro hold/release (§15) is the only row still open, tracked to M7.
+2. Two weeks of parallel running with no legacy-only route needed — backed by the M4 access log (D16), not judgment alone.
 3. `hud/data/api-rates.json` in place and `project_economics` parity green.
 4. `dashboard/Design from Google stitch/` → `docs/design/baton-flight-deck/`.
 5. `git rm -r dashboard/` in one commit. Delete `dashboard/requirements.txt`.
@@ -671,17 +678,17 @@ Each milestone is independently shippable and leaves the tree working.
 Merge `hud-prototype-grok` to `master`. launchd unit on droid. `baton hud {serve,status,install-service,rebuild}`. Migrations framework + `recv_ts`/`event_uid` columns. Retention pruner + nightly backup. `Last-Event-ID` resume. Extended `/healthz`. **Default theme flips `dark` → `sapphire`** (§9.4) — three small edits, no new machinery.
 **Exit:** survives a reboot unattended; `/healthz` green; a live stream loses zero events across a `kill -9` + restart; DB stops growing without bound; a browser with empty `localStorage` lands on `sapphire`; existing 44 tests plus migration/retention/resume/theme-default tests pass.
 
-### M2 — Multi-machine ingest (macOS + Linux satellites)
-`hud/auth.py` token store with scopes/source/machine binding. `POST /ingest/batch`. `hud/forwarder.py` + spool + drain. Satellite service units for **both** launchd and systemd (§8.5), with the platform-detecting `install-service`. Machine sampler gets its Linux branch. TrustedHost extended to the tailnet name. Skew detection. Bare `/api/machines`.
-**Exit:** a Claude Code session on a second box — macOS **or** Linux — appears in the HUD within 2 s; the collector down for 60 s loses nothing on recovery; an `ingest`-scoped token gets 401 on `/events` and 403 on a forged `source`/`machine`; `install-service` on Linux refuses to pretend it worked when lingering is disabled. Windows stays deferred.
+### M2 — Multi-machine ingest (macOS, Linux, and Windows satellites)
+`hud/auth.py` token store with scopes/source/machine binding. `POST /ingest/batch`. `hud/forwarder.py` + spool + drain. Satellite service units for launchd, systemd, **and Windows Task Scheduler** (§8.5, D15), with the platform-detecting `install-service`. Machine sampler gets its Linux and Windows branches. TrustedHost extended to the tailnet name (`tailscale serve`, §8.4). Skew detection. Bare `/api/machines`.
+**Exit:** a Claude Code session on a second box — macOS, Linux, **or Windows** — appears in the HUD within 2 s; the collector down for 60 s loses nothing on recovery; an `ingest`-scoped token gets 401 on `/events` and 403 on a forged `source`/`machine`; `install-service` on Linux refuses to pretend it worked when lingering is disabled; the Windows forwarder task survives a logoff/logon cycle.
 
 ### M3 — Journal / fleet adapter
 `hud/adapters/journal.py` + `runs.py`: tailer, cursor, 7-day backfill. Kinds `dispatch`, `tokens`, `gate`, `governor`, `job_phase`, `run_state`, `note`, `lesson`. `project`/`job_id`/`run_id` fields.
 **Exit:** a `/baton:codex` dispatch appears in the HUD; `/events?source=baton-journal` count matches the fixture journal's parsable line count exactly; parity gate vs `readers/journal.py`.
 
 ### M4 — Derived state; board + cockpit + machines graduate
-`sessions` projection, `derive.py`, `/api/{board,cockpit,machines,sessions}`, named SSE topics, `hud/adapters/machine.py`, `machines.html`. `board`/`cockpit` rewired off client-side derivation.
-**Exit:** parity gates vs `home_board`, `cockpit_grid`, `pane_truth`, `stats`, `machines`, `api/stats`. Two browsers on different machines show an identical board. Perf targets in §12.5 met.
+`sessions` projection, `derive.py`, `/api/{board,cockpit,machines,sessions}`, named SSE topics, `hud/adapters/machine.py`, `machines.html`. `board`/`cockpit` rewired off client-side derivation. Also lands a one-line access log on `dashboard/` routes (D16) — the data behind the M7 cutover call.
+**Exit:** parity gates vs `home_board`, `cockpit_grid`, `pane_truth`, `stats`, `machines`, `api/stats`. Two browsers on different machines show an identical board. Perf targets in §12.5 met. `dashboard/` access log is writing and readable.
 
 ### M5 — Economics, projects, jobs, runs, Maestro (read)
 `/api/{projects,gauges,jobs,runs,maestro}`, `rollups_hourly`, `api-rates.json` moved. Dark-factory panel. Maestro job/assignment board — held vs released, budget, assignments — as **observation only**.
@@ -692,7 +699,7 @@ Codex / grok / cursor-agent / opencode adapters. `/api/agents`, `/api/alerts`. S
 **Exit:** a Herdr-driven grok run appears as its own lane with correct status transitions; parity gates vs `agent_observability`, `factory_health`; five layouts still render with zero external network requests (asserted by the probe).
 
 ### M7 — Ship in Baton 2.x + retire `dashboard/`
-Hooks into `hooks/hooks.json` behind the opt-in guard. Port cutover. `dashboard/` deleted, design docs moved, all docs updated. Plugin version → 2.0.0, release notes, README section on standing the HUD up and what it records. **Conditional:** Maestro hold/release, only if §15.5 comes back "yes" — otherwise M7 ships with no write endpoint beyond `POST /config`.
+Hooks into `hooks/hooks.json` behind the opt-in guard. Port cutover. `dashboard/` deleted, design docs moved, all docs updated. Plugin version → 2.0.0, release notes, README section on standing the HUD up and what it records. **Conditional:** Maestro hold/release, only if M5's read-side usage flips the default in §15.1 — the planning default is leave-to-CLI, so M7 ships with no write endpoint beyond `POST /config` unless that changes.
 **Exit:** `dashboard/` is gone; no §10 row unaccounted for; the retire checklist (§11.3) is fully ticked including the 2.x release gate; a fresh Baton plugin install with `hud-enabled` absent emits nothing and costs < 20 ms per hook.
 
 ---
@@ -749,25 +756,31 @@ Hooks into `hooks/hooks.json` behind the opt-in guard. Port cutover. `dashboard/
 
 **D13 — The HUD is observe-only; fleet control stays in the CLI (and, later, a bot).**
 *Alternatives:* build the `POST /control/{action}` allowlist (ollama / LM Studio) + `runs/{id}/answer` write-back at M7, as an earlier draft did; leave the door fully shut and never revisit.
-*Rationale:* Kevin (2026-09-10): "I want to write back… but I don't really know if that is wise. It may be better to just leave it to the CLI or other interface and this is just a control plane to see what is going on." Write-back is the single largest blast-radius increase in the plan — it turns the browser's read cookie into a fleet-actuation credential and forces an `admin` scope with teeth. Deferring it keeps the token model small (`admin` = `POST /config` only), keeps the CSRF surface trivial, and loses no capability: `/baton:models`, `/baton:fleet` and the run CLI already cover every dropped action. If a dedicated control layer (a Hermes / "claw" bot) materialises, it owns write-back — not the HUD. The one live edge is Maestro hold/release (§15.5).
+*Rationale:* Kevin (2026-09-10): "I want to write back… but I don't really know if that is wise. It may be better to just leave it to the CLI or other interface and this is just a control plane to see what is going on." Write-back is the single largest blast-radius increase in the plan — it turns the browser's read cookie into a fleet-actuation credential and forces an `admin` scope with teeth. Deferring it keeps the token model small (`admin` = `POST /config` only), keeps the CSRF surface trivial, and loses no capability: `/baton:models`, `/baton:fleet` and the run CLI already cover every dropped action. If a dedicated control layer (a Hermes / "claw" bot) materialises, it owns write-back — not the HUD. The one live edge is Maestro hold/release (§15.1).
 
 **D14 — The HUD ships as a feature of Baton 2.x, not a Kevin-local tool.**
 *Alternatives:* keep it local until a real multi-tenant story exists; ship it in a 1.x point release.
 *Rationale:* Kevin (2026-09-10): "let's make the HUD a 2.x release, we may be close to that." Retiring `dashboard/` and turning telemetry on for every Baton user is a breaking, headline change — that is a major version. It also promotes D12's opt-in `$BATON_HOME/hud-enabled` guard from precaution to release-blocker: an upgrade must never silently start recording a stranger's prompts. Each install stays single-operator (§1.3); multi-tenant remains designed-for, not built.
 
+**D15 — Windows is a first-class M2 satellite via Task Scheduler, not deferred.**
+*Alternatives:* defer Windows past M2 (rev 2's position, when Kevin's candidate boxes were assumed macOS/Linux); install Windows as a real Service (needs an installer/admin rights) instead of a Scheduled Task.
+*Rationale:* Kevin confirmed (2026-09-11) one of his candidate satellite boxes is Windows, so "defer" would block M2 on his actual hardware. A Task Scheduler task with `AtLogon` + restart-on-failure matches the zero-install, no-admin-rights spirit of the launchd/systemd units without the packaging overhead a real Windows Service demands. The Windows *collector* role is out of scope for M2 (forwarder only) — that is untested surface, not a design objection, and can be picked up later without a redesign.
+
+**D16 — Add a one-line `dashboard/` access log at M4 so the M7 cutover call is data-backed.**
+*Alternatives:* keep the cutover gate as pure judgment (rev 2's position); instrument the HUD side instead (meaningless — the question is whether `dashboard/` still has traffic).
+*Rationale:* Kevin picked the spec's own recommendation: "two weeks parallel, no telemetry" was flagged as an honest gap in rev 2, not a preference. A single access-log line costs nothing and turns "does anyone still hit `dashboard/`" from a guess into a fact the retire checklist (§11.3) can point to.
+
 ---
 
 ## 15. Open questions for Kevin
 
-Resolved since the first draft, now folded into the body: default theme → **`sapphire`** (§9.4); write-back → **cut, observe-only** (D13); ship target → **Baton 2.x** (D14); Maestro → **kept, voice dropped** (§10.1). Still open:
+Resolved since rev 2, now folded into the body: default theme → **`sapphire`** (§9.4); write-back → **cut, observe-only** (D13); ship target → **Baton 2.x** (D14); Maestro read side → **kept, voice dropped** (§10.1); satellite OS → **macOS, Linux, and Windows all in scope for M2** (§8.5, D15); tailnet TLS → **`tailscale serve`, confirmed** (§8.4); KB router → **dropped** (§10.1); `mydashboard` → **dropped, confirmed** (§10.1); cutover gate → **a one-line `dashboard/` access log lands at M4** so the call is data-backed (§11.3, D16); retention → **30 days raw / hourly roll-ups forever, confirmed** (D9).
 
-1. **The satellite box(es).** Kevin: "may be macOS or Linux — a few machines it could be", Windows unlikely. M2 ships launchd + systemd forwarder units on that basis. Confirm none of the candidates is Windows (that adds a Scheduled Task unit + a Windows sampler branch to M2), and name the first box once chosen so M2 has a concrete target.
-2. **Tailnet TLS.** `tailscale serve` with a real `*.ts.net` cert, or plain HTTP restricted to the tailnet interface? Recommendation: `tailscale serve` — the §8.3 cookie wants `Secure`.
-3. **KB router.** Port `dashboard/routers/kb.py` (KB search + decision detail) into the HUD, or drop it and use `/baton:kb-search`? Recommendation: drop — it is a search box, not a monitor.
-4. **`mydashboard` router** — reads `~/Dev/MyDashboard`, outside Baton's scope. Confirm droppable.
-5. **Maestro hold/release.** The read side (job/assignment board, budget) is in at M5 unconditionally. The two write endpoints (`POST /maestro/jobs/{id}/{hold,release}`) collide with observe-only (D13). Build them at M7 as the sole write exception, or leave hold/release to the CLI too? Recommendation: leave to the CLI unless you drive hold/release from the dashboard often.
-6. **The cutover gate.** §11.3 step 2 is "two weeks parallel, no legacy-only route needed" — your judgment, no telemetry behind it. Accept that, or add a one-line access log to `dashboard/` at M4 so the decision has data?
-7. **Retention.** 30 days raw / hourly roll-ups forever (D9) — right, or do you want more raw history for debugging?
+One item stays genuinely open:
+
+1. **Maestro hold/release.** The read side (job/assignment board, budget) is in at M5 unconditionally, not gated on this. The two write endpoints (`POST /maestro/jobs/{id}/{hold,release}`) collide with observe-only (D13) — building them at M7 would be the sole write exception in the whole surface. Kevin's answer (2026-09-11): "probably leave to the CLI" but wants to keep the option open rather than close it now. **Planning default: leave to the CLI** — M7 (§13) stays conditional on this exactly as written, and the real call gets made once M5's read-side board has seen actual use: if hold/release turns out to be something Kevin reaches for from the dashboard often, build it at M7; otherwise M7 ships with no write endpoint beyond `POST /config`.
+
+Not blocking anything, but still outstanding: name the first Windows/macOS/Linux satellite box(es) once chosen (§8.5) — M2 can start before this is named; it only needs a concrete target by M2's exit criteria.
 
 ---
 
@@ -775,7 +788,7 @@ Resolved since the first draft, now folded into the body: default theme → **`s
 
 - **Live pane tails / terminal scrollback capture** (legacy `cockpit_grid` did a form of this). It is transcript capture by another name; it conflicts with the payload-clamp rule and it is the single fastest way to leak a secret into the store.
 - **STT / voice** (`readers/transcribe.py`, `maestro-voice.js`). Not a monitoring concern.
-- **Writing back to agents / actuating the fleet.** The HUD is observe-only (D13). The sole exception still under review is Maestro job hold/release (§15.5). No prompt injection into a running session, no arbitrary command execution, ever — a real control layer is a future CLI / bot concern, not the HUD's.
+- **Writing back to agents / actuating the fleet.** The HUD is observe-only (D13). The sole exception still under review is Maestro job hold/release (§15.1). No prompt injection into a running session, no arbitrary command execution, ever — a real control layer is a future CLI / bot concern, not the HUD's.
 - **WAN exposure**, port forwarding, self-signed certs, any auth provider.
 - **Multi-tenant / hosted mode.** The HUD ships in 2.x (D14) but every install is single-operator. Multi-tenant is designed-for (D12), not built.
 - **Editing `hud/versions/vN/`.** Frozen history.
