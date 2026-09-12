@@ -8,25 +8,8 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
+from hud import migrations
 from hud.schema import validate_envelope
-
-DDL = """
-CREATE TABLE IF NOT EXISTS events (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts         TEXT NOT NULL,
-  session_id TEXT NOT NULL,
-  source     TEXT NOT NULL,
-  kind       TEXT NOT NULL,
-  agent      TEXT,
-  seq        INTEGER NOT NULL,
-  machine    TEXT,
-  payload    TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS ix_events_session ON events(session_id);
-CREATE INDEX IF NOT EXISTS ix_events_kind    ON events(kind);
-CREATE INDEX IF NOT EXISTS ix_events_ts      ON events(ts);
-CREATE INDEX IF NOT EXISTS ix_events_session_seq ON events(session_id, seq);
-"""
 
 _lock = threading.Lock()
 _conn: Optional[sqlite3.Connection] = None
@@ -68,8 +51,7 @@ def get_conn() -> sqlite3.Connection:
 
 def init_db(conn: Optional[sqlite3.Connection] = None) -> None:
     c = conn if conn is not None else get_conn()
-    c.executescript(DDL)
-    c.commit()
+    migrations.migrate(c)
 
 
 def _row_to_event(row: sqlite3.Row) -> dict[str, Any]:
