@@ -1,7 +1,10 @@
-# HUD prototype
+# HUD
 
-Throwaway-or-keep live agent-activity HUD. Separate from the legacy `dashboard/`
-(do not start both). Transport is SSE. Storage is SQLite (`hud/hud.db`, gitignored).
+Baton's live agent-activity dashboard. Runs as a service (`baton hud install-service`
+on macOS; Linux/Windows land in M2). Separate from the legacy `dashboard/` (do not
+start both — see `docs/superpowers/specs/2026-09-10-hud-dashboard-buildout-design.md`
+§11.1 for the port-collision resolution). Transport is SSE with resume-on-reconnect.
+Storage is SQLite with hourly retention rollups (`hud/hud.db`, gitignored).
 
 ## Run
 
