@@ -170,3 +170,17 @@ def test_config_round_trip(client):
     assert r.status_code == 200
     assert r.json()["default_frontend"] is None
     assert read_config()["default_frontend"] is None
+
+
+def test_ingest_response_has_dup_field(client):
+    r = client.post("/ingest", json={"session_id": "s1", "kind": "stop"})
+    assert r.status_code == 200
+    assert r.json()["dup"] is False
+
+
+def test_ingest_dedups_on_event_uid(client):
+    body = {"session_id": "s1", "kind": "stop", "event_uid": "dup-1"}
+    r1 = client.post("/ingest", json=body)
+    r2 = client.post("/ingest", json=body)
+    assert r1.json()["id"] == r2.json()["id"]
+    assert r2.json()["dup"] is True

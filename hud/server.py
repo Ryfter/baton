@@ -265,7 +265,10 @@ def _fill(body: dict[str, Any]) -> dict[str, Any]:
     agent = body.get("agent")
     if agent is None or agent == "":
         agent = "main"
-    return {
+    event_uid = body.get("event_uid")
+    if event_uid is not None:
+        event_uid = str(event_uid)[:64]
+    result = {
         "schema": SCHEMA_ID,
         "ts": _coerce_ts(body.get("ts")),
         "session_id": str(session_id),
@@ -275,6 +278,9 @@ def _fill(body: dict[str, Any]) -> dict[str, Any]:
         "machine": body.get("machine") or socket.gethostname(),
         "payload": _clamp_payload(payload),
     }
+    if event_uid:
+        result["event_uid"] = event_uid
+    return result
 
 
 def _sse(event: dict[str, Any]) -> str:
@@ -498,7 +504,7 @@ async def ingest(request: Request) -> dict[str, Any]:
         logger.warning("ingest rejected: %s", exc)
         raise HTTPException(status_code=422, detail="invalid event") from exc
     await _broadcast(event)
-    return {"ok": True, "id": event_id, "seq": event["seq"]}
+    return {"ok": True, "id": event_id, "seq": event["seq"], "dup": event.get("dup", False)}
 
 
 @app.get("/stream")

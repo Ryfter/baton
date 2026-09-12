@@ -57,3 +57,29 @@ def test_replay_events_ascending(isolated_state):
     ids = [e["id"] for e in replayed]
     assert ids == sorted(ids)
     assert ids == [3, 4, 5]
+
+
+def test_insert_event_stamps_recv_ts_and_dup_false(isolated_state):
+    ev = make_event(session_id="s1", kind="stop")
+    insert_event(ev)
+    assert ev["recv_ts"]
+    assert ev["dup"] is False
+
+
+def test_insert_event_dedups_by_event_uid(isolated_state):
+    ev1 = make_event(session_id="s1", kind="stop", event_uid="abc-123")
+    id1 = insert_event(ev1)
+    ev2 = make_event(session_id="s1", kind="stop", event_uid="abc-123")
+    id2 = insert_event(ev2)
+    assert id2 == id1
+    assert ev2["dup"] is True
+    assert ev2["seq"] == ev1["seq"]
+
+
+def test_insert_event_without_event_uid_never_dedups(isolated_state):
+    a = make_event(session_id="s1", kind="stop")
+    b = make_event(session_id="s1", kind="stop")
+    id_a = insert_event(a)
+    id_b = insert_event(b)
+    assert id_a != id_b
+    assert a["dup"] is False and b["dup"] is False

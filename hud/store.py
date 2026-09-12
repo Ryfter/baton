@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -54,6 +55,10 @@ def init_db(conn: Optional[sqlite3.Connection] = None) -> None:
     migrations.migrate(c)
 
 
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _row_to_event(row: sqlite3.Row) -> dict[str, Any]:
     payload_raw = row["payload"]
     try:
@@ -72,6 +77,8 @@ def _row_to_event(row: sqlite3.Row) -> dict[str, Any]:
         "agent": row["agent"],
         "seq": row["seq"],
         "machine": row["machine"],
+        "event_uid": row["event_uid"],
+        "recv_ts": row["recv_ts"],
         "payload": payload,
     }
 
@@ -86,18 +93,23 @@ def _next_seq(conn: sqlite3.Connection, session_id: str) -> int:
 
 
 def insert_event(event: dict[str, Any]) -> int:
-    """Assign seq under a lock/transaction, persist, return id. Mutates event['seq']."""
+    """Assign seq + recv_ts under a lock/transaction, persist, return id.
+    Mutates event['seq'], event['recv_ts'], event['dup'].
+    A duplicate event_uid returns the EXISTING row's id/seq and sets dup=True."""
     with _lock:
         conn = get_conn()
         try:
             conn.execute("BEGIN IMMEDIATE")
             session_id = event["session_id"]
             event["seq"] = _next_seq(conn, session_id)
+            event["recv_ts"] = _utcnow_iso()
             validate_envelope(event)
+            event_uid = event.get("event_uid")
             cur = conn.execute(
                 """
-                INSERT INTO events (ts, session_id, source, kind, agent, seq, machine, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO events
+                  (ts, session_id, source, kind, agent, seq, machine, payload, event_uid, recv_ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event["ts"],
@@ -108,8 +120,21 @@ def insert_event(event: dict[str, Any]) -> int:
                     event["seq"],
                     event.get("machine"),
                     json.dumps(event.get("payload") or {}, ensure_ascii=False),
+                    event_uid,
+                    event["recv_ts"],
                 ),
             )
+            if cur.rowcount == 0 and event_uid:
+                existing = conn.execute(
+                    "SELECT id, seq FROM events WHERE event_uid = ?", (event_uid,)
+                ).fetchone()
+                conn.commit()
+                if existing is not None:
+                    event["dup"] = True
+                    event["seq"] = int(existing["seq"])
+                    return int(existing["id"])
+                # event_uid collided but the row is gone (pruned) -- fall through as non-dup.
+            event["dup"] = False
             conn.commit()
             return int(cur.lastrowid)
         except Exception:
@@ -168,3 +193,17 @@ def count_events() -> int:
         conn = get_conn()
         row = conn.execute("SELECT COUNT(*) FROM events").fetchone()
     return int(row[0] if row else 0)
+
+
+def count_events_since_recv(cutoff_ts: str) -> int:
+    with _lock:
+        conn = get_conn()
+        row = conn.execute("SELECT COUNT(*) FROM events WHERE recv_ts >= ?", (cutoff_ts,)).fetchone()
+    return int(row[0] if row else 0)
+
+
+def max_recv_ts() -> Optional[str]:
+    with _lock:
+        conn = get_conn()
+        row = conn.execute("SELECT MAX(recv_ts) FROM events").fetchone()
+    return row[0] if row and row[0] else None
