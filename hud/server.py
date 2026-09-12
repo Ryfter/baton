@@ -285,7 +285,9 @@ def _fill(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sse(event: dict[str, Any]) -> str:
-    return "event: hud\ndata: %s\n\n" % json.dumps(event, default=str, ensure_ascii=False)
+    eid = event.get("id")
+    id_line = "id: %s\n" % eid if eid else ""
+    return "%sevent: hud\ndata: %s\n\n" % (id_line, json.dumps(event, default=str, ensure_ascii=False))
 
 
 async def _broadcast(event: dict[str, Any]) -> None:
@@ -509,7 +511,7 @@ async def ingest(request: Request) -> dict[str, Any]:
 
 
 @app.get("/stream")
-async def stream(replay: int = Query(default=200)) -> StreamingResponse:
+async def stream(request: Request, replay: int = Query(default=200)) -> StreamingResponse:
     n = replay
     try:
         n = int(n)
@@ -517,12 +519,25 @@ async def stream(replay: int = Query(default=200)) -> StreamingResponse:
         n = 200
     n = max(0, min(n, 2000))
 
+    resume_from: Optional[int] = None
+    last_event_id_hdr = request.headers.get("last-event-id")
+    if last_event_id_hdr:
+        try:
+            candidate = int(last_event_id_hdr)
+            if candidate > 0:
+                resume_from = candidate
+        except (TypeError, ValueError):
+            resume_from = None
+
     async def gen():
         q: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAX)
         _subscribers.add(q)
         replayed_ids: set[int] = set()
         try:
-            replayed = await asyncio.to_thread(store.replay_events, n)
+            if resume_from is not None:
+                replayed = await asyncio.to_thread(store.query_events, since=resume_from)
+            else:
+                replayed = await asyncio.to_thread(store.replay_events, n)
             if not replayed:
                 yield ": stream-open\n\n"
             for ev in replayed:

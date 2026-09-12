@@ -186,6 +186,171 @@ def test_ingest_dedups_on_event_uid(client):
     assert r2.json()["dup"] is True
 
 
+def _read_sse_lines(url, headers=None, timeout=2.0, max_lines=4):
+    """Open a real HTTP GET against a live server and read up to max_lines
+    SSE lines (default 4 = one full frame: `id:`, `event:`, `data:`, blank).
+
+    NOTE on two deliberate deviations from the task brief's literal test code
+    here (both confirmed empirically, not guessed):
+
+    1. This goes through a real live uvicorn server (`live_server` fixture +
+       urllib), never the FastAPI/Starlette `TestClient` fixture, for the two
+       "simple" tests too. httpx's `ASGITransport` (which backs `TestClient`)
+       buffers an endpoint's ENTIRE response internally and only hands any
+       bytes back to the caller once the ASGI application callable *returns*
+       (httpx/_transports/asgi.py: `send()` appends every body chunk to
+       `body_parts`; `handle_async_request` doesn't build a `Response` until
+       `await self.app(...)` completes). `/stream`'s generator never returns
+       on its own -- it loops forever emitting periodic `: ping` keep-alives
+       -- so `client.stream(...).read()` / `.iter_lines()` against
+       `TestClient` hangs forever for this endpoint. Confirmed by direct
+       repro: it still hung with an explicit low per-call timeout and with
+       incremental `iter_lines()`, because the transport withholds all bytes
+       until the app coroutine finishes (which it never does). A real socket
+       doesn't have that limitation -- reads return as data arrives, exactly
+       like a real browser's EventSource -- matching this file's existing
+       `test_stream_receives_subsequently_ingested_event` pattern.
+
+    2. This reads line-by-line (`resp.readline()`), never `resp.read(N)` for
+       a largeish N (e.g. 4096, as the brief's Step 5 snippet does). Confirmed
+       by direct repro against a real uvicorn server: `HTTPResponse.read(N)`
+       on a chunked-transfer-encoded response (no Content-Length; `/stream`
+       has none) only returns once N bytes have arrived on the wire *or* the
+       connection closes (`http.client.HTTPResponse._read_chunked` loops
+       pulling additional chunks from the socket until `amt` is satisfied --
+       it is not a partial/non-blocking read). One SSE frame here is
+       ~150-300 bytes, and the connection deliberately stays open (SSE
+       keep-alive), so `.read(4096)` blocks past any short timeout even
+       though the bytes we need already arrived. `.readline()` returns each
+       `\\n`-terminated line as soon as it's on the wire, so reading exactly
+       the lines of one frame is both correct and fast (confirmed: returns
+       in ~1ms).
+    """
+    import urllib.request
+
+    req = urllib.request.Request(url, headers=headers or {})
+    lines = []
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        for _ in range(max_lines):
+            try:
+                line = resp.readline()
+            except (TimeoutError, OSError):
+                break
+            if not line:
+                break
+            lines.append(line.decode("utf-8"))
+    return "".join(lines)
+
+
+def test_sse_frames_carry_id(live_server):
+    url = live_server["url"]
+    body = json.dumps({"session_id": "s1", "kind": "stop"}).encode()
+    req = urllib.request.Request(
+        url + "/ingest", data=body, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    eid = json.loads(urllib.request.urlopen(req, timeout=2).read())["id"]
+    chunk = _read_sse_lines(url + "/stream?replay=10")
+    assert ("id: %d\n" % eid) in chunk
+
+
+def test_stream_honours_last_event_id_header(live_server):
+    url = live_server["url"]
+
+    def ingest(kind, payload=None):
+        body = json.dumps({"session_id": "s1", "kind": kind, "payload": payload or {}}).encode()
+        req = urllib.request.Request(
+            url + "/ingest", data=body, headers={"Content-Type": "application/json"}, method="POST"
+        )
+        return json.loads(urllib.request.urlopen(req, timeout=2).read())["id"]
+
+    first_id = ingest("stop")
+    second_id = ingest("notification", {"message": "x"})
+    chunk = _read_sse_lines(url + "/stream", headers={"Last-Event-ID": str(first_id)})
+    # resume from first_id must NOT replay first_id itself, but MUST include second_id
+    assert ("id: %d" % first_id) not in chunk
+    assert ("id: %d" % second_id) in chunk
+
+
+def test_restart_resume_loses_no_events(isolated_state):
+    import threading
+    import time
+    import urllib.request
+
+    import uvicorn
+
+    from hud.server import app
+
+    def start(port):
+        config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
+        srv = uvicorn.Server(config)
+        srv.install_signal_handlers = lambda: None
+        t = threading.Thread(target=srv.run, daemon=True)
+        t.start()
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                urllib.request.urlopen("http://127.0.0.1:%d/healthz" % port, timeout=0.2)
+                return srv, t
+            except Exception:
+                time.sleep(0.05)
+        raise RuntimeError("server did not start")
+
+    import socket as _socket
+    s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+
+    srv1, t1 = start(port)
+    # NOTE: urllib.request.urlopen() has no `headers=` kwarg (confirmed:
+    # passing one raises TypeError) -- build a Request object instead, same
+    # as the /stream request below already (correctly) does.
+    ingest_req = urllib.request.Request(
+        "http://127.0.0.1:%d/ingest" % port,
+        data=b'{"session_id":"s1","kind":"stop"}',
+        headers={"Content-Type": "application/json"},
+    )
+    r = urllib.request.urlopen(ingest_req, timeout=2)
+    import json as _json
+    first_id = _json.loads(r.read())["id"]
+
+    # simulate kill -9: stop the server WITHOUT graceful SSE teardown
+    srv1.should_exit = True
+    t1.join(timeout=3)
+
+    # while "down", an emitter would have nothing to POST to; simulate the
+    # gap by inserting directly into the shared store as if a forwarder had
+    # spooled it (M1 has no forwarder yet -- this proves the DB/WAL survives
+    # the restart, which is the M1-scoped half of the exit criterion).
+    from hud import store
+    ev2 = {"schema": "hud.event/v1", "ts": "2026-09-12T00:00:00Z", "session_id": "s1",
+           "source": "claude-hook", "kind": "notification", "agent": "main",
+           "machine": "m", "payload": {"message": "x"}}
+    second_id = store.insert_event(ev2)  # insert_event returns the id; it does not mutate event["id"]
+
+    srv2, t2 = start(port)
+    req = urllib.request.Request(
+        "http://127.0.0.1:%d/stream" % port,
+        headers={"Last-Event-ID": str(first_id)},
+    )
+    # NOTE: readline()-based read, not resp.read(4096) -- see _read_sse_lines'
+    # docstring above for why .read(N) blocks past any short timeout on a
+    # chunked-transfer SSE response that stays open (confirmed empirically).
+    chunk_lines = []
+    with urllib.request.urlopen(req, timeout=2) as resp:
+        for _ in range(4):  # one full frame: id / event / data / blank
+            line = resp.readline()
+            if not line:
+                break
+            chunk_lines.append(line.decode("utf-8"))
+    chunk = "".join(chunk_lines)
+    assert ("id: %d" % second_id) in chunk
+    assert ("id: %d" % first_id) not in chunk
+
+    srv2.should_exit = True
+    t2.join(timeout=3)
+
+
 def test_healthz_extended_fields(client):
     client.post("/ingest", json={"session_id": "s1", "kind": "stop"})
     r = client.get("/healthz")
