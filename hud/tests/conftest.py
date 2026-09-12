@@ -34,6 +34,7 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setenv("HUD_CONFIG", str(cfg))
     monkeypatch.setenv("HUD_HOST", "127.0.0.1")
     monkeypatch.delenv("HUD_TOKEN", raising=False)
+    monkeypatch.setenv("HUD_DISABLE_RETENTION", "1")
     import hud.store as store
 
     store.reset()

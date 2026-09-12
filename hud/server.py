@@ -22,6 +22,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from hud import config as hud_config
 from hud import migrations
+from hud import retention
 from hud import store
 from hud.schema import SCHEMA_ID
 
@@ -128,6 +129,8 @@ STARTED_AT = time.time()
 
 _subscribers: set[asyncio.Queue] = set()
 _QUEUE_MAX = 256
+_retention_task: Optional[asyncio.Task] = None
+_last_backup_ts: Optional[float] = None
 MAX_BODY = 64 * 1024
 EVENTS_LIMIT = 500
 _PAYLOAD_CAPS = {
@@ -481,6 +484,37 @@ app.add_middleware(
     allowed_hosts=list(allowed_hosts()) + ["*.local"],
     www_redirect=False,
 )
+
+
+async def _retention_loop() -> None:
+    global _last_backup_ts
+    while True:
+        try:
+            conn = store.get_conn()
+            days = int(os.environ.get("HUD_RETENTION_DAYS", str(retention.RETENTION_DAYS_DEFAULT)))
+            await asyncio.to_thread(retention.prune_once, conn, retention_days=days)
+            now = time.time()
+            if retention.should_backup(_last_backup_ts, now):
+                await asyncio.to_thread(retention.backup_now, conn, retention.backup_dir())
+                _last_backup_ts = now
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("retention loop failed")
+        await asyncio.sleep(retention.PRUNE_INTERVAL_S)
+
+
+@app.on_event("startup")
+async def _on_startup() -> None:
+    global _retention_task
+    if os.environ.get("HUD_DISABLE_RETENTION") != "1":
+        _retention_task = asyncio.create_task(_retention_loop())
+
+
+@app.on_event("shutdown")
+async def _on_shutdown() -> None:
+    if _retention_task is not None:
+        _retention_task.cancel()
 
 
 @app.middleware("http")

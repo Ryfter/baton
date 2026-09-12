@@ -370,3 +370,12 @@ def test_healthz_extended_fields(client):
     assert body["migration_version"] == 3
     assert body["last_event_recv_ts"]
     assert body["db_bytes"] > 0
+
+
+def test_retention_task_starts_unless_disabled(monkeypatch, isolated_state):
+    monkeypatch.delenv("HUD_DISABLE_RETENTION", raising=False)
+    from fastapi.testclient import TestClient
+    from hud import server
+    with TestClient(server.app):
+        assert server._retention_task is not None
+        assert not server._retention_task.done()
