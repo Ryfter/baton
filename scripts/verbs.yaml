@@ -211,3 +211,8 @@ verbs:
       --options-json: -OptionsJson
       --rec: -Rec
       --rec-why: -RecWhy
+  - name: hud
+    summary: Agent-activity HUD -- serve, status, install-service, rebuild.
+    class: engine
+    runner: hud.ps1
+    json: false
