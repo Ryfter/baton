@@ -6,6 +6,13 @@ start both — see `docs/superpowers/specs/2026-09-10-hud-dashboard-buildout-des
 §11.1 for the port-collision resolution). Transport is SSE with resume-on-reconnect.
 Storage is SQLite with hourly retention rollups (`hud/hud.db`, gitignored).
 
+**Retention scope (M1):** the pruner enforces **30-day time-based retention only**.
+A hard row-count cap (`HUD_MAX_ROWS`) and periodic space reclamation
+(`PRAGMA incremental_vacuum` / a weekly `VACUUM`, spec §5.3) are **deferred to a
+follow-up** — not implemented in this milestone. Time-based retention bounds
+steady-state growth, but there is currently no hard cap on row count and no
+space reclamation once rows are pruned.
+
 ## Run
 
 ```
