@@ -65,7 +65,7 @@ def _launch_agents_dir() -> Path:
     return Path.home() / "Library" / "LaunchAgents"
 
 
-def install_macos_service(repo_root: Path, *, host: str = "0.0.0.0", port: int = 8765,
+def install_macos_service(repo_root: Path, *, host: str = "127.0.0.1", port: int = 8765,
                            python_exe: str = "") -> Path:
     import sys
     python_exe = python_exe or sys.executable

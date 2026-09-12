@@ -7,10 +7,6 @@ import os
 import sys
 from pathlib import Path
 
-import uvicorn
-
-from hud.server import warn_if_unauthed_lan
-
 _KNOWN_COMMANDS = {"serve", "status", "install-service", "rebuild"}
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -28,7 +24,12 @@ def build_parser() -> argparse.ArgumentParser:
     status_p.add_argument("--port", type=int, default=int(os.environ.get("HUD_PORT", "8765")))
     status_p.add_argument("--token", default=os.environ.get("HUD_TOKEN", ""))
 
-    sub.add_parser("install-service", help="install the platform service unit (macOS: launchd)")
+    install_p = sub.add_parser("install-service", help="install the platform service unit (macOS: launchd)")
+    # Default matches `serve`'s own default: loopback-only. A LAN-bound service
+    # is opt-in via an explicit --host 0.0.0.0, exactly like `serve`.
+    install_p.add_argument("--host", default=os.environ.get("HUD_HOST", "127.0.0.1"))
+    install_p.add_argument("--port", type=int, default=int(os.environ.get("HUD_PORT", "8765")))
+
     sub.add_parser("rebuild", help="WAL checkpoint + integrity check (+ sessions rebuild from M4)")
 
     return parser
@@ -42,6 +43,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "serve":
+        import uvicorn
+        from hud.server import warn_if_unauthed_lan
+
         os.environ["HUD_HOST"] = args.host
         warn_if_unauthed_lan(args.host)
         uvicorn.run("hud.server:app", host=args.host, port=args.port)
@@ -56,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "install-service":
         from hud import servicectl
         try:
-            path = servicectl.install_service(_REPO_ROOT)
+            path = servicectl.install_service(_REPO_ROOT, host=args.host, port=args.port)
         except servicectl.UnsupportedPlatform as exc:
             print(str(exc), file=sys.stderr)
             return 1

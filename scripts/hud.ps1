@@ -8,16 +8,26 @@
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$python = Get-Command python3 -ErrorAction SilentlyContinue
-if (-not $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
-if (-not $python) {
-    Write-Error "baton hud: no python3/python on PATH"
-    exit 1
+
+# Prefer the repo's own venv -- a bare python3/python resolved from PATH may
+# lack FastAPI/uvicorn (or any of hud's deps), which crashes even the
+# subcommands that don't need them (C2).
+$venvPython = Join-Path $repoRoot ".venv/bin/python"
+if (Test-Path $venvPython) {
+    $pythonPath = $venvPython
+} else {
+    $python = Get-Command python3 -ErrorAction SilentlyContinue
+    if (-not $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
+    if (-not $python) {
+        Write-Error "baton hud: no .venv/bin/python and no python3/python on PATH"
+        exit 1
+    }
+    $pythonPath = $python.Path
 }
 
 Push-Location $repoRoot
 try {
-    & $python.Path -m hud @args
+    & $pythonPath -m hud @args
     exit $LASTEXITCODE
 } finally {
     Pop-Location
