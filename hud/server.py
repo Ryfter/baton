@@ -310,7 +310,7 @@ async def _broadcast(event: dict[str, Any]) -> None:
             pass
 
 
-def _chooser_html(names: list[str], token: str = "") -> str:
+def _chooser_html(names: list[str], token: str = "", default_theme: str = "sapphire") -> str:
     cards = []
     for name in names:
         desc = CHOOSER_DESCRIPTIONS.get(name, "HUD front-end variant.")
@@ -338,8 +338,8 @@ def _chooser_html(names: list[str], token: str = "") -> str:
       var q = new URLSearchParams(location.search);
       var t = q.get("theme");
       if (t && ALLOWED.indexOf(t) >= 0) localStorage.setItem("hud-theme", t);
-      else t = localStorage.getItem("hud-theme") || "dark";
-      if (ALLOWED.indexOf(t) < 0) t = "dark";
+      else t = localStorage.getItem("hud-theme") || "%(theme)s";
+      if (ALLOWED.indexOf(t) < 0) t = "%(theme)s";
       document.write('<link rel="stylesheet" id="hud-theme" href="/themes/' + t + '.css">');
     })();
   </script>
@@ -437,15 +437,15 @@ def _chooser_html(names: list[str], token: str = "") -> str:
     </div>
   </header>
   <main>
-    %s
+    %(cards)s
   </main>
   <script>
     (function () {
       var pick = document.getElementById("theme-pick");
       var link = document.getElementById("hud-theme");
       var q = new URLSearchParams(location.search).get("theme");
-      var t = q || localStorage.getItem("hud-theme") || "dark";
-      if (ALLOWED.indexOf(t) < 0) t = "dark";
+      var t = q || localStorage.getItem("hud-theme") || "%(theme)s";
+      if (ALLOWED.indexOf(t) < 0) t = "%(theme)s";
       pick.value = t;
       if (link) link.href = "/themes/" + t + ".css";
       pick.addEventListener("change", function () {
@@ -475,7 +475,23 @@ def _chooser_html(names: list[str], token: str = "") -> str:
   </script>
 </body>
 </html>
-""" % "\n".join(cards)
+""" % {"theme": default_theme, "cards": "\n".join(cards)}
+
+
+_THEME_FALLBACK_MARKERS = (
+    'localStorage.getItem("hud-theme") || "dark"',
+    't = "dark";',
+    ': "dark";',
+)
+
+
+def _render_frontend(path: Path, default_theme: str) -> str:
+    text = path.read_text(encoding="utf-8")
+    text = text.replace('localStorage.getItem("hud-theme") || "dark"',
+                         'localStorage.getItem("hud-theme") || "%s"' % default_theme)
+    text = text.replace('t = "dark";', 't = "%s";' % default_theme)
+    text = text.replace(': "dark";', ': "%s";' % default_theme)
+    return text
 
 
 app = FastAPI(title="hud", docs_url=None, redoc_url=None, openapi_url=None)
@@ -639,7 +655,7 @@ async def root(request: Request) -> Any:
         if path is not None:
             return RedirectResponse(url=_with_t("/v/%s" % path.stem, token), status_code=302)
     names = _frontend_names()
-    return HTMLResponse(_chooser_html(names, token=token))
+    return HTMLResponse(_chooser_html(names, token=token, default_theme=cfg.get("default_theme", "sapphire")))
 
 
 @app.get("/v/{name}")
@@ -647,7 +663,9 @@ async def view(name: str) -> Any:
     path = _frontend_path(name)
     if path is None:
         raise HTTPException(status_code=404, detail="unknown front-end")
-    return FileResponse(path, media_type="text/html; charset=utf-8")
+    cfg = hud_config.read_config()
+    html_text = _render_frontend(path, cfg.get("default_theme", "sapphire"))
+    return HTMLResponse(html_text)
 
 
 @app.get("/themes/{name}.css")
@@ -661,18 +679,26 @@ async def theme_css(name: str) -> Any:
 @app.post("/config")
 async def post_config(request: Request) -> dict[str, Any]:
     body = await _read_json_object(request)
-    if "default_frontend" not in body:
-        raise HTTPException(status_code=422, detail="default_frontend required")
-    val = body.get("default_frontend")
-    if val is not None:
-        val = str(val)
-        if val.endswith(".html"):
-            val = val[:-5]
-        if val == "" or val.lower() == "null":
-            val = None
-        elif _frontend_path(val) is None:
-            raise HTTPException(status_code=422, detail="unknown front-end")
-    return hud_config.write_config(val)
+    if "default_frontend" not in body and "default_theme" not in body:
+        raise HTTPException(status_code=422, detail="default_frontend or default_theme required")
+    kwargs: dict[str, Any] = {}
+    if "default_frontend" in body:
+        val = body.get("default_frontend")
+        if val is not None:
+            val = str(val)
+            if val.endswith(".html"):
+                val = val[:-5]
+            if val == "" or val.lower() == "null":
+                val = None
+            elif _frontend_path(val) is None:
+                raise HTTPException(status_code=422, detail="unknown front-end")
+        kwargs["default_frontend"] = val
+    if "default_theme" in body:
+        theme = body.get("default_theme")
+        if theme not in hud_config.THEME_NAMES:
+            raise HTTPException(status_code=422, detail="unknown theme")
+        kwargs["default_theme"] = theme
+    return hud_config.write_config(**kwargs)
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -749,6 +775,7 @@ async def version_chooser(vid: str, request: Request) -> Any:
         raise HTTPException(status_code=404, detail="unknown version")
     names = sorted(p.stem for p in (VERSIONS_DIR / vid).glob("*.html"))
     token = request.query_params.get("t") or ""
+    # Frozen versions keep hardcoded "dark" default -- do NOT pass hud_config's default_theme here
     html = _chooser_html(names, token=token).replace('href="/v/', 'href="/%s/v/' % vid)
     html = html.replace("<body>", '<body><p style="padding:0 20px"><a href="/versions">← all versions</a> · %s</p>' % vid)
     return HTMLResponse(html)

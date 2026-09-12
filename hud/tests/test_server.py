@@ -379,3 +379,52 @@ def test_retention_task_starts_unless_disabled(monkeypatch, isolated_state):
     with TestClient(server.app):
         assert server._retention_task is not None
         assert not server._retention_task.done()
+
+
+def test_default_theme_is_sapphire_out_of_the_box(client):
+    r = client.get("/v/board")
+    assert r.status_code == 200
+    text = r.text
+    assert 'localStorage.getItem("hud-theme") || "sapphire"' in text
+    assert 't = "sapphire";' in text  # the ALLOWED-fallback line
+
+
+def test_frozen_version_snapshots_still_default_to_dark(client):
+    from hud.server import _version_index
+
+    rows = _version_index()
+    assert rows  # sanity: frozen versions exist
+    # Find a version that has theme support (v3 or v4; v1-v2 predate it)
+    vid = None
+    layout = None
+    for row in rows:
+        if row["id"] in ("v3", "v4"):
+            vid = row["id"]
+            layout = row["layouts"][0]
+            break
+    assert vid is not None, "No theme-aware frozen version found"
+    r = client.get("/%s/v/%s" % (vid, layout))
+    assert r.status_code == 200
+    # frozen versions are served via FileResponse (untouched by Task 6's templating)
+    # and must keep whatever literal default they shipped with -- "dark" for v3-v4.
+    assert 'localStorage.getItem("hud-theme") || "dark"' in r.text
+
+
+def test_post_config_sets_default_theme(client):
+    r = client.post("/config", json={"default_theme": "lapis-velvet"})
+    assert r.status_code == 200
+    assert r.json()["default_theme"] == "lapis-velvet"
+    r2 = client.get("/v/board")
+    assert 'localStorage.getItem("hud-theme") || "lapis-velvet"' in r2.text
+    # default_frontend, untouched by this call, is preserved
+    assert r.json()["default_frontend"] is None
+
+
+def test_post_config_rejects_unknown_theme(client):
+    r = client.post("/config", json={"default_theme": "neon"})
+    assert r.status_code == 422
+
+
+def test_chooser_uses_configured_default_theme(client):
+    r = client.get("/")
+    assert 'localStorage.getItem("hud-theme") || "sapphire"' in r.text
