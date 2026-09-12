@@ -478,13 +478,6 @@ def _chooser_html(names: list[str], token: str = "", default_theme: str = "sapph
 """ % {"theme": default_theme, "cards": "\n".join(cards)}
 
 
-_THEME_FALLBACK_MARKERS = (
-    'localStorage.getItem("hud-theme") || "dark"',
-    't = "dark";',
-    ': "dark";',
-)
-
-
 def _render_frontend(path: Path, default_theme: str) -> str:
     text = path.read_text(encoding="utf-8")
     text = text.replace('localStorage.getItem("hud-theme") || "dark"',
@@ -535,6 +528,11 @@ async def _on_shutdown() -> None:
 
 @app.middleware("http")
 async def _auth(request: Request, call_next):
+    if request.method == "GET" and request.url.path == "/healthz":
+        # /healthz exposes only counters (no event content, no session id) --
+        # spec 7.3 requires it stay reachable without a credential so launchd,
+        # the forwarder and an uptime check can probe it from any host.
+        return await call_next(request)
     token = os.environ.get("HUD_TOKEN") or ""
     off_loopback = not host_is_loopback()
     if token or off_loopback:
@@ -556,7 +554,8 @@ async def ingest(request: Request) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("ingest rejected: %s", exc)
         raise HTTPException(status_code=422, detail="invalid event") from exc
-    await _broadcast(event)
+    if not event.get("dup"):
+        await _broadcast(event)
     return {"ok": True, "id": event_id, "seq": event["seq"], "dup": event.get("dup", False)}
 
 

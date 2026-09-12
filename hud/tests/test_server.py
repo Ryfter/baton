@@ -3,6 +3,8 @@ import threading
 import time
 import urllib.request
 
+import pytest
+
 from hud.config import read_config, write_config
 
 
@@ -184,6 +186,55 @@ def test_ingest_dedups_on_event_uid(client):
     r2 = client.post("/ingest", json=body)
     assert r1.json()["id"] == r2.json()["id"]
     assert r2.json()["dup"] is True
+
+
+def test_duplicate_event_uid_ingest_does_not_double_broadcast(live_server):
+    """I1: a deduplicated ingest (event_uid collision) must NOT re-broadcast to
+    live SSE subscribers -- a live client would otherwise see the same event
+    twice. Connect to /stream, POST the same event_uid twice, and confirm only
+    one frame for that session was ever emitted."""
+    url = live_server["url"]
+    frames = []
+    err = []
+
+    def listen():
+        try:
+            req = urllib.request.Request(url + "/stream?replay=0")
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                while True:
+                    line = resp.readline()
+                    if not line:
+                        break
+                    if line.startswith(b"data:"):
+                        frames.append(json.loads(line[5:].decode("utf-8")))
+        except (TimeoutError, OSError):
+            pass  # expected: the loop exits via the listener's own read timeout
+        except Exception as exc:
+            err.append(exc)
+
+    t = threading.Thread(target=listen, daemon=True)
+    t.start()
+    time.sleep(0.25)
+    body = json.dumps(
+        {"session_id": "dup-live", "kind": "stop", "payload": {}, "event_uid": "dup-live-1"}
+    ).encode()
+    for _ in range(2):
+        req = urllib.request.Request(
+            url + "/ingest",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=2)
+    # the listener's own urlopen timeout (2s of no new data) ends its loop
+    t.join(timeout=5)
+    assert not err, err
+    matching = [f for f in frames if f.get("session_id") == "dup-live"]
+    assert len(matching) == 1, (
+        "duplicate event_uid ingest produced %d broadcast frame(s), want exactly 1"
+        % len(matching)
+    )
+    assert matching[0]["dup"] is False
 
 
 def _read_sse_lines(url, headers=None, timeout=2.0, max_lines=4):
@@ -381,8 +432,9 @@ def test_retention_task_starts_unless_disabled(monkeypatch, isolated_state):
         assert not server._retention_task.done()
 
 
-def test_default_theme_is_sapphire_out_of_the_box(client):
-    r = client.get("/v/board")
+@pytest.mark.parametrize("layout", ["board", "cockpit", "deck", "minimal", "cards"])
+def test_default_theme_is_sapphire_out_of_the_box(client, layout):
+    r = client.get("/v/%s" % layout)
     assert r.status_code == 200
     text = r.text
     assert 'localStorage.getItem("hud-theme") || "sapphire"' in text
