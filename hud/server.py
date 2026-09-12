@@ -775,8 +775,8 @@ async def version_chooser(vid: str, request: Request) -> Any:
         raise HTTPException(status_code=404, detail="unknown version")
     names = sorted(p.stem for p in (VERSIONS_DIR / vid).glob("*.html"))
     token = request.query_params.get("t") or ""
-    # Frozen versions keep hardcoded "dark" default -- do NOT pass hud_config's default_theme here
-    html = _chooser_html(names, token=token).replace('href="/v/', 'href="/%s/v/' % vid)
+    # Frozen versions keep hardcoded "dark" default -- explicitly pass it to avoid picking up sapphire
+    html = _chooser_html(names, token=token, default_theme="dark").replace('href="/v/', 'href="/%s/v/' % vid)
     html = html.replace("<body>", '<body><p style="padding:0 20px"><a href="/versions">← all versions</a> · %s</p>' % vid)
     return HTMLResponse(html)
 

@@ -428,3 +428,17 @@ def test_post_config_rejects_unknown_theme(client):
 def test_chooser_uses_configured_default_theme(client):
     r = client.get("/")
     assert 'localStorage.getItem("hud-theme") || "sapphire"' in r.text
+
+
+def test_version_chooser_still_defaults_to_dark(client):
+    r = client.get("/v3")
+    assert r.status_code == 200
+    assert 'localStorage.getItem("hud-theme") || "dark"' in r.text
+
+
+def test_post_config_theme_only_write_preserves_frontend(client):
+    client.post("/config", json={"default_frontend": "deck"})
+    r = client.post("/config", json={"default_theme": "lapis-velvet"})
+    assert r.status_code == 200
+    assert r.json()["default_frontend"] == "deck"
+    assert r.json()["default_theme"] == "lapis-velvet"
