@@ -50,6 +50,18 @@ python hud/fake_traffic.py --fast
 Port 8765 is also the legacy `dashboard/`'s port. They cannot both run. This
 prototype takes 8765; do not start the old dashboard alongside it.
 
+## Running as a service (macOS)
+
+```
+baton hud install-service          # writes ~/Library/LaunchAgents/dev.baton.hud.plist, loads it
+baton hud status                   # human-readable /healthz summary
+baton hud rebuild                  # WAL checkpoint + integrity check + row count
+launchctl unload ~/Library/LaunchAgents/dev.baton.hud.plist   # stop
+```
+
+`install-service` on Linux/Windows currently refuses with a clear message — systemd and
+Task Scheduler land in M2 (see `docs/superpowers/specs/2026-09-10-hud-dashboard-buildout-design.md` §8.5, D15).
+
 ## Hooks
 
 `settings-hooks.snippet.json` (repo root) is the `~/.claude/settings.json` `hooks`
