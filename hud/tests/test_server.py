@@ -184,3 +184,19 @@ def test_ingest_dedups_on_event_uid(client):
     r2 = client.post("/ingest", json=body)
     assert r1.json()["id"] == r2.json()["id"]
     assert r2.json()["dup"] is True
+
+
+def test_healthz_extended_fields(client):
+    client.post("/ingest", json={"session_id": "s1", "kind": "stop"})
+    r = client.get("/healthz")
+    body = r.json()
+    for key in ("ok", "events", "sessions", "uptime_s", "db_bytes", "subscribers",
+                "ingest_rate_1m", "spool_drops", "last_event_recv_ts", "migration_version"):
+        assert key in body, key
+    assert body["events"] >= 1
+    assert body["ingest_rate_1m"] >= 1
+    assert body["sessions"] is None
+    assert body["spool_drops"] == 0
+    assert body["migration_version"] == 3
+    assert body["last_event_recv_ts"]
+    assert body["db_bytes"] > 0

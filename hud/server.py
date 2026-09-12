@@ -11,7 +11,7 @@ import re
 import socket
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote, urlsplit
@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from hud import config as hud_config
+from hud import migrations
 from hud import store
 from hud.schema import SCHEMA_ID
 
@@ -630,12 +631,31 @@ async def favicon() -> Response:
     return Response(status_code=204)
 
 
+def _db_bytes() -> int:
+    total = 0
+    base = str(store.db_path())
+    for suffix in ("", "-wal", "-shm"):
+        p = Path(base + suffix)
+        if p.exists():
+            total += p.stat().st_size
+    return total
+
+
 @app.get("/healthz")
 async def healthz() -> dict[str, Any]:
+    one_min_ago = (datetime.now(timezone.utc) - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn = store.get_conn()
     return {
         "ok": True,
         "events": await asyncio.to_thread(store.count_events),
+        "sessions": None,  # M4: sessions projection
         "uptime_s": int(time.time() - STARTED_AT),
+        "db_bytes": await asyncio.to_thread(_db_bytes),
+        "subscribers": len(_subscribers),
+        "ingest_rate_1m": await asyncio.to_thread(store.count_events_since_recv, one_min_ago),
+        "spool_drops": 0,  # M2: forwarder spool
+        "last_event_recv_ts": await asyncio.to_thread(store.max_recv_ts),
+        "migration_version": await asyncio.to_thread(migrations.current_version, conn),
     }
 
 
