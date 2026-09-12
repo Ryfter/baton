@@ -133,8 +133,11 @@ def insert_event(event: dict[str, Any]) -> int:
                     event["dup"] = True
                     event["seq"] = int(existing["seq"])
                     return int(existing["id"])
-                # event_uid conflicted a moment ago but the row is gone now (e.g. pruned
-                # concurrently) -- retry a real insert instead of fabricating a result.
+                # The INSERT OR IGNORE was ignored for some reason OTHER than a live
+                # event_uid conflict (e.g. a different constraint violation) -- no row
+                # with this event_uid actually exists to have returned here. Retry a
+                # real INSERT so any real problem raises loudly instead of silently
+                # vanishing.
                 cur = conn.execute(
                     """
                     INSERT INTO events (ts, session_id, source, kind, agent, seq, machine, payload, event_uid, recv_ts)
