@@ -329,26 +329,31 @@ def test_restart_resume_loses_no_events(isolated_state):
     second_id = store.insert_event(ev2)  # insert_event returns the id; it does not mutate event["id"]
 
     srv2, t2 = start(port)
-    req = urllib.request.Request(
-        "http://127.0.0.1:%d/stream" % port,
-        headers={"Last-Event-ID": str(first_id)},
-    )
-    # NOTE: readline()-based read, not resp.read(4096) -- see _read_sse_lines'
-    # docstring above for why .read(N) blocks past any short timeout on a
-    # chunked-transfer SSE response that stays open (confirmed empirically).
-    chunk_lines = []
-    with urllib.request.urlopen(req, timeout=2) as resp:
-        for _ in range(4):  # one full frame: id / event / data / blank
-            line = resp.readline()
-            if not line:
-                break
-            chunk_lines.append(line.decode("utf-8"))
-    chunk = "".join(chunk_lines)
-    assert ("id: %d" % second_id) in chunk
-    assert ("id: %d" % first_id) not in chunk
-
-    srv2.should_exit = True
-    t2.join(timeout=3)
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/stream" % port,
+            headers={"Last-Event-ID": str(first_id)},
+        )
+        # NOTE: readline()-based read, not resp.read(4096) -- see _read_sse_lines'
+        # docstring above for why .read(N) blocks past any short timeout on a
+        # chunked-transfer SSE response that stays open (confirmed empirically).
+        chunk_lines = []
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            for _ in range(4):  # one full frame: id / event / data / blank
+                line = resp.readline()
+                if not line:
+                    break
+                chunk_lines.append(line.decode("utf-8"))
+        chunk = "".join(chunk_lines)
+        assert ("id: %d" % second_id) in chunk
+        assert ("id: %d" % first_id) not in chunk
+    finally:
+        # Always torn down, even if an assertion above raises -- otherwise a
+        # failing test (exactly the failure mode this test exists to catch)
+        # leaks srv2's daemon thread still listening on `port` for the rest
+        # of the test process.
+        srv2.should_exit = True
+        t2.join(timeout=3)
 
 
 def test_healthz_extended_fields(client):
