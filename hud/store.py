@@ -128,12 +128,31 @@ def insert_event(event: dict[str, Any]) -> int:
                 existing = conn.execute(
                     "SELECT id, seq FROM events WHERE event_uid = ?", (event_uid,)
                 ).fetchone()
-                conn.commit()
                 if existing is not None:
+                    conn.commit()
                     event["dup"] = True
                     event["seq"] = int(existing["seq"])
                     return int(existing["id"])
-                # event_uid collided but the row is gone (pruned) -- fall through as non-dup.
+                # event_uid conflicted a moment ago but the row is gone now (e.g. pruned
+                # concurrently) -- retry a real insert instead of fabricating a result.
+                cur = conn.execute(
+                    """
+                    INSERT INTO events (ts, session_id, source, kind, agent, seq, machine, payload, event_uid, recv_ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event["ts"],
+                        event["session_id"],
+                        event["source"],
+                        event["kind"],
+                        event.get("agent"),
+                        event["seq"],
+                        event.get("machine"),
+                        json.dumps(event.get("payload") or {}, ensure_ascii=False),
+                        event_uid,
+                        event["recv_ts"],
+                    ),
+                )
             event["dup"] = False
             conn.commit()
             return int(cur.lastrowid)

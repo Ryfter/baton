@@ -1,4 +1,4 @@
-from hud.store import insert_event, query_events, replay_events
+from hud.store import insert_event, query_events, replay_events, get_conn
 
 
 def make_event(**overrides):
@@ -83,3 +83,27 @@ def test_insert_event_without_event_uid_never_dedups(isolated_state):
     id_b = insert_event(b)
     assert id_a != id_b
     assert a["dup"] is False and b["dup"] is False
+
+
+def test_insert_event_row_vanished_retries_insert(isolated_state):
+    """When event_uid collides but the row is concurrently deleted (e.g. by pruner),
+    the second insert_event with the same event_uid should succeed as a fresh insert."""
+    uid = "vanished-test-uid"
+    ev1 = make_event(session_id="s1", kind="stop", event_uid=uid)
+    id1 = insert_event(ev1)
+    assert ev1["dup"] is False
+
+    # Manually delete the row to simulate concurrent pruning
+    conn = get_conn()
+    conn.execute("DELETE FROM events WHERE event_uid = ?", (uid,))
+    conn.commit()
+
+    # Insert the same event again with the same event_uid
+    # The unique index will no longer find a conflict, so a real insert should succeed
+    ev2 = make_event(session_id="s1", kind="stop", event_uid=uid)
+    id2 = insert_event(ev2)
+
+    # Should have inserted a new row (different id)
+    assert id2 != id1
+    # Should NOT be marked as a duplicate (the old row is gone)
+    assert ev2["dup"] is False
