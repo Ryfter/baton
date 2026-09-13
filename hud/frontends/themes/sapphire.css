@@ -1,0 +1,82 @@
+/* HUD theme: sapphire — OLED near-black, phosphor marks, dense terminal */
+:root {
+  color-scheme: dark;
+
+  --hud-bg: #000000;
+  --hud-bg-elevated: #05070a;
+  --hud-surface: #07090c;
+  --hud-surface-2: #0c1014;
+  --hud-surface-3: #10161c;
+  --hud-border: #1a2830;
+  --hud-border-strong: #2a4850;
+  --hud-header-bg: rgba(0, 0, 0, 0.94);
+  --hud-header-border: #122026;
+  --hud-accent: #3ee0ff;
+  --hud-accent-dim: #145060;
+
+  --hud-text: #b8c4c8;
+  --hud-text-strong: #e6f4f2;
+  --hud-text-muted: #6a8088;
+  --hud-text-faint: #4a6068;
+  --hud-link: #3ee0ff;
+
+  --hud-live: #39ff88;
+  --hud-live-glow: rgba(57, 255, 136, 0.4);
+  --hud-recon: #ff4d6a;
+  --hud-running: #39ff88;
+  --hud-needs: #ffc44d;
+  --hud-stopped: #5a7078;
+  --hud-error: #ff4d6a;
+
+  --chip-tool-bg: #041a10;
+  --chip-tool-fg: #39ff88;
+  --chip-tool-fail-bg: #2a060c;
+  --chip-tool-fail-fg: #ff4d6a;
+  --chip-wait-bg: #1a1200;
+  --chip-wait-fg: #ffc44d;
+  --chip-end-bg: #0a1214;
+  --chip-end-fg: #4a7880;
+  --chip-meta-bg: #061018;
+  --chip-meta-fg: #3ee0ff;
+  --chip-border: transparent;
+  --chip-fail-border: #ff4d6a;
+  --chip-shadow: none;
+  --chip-pad-y: 3px;
+  --chip-pad-x: 6px;
+  --chip-font: 10px;
+  --chip-radius: 2px;
+
+  --tile-sessions: #39ff88;
+  --tile-rate: #3ee0ff;
+  --tile-tools: #b8c4c8;
+  --tile-errors: #ff4d6a;
+  --spark-stroke: #3ee0ff;
+  --spark-fill-top: rgba(62, 224, 255, 0.28);
+  --spark-fill-bot: rgba(62, 224, 255, 0.02);
+
+  --board-col-running: #10b981;
+  --board-col-running-bg: rgba(16, 185, 129, 0.1);
+  --board-col-needs: #d97706;
+  --board-col-needs-bg: rgba(217, 119, 6, 0.1);
+  --board-col-stopped: #4a6068;
+  --board-col-stopped-bg: rgba(74, 96, 104, 0.1);
+  --board-card-bg: #07090c;
+  --board-card-shadow: rgba(0, 0, 0, 0.6);
+
+  --hud-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --hud-font-sans: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --hud-font-display: var(--hud-font-mono);
+  --hud-radius-sm: 2px;
+  --hud-radius-md: 3px;
+  --hud-radius-lg: 4px;
+  --hud-space-1: 2px;
+  --hud-space-2: 4px;
+  --hud-space-3: 8px;
+  --hud-space-4: 12px;
+  --hud-space-5: 16px;
+  --lane-gap: 4px;
+  --lane-pad-y: 4px;
+  --lane-pad-x: 8px;
+  --strip-thumb: #3ee0ff;
+  --strip-track: #0c1014;
+}

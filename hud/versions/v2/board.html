@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HUD · board</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: #d5dee9;
+      color: #0f172a;
+      font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    header {
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px 22px;
+      background: #0b1c2c;
+      color: #e8eef6;
+      border-bottom: 3px solid #14b8a6;
+    }
+    .title {
+      font-size: 13px; letter-spacing: .22em; text-transform: uppercase;
+      font-weight: 700;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #f87171; }
+    .dot.live { background: #2dd4bf; box-shadow: 0 0 10px #2dd4bf99; }
+    .dot.recon { background: #f87171; }
+    .meta { color: #93a4b8; font-size: 13px; }
+    .meta strong { color: #e8eef6; font-variant-numeric: tabular-nums; }
+    .meta a { color: #99f6e4; text-decoration: none; }
+    .board {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px;
+      padding: 22px; align-items: stretch;
+      min-height: calc(100vh - 54px);
+    }
+    .col {
+      background: #eef2f7;
+      border-radius: 12px;
+      padding: 0 0 14px;
+      min-height: 62vh;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, .08);
+      overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+    .col h2 {
+      margin: 0;
+      padding: 14px 16px 12px;
+      font-size: 11px; letter-spacing: .18em;
+      text-transform: uppercase; font-weight: 700;
+      display: flex; align-items: baseline; justify-content: space-between;
+      border-top: 4px solid currentColor;
+    }
+    .col h2 .n {
+      font-variant-numeric: tabular-nums; letter-spacing: 0;
+      font-size: 12px; opacity: .7;
+    }
+    .col-running { color: #0f766e; }
+    .col-running h2 { background: #ccfbf1; color: #0f766e; }
+    .col-needs   { color: #b45309; }
+    .col-needs h2 { background: #ffedd5; color: #b45309; }
+    .col-stopped { color: #475569; }
+    .col-stopped h2 { background: #e2e8f0; color: #334155; }
+    .cards { padding: 14px 12px 0; flex: 1; }
+    .empty {
+      margin: 8px 12px 0; padding: 18px 8px;
+      text-align: center; font-size: 13px; color: #94a3b8;
+      font-style: italic; letter-spacing: .02em;
+    }
+    .card {
+      position: relative;
+      background: #fff;
+      border-radius: 8px;
+      padding: 12px 14px 12px 18px;
+      margin-bottom: 10px;
+      box-shadow: 0 1px 0 rgba(15,23,42,.04), 0 8px 20px rgba(15,23,42,.06);
+      animation: pop .25s ease;
+      transition: transform .25s ease, opacity .25s ease, box-shadow .2s;
+    }
+    .card:hover { box-shadow: 0 12px 28px rgba(15,23,42,.12); }
+    .card::before {
+      content: "";
+      position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+      border-radius: 8px 0 0 8px;
+      background: currentColor;
+    }
+    .card.st-running { color: #0f766e; }
+    .card.st-needs   { color: #d97706; }
+    .card.st-stopped { color: #64748b; }
+    @keyframes pop { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
+    .card-top {
+      display: flex; align-items: center; gap: 8px;
+      color: #0f172a;
+    }
+    .led {
+      width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+      background: currentColor;
+      box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent);
+    }
+    .sid {
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 15px; font-weight: 700; letter-spacing: .02em;
+      color: #0f172a;
+    }
+    .age {
+      margin-left: auto; font-size: 11px; color: #64748b;
+      font-variant-numeric: tabular-nums; letter-spacing: .04em;
+    }
+    .machine {
+      margin: 6px 0 0 16px; font-size: 12px; color: #64748b;
+    }
+    .card-foot {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; margin: 12px 0 0 16px;
+    }
+    .tool {
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 11px; padding: 3px 8px; border-radius: 999px;
+      background: #f1f5f9; color: #334155;
+    }
+    .n {
+      font-size: 11px; color: #64748b; letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    @media (max-width: 800px) { .board { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="title">Mission board</span>
+    <span id="dot" class="dot recon"></span>
+    <span class="meta">events <strong id="count">0</strong></span>
+    <span class="meta" style="margin-left:auto"><a href="/">⚙ views</a></span>
+  </header>
+  <div class="board">
+    <section class="col col-running" id="running">
+      <h2>Running <span class="n" data-count>0</span></h2>
+      <div class="cards"></div>
+      <p class="empty">No active sessions</p>
+    </section>
+    <section class="col col-needs" id="needs-you">
+      <h2>Needs You <span class="n" data-count>0</span></h2>
+      <div class="cards"></div>
+      <p class="empty">Nothing waiting</p>
+    </section>
+    <section class="col col-stopped" id="stopped">
+      <h2>Stopped <span class="n" data-count>0</span></h2>
+      <div class="cards"></div>
+      <p class="empty">No stopped sessions</p>
+    </section>
+  </div>
+  <script>
+    var MAX = 500;
+    var total = 0;
+    var cards = {};
+    var eventLog = [];
+    var cols = {
+      running: document.getElementById("running"),
+      needs: document.getElementById("needs-you"),
+      stopped: document.getElementById("stopped")
+    };
+    var countEl = document.getElementById("count");
+    var dot = document.getElementById("dot");
+
+    function shortId(id) {
+      id = String(id || "");
+      return id.length > 10 ? id.slice(0, 8) : id;
+    }
+    function age(ts) {
+      var t = Date.parse(ts);
+      if (isNaN(t)) t = Date.now();
+      var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+      if (s < 60) return s + "s ago";
+      if (s < 3600) return Math.round(s / 60) + "m ago";
+      return Math.round(s / 3600) + "h ago";
+    }
+    function statusOf(state) {
+      if (state.kind === "stop") return "stopped";
+      if (state.kind === "notification") return "needs";
+      return "running";
+    }
+    function columnFor(status) {
+      if (status === "stopped") return cols.stopped;
+      if (status === "needs") return cols.needs;
+      return cols.running;
+    }
+    function lastTool(state) {
+      return state.lastTool || "—";
+    }
+    function syncEmpty() {
+      ["running", "needs", "stopped"].forEach(function (k) {
+        var col = cols[k];
+        var n = col.querySelectorAll(".card").length;
+        var empty = col.querySelector(".empty");
+        var badge = col.querySelector("[data-count]");
+        if (empty) empty.hidden = n > 0;
+        if (badge) badge.textContent = String(n);
+      });
+    }
+    function renderCard(sid) {
+      var state = cards[sid];
+      var el = state.el;
+      var status = statusOf(state);
+      el.className = "card st-" + status;
+      el.querySelector(".sid").textContent = shortId(sid);
+      el.querySelector(".machine").textContent = state.machine || "—";
+      el.querySelector(".tool").textContent = lastTool(state);
+      el.querySelector(".n").textContent = state.count + " events";
+      el.querySelector(".age").textContent = age(state.ts);
+      var dest = columnFor(status).querySelector(".cards");
+      if (el.parentNode !== dest) dest.appendChild(el);
+      syncEmpty();
+    }
+    function onEvent(ev) {
+      var sid = ev.session_id || "unknown";
+      eventLog.push(ev);
+      if (eventLog.length > MAX) eventLog.shift();
+      if (!cards[sid]) {
+        var el = document.createElement("article");
+        el.className = "card st-running";
+        el.innerHTML = '<div class="card-top"><span class="led"></span><span class="sid"></span><span class="age"></span></div>' +
+          '<div class="machine"></div>' +
+          '<div class="card-foot"><span class="tool"></span><span class="n"></span></div>';
+        cards[sid] = { el: el, count: 0, kind: "", lastTool: "", machine: "", ts: ev.ts };
+        cols.running.querySelector(".cards").appendChild(el);
+      }
+      var st = cards[sid];
+      st.count += 1;
+      st.kind = ev.kind;
+      st.machine = ev.machine || st.machine;
+      st.ts = ev.ts;
+      if (ev.payload && ev.payload.tool_name) st.lastTool = ev.payload.tool_name;
+      total++;
+      countEl.textContent = String(total);
+      renderCard(sid);
+    }
+    setInterval(function () {
+      Object.keys(cards).forEach(renderCard);
+    }, 5000);
+    syncEmpty();
+
+    var es = new EventSource('/stream?replay=200');
+    es.addEventListener("open", function () { dot.className = "dot live"; });
+    es.addEventListener("error", function () { dot.className = "dot recon"; });
+    es.addEventListener("hud", function (e) {
+      try { onEvent(JSON.parse(e.data)); } catch (err) {}
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,82 @@
+/* HUD theme: lapis-velvet — editorial plum salon, cream type, generous radius */
+:root {
+  color-scheme: dark;
+
+  --hud-bg: #120e18;
+  --hud-bg-elevated: #18141f;
+  --hud-surface: #1c1626;
+  --hud-surface-2: #241c30;
+  --hud-surface-3: #2c2238;
+  --hud-border: #3a2e4a;
+  --hud-border-strong: #5a4470;
+  --hud-header-bg: rgba(18, 14, 24, 0.94);
+  --hud-header-border: #3a2e4a;
+  --hud-accent: #c4a8e8;
+  --hud-accent-dim: #6a5088;
+
+  --hud-text: #e8dcc8;
+  --hud-text-strong: #f5efe6;
+  --hud-text-muted: #b8a090;
+  --hud-text-faint: #8a7868;
+  --hud-link: #d4b8f0;
+
+  --hud-live: #86efac;
+  --hud-live-glow: rgba(134, 239, 172, 0.28);
+  --hud-recon: #f87171;
+  --hud-running: #d4b8f0;
+  --hud-needs: #e8c070;
+  --hud-stopped: #a89888;
+  --hud-error: #f0a0a0;
+
+  --chip-tool-bg: #2a1838;
+  --chip-tool-fg: #e4c7ff;
+  --chip-tool-fail-bg: #3a1418;
+  --chip-tool-fail-fg: #f0a0a0;
+  --chip-wait-bg: #2e2410;
+  --chip-wait-fg: #e8c070;
+  --chip-end-bg: #241e28;
+  --chip-end-fg: #c4b4a4;
+  --chip-meta-bg: #22182c;
+  --chip-meta-fg: #f5efe6;
+  --chip-border: transparent;
+  --chip-fail-border: #f0a0a0;
+  --chip-shadow: none;
+  --chip-pad-y: 7px;
+  --chip-pad-x: 12px;
+  --chip-font: 12px;
+  --chip-radius: 10px;
+
+  --tile-sessions: #d4b8f0;
+  --tile-rate: #e8dcc8;
+  --tile-tools: #c4b4a4;
+  --tile-errors: #f0a0a0;
+  --spark-stroke: #c4a8e8;
+  --spark-fill-top: rgba(196, 168, 232, 0.32);
+  --spark-fill-bot: rgba(196, 168, 232, 0.02);
+
+  --board-col-running: #9d7ab8;
+  --board-col-running-bg: rgba(157, 122, 184, 0.16);
+  --board-col-needs: #c9a227;
+  --board-col-needs-bg: rgba(201, 162, 39, 0.14);
+  --board-col-stopped: #8a7868;
+  --board-col-stopped-bg: rgba(138, 120, 104, 0.14);
+  --board-card-bg: #1c1626;
+  --board-card-shadow: rgba(0, 0, 0, 0.35);
+
+  --hud-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --hud-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --hud-font-display: Palatino, "Palatino Linotype", "Iowan Old Style", Georgia, serif;
+  --hud-radius-sm: 8px;
+  --hud-radius-md: 14px;
+  --hud-radius-lg: 20px;
+  --hud-space-1: 6px;
+  --hud-space-2: 10px;
+  --hud-space-3: 16px;
+  --hud-space-4: 22px;
+  --hud-space-5: 32px;
+  --lane-gap: 12px;
+  --lane-pad-y: 14px;
+  --lane-pad-x: 16px;
+  --strip-thumb: #c4a8e8;
+  --strip-track: #241c30;
+}

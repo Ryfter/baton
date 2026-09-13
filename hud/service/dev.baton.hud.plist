@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.baton.hud</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>-m</string>
+    <string>hud</string>
+    <string>serve</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/kev/Dev/Baton</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HUD_HOST</key><string>0.0.0.0</string>
+    <key>HUD_PORT</key><string>8765</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+  </dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/Users/kev/Dev/Baton/hud/logs/hud.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/kev/Dev/Baton/hud/logs/hud.err.log</string>
+</dict>
+</plist>

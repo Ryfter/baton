@@ -1,0 +1,8 @@
+{
+  "versions": [
+    {"id": "v1", "label": "Grok · round 1", "date": "2026-09-09", "note": "First build from spec. Flat colours, plain light board."},
+    {"id": "v2", "label": "Grok · round 2", "date": "2026-09-09", "note": "Visual redesign + cards.html. Mission-board, cockpit sparkline, 9-hue deck chips."},
+    {"id": "v3", "label": "Cursor (composer-2.5) · round 3", "date": "2026-09-09", "note": "Theme layer: dark / sapphire / lapis-velvet / sandstone. Refined flight-deck chrome, dark mission board."},
+    {"id": "v4", "label": "Grok · round 4 (polish from 2 reviews)", "date": "2026-09-09", "note": "Chips = verbs + glyphs (Read ✓ / Grep ✗). Board cards show WHY. Sparkline fixed. Tile orbs gone. Themes as rooms: sapphire OLED, sandstone serif ink-on-paper. Sentence-case headers."}
+  ]
+}

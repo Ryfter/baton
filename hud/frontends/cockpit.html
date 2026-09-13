@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HUD · cockpit</title>
+  <link rel="icon" href="data:,">
+  <script>
+    (function () {
+      var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
+      var q = new URLSearchParams(location.search);
+      var t = q.get("theme");
+      if (t && ALLOWED.indexOf(t) >= 0) localStorage.setItem("hud-theme", t);
+      else t = localStorage.getItem("hud-theme") || "dark";
+      if (ALLOWED.indexOf(t) < 0) t = "dark";
+      document.write('<link rel="stylesheet" id="hud-theme" href="/themes/' + t + '.css">');
+    })();
+  </script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background: var(--hud-bg);
+      color: var(--hud-text);
+      font-family: var(--hud-font-sans);
+      font-size: 13px;
+    }
+    .hud-header {
+      display: flex; align-items: center; gap: var(--hud-space-3);
+      padding: var(--hud-space-3) var(--hud-space-4);
+      border-bottom: 1px solid var(--hud-header-border);
+      background: var(--hud-header-bg);
+      position: sticky; top: 0; z-index: 10;
+    }
+    .hud-title {
+      font-family: var(--hud-font-display, var(--hud-font-sans));
+      font-weight: 650; font-size: 15px;
+      color: var(--hud-text-strong);
+    }
+    .hud-dot {
+      width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+      background: var(--hud-recon);
+    }
+    .hud-dot.live {
+      background: var(--hud-live);
+      box-shadow: 0 0 0 3px var(--hud-live-glow), 0 0 12px var(--hud-live-glow);
+    }
+    .hud-meta {
+      color: var(--hud-text-muted); font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .hud-meta strong { color: var(--hud-text-strong); }
+    .hud-spacer { margin-left: auto; }
+    .hud-link {
+      color: var(--hud-link); text-decoration: none; font-size: 12px;
+      border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
+      padding: 4px 10px;
+    }
+    .hud-theme {
+      background: var(--hud-surface); color: var(--hud-text);
+      border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
+      font: inherit; font-size: 11px; padding: 4px 8px; cursor: pointer;
+    }
+    .hud-theme:focus-visible, .hud-link:focus-visible, .sid:focus-visible {
+      outline: 2px solid var(--hud-accent); outline-offset: 2px;
+    }
+    .instruments {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: var(--hud-space-3); padding: var(--hud-space-4) var(--hud-space-4) var(--hud-space-2);
+    }
+    .tile {
+      background: var(--hud-surface);
+      border: 1px solid var(--hud-border);
+      border-radius: var(--hud-radius-lg);
+      padding: var(--hud-space-4);
+      position: relative; overflow: hidden;
+    }
+    .tile::before {
+      content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+      background: var(--accent);
+    }
+    .tile .val {
+      font-size: 28px; font-weight: 700; line-height: 1;
+      font-variant-numeric: tabular-nums;
+      font-family: var(--hud-font-mono);
+      color: var(--accent);
+    }
+    .tile .lbl {
+      margin-top: 6px; font-size: 11px; color: var(--hud-text-muted);
+    }
+    .tile-sessions { --accent: var(--tile-sessions); }
+    .tile-rate     { --accent: var(--tile-rate); }
+    .tile-tools    { --accent: var(--tile-tools); }
+    .tile-errors   { --accent: var(--tile-errors); }
+    .spark-panel {
+      margin: 0 var(--hud-space-4) var(--hud-space-3);
+      padding: 8px 12px;
+      background: var(--hud-surface);
+      border: 1px solid var(--hud-border);
+      border-radius: var(--hud-radius-lg);
+    }
+    .spark-head {
+      display: flex; justify-content: space-between; align-items: baseline;
+      margin-bottom: 4px;
+    }
+    .spark-label { font-size: 11px; color: var(--hud-text-muted); }
+    .spark-axis {
+      font-size: 10px; color: var(--hud-text-faint);
+      font-variant-numeric: tabular-nums; font-family: var(--hud-font-mono);
+    }
+    .spark-body { position: relative; height: 54px; }
+    svg { width: 100%; height: 54px; display: block; }
+    .grid-line { stroke: var(--hud-border); stroke-width: 1; }
+    .spark-empty {
+      position: absolute; inset: 0; margin: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; color: var(--hud-text-faint);
+    }
+    .spark-body.has-data .spark-empty { display: none; }
+    .spark-body:not(.has-data) svg { visibility: hidden; }
+    .feed-wrap {
+      margin: 0 var(--hud-space-4) var(--hud-space-5);
+      border: 1px solid var(--hud-border);
+      border-radius: var(--hud-radius-lg);
+      overflow: hidden;
+      background: var(--hud-surface);
+    }
+    .feed-head {
+      padding: var(--hud-space-2) var(--hud-space-4);
+      border-bottom: 1px solid var(--hud-border);
+      font-size: 11px; color: var(--hud-text-muted);
+      display: grid; grid-template-columns: 8px 72px 100px 1fr; gap: var(--hud-space-2);
+      font-family: var(--hud-font-mono);
+    }
+    .feed-filter {
+      font-size: 11px; color: var(--hud-text-muted);
+      padding: 4px var(--hud-space-4);
+      border-bottom: 1px solid var(--hud-border);
+    }
+    .feed { font-family: var(--hud-font-mono); font-size: 11px; max-height: 52vh; overflow-y: auto; }
+    .line {
+      display: grid; grid-template-columns: 8px 72px 100px 1fr; gap: var(--hud-space-2);
+      padding: 6px var(--hud-space-4);
+      border-bottom: 1px solid var(--hud-border);
+      color: var(--hud-text);
+      align-items: center;
+    }
+    .line:nth-child(even) { background: var(--hud-surface-2); }
+    .line.hidden { display: none; }
+    .swatch {
+      width: 6px; height: 6px; border-radius: 1px;
+      background: var(--chip-meta-fg);
+    }
+    .swatch.tool { background: var(--chip-tool-fg); }
+    .swatch.tool-fail { background: var(--chip-tool-fail-fg); }
+    .swatch.wait { background: var(--chip-wait-fg); }
+    .swatch.end { background: var(--chip-end-fg); }
+    .swatch.meta { background: var(--chip-meta-fg); }
+    .line.err .detail { color: var(--hud-error); }
+    .t { color: var(--hud-text-faint); font-variant-numeric: tabular-nums; }
+    .sid {
+      color: var(--hud-link); background: none; border: 0; padding: 0;
+      font: inherit; cursor: pointer; text-align: left;
+    }
+    .sid:hover, .sid.active { text-decoration: underline; }
+    .detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    @media (max-width: 900px) {
+      .instruments { grid-template-columns: 1fr 1fr; }
+      .feed-head, .line { grid-template-columns: 8px 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hud-header">
+    <span id="dot" class="hud-dot" aria-label="connection"></span>
+    <span class="hud-title">Cockpit</span>
+    <span class="hud-meta">events <strong id="count">0</strong></span>
+    <span class="hud-spacer"></span>
+    <select id="theme-pick" class="hud-theme" aria-label="Theme">
+      <option value="dark">dark</option>
+      <option value="sapphire">sapphire</option>
+      <option value="lapis-velvet">lapis-velvet</option>
+      <option value="sandstone">sandstone</option>
+    </select>
+    <a class="hud-link" href="/">views</a>
+  </header>
+  <div class="instruments">
+    <div class="tile tile-sessions"><div class="val" id="t-active">0</div><div class="lbl">Active sessions</div></div>
+    <div class="tile tile-rate"><div class="val" id="t-epm">0</div><div class="lbl">Events / min</div></div>
+    <div class="tile tile-tools"><div class="val" id="t-tools">0</div><div class="lbl">Tool calls</div></div>
+    <div class="tile tile-errors"><div class="val" id="t-err">0</div><div class="lbl">Errors</div></div>
+  </div>
+  <div class="spark-panel">
+    <div class="spark-head">
+      <span class="spark-label">Throughput</span>
+      <span class="spark-axis">now ← 60s</span>
+    </div>
+    <div class="spark-body" id="spark-body">
+      <svg id="spark" viewBox="0 0 600 54" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--spark-stroke)" stop-opacity="0.45"/>
+            <stop offset="100%" stop-color="var(--spark-stroke)" stop-opacity="0.02"/>
+          </linearGradient>
+        </defs>
+        <line class="grid-line" x1="0" y1="14" x2="600" y2="14"/>
+        <line class="grid-line" x1="0" y1="27" x2="600" y2="27"/>
+        <line class="grid-line" x1="0" y1="40" x2="600" y2="40"/>
+        <polygon id="spark-area" fill="url(#sparkFill)" points="0,54 600,54"/>
+        <polyline id="spark-line" fill="none" stroke="var(--spark-stroke)" stroke-width="2"
+                  stroke-linejoin="round" stroke-linecap="round" points=""/>
+      </svg>
+      <p class="spark-empty" id="spark-empty">no events in this window</p>
+    </div>
+  </div>
+  <div class="feed-wrap">
+    <div class="feed-head"><span></span><span>time</span><span>session</span><span>event</span></div>
+    <div class="feed-filter" id="feed-filter" hidden></div>
+    <div class="feed" id="feed"></div>
+  </div>
+  <script>
+    var MAX = 500;
+    var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
+    var events = [];
+    var lastKind = {};
+    var toolCalls = 0;
+    var errors = 0;
+    var total = 0;
+    var BUCKETS = 30;
+    var BUCKET_MS = 2000;
+    var filterSid = null;
+    var lastCountsKey = "";
+    var feed = document.getElementById("feed");
+    var feedFilter = document.getElementById("feed-filter");
+    var sparkBody = document.getElementById("spark-body");
+    var dot = document.getElementById("dot");
+    var countEl = document.getElementById("count");
+    var poly = document.getElementById("spark-line");
+    var area = document.getElementById("spark-area");
+    var themePick = document.getElementById("theme-pick");
+
+    function jitter(n) { return n + (Math.random() * 1.2 - 0.6); }
+    function isError(ev) {
+      return ev.kind === "post_tool_use" && ev.payload && ev.payload.ok === false;
+    }
+    function chipFamily(ev) {
+      var kind = ev.kind || "";
+      if (kind === "post_tool_use" && ev.payload && ev.payload.ok === false) return "tool-fail";
+      if (kind === "pre_tool_use" || kind === "post_tool_use") return "tool";
+      if (kind === "notification") return "wait";
+      if (kind === "stop" || kind === "subagent_stop") return "end";
+      return "meta";
+    }
+    function truncate(s, n) {
+      s = String(s || "").replace(/\s+/g, " ").trim();
+      if (s.length <= n) return s;
+      return s.slice(0, n - 1) + "…";
+    }
+    function chipText(ev) {
+      var p = ev.payload || {};
+      var kind = ev.kind || "";
+      var tool = p.tool_name || "";
+      if (kind === "session_start") return "start";
+      if (kind === "user_prompt") return truncate(p.prompt || "", 22) || "prompt";
+      if (kind === "pre_tool_use") return tool || "tool";
+      if (kind === "post_tool_use") return (tool || "tool") + (p.ok === false ? " ✗" : " ✓");
+      if (kind === "notification") return "notify";
+      if (kind === "stop") return "stop";
+      if (kind === "subagent_stop") return "sub ✓";
+      if (kind === "pre_compact") return "compact";
+      return kind;
+    }
+    function feedDetail(ev) {
+      var label = chipText(ev);
+      var p = ev.payload || {};
+      var extra = p.error || p.message || "";
+      if (!extra && p.tool_input_summary && ev.kind === "pre_tool_use") extra = p.tool_input_summary;
+      if (extra && label.indexOf(String(extra).slice(0, 8)) === -1) return label + "  " + extra;
+      return label;
+    }
+    function shortId(id) {
+      id = String(id || "");
+      if (id.length <= 14) return id;
+      return "…" + id.slice(-13);
+    }
+    function clock(ts) {
+      var d = new Date(Date.parse(ts) || Date.now());
+      return d.toISOString().slice(11, 19);
+    }
+    function eventTime(ev) {
+      var t = Date.parse(ev.ts);
+      if (!isNaN(t)) return t;
+      return ev._arrived || Date.now();
+    }
+    function windowAnchor() {
+      var newest = 0;
+      for (var i = 0; i < events.length; i++) {
+        var t = eventTime(events[i]);
+        if (t > newest) newest = t;
+      }
+      return newest || Date.now();
+    }
+    function applyFilter() {
+      var nodes = feed.children;
+      for (var i = 0; i < nodes.length; i++) {
+        var sid = nodes[i].getAttribute("data-sid");
+        if (filterSid && sid !== filterSid) nodes[i].classList.add("hidden");
+        else nodes[i].classList.remove("hidden");
+      }
+      var sids = feed.querySelectorAll(".sid");
+      for (i = 0; i < sids.length; i++) {
+        if (filterSid && sids[i].getAttribute("data-full") === filterSid) sids[i].classList.add("active");
+        else sids[i].classList.remove("active");
+      }
+      if (filterSid) {
+        feedFilter.hidden = false;
+        feedFilter.textContent = "Showing " + shortId(filterSid) + " — click the id again to clear";
+      } else {
+        feedFilter.hidden = true;
+        feedFilter.textContent = "";
+      }
+    }
+    function recompute() {
+      var anchor = windowAnchor();
+      var cutoff = anchor - 60000;
+      var epm = 0;
+      var active = {};
+      lastKind = {};
+      for (var i = 0; i < events.length; i++) {
+        var ev = events[i];
+        lastKind[ev.session_id] = ev.kind;
+        var t = eventTime(ev);
+        if (t >= cutoff && t <= anchor + 1) epm++;
+      }
+      Object.keys(lastKind).forEach(function (sid) {
+        if (lastKind[sid] !== "stop") active[sid] = true;
+      });
+      document.getElementById("t-active").textContent = String(Object.keys(active).length);
+      document.getElementById("t-epm").textContent = String(epm);
+      document.getElementById("t-tools").textContent = String(toolCalls);
+      document.getElementById("t-err").textContent = String(errors);
+    }
+    function drawSpark(anchor, allowJitter) {
+      var counts = [];
+      var i, W = 600, H = 54, pad = 6;
+      for (i = 0; i < BUCKETS; i++) counts[i] = 0;
+      for (i = 0; i < events.length; i++) {
+        var t = eventTime(events[i]);
+        var ago = anchor - t;
+        var idx = BUCKETS - 1 - Math.floor(ago / BUCKET_MS);
+        if (idx >= 0 && idx < BUCKETS) counts[idx]++;
+      }
+      var key = counts.join(",");
+      var empty = true;
+      for (i = 0; i < counts.length; i++) if (counts[i] > 0) empty = false;
+      if (empty) {
+        sparkBody.classList.remove("has-data");
+        lastCountsKey = key;
+        return;
+      }
+      sparkBody.classList.add("has-data");
+      if (key === lastCountsKey && !allowJitter) return;
+      lastCountsKey = key;
+      var max = 1;
+      for (i = 0; i < counts.length; i++) if (counts[i] > max) max = counts[i];
+      var pts = [];
+      var doJitter = allowJitter;
+      for (i = 0; i < counts.length; i++) {
+        var x = (i / (BUCKETS - 1)) * W;
+        var y = H - pad - (counts[i] / max) * (H - pad * 2);
+        if (doJitter && counts[i] > 0) { x = jitter(x); y = jitter(y); }
+        pts.push(x.toFixed(1) + "," + y.toFixed(1));
+      }
+      poly.setAttribute("points", pts.join(" "));
+      area.setAttribute("points", pts.join(" ") + " " + W + "," + H + " 0," + H);
+    }
+    function onEvent(ev) {
+      ev._arrived = Date.now();
+      events.push(ev);
+      if (events.length > MAX) events.shift();
+      if (ev.kind === "pre_tool_use") toolCalls++;
+      if (isError(ev)) errors++;
+      total++;
+      countEl.textContent = String(total);
+      var line = document.createElement("div");
+      line.className = "line" + (isError(ev) ? " err" : "");
+      line.setAttribute("data-sid", ev.session_id || "");
+      var swatch = document.createElement("span");
+      swatch.className = "swatch " + chipFamily(ev);
+      var timeEl = document.createElement("span");
+      timeEl.className = "t";
+      timeEl.textContent = clock(ev.ts);
+      var sidEl = document.createElement("button");
+      sidEl.type = "button";
+      sidEl.className = "sid";
+      sidEl.textContent = shortId(ev.session_id);
+      sidEl.title = ev.session_id || "";
+      sidEl.setAttribute("data-full", ev.session_id || "");
+      sidEl.addEventListener("click", function () {
+        var id = sidEl.getAttribute("data-full");
+        filterSid = (filterSid === id) ? null : id;
+        applyFilter();
+      });
+      var detEl = document.createElement("span");
+      detEl.className = "detail";
+      detEl.textContent = feedDetail(ev);
+      detEl.title = feedDetail(ev);
+      line.appendChild(swatch);
+      line.appendChild(timeEl);
+      line.appendChild(sidEl);
+      line.appendChild(detEl);
+      feed.insertBefore(line, feed.firstChild);
+      while (feed.childNodes.length > MAX) feed.removeChild(feed.lastChild);
+      if (filterSid) applyFilter();
+      recompute();
+      drawSpark(windowAnchor(), true);
+    }
+
+    function currentTheme() {
+      var q = new URLSearchParams(location.search).get("theme");
+      var t = q || localStorage.getItem("hud-theme") || "dark";
+      return ALLOWED.indexOf(t) >= 0 ? t : "dark";
+    }
+    function applyTheme(t) {
+      localStorage.setItem("hud-theme", t);
+      document.getElementById("hud-theme").href = "/themes/" + t + ".css";
+      var u = new URL(location.href);
+      u.searchParams.set("theme", t);
+      history.replaceState(null, "", u);
+    }
+    themePick.value = currentTheme();
+    themePick.addEventListener("change", function () { applyTheme(themePick.value); });
+
+    var hudTok = new URLSearchParams(location.search).get("t") || "";
+    if (hudTok) {
+      document.querySelectorAll("a.hud-link").forEach(function (a) {
+        var href = a.getAttribute("href") || "";
+        if (href && href.indexOf("t=") < 0) {
+          a.setAttribute("href", href + (href.indexOf("?") >= 0 ? "&" : "?") + "t=" + encodeURIComponent(hudTok));
+        }
+      });
+    }
+    var es = new EventSource('/stream?replay=200' + (hudTok ? '&t=' + encodeURIComponent(hudTok) : ''));
+    es.addEventListener("open", function () { dot.className = "hud-dot live"; });
+    es.addEventListener("error", function () { dot.className = "hud-dot"; });
+    es.addEventListener("hud", function (e) {
+      try { onEvent(JSON.parse(e.data)); } catch (err) {}
+    });
+    setInterval(function () {
+      recompute();
+      drawSpark(windowAnchor(), false);
+    }, 2000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HUD · cards</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background: #0b0e14;
+      color: #c9d1d9;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+    header {
+      display: flex; align-items: center; gap: 14px;
+      padding: 10px 16px;
+      border-bottom: 1px solid #1c2330;
+      position: sticky; top: 0; background: #0b0e14; z-index: 2;
+    }
+    .title { letter-spacing: .12em; font-weight: 700; color: #e6edf3; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #e45858; flex: 0 0 auto; }
+    .dot.live { background: #3ddc8e; box-shadow: 0 0 8px #3ddc8e88; }
+    .dot.recon { background: #e45858; }
+    .meta { color: #8b949e; }
+    .meta a { color: #8ec8ff; text-decoration: none; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+      padding: 14px 14px 40px;
+    }
+    .card {
+      background: #11161f; border: 1px solid #1c2330; border-radius: 8px;
+      padding: 12px; display: flex; flex-direction: column; gap: 10px;
+      animation: slidein .28s ease; min-height: 140px;
+    }
+    @keyframes slidein { from { transform: translateY(-10px); opacity: 0; } to { transform: none; opacity: 1; } }
+    .card-head {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    }
+    .sid { color: #8ec8ff; font-weight: 700; }
+    .machine { color: #6e7681; font-size: 11px; }
+    .pill {
+      font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+      padding: 3px 8px; border-radius: 999px; font-weight: 700;
+    }
+    .pill.running { background: #0f2f2c; color: #5eead4; }
+    .pill.needs   { background: #3d2f0e; color: #ffc14d; }
+    .pill.stopped { background: #2a2e35; color: #9aa3ad; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; align-content: flex-start; }
+    .chip {
+      flex: 0 0 auto; border-radius: 4px; padding: 4px 8px; font-size: 12px;
+      background: #1a1f28; color: #c9d1d9; white-space: nowrap;
+    }
+    .chip.session_start { background: #0f2f2c; color: #5eead4; }
+    .chip.user_prompt   { background: #2a1f4a; color: #c4b5fd; }
+    .chip.pre_tool_use  { background: #16324d; color: #8ec8ff; }
+    .chip.post_tool_use { background: #123d38; color: #5ee0c4; }
+    .chip.error         { background: #4a1515; color: #ff6b6b; }
+    .chip.notification  { background: #3d2f0e; color: #ffc14d; }
+    .chip.stop          { background: #2a2e35; color: #9aa3ad; }
+    .chip.subagent_stop { background: #25202e; color: #b8a4c9; }
+    .chip.pre_compact   { background: #2d2040; color: #d8b4fe; }
+    .foot {
+      display: flex; justify-content: space-between; color: #6e7681; font-size: 11px;
+      border-top: 1px solid #1c2330; padding-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="title">HUD CARDS</span>
+    <span id="dot" class="dot recon" title="connection"></span>
+    <span class="meta">events <strong id="count">0</strong></span>
+    <span class="meta" style="margin-left:auto"><a href="/">⚙ views</a></span>
+  </header>
+  <div class="grid" id="grid"></div>
+  <script>
+    var MAX = 500;
+    var CHIP_CAP = 12;
+    var total = 0;
+    var chipCount = 0;
+    var sessions = {};
+    var order = [];
+    var grid = document.getElementById("grid");
+    var countEl = document.getElementById("count");
+    var dot = document.getElementById("dot");
+
+    function shortId(id) {
+      id = String(id || "");
+      return id.length > 10 ? id.slice(0, 8) : id;
+    }
+    function chipClass(ev) {
+      var kind = ev.kind || "";
+      var payload = ev.payload || {};
+      if (kind === "post_tool_use" && payload.ok === false) return "error";
+      if (kind.indexOf("error") !== -1) return "error";
+      return kind;
+    }
+    function chipText(ev) {
+      var tool = (ev.payload && ev.payload.tool_name) || "";
+      return tool ? (ev.kind + " " + tool) : ev.kind;
+    }
+    function chipTitle(ev) {
+      var p = ev.payload || {};
+      if (p.error) return String(p.error);
+      if (p.tool_input_summary) return String(p.tool_input_summary);
+      if (p.prompt) return String(p.prompt);
+      if (p.message) return String(p.message);
+      if (p.cwd) return String(p.cwd);
+      if (p.trigger) return String(p.trigger);
+      if (p.agent) return String(p.agent);
+      if (p.source) return String(p.source);
+      if (p.tool_name) return String(p.tool_name);
+      return ev.kind || "";
+    }
+    function statusOf(kind) {
+      if (kind === "stop") return "stopped";
+      if (kind === "notification") return "needs-you";
+      return "running";
+    }
+    function pillClass(status) {
+      if (status === "stopped") return "stopped";
+      if (status === "needs-you") return "needs";
+      return "running";
+    }
+    function pillLabel(status) {
+      if (status === "stopped") return "stopped";
+      if (status === "needs-you") return "needs-you";
+      return "running";
+    }
+    function age(ts) {
+      var t = Date.parse(ts);
+      if (isNaN(t)) t = Date.now();
+      var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+      if (s < 60) return s + "s ago";
+      if (s < 3600) return Math.round(s / 60) + "m ago";
+      return Math.round(s / 3600) + "h ago";
+    }
+    function makeChip(ev) {
+      var chip = document.createElement("span");
+      chip.className = "chip " + chipClass(ev);
+      chip.textContent = chipText(ev);
+      chip.title = chipTitle(ev);
+      return chip;
+    }
+    function ensureCard(sid, ev) {
+      if (!sessions[sid]) {
+        var card = document.createElement("article");
+        card.className = "card";
+        card.innerHTML =
+          '<div class="card-head"><span class="sid"></span><span class="pill running">running</span></div>' +
+          '<div class="machine"></div>' +
+          '<div class="chips"></div>' +
+          '<div class="foot"><span class="n"></span><span class="age"></span></div>';
+        card.querySelector(".sid").textContent = shortId(sid);
+        card.querySelector(".machine").textContent = ev.machine || "";
+        sessions[sid] = {
+          el: card,
+          chipsEl: card.querySelector(".chips"),
+          pill: card.querySelector(".pill"),
+          nEl: card.querySelector(".n"),
+          ageEl: card.querySelector(".age"),
+          machineEl: card.querySelector(".machine"),
+          events: [],
+          count: 0,
+          kind: "",
+          ts: ev.ts
+        };
+        order.unshift(sid);
+        grid.insertBefore(card, grid.firstChild);
+      }
+      return sessions[sid];
+    }
+    function bumpCard(sid) {
+      var idx = order.indexOf(sid);
+      if (idx > 0) {
+        order.splice(idx, 1);
+        order.unshift(sid);
+        grid.insertBefore(sessions[sid].el, grid.firstChild);
+      }
+    }
+    function trimOldest() {
+      while (chipCount > MAX) {
+        for (var i = order.length - 1; i >= 0; i--) {
+          var s = sessions[order[i]];
+          if (s.events.length) {
+            s.events.shift();
+            if (s.chipsEl.firstChild) s.chipsEl.removeChild(s.chipsEl.firstChild);
+            chipCount--;
+            break;
+          }
+        }
+      }
+    }
+    function onEvent(ev) {
+      var sid = ev.session_id || "unknown";
+      var st = ensureCard(sid, ev);
+      st.count += 1;
+      st.kind = ev.kind;
+      st.ts = ev.ts;
+      if (ev.machine) st.machineEl.textContent = ev.machine;
+      var status = statusOf(ev.kind);
+      st.pill.className = "pill " + pillClass(status);
+      st.pill.textContent = pillLabel(status);
+      st.events.push(ev);
+      var chip = makeChip(ev);
+      st.chipsEl.appendChild(chip);
+      chipCount++;
+      while (st.events.length > CHIP_CAP) {
+        st.events.shift();
+        if (st.chipsEl.firstChild) st.chipsEl.removeChild(st.chipsEl.firstChild);
+        chipCount--;
+      }
+      st.nEl.textContent = st.count + " events";
+      st.ageEl.textContent = age(st.ts);
+      bumpCard(sid);
+      total++;
+      countEl.textContent = String(total);
+      trimOldest();
+    }
+    setInterval(function () {
+      Object.keys(sessions).forEach(function (sid) {
+        var st = sessions[sid];
+        st.ageEl.textContent = age(st.ts);
+      });
+    }, 5000);
+
+    var es = new EventSource('/stream?replay=200');
+    es.addEventListener("open", function () { dot.className = "dot live"; });
+    es.addEventListener("error", function () { dot.className = "dot recon"; });
+    es.addEventListener("hud", function (e) {
+      try { onEvent(JSON.parse(e.data)); } catch (err) {}
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HUD · deck</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" id="hud-theme" href="/v3/themes/dark.css">
+  <script>
+    (function () {
+      var ALLOWED = ["dark", "sapphire", "lapis-velvet", "sandstone"];
+      var q = new URLSearchParams(location.search);
+      var t = q.get("theme");
+      if (t && ALLOWED.indexOf(t) >= 0) localStorage.setItem("hud-theme", t);
+      else t = localStorage.getItem("hud-theme") || "dark";
+      if (ALLOWED.indexOf(t) < 0) t = "dark";
+      document.getElementById("hud-theme").href = "/v3/themes/" + t + ".css";
+    })();
+  </script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--hud-bg);
+      color: var(--hud-text);
+      font-family: var(--hud-font-mono);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .hud-header {
+      display: flex; align-items: center; gap: var(--hud-space-3);
+      padding: var(--hud-space-3) var(--hud-space-4);
+      border-bottom: 1px solid var(--hud-header-border);
+      background: var(--hud-header-bg);
+      backdrop-filter: blur(8px);
+      position: sticky; top: 0; z-index: 10;
+    }
+    .hud-brand {
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .hud-title {
+      letter-spacing: .18em; font-weight: 700; font-size: 11px;
+      text-transform: uppercase; color: var(--hud-text-strong);
+    }
+    .hud-subtitle { font-size: 10px; color: var(--hud-text-faint); letter-spacing: .06em; }
+    .hud-dot {
+      width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+      background: var(--hud-recon); transition: background .2s, box-shadow .2s;
+    }
+    .hud-dot.live {
+      background: var(--hud-live);
+      box-shadow: 0 0 0 3px var(--hud-live-glow), 0 0 12px var(--hud-live-glow);
+    }
+    .hud-meta {
+      color: var(--hud-text-muted); font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .hud-meta strong { color: var(--hud-text-strong); font-weight: 600; }
+    .hud-spacer { margin-left: auto; }
+    .hud-link {
+      color: var(--hud-link); text-decoration: none; font-size: 12px;
+      border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
+      padding: 4px 10px; transition: border-color .15s;
+    }
+    .hud-link:hover { border-color: var(--hud-accent); }
+    .hud-theme {
+      background: var(--hud-surface); color: var(--hud-text);
+      border: 1px solid var(--hud-border); border-radius: var(--hud-radius-sm);
+      font: inherit; font-size: 11px; padding: 4px 8px; cursor: pointer;
+    }
+    .lanes {
+      display: flex; flex-direction: column; gap: var(--hud-space-2);
+      padding: var(--hud-space-3) var(--hud-space-3) 48px;
+    }
+    .lane {
+      display: grid; grid-template-columns: 148px 1fr; gap: var(--hud-space-2);
+      background: var(--hud-surface);
+      border: 1px solid var(--hud-border);
+      border-left: 3px solid var(--hud-accent-dim);
+      border-radius: var(--hud-radius-md);
+      padding: var(--hud-space-2) var(--hud-space-3);
+      min-height: 56px;
+      animation: lane-in .32s cubic-bezier(.22, 1, .36, 1);
+      transition: opacity .45s, border-left-color .3s;
+    }
+    .lane.active { border-left-color: var(--hud-accent); }
+    .lane.idle { opacity: .32; }
+    @keyframes lane-in {
+      from { transform: translateY(-8px); opacity: 0; }
+      to { transform: none; opacity: 1; }
+    }
+    .lane-label { padding: 6px 4px; min-width: 0; }
+    .lane-id {
+      color: var(--hud-link); font-weight: 700; font-size: 13px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .lane-meta {
+      display: block; margin-top: 4px; font-size: 10px;
+      color: var(--hud-text-faint); letter-spacing: .04em;
+    }
+    .strip {
+      display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px;
+      scrollbar-width: thin; scrollbar-color: var(--hud-border) transparent;
+    }
+    .chip {
+      flex: 0 0 auto; border-radius: var(--hud-radius-sm);
+      padding: 5px 9px; font-size: 11px; white-space: nowrap;
+      background: var(--chip-default-bg); color: var(--chip-default-fg);
+      border: 1px solid transparent;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+    }
+    .chip.session_start { background: var(--chip-session-start-bg); color: var(--chip-session-start-fg); }
+    .chip.user_prompt   { background: var(--chip-user-prompt-bg); color: var(--chip-user-prompt-fg); }
+    .chip.pre_tool_use  { background: var(--chip-pre-tool-bg); color: var(--chip-pre-tool-fg); }
+    .chip.post_tool_use { background: var(--chip-post-tool-bg); color: var(--chip-post-tool-fg); }
+    .chip.error         { background: var(--chip-error-bg); color: var(--chip-error-fg); border-color: var(--hud-error); }
+    .chip.notification  { background: var(--chip-notification-bg); color: var(--chip-notification-fg); }
+    .chip.stop          { background: var(--chip-stop-bg); color: var(--chip-stop-fg); }
+    .chip.subagent_stop { background: var(--chip-subagent-bg); color: var(--chip-subagent-fg); }
+    .chip.pre_compact   { background: var(--chip-compact-bg); color: var(--chip-compact-fg); }
+    .empty-state {
+      margin: var(--hud-space-5); padding: var(--hud-space-5);
+      text-align: center; color: var(--hud-text-faint);
+      border: 1px dashed var(--hud-border); border-radius: var(--hud-radius-lg);
+      letter-spacing: .08em; font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <header class="hud-header">
+    <span id="dot" class="hud-dot" title="connection"></span>
+    <div class="hud-brand">
+      <span class="hud-title">Flight Deck</span>
+      <span class="hud-subtitle">session swim-lanes</span>
+    </div>
+    <span class="hud-meta">events <strong id="count">0</strong></span>
+    <span class="hud-meta">lanes <strong id="lane-count">0</strong></span>
+    <span class="hud-spacer"></span>
+    <select id="theme-pick" class="hud-theme" aria-label="Theme">
+      <option value="dark">dark</option>
+      <option value="sapphire">sapphire</option>
+      <option value="lapis-velvet">lapis-velvet</option>
+      <option value="sandstone">sandstone</option>
+    </select>
+    <a class="hud-link" href="/">views</a>
+  </header>
+  <div class="lanes" id="lanes">
+    <p class="empty-state" id="empty">Awaiting telemetry…</p>
+  </div>
+  <script>
+    var MAX = 500;
+    var IDLE_MS = 5 * 60 * 1000;
+    var total = 0;
+    var sessions = {};
+    var order = [];
+    var chipCount = 0;
+    var lanesEl = document.getElementById("lanes");
+    var emptyEl = document.getElementById("empty");
+    var countEl = document.getElementById("count");
+    var laneCountEl = document.getElementById("lane-count");
+    var dot = document.getElementById("dot");
+    var themePick = document.getElementById("theme-pick");
+
+    function shortId(id) {
+      id = String(id || "");
+      return id.length > 10 ? id.slice(0, 8) + "…" : id;
+    }
+    function chipClass(ev) {
+      var kind = ev.kind || "";
+      var payload = ev.payload || {};
+      if (kind === "post_tool_use" && payload.ok === false) return "error";
+      if (kind.indexOf("error") !== -1) return "error";
+      return kind;
+    }
+    function chipText(ev) {
+      var tool = (ev.payload && ev.payload.tool_name) || "";
+      return tool ? ev.kind + " · " + tool : ev.kind;
+    }
+    function chipTitle(ev) {
+      var p = ev.payload || {};
+      if (p.error) return String(p.error);
+      if (p.tool_input_summary) return String(p.tool_input_summary);
+      if (p.prompt) return String(p.prompt);
+      if (p.message) return String(p.message);
+      if (p.cwd) return String(p.cwd);
+      if (p.trigger) return String(p.trigger);
+      if (p.agent) return String(p.agent);
+      if (p.source) return String(p.source);
+      if (p.tool_name) return String(p.tool_name);
+      return ev.kind || "";
+    }
+    function parseTs(ev) {
+      if (!ev.ts) return Date.now();
+      var t = Date.parse(ev.ts);
+      return isNaN(t) ? Date.now() : t;
+    }
+    function syncEmpty() {
+      var n = Object.keys(sessions).length;
+      if (emptyEl) emptyEl.hidden = n > 0;
+      laneCountEl.textContent = String(n);
+    }
+    function ensureLane(sid, ev) {
+      if (!sessions[sid]) {
+        var lane = document.createElement("div");
+        lane.className = "lane active";
+        var label = document.createElement("div");
+        label.className = "lane-label";
+        label.innerHTML = '<div class="lane-id"></div><small class="lane-meta"></small>';
+        label.querySelector(".lane-id").textContent = shortId(sid);
+        label.querySelector(".lane-meta").textContent = ev.machine || "—";
+        var strip = document.createElement("div");
+        strip.className = "strip";
+        lane.appendChild(label);
+        lane.appendChild(strip);
+        sessions[sid] = { el: lane, strip: strip, last: Date.now(), chips: [] };
+        order.unshift(sid);
+        lanesEl.insertBefore(lane, lanesEl.firstChild);
+        syncEmpty();
+      }
+      return sessions[sid];
+    }
+    function bumpLane(sid) {
+      var idx = order.indexOf(sid);
+      if (idx > 0) {
+        order.splice(idx, 1);
+        order.unshift(sid);
+        lanesEl.insertBefore(sessions[sid].el, lanesEl.firstChild);
+      }
+    }
+    function trimOldest() {
+      while (chipCount > MAX) {
+        for (var i = order.length - 1; i >= 0; i--) {
+          var s = sessions[order[i]];
+          if (s.chips.length) {
+            var node = s.chips.shift();
+            if (node.parentNode) node.parentNode.removeChild(node);
+            chipCount--;
+            break;
+          }
+        }
+      }
+    }
+    function onEvent(ev) {
+      var sid = ev.session_id || "unknown";
+      var lane = ensureLane(sid, ev);
+      lane.last = parseTs(ev);
+      lane.el.classList.remove("idle");
+      lane.el.classList.add("active");
+      bumpLane(sid);
+      var chip = document.createElement("span");
+      chip.className = "chip " + chipClass(ev);
+      chip.textContent = chipText(ev);
+      chip.title = chipTitle(ev);
+      lane.strip.appendChild(chip);
+      lane.chips.push(chip);
+      chipCount++;
+      lane.strip.scrollLeft = lane.strip.scrollWidth;
+      total++;
+      countEl.textContent = String(total);
+      trimOldest();
+    }
+    setInterval(function () {
+      var now = Date.now();
+      Object.keys(sessions).forEach(function (sid) {
+        var s = sessions[sid];
+        if (now - s.last > IDLE_MS) {
+          s.el.classList.add("idle");
+          s.el.classList.remove("active");
+        } else {
+          s.el.classList.remove("idle");
+          s.el.classList.add("active");
+        }
+      });
+    }, 10000);
+
+    themePick.value = localStorage.getItem("hud-theme") || "dark";
+    themePick.addEventListener("change", function () {
+      localStorage.setItem("hud-theme", themePick.value);
+      document.getElementById("hud-theme").href = "/v3/themes/" + themePick.value + ".css";
+    });
+
+    var es = new EventSource('/stream?replay=200');
+    es.addEventListener("open", function () { dot.className = "hud-dot live"; });
+    es.addEventListener("error", function () { dot.className = "hud-dot"; });
+    es.addEventListener("hud", function (e) {
+      try { onEvent(JSON.parse(e.data)); } catch (err) {}
+    });
+  </script>
+</body>
+</html>

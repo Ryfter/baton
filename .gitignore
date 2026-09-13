@@ -29,3 +29,10 @@ scratch/
 # Root-scoped so tracked zips under dashboard/ are unaffected.
 /token-saver-skill.zip
 /tools/token_saver/
+
+hud/hud.db
+hud/*.db
+hud/hud.db*
+# Retention's periodic SQLite backups -- full copies of event data (prompt
+# text, command lines). This repo is PUBLIC; these must never be committed.
+hud/backups/
