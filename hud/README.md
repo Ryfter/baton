@@ -6,12 +6,22 @@ start both — see `docs/superpowers/specs/2026-09-10-hud-dashboard-buildout-des
 §11.1 for the port-collision resolution). Transport is SSE with resume-on-reconnect.
 Storage is SQLite with hourly retention rollups (`hud/hud.db`, gitignored).
 
-**Retention scope (M1):** the pruner enforces **30-day time-based retention only**.
-A hard row-count cap (`HUD_MAX_ROWS`) and periodic space reclamation
-(`PRAGMA incremental_vacuum` / a weekly `VACUUM`, spec §5.3) are **deferred to a
-follow-up** — not implemented in this milestone. Time-based retention bounds
-steady-state growth, but there is currently no hard cap on row count and no
-space reclamation once rows are pruned.
+**Retention (M1, spec §5.3 — fully implemented):** the pruner enforces 30-day
+time-based retention (`HUD_RETENTION_DAYS`, default 30) AND a hard row-count
+cap (`HUD_MAX_ROWS`, default 2,000,000) — whichever binds first. Both prune
+passes roll a row's contribution into `rollups_hourly` before deleting it, so
+cost/token history survives at hourly granularity even after the raw event
+is gone. The cutoff and rollup bucket are keyed on `recv_ts` (the
+server-assigned collector clock), not the emitter-supplied `ts`, so a bad
+emitter clock can't skew what gets pruned or when (falls back to `ts` only
+for pre-migration rows that predate `recv_ts`). Space is actually reclaimed
+as rows are deleted: the DB runs with `PRAGMA auto_vacuum=INCREMENTAL`
+(converted in place via migrations.py for any DB that predates this), and
+each prune batch runs `PRAGMA incremental_vacuum` afterward. A full `VACUUM`
+also runs roughly weekly (7+ days since the last one). Nightly backups
+(`backup_now`, keep 7) seed their "last backup" timer from the newest
+existing backup file's mtime at startup, so a crash-looping process doesn't
+mistake a restart for "no backup has ever run" and rotate away real history.
 
 ## Run
 

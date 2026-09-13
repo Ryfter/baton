@@ -131,6 +131,7 @@ _subscribers: set[asyncio.Queue] = set()
 _QUEUE_MAX = 256
 _retention_task: Optional[asyncio.Task] = None
 _last_backup_ts: Optional[float] = None
+_last_vacuum_ts: Optional[float] = None
 MAX_BODY = 64 * 1024
 EVENTS_LIMIT = 500
 _PAYLOAD_CAPS = {
@@ -496,16 +497,20 @@ app.add_middleware(
 
 
 async def _retention_loop() -> None:
-    global _last_backup_ts
+    global _last_backup_ts, _last_vacuum_ts
     while True:
         try:
             conn = store.get_conn()
             days = int(os.environ.get("HUD_RETENTION_DAYS", str(retention.RETENTION_DAYS_DEFAULT)))
-            await asyncio.to_thread(retention.prune_once, conn, retention_days=days)
+            max_rows = int(os.environ.get("HUD_MAX_ROWS", str(retention.MAX_ROWS_DEFAULT)))
+            await asyncio.to_thread(retention.prune_once, conn, retention_days=days, max_rows=max_rows)
             now = time.time()
             if retention.should_backup(_last_backup_ts, now):
                 await asyncio.to_thread(retention.backup_now, conn, retention.backup_dir())
                 _last_backup_ts = now
+            if retention.should_vacuum(_last_vacuum_ts, now):
+                await asyncio.to_thread(retention.vacuum_now, conn)
+                _last_vacuum_ts = now
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -515,7 +520,13 @@ async def _retention_loop() -> None:
 
 @app.on_event("startup")
 async def _on_startup() -> None:
-    global _retention_task
+    global _retention_task, _last_backup_ts
+    # I4: seed from the newest existing backup's mtime (not None) so a
+    # crash-looping process under launchd's KeepAlive doesn't think no
+    # backup has ever run and take a fresh one on every ~10s restart --
+    # with keep=7 that rotates away a week of real history in under a
+    # minute. Must happen before the retention loop is scheduled.
+    _last_backup_ts = retention.latest_backup_mtime(retention.backup_dir())
     if os.environ.get("HUD_DISABLE_RETENTION") != "1":
         _retention_task = asyncio.create_task(_retention_loop())
 

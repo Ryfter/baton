@@ -62,8 +62,36 @@ def current_version(conn: sqlite3.Connection) -> int:
     return int(row[0]) if row else 0
 
 
+def _ensure_auto_vacuum_incremental(conn: sqlite3.Connection) -> None:
+    """I5 item 2: switch the DB to auto_vacuum=INCREMENTAL so the retention
+    pruner's `PRAGMA incremental_vacuum` calls actually reclaim space.
+
+    SQLite gotcha (investigated for I5): `PRAGMA auto_vacuum` can only be
+    changed on a database that has not yet had any tables/pages written --
+    on a database that already has data, setting the pragma alone is a
+    silent no-op for the on-disk format; only a subsequent full `VACUUM`
+    actually rewrites the file in the new mode. So:
+      - brand-new DB (page_count == 0, e.g. a fresh install or a fresh test
+        tmp_path db): set the pragma before any tables exist -- takes effect
+        immediately, no VACUUM needed.
+      - existing DB with data (e.g. every hud.db that predates this change):
+        set the pragma AND run one full VACUUM to convert it.
+    Idempotent either way -- once auto_vacuum reads back as 2 (INCREMENTAL),
+    every later call returns immediately, so this costs nothing on the
+    common (already-converted) startup path.
+    """
+    current = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+    if current == 2:
+        return
+    conn.execute("PRAGMA auto_vacuum = 2")
+    page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+    if page_count > 0:
+        conn.execute("VACUUM")
+
+
 def migrate(conn: sqlite3.Connection) -> int:
     """Apply every pending migration, each in its own transaction. Returns the final version."""
+    _ensure_auto_vacuum_incremental(conn)
     version = current_version(conn)
     for target, statements in MIGRATIONS:
         if target <= version:
@@ -75,7 +103,10 @@ def migrate(conn: sqlite3.Connection) -> int:
             conn.execute("PRAGMA user_version = %d" % target)
             conn.commit()
         except Exception:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
             raise
         version = target
     return version

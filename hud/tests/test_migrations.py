@@ -30,6 +30,47 @@ def test_migrate_is_idempotent(tmp_path):
     assert migrations.current_version(conn) == v1
 
 
+def test_fresh_db_migrates_with_incremental_auto_vacuum(tmp_path):
+    """I5 item 2: a brand-new (empty) DB can switch to auto_vacuum=INCREMENTAL
+    by just setting the pragma -- no VACUUM needed since no pages exist yet."""
+    conn = _fresh_conn(tmp_path)
+    migrations.migrate(conn)
+    assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
+    # Idempotent: migrating an already-INCREMENTAL DB again is a no-op, not
+    # a repeated VACUUM.
+    migrations.migrate(conn)
+    assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
+
+
+def test_migrate_converts_existing_db_with_data_to_incremental_auto_vacuum(tmp_path):
+    """I5 item 2: SQLite only lets an EXISTING (non-empty) database change
+    auto_vacuum mode via a full VACUUM after setting the pragma -- setting
+    the pragma alone is a silent no-op on a DB that already has pages. This
+    simulates a DB that predates this change (data already present,
+    auto_vacuum still the SQLite default of NONE)."""
+    conn = _fresh_conn(tmp_path)
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, session_id TEXT NOT NULL,
+          source TEXT NOT NULL, kind TEXT NOT NULL, agent TEXT, seq INTEGER NOT NULL,
+          machine TEXT, payload TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO events (ts, session_id, source, kind, agent, seq, machine, payload) "
+        "VALUES ('t','pre-existing','claude-hook','stop','main',1,'m','{}')"
+    )
+    assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 0  # NONE, the pre-change default
+
+    migrations.migrate(conn)
+
+    assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2  # INCREMENTAL
+    row = conn.execute("SELECT session_id FROM events WHERE session_id='pre-existing'").fetchone()
+    assert row is not None  # data survived the conversion VACUUM
+
+
 def test_preexisting_db_without_user_version_upgrades_cleanly(tmp_path):
     """A DB created by the old store.py (static DDL, no migrations, user_version=0)
     must upgrade in place without losing its rows."""

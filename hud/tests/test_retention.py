@@ -1,29 +1,55 @@
+import os
 import time
+
+import pytest
 
 from hud import retention, store
 
 
 def _insert_old(session_id, kind, payload, ts):
+    """Insert an event with the given `ts`. insert_event always stamps
+    recv_ts to the real wall-clock "now", so this makes a row with an OLD
+    `ts` but a RECENT `recv_ts` -- useful on its own for the I2 tests below,
+    which are specifically about that divergence."""
     ev = {"schema": "hud.event/v1", "ts": ts, "session_id": session_id, "source": "claude-hook",
           "kind": kind, "agent": "main", "machine": "m", "payload": payload}
     store.insert_event(ev)
     return ev
 
 
+def _insert_fully_old(session_id, kind, payload, ts):
+    """Like _insert_old, but also backdates recv_ts to match ts -- a
+    realistic "genuinely old" row, as if it had actually been ingested back
+    when `ts` was current. Used by tests that exercise the prune+rollup
+    mechanism itself rather than the ts/recv_ts divergence (I2)."""
+    ev = _insert_old(session_id, kind, payload, ts)
+    conn = store.get_conn()
+    conn.execute("UPDATE events SET recv_ts = ? WHERE session_id = ? AND ts = ? AND recv_ts != ?",
+                 (ts, session_id, ts, ts))
+    conn.commit()
+    ev["recv_ts"] = ts
+    return ev
+
+
 def test_prune_once_rolls_old_rows_into_rollups_and_deletes_them(isolated_state):
     old_ts = "2020-01-01T07:00:03Z"
-    _insert_old("s1", "post_tool_use", {"tool_name": "Bash", "ok": True}, old_ts)
-    _insert_old("s1", "post_tool_use", {"tool_name": "Bash", "ok": False, "error": "boom"}, old_ts)
-    _insert_old("s2", "stop", {}, "2020-01-01T07:00:05Z")  # also old -- retention is date-based
+    ev1 = _insert_fully_old("s1", "post_tool_use", {"tool_name": "Bash", "ok": True}, old_ts)
+    _insert_fully_old("s1", "post_tool_use", {"tool_name": "Bash", "ok": False, "error": "boom"}, old_ts)
+    _insert_fully_old("s2", "stop", {}, "2020-01-01T07:00:05Z")  # also old -- retention is date-based
     conn = store.get_conn()
 
     result = retention.prune_once(conn, retention_days=30, now=time.time())
     assert result["deleted"] == 3
     assert store.count_events() == 0
 
+    # I2: bucket_ts is keyed on recv_ts (the collector clock), not the
+    # emitter-supplied `ts` above -- floor insert_event's own recv_ts (real
+    # wall-clock time of the insert) to the hour, don't hardcode `old_ts`'s
+    # bucket.
+    bucket = retention._bucket_ts(ev1["recv_ts"])
     row = conn.execute(
         "SELECT n, n_errors FROM rollups_hourly WHERE bucket_ts = ? AND kind = 'post_tool_use'",
-        ("2020-01-01T07:00:00Z",),
+        (bucket,),
     ).fetchone()
     assert row["n"] == 2
     assert row["n_errors"] == 1
@@ -33,13 +59,14 @@ def test_prune_once_is_safe_to_call_repeatedly(isolated_state):
     """Two separate prune passes over data in the same hour bucket must
     accumulate in rollups_hourly, not collide on the NULL project/model PK."""
     conn = store.get_conn()
-    _insert_old("s1", "stop", {}, "2020-01-01T07:00:00Z")
+    ev1 = _insert_fully_old("s1", "stop", {}, "2020-01-01T07:00:00Z")
     retention.prune_once(conn, retention_days=30, now=time.time())
-    _insert_old("s2", "stop", {}, "2020-01-01T07:00:30Z")
+    _insert_fully_old("s2", "stop", {}, "2020-01-01T07:00:30Z")
     retention.prune_once(conn, retention_days=30, now=time.time())
+    bucket = retention._bucket_ts(ev1["recv_ts"])  # I2: bucketed by recv_ts, not ts
     row = conn.execute(
         "SELECT n FROM rollups_hourly WHERE bucket_ts = ? AND kind = 'stop'",
-        ("2020-01-01T07:00:00Z",),
+        (bucket,),
     ).fetchone()
     assert row["n"] == 2  # not two separate rows of n=1
 
@@ -51,6 +78,37 @@ def test_prune_once_keeps_recent_rows(isolated_state):
     conn = store.get_conn()
     retention.prune_once(conn, retention_days=30, now=time.time())
     assert store.count_events() == 1
+
+
+def test_prune_once_uses_recv_ts_not_ts_for_cutoff(isolated_state):
+    """I2: recv_ts (server clock) is authoritative, not ts (emitter clock).
+    A row with an old `ts` but a fresh `recv_ts` must survive -- an emitter
+    with a wrong clock (or clock skew) must not get its events silently
+    pruned right after ingest."""
+    conn = store.get_conn()
+    ev = _insert_old("s1", "stop", {}, "2020-01-01T00:00:00Z")  # ts: far in the past
+    # insert_event always stamps recv_ts = now -- leave it alone, it's recent.
+    row = conn.execute("SELECT recv_ts FROM events WHERE session_id = 's1'").fetchone()
+    assert row["recv_ts"]  # sanity: recv_ts really is set and recent
+
+    retention.prune_once(conn, retention_days=30, now=time.time())
+
+    assert store.count_events() == 1  # NOT pruned -- recv_ts wins over the stale ts
+
+
+def test_prune_once_falls_back_to_ts_when_recv_ts_is_null(isolated_state):
+    """I2 fallback: pre-migration rows (recv_ts IS NULL, from before Task 1/2
+    landed) must still be prunable via their ts."""
+    conn = store.get_conn()
+    _insert_old("s1", "stop", {}, "2020-01-01T00:00:00Z")
+    conn.execute("UPDATE events SET recv_ts = NULL WHERE session_id = 's1'")
+    conn.commit()
+    row = conn.execute("SELECT recv_ts, ts FROM events WHERE session_id = 's1'").fetchone()
+    assert row["recv_ts"] is None and row["ts"] == "2020-01-01T00:00:00Z"
+
+    retention.prune_once(conn, retention_days=30, now=time.time())
+
+    assert store.count_events() == 0  # pruned via the ts fallback
 
 
 def test_backup_now_creates_restorable_copy_and_keeps_n(isolated_state, tmp_path):
@@ -68,3 +126,86 @@ def test_should_backup():
     assert retention.should_backup(None, now) is True
     assert retention.should_backup(now - 3600, now) is False
     assert retention.should_backup(now - 21 * 3600, now) is True
+
+
+def test_latest_backup_mtime_finds_newest_backup(tmp_path):
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    older = backups / "hud-20260101-000000-000000.db"
+    newer = backups / "hud-20260102-000000-000000.db"
+    older.write_bytes(b"x")
+    newer.write_bytes(b"x")
+    old_t = time.time() - 3600
+    os.utime(older, (old_t, old_t))
+    new_t = time.time()
+    os.utime(newer, (new_t, new_t))
+
+    result = retention.latest_backup_mtime(backups)
+    assert result == pytest.approx(newer.stat().st_mtime)
+
+
+def test_latest_backup_mtime_empty_or_missing_dir_returns_none(tmp_path):
+    empty = tmp_path / "empty-backups"
+    empty.mkdir()
+    assert retention.latest_backup_mtime(empty) is None
+    assert retention.latest_backup_mtime(tmp_path / "does-not-exist") is None
+
+
+def test_should_vacuum():
+    now = 1_000_000.0
+    assert retention.should_vacuum(None, now) is True
+    assert retention.should_vacuum(now - 86400, now) is False  # 1 day: not yet
+    assert retention.should_vacuum(now - 8 * 86400, now) is True  # 8 days: due
+
+
+def test_prune_once_enforces_hud_max_rows_by_deleting_oldest_first(isolated_state):
+    """I5 item 1: HUD_MAX_ROWS is a second, row-count-based bound on top of
+    the time-based retention -- whichever binds first. Excess oldest rows
+    (by id) get rolled into rollups_hourly, not just deleted."""
+    conn = store.get_conn()
+    recent = "2026-09-12T00:00:00Z"
+    for i in range(12):
+        _insert_old("s1", "stop", {}, recent)
+
+    result = retention.prune_once(conn, retention_days=30, now=time.time(), max_rows=5)
+
+    assert store.count_events() <= 5
+    assert result["deleted"] == 7
+    row = conn.execute("SELECT SUM(n) AS total FROM rollups_hourly WHERE kind = 'stop'").fetchone()
+    assert row["total"] == 7  # rolled up, not just dropped
+
+
+def test_prune_once_without_max_rows_does_not_enforce_a_count_bound(isolated_state):
+    conn = store.get_conn()
+    recent = "2026-09-12T00:00:00Z"
+    for i in range(5):
+        _insert_old("s1", "stop", {}, recent)
+    retention.prune_once(conn, retention_days=30, now=time.time())
+    assert store.count_events() == 5
+
+
+def test_prune_once_incremental_vacuum_runs_without_error(isolated_state):
+    """I5 item 2: incremental_vacuum must run cleanly against a real DB
+    (auto_vacuum=INCREMENTAL is set once at migration time -- see
+    hud/tests/test_migrations.py) after both prune passes, without raising
+    and without corrupting the database."""
+    conn = store.get_conn()
+    assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
+    old_ts = "2020-01-01T00:00:00Z"
+    for i in range(5):
+        _insert_old("s1", "stop", {}, old_ts)
+    for i in range(5):
+        _insert_old("s2", "stop", {}, "2026-09-12T00:00:00Z")
+
+    retention.prune_once(conn, retention_days=30, now=time.time(), max_rows=2)
+
+    integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+    assert integrity == "ok"
+
+
+def test_vacuum_now_runs_without_error(isolated_state):
+    conn = store.get_conn()
+    _insert_old("s1", "stop", {}, "2026-09-12T00:00:00Z")
+    retention.vacuum_now(conn)
+    integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+    assert integrity == "ok"
