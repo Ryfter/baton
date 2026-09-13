@@ -21,7 +21,13 @@ each prune batch runs `PRAGMA incremental_vacuum` afterward. A full `VACUUM`
 also runs roughly weekly (7+ days since the last one). Nightly backups
 (`backup_now`, keep 7) seed their "last backup" timer from the newest
 existing backup file's mtime at startup, so a crash-looping process doesn't
-mistake a restart for "no backup has ever run" and rotate away real history.
+mistake a restart for "no backup has ever run" and rotate away real history;
+the weekly `VACUUM` seeds the same way from a small marker file touched after
+each run, for the same reason (a launchd crash-loop must not re-trigger a
+full-file rewrite on every ~10s restart). Both `backup_now` and `vacuum_now`
+hold the store's write lock for their full duration (blocking ingest/read
+traffic meanwhile) -- acceptable at current scale, worth revisiting if the DB
+grows large.
 
 ## Run
 

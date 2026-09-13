@@ -488,7 +488,7 @@ async def _retention_loop() -> None:
                 await asyncio.to_thread(retention.backup_now, conn, retention.backup_dir())
                 _last_backup_ts = now
             if retention.should_vacuum(_last_vacuum_ts, now):
-                await asyncio.to_thread(retention.vacuum_now, conn)
+                await asyncio.to_thread(retention.vacuum_now, conn, retention.backup_dir())
                 _last_vacuum_ts = now
         except asyncio.CancelledError:
             raise
@@ -499,13 +499,17 @@ async def _retention_loop() -> None:
 
 @app.on_event("startup")
 async def _on_startup() -> None:
-    global _retention_task, _last_backup_ts
+    global _retention_task, _last_backup_ts, _last_vacuum_ts
     # I4: seed from the newest existing backup's mtime (not None) so a
     # crash-looping process under launchd's KeepAlive doesn't think no
     # backup has ever run and take a fresh one on every ~10s restart --
     # with keep=7 that rotates away a week of real history in under a
     # minute. Must happen before the retention loop is scheduled.
     _last_backup_ts = retention.latest_backup_mtime(retention.backup_dir())
+    # I-2: same reasoning, for the weekly VACUUM -- see
+    # retention.latest_vacuum_mtime's docstring for why a marker file (not
+    # _last_backup_ts's approach of reusing an existing file's mtime) is used.
+    _last_vacuum_ts = retention.latest_vacuum_mtime(retention.backup_dir())
     if os.environ.get("HUD_DISABLE_RETENTION") != "1":
         _retention_task = asyncio.create_task(_retention_loop())
 

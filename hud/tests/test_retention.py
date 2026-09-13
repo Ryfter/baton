@@ -245,3 +245,39 @@ def test_vacuum_now_runs_without_error(isolated_state):
     retention.vacuum_now(conn)
     integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
     assert integrity == "ok"
+
+
+def test_latest_vacuum_mtime_returns_none_when_marker_missing(tmp_path):
+    empty = tmp_path / "empty-backups"
+    empty.mkdir()
+    assert retention.latest_vacuum_mtime(empty) is None
+    assert retention.latest_vacuum_mtime(tmp_path / "does-not-exist") is None
+
+
+def test_vacuum_now_writes_marker_and_latest_vacuum_mtime_finds_it(isolated_state, tmp_path):
+    """I-2: vacuum_now(conn, backups_dir) touches a marker file after the
+    VACUUM completes, and latest_vacuum_mtime reads it back -- the same
+    seeding shape as latest_backup_mtime/backup_now (I4), so a crash-looping
+    process seeds _last_vacuum_ts from disk instead of re-VACUUMing on every
+    restart."""
+    conn = store.get_conn()
+    _insert_old("s1", "stop", {}, "2026-09-12T00:00:00Z")
+    backups = tmp_path / "backups"
+    assert retention.latest_vacuum_mtime(backups) is None  # nothing yet
+
+    retention.vacuum_now(conn, backups)
+
+    marker = retention.vacuum_marker_path(backups)
+    assert marker.is_file()
+    result = retention.latest_vacuum_mtime(backups)
+    assert result == pytest.approx(marker.stat().st_mtime)
+
+
+def test_vacuum_now_without_backups_dir_does_not_write_a_marker(isolated_state):
+    """Backward-compat: the pre-existing `retention.vacuum_now(conn)` call
+    shape (no backups_dir) still works and simply skips marker bookkeeping."""
+    conn = store.get_conn()
+    _insert_old("s1", "stop", {}, "2026-09-12T00:00:00Z")
+    retention.vacuum_now(conn)  # no backups_dir -- must not raise
+    integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+    assert integrity == "ok"

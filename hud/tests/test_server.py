@@ -503,3 +503,38 @@ def test_post_config_theme_only_write_preserves_frontend(client):
     assert r.status_code == 200
     assert r.json()["default_frontend"] == "deck"
     assert r.json()["default_theme"] == "lapis-velvet"
+
+
+def test_on_startup_seeds_last_backup_ts_from_latest_backup_mtime(isolated_state, tmp_path):
+    """M-7(a): _on_startup must seed the module-level _last_backup_ts from
+    latest_backup_mtime() (I4) rather than leaving it None, when a backup
+    already exists on disk at process start. No prior test asserted this
+    directly -- only the underlying latest_backup_mtime helper was covered."""
+    from fastapi.testclient import TestClient
+    import hud.server as server_mod
+
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    backup_file = backups / "hud-20260101-000000-000000.db"
+    backup_file.write_bytes(b"x")
+    expected_mtime = backup_file.stat().st_mtime
+
+    with TestClient(server_mod.app):
+        assert server_mod._last_backup_ts == pytest.approx(expected_mtime)
+
+
+def test_on_startup_seeds_last_vacuum_ts_from_marker(isolated_state, tmp_path):
+    """I-2 sibling of the above: _on_startup must seed _last_vacuum_ts from
+    the vacuum marker file's mtime, the same shape as _last_backup_ts."""
+    from fastapi.testclient import TestClient
+    from hud import retention
+    import hud.server as server_mod
+
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    marker = retention.vacuum_marker_path(backups)
+    marker.touch()
+    expected_mtime = marker.stat().st_mtime
+
+    with TestClient(server_mod.app):
+        assert server_mod._last_vacuum_ts == pytest.approx(expected_mtime)

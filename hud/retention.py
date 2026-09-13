@@ -43,6 +43,7 @@ PRUNE_INTERVAL_S = 3600
 BACKUP_KEEP_DEFAULT = 7
 BACKUP_MIN_INTERVAL_S = 20 * 3600  # "nightly", without needing calendar-day bookkeeping
 VACUUM_MIN_INTERVAL_S = 7 * 86400  # "weekly", without needing exact wall-clock scheduling
+VACUUM_MARKER_NAME = ".last-vacuum"
 
 _ROW_COLUMNS = "id, ts, recv_ts, machine, source, kind, payload"
 
@@ -239,6 +240,34 @@ def should_vacuum(last_vacuum_ts: Optional[float], now: float) -> bool:
     return last_vacuum_ts is None or (now - last_vacuum_ts) >= VACUUM_MIN_INTERVAL_S
 
 
-def vacuum_now(conn: sqlite3.Connection) -> None:
+def vacuum_marker_path(backups_dir: Path) -> Path:
+    return backups_dir / VACUUM_MARKER_NAME
+
+
+def latest_vacuum_mtime(backups_dir: Path) -> Optional[float]:
+    """Mtime of the vacuum marker file, or None if a VACUUM has never run (or
+    `backups_dir` doesn't exist yet). Used to seed _last_vacuum_ts at startup
+    (I-2), the same way latest_backup_mtime seeds _last_backup_ts (I4): a
+    process's own _last_vacuum_ts starts None on every restart, and the
+    retention loop runs its body before its first sleep, so without a
+    persisted marker a launchd crash-loop (restart every ~10s) would fire a
+    full VACUUM -- a real, possibly-long file rewrite -- on every single
+    restart. A marker file is used rather than the main DB file's own mtime
+    because ordinary writes touch that mtime constantly, which would make it
+    useless as a "was a VACUUM the last thing that touched this file"
+    signal."""
+    try:
+        return vacuum_marker_path(backups_dir).stat().st_mtime
+    except OSError:
+        return None
+
+
+def vacuum_now(conn: sqlite3.Connection, backups_dir: Optional[Path] = None) -> None:
     with store._lock:
         conn.execute("VACUUM")
+    if backups_dir is not None:
+        # Touch the marker (I-2) after releasing the lock -- this is bookkeeping
+        # for the *next* process startup's should_vacuum() decision, not part of
+        # the VACUUM transaction itself, so it doesn't need store._lock held.
+        backups_dir.mkdir(parents=True, exist_ok=True)
+        vacuum_marker_path(backups_dir).touch()
