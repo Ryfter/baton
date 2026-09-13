@@ -1,9 +1,22 @@
 """Service install/status/rebuild logic behind `baton hud {install-service,status,rebuild}`.
-Kept out of __main__.py so it's unit-testable without subprocess/argv plumbing."""
+Kept out of __main__.py so it's unit-testable without subprocess/argv plumbing.
+
+host_is_loopback/warn_if_unauthed_lan live here (not in hud/server.py, which they
+originally shipped in) specifically so `install-service` can call them without
+pulling in FastAPI/starlette -- hud/server.py imports those at module scope, and
+`install-service` must keep working on an interpreter that never had them
+installed (I-1: minor item 6 of the M1 cleanup pass reintroduced exactly this
+`ModuleNotFoundError` regression, previously fixed for `serve`/`status`/`rebuild`
+as C2, by adding `from hud.server import warn_if_unauthed_lan` back into
+`install-service`). hud/server.py imports both names from here instead of
+defining them, so there is one implementation, not a fork."""
 from __future__ import annotations
 
+import logging
+import os
 import platform
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -11,7 +24,35 @@ from typing import Any
 
 from hud import store
 
+logger = logging.getLogger("hud")
+
 PLIST_NAME = "dev.baton.hud.plist"
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def host_is_loopback(host: str | None = None) -> bool:
+    h = (host if host is not None else os.environ.get("HUD_HOST", "127.0.0.1")).strip().lower()
+    return h in _LOOPBACK_HOSTS
+
+
+def warn_if_unauthed_lan(host: str | None = None) -> None:
+    h = (host if host is not None else os.environ.get("HUD_HOST", "127.0.0.1")).strip()
+    if host_is_loopback(h) or os.environ.get("HUD_TOKEN"):
+        return
+    msg = (
+        "WARNING: HUD is bound to %s (not loopback) without HUD_TOKEN. "
+        "All requests will be rejected with 401. Set HUD_TOKEN and pass it "
+        "as the X-HUD-Token header or ?t= query parameter. "
+        "Example: HUD_HOST=0.0.0.0 HUD_TOKEN=secret python -m hud\n" % (h or "?",)
+    )
+    try:
+        sys.stderr.write(msg)
+        sys.stderr.flush()
+    except Exception:
+        pass
+    logger.warning(msg.strip())
+
 
 _PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

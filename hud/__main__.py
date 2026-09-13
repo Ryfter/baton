@@ -59,7 +59,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "install-service":
         from hud import servicectl
-        from hud.server import warn_if_unauthed_lan
+        # NOT `from hud.server import warn_if_unauthed_lan` -- hud/server.py
+        # imports FastAPI/starlette at module scope, and this branch must keep
+        # working on an interpreter that never had them installed (I-1: this
+        # is the exact C2 regression class, reintroduced here by minor item 6
+        # of the M1 cleanup pass). hud.servicectl has no FastAPI dependency.
+        from hud.servicectl import warn_if_unauthed_lan
 
         # Same warning `serve` already gives: a LAN bind with no HUD_TOKEN
         # deserves a loud heads-up at install time too, not just at `serve`

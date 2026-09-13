@@ -9,7 +9,6 @@ import logging
 import os
 import re
 import socket
-import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -25,33 +24,13 @@ from hud import migrations
 from hud import retention
 from hud import store
 from hud.schema import SCHEMA_ID
+# host_is_loopback/warn_if_unauthed_lan live in hud/servicectl.py, which has no
+# FastAPI dependency, so `install-service` can import them without pulling in
+# FastAPI (I-1). Re-imported here under the same names for every existing
+# caller/test of hud.server.host_is_loopback / hud.server.warn_if_unauthed_lan.
+from hud.servicectl import host_is_loopback, warn_if_unauthed_lan
 
 logger = logging.getLogger("hud")
-
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
-
-
-def host_is_loopback(host: str | None = None) -> bool:
-    h = (host if host is not None else os.environ.get("HUD_HOST", "127.0.0.1")).strip().lower()
-    return h in _LOOPBACK_HOSTS
-
-
-def warn_if_unauthed_lan(host: str | None = None) -> None:
-    h = (host if host is not None else os.environ.get("HUD_HOST", "127.0.0.1")).strip()
-    if host_is_loopback(h) or os.environ.get("HUD_TOKEN"):
-        return
-    msg = (
-        "WARNING: HUD is bound to %s (not loopback) without HUD_TOKEN. "
-        "All requests will be rejected with 401. Set HUD_TOKEN and pass it "
-        "as the X-HUD-Token header or ?t= query parameter. "
-        "Example: HUD_HOST=0.0.0.0 HUD_TOKEN=secret python -m hud\n" % (h or "?",)
-    )
-    try:
-        sys.stderr.write(msg)
-        sys.stderr.flush()
-    except Exception:
-        pass
-    logger.warning(msg.strip())
 
 
 def _with_t(path: str, token: str) -> str:
