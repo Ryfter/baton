@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -35,6 +36,8 @@ from pathlib import Path
 from typing import Optional
 
 from hud import store
+
+logger = logging.getLogger("hud")
 
 RETENTION_DAYS_DEFAULT = 30
 MAX_ROWS_DEFAULT = 2_000_000
@@ -48,6 +51,22 @@ VACUUM_MARKER_NAME = ".last-vacuum"
 _ROW_COLUMNS = "id, ts, recv_ts, machine, source, kind, payload"
 
 
+def env_int(name: str, default: int) -> int:
+    """Read an int env var, falling back to `default` (and logging a warning)
+    on a missing-but-set-empty or unparseable value, instead of letting a
+    typo'd HUD_MAX_ROWS/HUD_RETENTION_DAYS raise and take the WHOLE retention
+    cycle's prune+backup+vacuum down with it for that hour (M-6). A truly
+    absent env var is not a warning case -- that's just "use the default"."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning("invalid int for %s=%r; using default %s", name, raw, default)
+        return default
+
+
 def _iso(ts: float) -> str:
     return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -58,8 +77,16 @@ def _bucket_ts(ts: str) -> str:
 
 
 def _row_clock(row: sqlite3.Row) -> str:
-    """The authoritative clock for a row: recv_ts when present, else ts (I2)."""
-    return row["recv_ts"] or row["ts"]
+    """The authoritative clock for a row: recv_ts when present, else ts (I2).
+    Matches the SQL cutoff query's COALESCE(recv_ts, ts) exactly -- only NULL
+    falls back to ts, not an empty string (M-3; `recv_ts or ts` was wrong:
+    COALESCE treats '' as NOT NULL and keeps it, so `or`'s truthiness-based
+    fallback would diverge from SQL for an empty-string recv_ts even though
+    the module docstring promises the two use "the same COALESCE" value.
+    Currently unreachable -- nothing produces an empty-string recv_ts -- but
+    fixed for correctness/consistency with that promise)."""
+    recv_ts = row["recv_ts"]
+    return recv_ts if recv_ts is not None else row["ts"]
 
 
 def _row_stats(payload_json: str) -> tuple[bool, int, int, float]:

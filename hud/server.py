@@ -475,13 +475,22 @@ app.add_middleware(
 )
 
 
+def _retention_env() -> tuple[int, int]:
+    """HUD_RETENTION_DAYS / HUD_MAX_ROWS, tolerant of a missing-or-bad value
+    (M-6) -- split out from _retention_loop so the env-var plumbing into
+    prune_once's row-count-based pass is directly testable without waiting
+    on the loop's real hourly sleep (M-7)."""
+    days = retention.env_int("HUD_RETENTION_DAYS", retention.RETENTION_DAYS_DEFAULT)
+    max_rows = retention.env_int("HUD_MAX_ROWS", retention.MAX_ROWS_DEFAULT)
+    return days, max_rows
+
+
 async def _retention_loop() -> None:
     global _last_backup_ts, _last_vacuum_ts
     while True:
         try:
             conn = store.get_conn()
-            days = int(os.environ.get("HUD_RETENTION_DAYS", str(retention.RETENTION_DAYS_DEFAULT)))
-            max_rows = int(os.environ.get("HUD_MAX_ROWS", str(retention.MAX_ROWS_DEFAULT)))
+            days, max_rows = _retention_env()
             await asyncio.to_thread(retention.prune_once, conn, retention_days=days, max_rows=max_rows)
             now = time.time()
             if retention.should_backup(_last_backup_ts, now):

@@ -281,3 +281,33 @@ def test_vacuum_now_without_backups_dir_does_not_write_a_marker(isolated_state):
     retention.vacuum_now(conn)  # no backups_dir -- must not raise
     integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
     assert integrity == "ok"
+
+
+def test_row_clock_falls_back_only_on_none_not_empty_string():
+    """M-3: _row_clock must match the SQL cutoff query's
+    COALESCE(recv_ts, ts) exactly -- COALESCE only falls back on NULL, and
+    treats '' as a real (kept) value. The old `recv_ts or ts` implementation
+    would have wrongly fallen back to `ts` for an empty-string recv_ts."""
+    assert retention._row_clock({"recv_ts": None, "ts": "TS"}) == "TS"
+    assert retention._row_clock({"recv_ts": "RECV", "ts": "TS"}) == "RECV"
+    assert retention._row_clock({"recv_ts": "", "ts": "TS"}) == ""
+
+
+def test_env_int_returns_default_when_var_unset(monkeypatch):
+    monkeypatch.delenv("HUD_TESTVAR_NOPE", raising=False)
+    assert retention.env_int("HUD_TESTVAR_NOPE", 42) == 42
+
+
+def test_env_int_parses_a_valid_value(monkeypatch):
+    monkeypatch.setenv("HUD_TESTVAR_NOPE", "7")
+    assert retention.env_int("HUD_TESTVAR_NOPE", 42) == 7
+
+
+def test_env_int_falls_back_and_warns_on_a_bad_value(monkeypatch, caplog):
+    """M-6: a typo'd HUD_MAX_ROWS/HUD_RETENTION_DAYS must not raise and take
+    the whole retention cycle down with it -- fall back to the documented
+    default and log a warning instead."""
+    monkeypatch.setenv("HUD_TESTVAR_NOPE", "not-a-number")
+    with caplog.at_level("WARNING", logger="hud"):
+        assert retention.env_int("HUD_TESTVAR_NOPE", 42) == 42
+    assert any("HUD_TESTVAR_NOPE" in rec.message for rec in caplog.records)

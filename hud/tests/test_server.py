@@ -164,8 +164,11 @@ def test_healthz(client):
 
 
 def test_head_healthz_is_also_exempt_from_auth(client, monkeypatch):
-    """Minor item 2: Starlette auto-serves HEAD for any GET route, so
-    exempting only GET left `HEAD /healthz` 401ing off-loopback."""
+    """Minor item 2: Starlette does NOT auto-serve HEAD for a plain GET
+    route (confirmed empirically), so exempting only GET left `HEAD
+    /healthz` 401ing off-loopback -- and even on loopback the route itself
+    405'd until it was explicitly registered for both GET and HEAD (see
+    the route registration's own comment in hud/server.py)."""
     monkeypatch.setenv("HUD_HOST", "0.0.0.0")
     monkeypatch.setenv("HUD_TOKEN", "secret")
     r = client.head("/healthz")
@@ -538,3 +541,29 @@ def test_on_startup_seeds_last_vacuum_ts_from_marker(isolated_state, tmp_path):
 
     with TestClient(server_mod.app):
         assert server_mod._last_vacuum_ts == pytest.approx(expected_mtime)
+
+
+def test_retention_env_reaches_prune_once_row_count_pass(isolated_state, monkeypatch):
+    """M-7(b): confirm an env-set HUD_MAX_ROWS actually reaches prune_once's
+    row-count-based pass, via server._retention_env() (the same helper
+    _retention_loop calls each cycle) -- without waiting on the loop's real
+    hourly sleep."""
+    from hud import retention, store
+    import hud.server as server_mod
+
+    for i in range(10):
+        store.insert_event({
+            "schema": "hud.event/v1", "ts": "2026-09-12T00:00:00Z",
+            "session_id": "s%d" % i, "source": "claude-hook", "kind": "stop",
+            "agent": "main", "machine": "m", "payload": {},
+        })
+    assert store.count_events() == 10
+
+    monkeypatch.setenv("HUD_MAX_ROWS", "3")
+    days, max_rows = server_mod._retention_env()
+    assert max_rows == 3
+
+    conn = store.get_conn()
+    retention.prune_once(conn, retention_days=days, max_rows=max_rows, now=time.time())
+
+    assert store.count_events() <= 3
