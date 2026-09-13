@@ -539,10 +539,16 @@ async def _on_shutdown() -> None:
 
 @app.middleware("http")
 async def _auth(request: Request, call_next):
-    if request.method == "GET" and request.url.path == "/healthz":
+    if request.method in ("GET", "HEAD") and request.url.path == "/healthz":
         # /healthz exposes only counters (no event content, no session id) --
         # spec 7.3 requires it stay reachable without a credential so launchd,
-        # the forwarder and an uptime check can probe it from any host.
+        # the forwarder and an uptime check can probe it from any host. HEAD
+        # is included because uptime checks commonly probe with HEAD -- the
+        # route below is registered for both GET and HEAD to match (the
+        # installed FastAPI/Starlette here does NOT auto-add HEAD to a plain
+        # @app.get route, confirmed empirically: exempting only GET left
+        # `HEAD /healthz` 401ing off-loopback, and even on loopback the route
+        # itself 405'd until it was registered for HEAD too).
         return await call_next(request)
     token = os.environ.get("HUD_TOKEN") or ""
     off_loopback = not host_is_loopback()
@@ -726,7 +732,7 @@ def _db_bytes() -> int:
     return total
 
 
-@app.get("/healthz")
+@app.api_route("/healthz", methods=["GET", "HEAD"])
 async def healthz() -> dict[str, Any]:
     one_min_ago = (datetime.now(timezone.utc) - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn = store.get_conn()

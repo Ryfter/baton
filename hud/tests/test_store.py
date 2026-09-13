@@ -85,9 +85,14 @@ def test_insert_event_without_event_uid_never_dedups(isolated_state):
     assert a["dup"] is False and b["dup"] is False
 
 
-def test_insert_event_row_vanished_retries_insert(isolated_state):
-    """When event_uid collides but the row is concurrently deleted (e.g. by pruner),
-    the second insert_event with the same event_uid should succeed as a fresh insert."""
+def test_insert_event_recycled_event_uid_after_deletion_inserts_as_new_row(isolated_state):
+    """Renamed from test_insert_event_row_vanished_retries_insert: this test
+    deletes-and-commits before re-inserting, so INSERT OR IGNORE just
+    succeeds normally -- it does NOT reach the "row vanished mid-transaction"
+    branch (the `cur.rowcount == 0 and event_uid` / re-SELECT-finds-nothing
+    path in insert_event). What it actually proves: a recycled event_uid,
+    after the original row was pruned, re-inserts cleanly as a brand-new row
+    rather than being treated as a (now-nonexistent) duplicate."""
     uid = "vanished-test-uid"
     ev1 = make_event(session_id="s1", kind="stop", event_uid=uid)
     id1 = insert_event(ev1)

@@ -59,9 +59,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "install-service":
         from hud import servicectl
+        from hud.server import warn_if_unauthed_lan
+
+        # Same warning `serve` already gives: a LAN bind with no HUD_TOKEN
+        # deserves a loud heads-up at install time too, not just at `serve`
+        # time (minor item 6).
+        warn_if_unauthed_lan(args.host)
         try:
             path = servicectl.install_service(_REPO_ROOT, host=args.host, port=args.port)
         except servicectl.UnsupportedPlatform as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except servicectl.ServiceLoadError as exc:
             print(str(exc), file=sys.stderr)
             return 1
         print("installed: %s" % path)

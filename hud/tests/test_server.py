@@ -163,6 +163,15 @@ def test_healthz(client):
     assert isinstance(body["uptime_s"], int)
 
 
+def test_head_healthz_is_also_exempt_from_auth(client, monkeypatch):
+    """Minor item 2: Starlette auto-serves HEAD for any GET route, so
+    exempting only GET left `HEAD /healthz` 401ing off-loopback."""
+    monkeypatch.setenv("HUD_HOST", "0.0.0.0")
+    monkeypatch.setenv("HUD_TOKEN", "secret")
+    r = client.head("/healthz")
+    assert r.status_code == 200
+
+
 def test_config_round_trip(client):
     r = client.post("/config", json={"default_frontend": "deck"})
     assert r.status_code == 200

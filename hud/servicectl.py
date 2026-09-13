@@ -48,11 +48,23 @@ class UnsupportedPlatform(RuntimeError):
     pass
 
 
+class ServiceLoadError(RuntimeError):
+    """`launchctl load` exited non-zero -- the plist was written but the
+    service is NOT actually running. Minor item 5: previously this was
+    printed as "installed: <path>" regardless of the load call's exit code."""
+
+    def __init__(self, path: Path, stderr: str):
+        self.path = path
+        self.stderr = stderr
+        detail = stderr.strip() or "(no stderr)"
+        super().__init__("launchctl load failed for %s: %s" % (path, detail))
+
+
 class _FakeCompleted:
     returncode = 0
 
 
-def render_launchd_plist(python_exe: str, repo_root: Path, *, host: str = "0.0.0.0", port: int = 8765) -> str:
+def render_launchd_plist(python_exe: str, repo_root: Path, *, host: str = "127.0.0.1", port: int = 8765) -> str:
     return _PLIST_TEMPLATE % {
         "python": python_exe,
         "repo_root": str(repo_root),
@@ -76,7 +88,12 @@ def install_macos_service(repo_root: Path, *, host: str = "127.0.0.1", port: int
     dest = dest_dir / PLIST_NAME
     dest.write_text(xml, encoding="utf-8")
     subprocess.run(["launchctl", "unload", str(dest)], capture_output=True)
-    subprocess.run(["launchctl", "load", str(dest)], capture_output=True, check=False)
+    result = subprocess.run(["launchctl", "load", str(dest)], capture_output=True, check=False)
+    if result.returncode != 0:
+        stderr = result.stderr
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", "replace")
+        raise ServiceLoadError(dest, stderr or "")
     return dest
 
 

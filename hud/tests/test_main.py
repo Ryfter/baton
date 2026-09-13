@@ -1,18 +1,21 @@
+import json
+import os
+from pathlib import Path
+
 from hud.__main__ import build_parser
 
 
-def test_no_subcommand_implies_serve():
+def test_explicit_serve_subcommand():
+    """Covers explicit `serve` subcommand parsing, both --host and --port.
+    (Consolidated with the former test_no_subcommand_implies_serve, which --
+    despite its name -- also passed an explicit "serve" argv and was a
+    near-duplicate of this test; the actual "no subcommand" backward-compat
+    behavior is covered separately by
+    test_main_prepends_serve_when_no_known_subcommand below.)"""
     parser = build_parser()
-    args = parser.parse_args(["serve", "--host", "0.0.0.0", "--port", "9999"])
+    args = parser.parse_args(["serve", "--host", "0.0.0.0", "--port", "9000"])
     assert args.command == "serve"
     assert args.host == "0.0.0.0"
-    assert args.port == 9999
-
-
-def test_explicit_serve_subcommand():
-    parser = build_parser()
-    args = parser.parse_args(["serve", "--port", "9000"])
-    assert args.command == "serve"
     assert args.port == 9000
 
 
@@ -50,6 +53,14 @@ def test_main_prepends_serve_when_no_known_subcommand(monkeypatch):
     # cached module object.
     monkeypatch.setattr(uvicorn, "run", fake_uvicorn_run)
     monkeypatch.setattr(server_mod, "warn_if_unauthed_lan", lambda h: None)
+    # main()'s serve branch sets os.environ["HUD_HOST"] directly (correct --
+    # serve needs it in the real process environment) rather than through
+    # monkeypatch, so monkeypatch's own undo log has no record of it. Prime
+    # monkeypatch with a throwaway setenv first: its teardown restores
+    # whatever HUD_HOST's value (or absence) truly was before this test,
+    # no matter what main() does to it in between -- this is what fixes the
+    # "0.0.0.0" leaking into the rest of the test session.
+    monkeypatch.setenv("HUD_HOST", os.environ.get("HUD_HOST", "unset-before-test"))
     rc = main_mod.main(["--host", "0.0.0.0", "--port", "9999"])
     assert rc == 0
     assert captured == {"host": "0.0.0.0", "port": 9999}
@@ -77,10 +88,54 @@ def test_install_service_defaults_to_loopback(monkeypatch):
 
 
 def test_main_module_namespace_has_no_eager_uvicorn_import():
-    """C2: only the `serve` subcommand needs FastAPI/uvicorn. status/rebuild/
-    install-service must be dispatchable in an environment where uvicorn is
-    not importable -- guard against a regression back to a module-scope
-    `import uvicorn`."""
+    """C2 (narrow/fast check): guards specifically against a regression back
+    to a module-scope `import uvicorn` in hud/__main__.py. This does NOT
+    catch a regression via a *different* eager import that transitively
+    pulls in FastAPI/uvicorn (e.g. re-adding
+    `from hud.server import warn_if_unauthed_lan` at module scope) -- see
+    test_status_subcommand_works_without_uvicorn_or_fastapi_importable below
+    for the real regression-class test."""
     import hud.__main__ as main_mod
 
     assert "uvicorn" not in vars(main_mod)
+
+
+def test_status_subcommand_works_without_uvicorn_or_fastapi_importable(tmp_path):
+    """C2, strengthened: `status` (and rebuild/install-service) must not need
+    uvicorn or FastAPI importable AT ALL -- not just absent from
+    hud.__main__'s own namespace. Runs `python -m hud status` as a real
+    subprocess, using the SAME interpreter as sys.executable, with a meta
+    path finder that makes uvicorn/fastapi raise ModuleNotFoundError if
+    anything tries to import them. Pointed at a port nothing listens on, a
+    clean `{"reachable": false, ...}` JSON reply (not a traceback) proves no
+    ModuleNotFoundError occurred anywhere in the import chain -- which is the
+    actual regression class this needs to catch."""
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).resolve().parents[2]
+    script = (
+        "import sys\n"
+        "class _Blocker:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name in ('uvicorn', 'fastapi') or name.startswith(('uvicorn.', 'fastapi.')):\n"
+        "            raise ModuleNotFoundError('blocked for test: ' + name)\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _Blocker())\n"
+        "sys.argv = ['hud', 'status', '--host', '127.0.0.1', '--port', '1']\n"
+        "import runpy\n"
+        "runpy.run_module('hud.__main__', run_name='__main__')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        cwd=str(repo_root),
+        env={**os.environ, "PYTHONPATH": str(repo_root)},
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    assert "ModuleNotFoundError" not in result.stderr, result.stderr
+    body = json.loads(result.stdout)
+    assert body["reachable"] is False
+    assert result.returncode == 1  # status's own exit code for "not reachable"
