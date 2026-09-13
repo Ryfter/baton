@@ -123,7 +123,16 @@ def _prune_rows(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> tuple[int,
         # migrations._ensure_auto_vacuum_incremental, applied once at DB
         # creation/migration time) -- see I5 item 2 in the follow-up report
         # for the full auto_vacuum investigation.
-        conn.execute("PRAGMA incremental_vacuum")
+        #
+        # C-1: `PRAGMA incremental_vacuum` is *row-stepped* -- sqlite3's
+        # Connection.execute() performs exactly one sqlite3_step and returns,
+        # so a bare `conn.execute(...)` with the cursor discarded frees only
+        # ONE page per call, no matter how many pages are on the freelist.
+        # list(...) (or executescript, equivalently) drives the statement to
+        # completion, actually draining the freelist. Verified empirically: a
+        # 4000-row prune that put 598 pages on the freelist only reclaimed 1
+        # of them (0.2%) with the bare-execute form.
+        list(conn.execute("PRAGMA incremental_vacuum"))
     return len(ids), len(agg)
 
 

@@ -203,6 +203,42 @@ def test_prune_once_incremental_vacuum_runs_without_error(isolated_state):
     assert integrity == "ok"
 
 
+def test_prune_once_incremental_vacuum_drains_the_freelist(isolated_state):
+    """C-1: `conn.execute("PRAGMA incremental_vacuum")` with the cursor
+    discarded performs exactly ONE sqlite3_step and returns -- it reclaims
+    only ONE freelist page per call, no matter how many pages the DELETE
+    just freed. `PRAGMA integrity_check == 'ok'` (the previous version of
+    this test) passes just as well against that buggy one-step call as
+    against a real fix -- it doesn't corrupt the DB, it just leaves the
+    freelist almost entirely undrained. This is the assertion that actually
+    catches a regression back to that bug: freelist_count must come back
+    down to (near) zero after a prune that puts many pages on the freelist,
+    not merely "didn't raise, didn't corrupt anything"."""
+    conn = store.get_conn()
+    assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
+    old_ts = "2020-01-01T00:00:00Z"
+    big_payload = {"message": "x" * 500}
+    for i in range(3000):
+        _insert_old("s%d" % i, "stop", big_payload, old_ts)
+    # Bulk-backdate recv_ts (I2's authoritative clock) so the cutoff pass
+    # actually prunes these rows -- see _insert_fully_old's docstring above;
+    # done as one UPDATE here (not per-row like _insert_fully_old) purely so
+    # 3000 rows insert fast enough for a unit test.
+    conn.execute("UPDATE events SET recv_ts = ts")
+    conn.commit()
+
+    result = retention.prune_once(conn, retention_days=30, now=time.time())
+    assert result["deleted"] == 3000
+
+    freelist_count = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    assert freelist_count <= 1, (
+        "freelist_count=%d after prune -- incremental_vacuum did not drain "
+        "the freelist (regression to the one-step-per-call bug, C-1)" % freelist_count
+    )
+    integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+    assert integrity == "ok"
+
+
 def test_vacuum_now_runs_without_error(isolated_state):
     conn = store.get_conn()
     _insert_old("s1", "stop", {}, "2026-09-12T00:00:00Z")
