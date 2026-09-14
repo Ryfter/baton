@@ -1,0 +1,822 @@
+ex-Meta Principal Explains the AI Token Game  |  https://www.youtube.com/watch?v=sxUPsyNwGgs  |  06/03/2026
+
+---
+
+The provided source investigates the phenomenon of **token maxing**, a strategy where tech companies and engineers are incentivized to consume massive amounts of artificial intelligence data to inflate perceived productivity. The author reveals a **circular capital game** where tech giants like Microsoft and Google invest in AI startups to ensure their own cloud infrastructure is utilized, thereby creating an illusion of **rising revenue** that masks the actual costs of computation. This ecosystem generates a manufactured sense of **FOMO (fear of missing out)** among enterprise leaders, who are often the only ones paying full price for expensive API tokens while individuals and startups use subsidized versions. To navigate this landscape, the text advises leaders to prioritize **business outcomes** over usage metrics and encourages individuals to focus on **high-quality success stories** rather than the sheer volume of AI-generated content.
+
+---  
+
+Chapters:
+00:00 Intro
+01:26 The Economy Around Tokens
+02:50 The Circular Capital Game
+07:10 The Subsidized Campaign
+09:06 Enterprises Pay the Bill
+11:05 What Should Company Leaders Do
+14:51 What Should Employees Do
+
+Intro
+0:00
+Token maxing depending on who you ask is
+0:03
+either the evidence of being an expert
+0:05
+in agentic engineering living on the
+0:08
+bleeding edge and being massively more
+0:10
+productive than everyone else.
+0:12
+If you can token max it's like I mean
+0:14
+you could buy millions of years of
+0:17
+consciousness.
+0:18
+Every engineer is going to have hundred
+0:20
+a hundred agents. Usually every night I
+0:22
+have like a few thousand that are doing
+0:23
+kind of deeper work
+0:29
+or the most wasteful spending and the
+0:32
+dumbest idea of our time. AI tokens are
+0:35
+very costly. Companies are burning
+0:38
+through their budget faster than
+0:39
+anything they have ever seen before and
+0:42
+they are getting shocked by the bill.
+0:44
+Yet we still see leaders across the
+0:46
+industry telling their employees to use
+0:49
+more tokens. Many companies are
+0:51
+incentivizing people to use AI by
+0:54
+counting tokens.
+0:55
+I am going to probably use $300 million
+0:57
+of entropic this year.
+0:59
+Effectively fund unlimited tokens for
+1:01
+everybody.
+1:01
+What on earth is happening here in this
+1:04
+video? As someone who's been working
+1:06
+deeply inside of the AI industry and
+1:09
+been engaging with many companies in
+1:11
+their AI adoption journey, I will try to
+1:14
+unpack what's happening, some of the
+1:17
+dark secrets behind the curtains and
+1:19
+give some honest recommendations for
+1:21
+both leaders and individual contributors
+1:24
+on what are the right things to do.
+The Economy Around Tokens
+1:26
+Let's first look at the ecosystem of
+1:28
+tokens. It all starts with you, the end
+1:32
+user, who's sending the prompts to the
+1:34
+large language models, which generates
+1:36
+tokens and get some work done for you.
+1:39
+Most people use one of the frontier
+1:41
+models. So, one way or another, you are
+1:43
+paying companies like OpenAI or
+1:45
+Anthropic for the tokens that you use.
+1:48
+Large language models run in massive
+1:50
+data centers operated by what's called
+1:52
+hyperscalers like AWS, Google Cloud, and
+1:56
+Microsoft Azure. Because generating
+1:58
+tokens requires a lot of computation.
+2:01
+So, OpenAI and Anthropic are paying the
+2:03
+hyperscalers for the compute they use.
+2:06
+These data centers host a lot of GPUs to
+2:09
+run the computations that generate
+2:11
+tokens. They buy the GPUs from chip
+2:14
+makers like Nvidia and AMD. Google is
+2:18
+the only one who has everything here. By
+2:19
+the way, across this food chain, I think
+2:22
+the chip makers have the simplest yet
+2:24
+safest business model. They take
+2:27
+purchase orders and sell chips. Every
+2:30
+transaction makes them money. When it
+2:33
+comes to hyperscalers, it's no longer so
+2:36
+simple. Let's say Microsoft spends a
+2:38
+bunch of money to buy GPUs from Nvidia
+2:41
+and put them into Azure. They will only
+2:44
+make the money back if someone else
+2:47
+actually wants to use those GPUs and pay
+2:49
+for the compute. This is where things
+The Circular Capital Game
+2:52
+are getting a little bit interesting and
+2:54
+dark.
+2:55
+In order to guarantee their GPUs will
+2:58
+get used, Microsoft quote unquote
+3:02
+invested 13 billion dollars in Open AI,
+3:06
+most of which comes in the form of Azure
+3:09
+compute credits. So, Microsoft gave a
+3:12
+bunch of money to open AAI and Open AAI
+3:15
+will give it back whenever they run
+3:17
+their GPT models through Azure. And when
+3:21
+they give it back, it's recorded as
+3:23
+revenue for Microsoft.
+3:26
+So let's get it straight. Microsoft use
+3:29
+their own money to buy compute from
+3:31
+themselves, but through OpenAI's hands.
+3:35
+They are neither making money nor losing
+3:37
+money here because it's all from
+3:39
+themselves. But their revenue number
+3:42
+suddenly keeps going up because real
+3:44
+transactions happened which looks good
+3:47
+to their investors and helps them
+3:49
+attract more money to do more ambitious
+3:52
+things. It's a circular game of capital.
+3:56
+And now OpenAI is playing the exact same
+3:59
+game. They just offered to quote unquote
+4:02
+invest $2 million in every YC company in
+4:05
+the current batch and in the form of
+4:08
+token credits. The exact same playbook
+4:11
+they learned from Microsoft is now being
+4:13
+played on many AI startups. Money moves
+4:17
+from the left pocket to the right and
+4:19
+revenue keeps going up. The same thing
+4:22
+is happening between AWS, Google,
+4:25
+Microsoft and Anthropic as well. All the
+4:28
+hyperscalers Amazon, Google and
+4:30
+Microsoft are all investors in
+4:33
+Anthropic. Just look at this. Microsoft,
+4:36
+Nvidia and Anthropic announce strategic
+4:40
+partnerships.
+4:42
+Anthropic to scale cloud on Azure.
+4:45
+Anthropic to adopt Nvidia architecture.
+4:48
+Nvidia and Microsoft to invest in
+4:51
+Anthropic.
+4:53
+Anthropic has committed to purchase $30
+4:56
+billion of Azure compute capacity. Money
+5:00
+goes in, money flows back. They
+5:03
+literally spelled out how the game is
+5:05
+played here. A game where some of the
+5:08
+smartest people get together and make
+5:10
+numbers go up for everyone. This game,
+5:14
+however, only keeps going if people
+5:16
+actually use AI. When people pay
+5:19
+Anthropic for tokens, Anthropic's
+5:22
+revenue goes up directly. And Dario here
+5:24
+is happy. Microsoft Azure's revenue also
+5:28
+goes up because Anthropic is paying them
+5:30
+for the compute. So Satia here is also
+5:33
+happy and it creates demand for more
+5:37
+Nvidia GPUs. So Jensen here is also
+5:40
+happy. The entire food chain is happy as
+5:44
+long as you keep paying for more and
+5:46
+more tokens. And you know who else is
+5:49
+happy? The investors. Seoia Capital has
+5:53
+been one of the most vocal investors
+5:55
+about token maxing. We all should be
+5:58
+token maxing, said Sonia Hang, a partner
+6:02
+at Sequoia Capital. Huang said Sequoia
+6:05
+has its own leaderboard, as do many of
+6:07
+the portfolio companies she advises. And
+6:10
+let's look at companies they invested
+6:12
+in,
+6:14
+Anthropic,
+6:16
+Nvidia,
+6:18
+Open AI. I wonder why they tell people
+6:20
+to token max. Here we are, an entire
+6:23
+industry with all the tech giants and
+6:26
+massive capital all set up with an
+6:28
+incentive to see more tokens being used.
+6:32
+So of course, what happens next is that
+6:34
+they would start to do everything they
+6:36
+can to convince more people to burn more
+6:39
+tokens.
+6:40
+The first and easiest thing to do is to
+6:43
+lead by example. All these AI companies
+6:46
+started asking their own employees to
+6:49
+use AI heavily without limit and then
+6:53
+they would go on podcasts and interviews
+6:55
+to tell other companies how behind they
+6:58
+all are.
+6:58
+You should token max just giving
+7:00
+engineers as many tokens as possible
+7:02
+and that's a lot of fun. I hit 250
+7:04
+million one day.
+7:05
+You deploy a billion tokens of
+7:06
+intelligence a day.
+7:07
+That's how this all began. But these
+The Subsidized Campaign
+7:10
+tech giants aren't the only ones token
+7:12
+maxing. We see many small startups and
+7:15
+individuals also using tokens heavily.
+7:18
+They don't have the same incentives as
+7:20
+the AI companies whose business depends
+7:22
+on more tokens being burned. Small teams
+7:25
+do so because of a different incentive,
+7:28
+subsidization. When an individual user
+7:31
+on a small team pays for tokens from one
+7:34
+of the Frontier LLM providers, they
+7:36
+mostly pay for one of the monthly
+7:38
+subscriptions which are heavily
+7:40
+subsidized with a $200 per month
+7:43
+subscription from Anthropic or OpenAI.
+7:46
+And if you use it heavily, you can get
+7:48
+thousands of dollars worth of tokens.
+7:51
+For users who paid for these subsidized
+7:53
+subscriptions, they are paying a fixed
+7:56
+price regardless of how many tokens they
+7:59
+use. Even though the return starts to
+8:01
+diminish after a certain point, there's
+8:04
+no reason not to keep burning tokens
+8:06
+until they hit the limit. So why do LLM
+8:09
+providers offer these subsidized
+8:11
+subscriptions?
+8:12
+That's clearly losing money. Right?
+8:15
+Right? Wrong. If you think people like
+8:19
+Daario and Sam Altman will ever create a
+8:22
+business strategy where they lose money,
+8:25
+think again.
+8:27
+They offered these subsidized
+8:29
+subscriptions to create the biggest
+8:31
+marketing campaign that the world has
+8:34
+ever seen. You see, if Anthropic and
+8:38
+Open AAI tell other companies to use
+8:40
+more tokens, they will be seen as
+8:42
+salesmen trying to sell their own
+8:44
+product. But if many startup companies
+8:47
+who move very fast and keep launching
+8:50
+cool stuff all tell the same token
+8:52
+maxing story and show how many agents
+8:55
+they run, how much work got automated,
+8:58
+how productive they felt, that's
+9:01
+different that creates something magical
+9:04
+we call FOMO. Fear of missing out is
+Enterprises Pay the Bill
+9:08
+probably the best way to describe the
+9:10
+feeling of leaders at most enterprise
+9:12
+companies right now. They look at big
+9:15
+tech and see everyone token maxing. They
+9:18
+then look at small startups. Everyone's
+9:20
+also token maxing. Then they look at
+9:22
+themselves. I have thousands of
+9:25
+employees. Yet this five person startup
+9:28
+is shipping features faster than my
+9:30
+company. Why? Oh, because they are using
+9:34
+AI like crazy. I must catch up. Little
+9:38
+did they know they are the only ones
+9:40
+paying the bill in this entire game. You
+9:44
+see, when one of these AI companies burn
+9:46
+their own tokens and computes, they are
+9:49
+obviously not making money. When the
+9:52
+individuals and small teams on
+9:54
+subsidized subscriptions burn tokens,
+9:56
+the AI companies also don't make much
+9:59
+money. They may even end up losing some
+10:01
+money on those users who burn thousands
+10:04
+of dollars of tokens on a $200 plan. So,
+10:08
+who do they make money from? It's
+10:10
+obviously the enterprises. When
+10:13
+Anthropic and Open AI sell tokens to
+10:16
+enterprise companies like Uber, they do
+10:19
+not offer the $200 fixedpriced
+10:21
+subscription. They charge by API pricing
+10:24
+instead, which is tokenbased and an
+10:28
+order of magnitude more expensive than
+10:30
+the subsidized subscriptions. These poor
+10:33
+enterprise companies end up paying for
+10:35
+literally everyone else. The profit of
+10:38
+this entire food chain depends on
+10:41
+enterprise companies adopting AI and
+10:44
+token maxing as much as they can. So the
+10:47
+AI companies spent a ton of money and
+10:50
+put in so much thought, planning, and
+10:53
+careful execution into creating the
+10:55
+narrative that token maxing is what
+10:58
+everyone should do to survive the AI
+11:01
+era. And it's working. It's working very
+11:04
+very well. Now with the understanding of
+What Should Company Leaders Do
+11:07
+how the AI industry works, let me share
+11:09
+my recommendation for what you should
+11:11
+do. Listen carefully now because these
+11:14
+are the real valuable parts of this
+11:16
+video. For leaders at enterprise
+11:18
+companies, you need to understand that
+11:21
+the entire world has been carefully
+11:24
+shaped to convince you that you are not
+11:26
+spending enough on AI and using more
+11:29
+tokens is the only solution to survive
+11:32
+and win. It has some truth to it. AI is
+11:36
+a real technological revolution and
+11:38
+using it well can indeed transform your
+11:41
+business, but it's not as simple as
+11:44
+burning more tokens. So don't make the
+11:47
+mistake of building a token usage
+11:50
+leaderboard. For one, leaderboards only
+11:53
+reward outliers who typically get there
+11:56
+by gaming the metric. And second, token
+11:59
+usage is not even a productivity metric.
+12:02
+This study from Jellyfish that looked at
+12:04
+over 7,000 engineers reported that the
+12:07
+developers who spends the most tokens
+12:10
+are generating roughly twice the output
+12:13
+at 10 times the cost. They are often
+12:16
+burning a ton of tokens because it's
+12:18
+free for them and they get to look cool.
+12:21
+But I get it. You need your company to
+12:24
+leverage AI better and there is real
+12:26
+gain to be had. I agree. To measure your
+12:29
+company's AI adoption, what you need is
+12:32
+a dashboard that tracks in aggregate how
+12:35
+many people are not using AI at all,
+12:38
+using it occasionally, using it
+12:40
+regularly, or using it as a primary way
+12:42
+of work. Just looking at the size of
+12:45
+these four buckets and how they shift
+12:48
+over time will give you visibility into
+12:50
+your progress. You also need to put more
+12:53
+attention on business outcomes. How many
+12:56
+teams hit their OKRs ahead of time? How
+12:59
+many teams exceeded their targets? How
+13:02
+many teams started setting much more
+13:04
+aggressive goals that you previously
+13:06
+couldn't imagine?
+13:08
+Understanding the AI usage patterns that
+13:10
+correlated with those teams success will
+13:14
+give you much better insights into what
+13:16
+actually works versus not. You also
+13:18
+should put in some guardrails for cost.
+13:22
+Give people generous usage quotas to
+13:24
+experiment and get work done, but not
+13:27
+unlimited. The quota creates an
+13:29
+incentive for your power users to also
+13:32
+look into how things can be done more
+13:34
+efficiently, not just how to spend more
+13:37
+tokens in any way possible. Lastly,
+13:40
+don't just fire your people. By the way,
+13:43
+for anyone who wants to better
+13:44
+understand the driving forces behind
+13:47
+layoffs, I have a previous video talking
+13:49
+in depth about it. I'll provide a link
+13:51
+here. Instead of copying others and
+13:54
+starting to do AI layoffs, you should
+13:56
+learn to invest in your people who
+13:58
+already understand your business and
+14:00
+systems. For people who haven't figured
+14:03
+out how to use AI regularly yet, give
+14:06
+them proper training done by people
+14:08
+around them who have figured it out. For
+14:12
+people who already use AI heavily,
+14:14
+empower them to keep charging ahead by
+14:17
+removing outdated processes and other
+14:20
+factors that are slowing them down. You
+14:23
+already have many AI native engineers in
+14:25
+your team, but they can't get more done
+14:28
+simply because your entire company was
+14:31
+structured to move slowly. ownership
+14:34
+boundaries, politics, quarterly
+14:36
+planning, cross team dependencies, and
+14:39
+how many stakeholders needs to align and
+14:41
+sign off for a single feature to ship.
+14:44
+Until you tear down those roadblocks, no
+14:47
+amount of tokens will allow you to
+14:49
+operate at a startup speed. Now, for
+What Should Employees Do
+14:53
+individual contributors, here's my
+14:54
+advice. If you haven't seriously adopted
+14:58
+AI in your workflows yet, you do need to
+15:00
+learn and play with it. Initially, you
+15:03
+may find it less productive than just
+15:05
+doing work by yourself, but it's a
+15:07
+learning curve at play, which has
+15:09
+happened in every technological
+15:11
+revolution. You don't want to be still
+15:13
+running your handcrafting workshop when
+15:16
+the world is moving to steam powered
+15:18
+factories. You don't want to be
+15:20
+calculating numbers by hand when the
+15:22
+world is starting to use computers and
+15:24
+spreadsheets.
+15:26
+You can hate some of the negative
+15:28
+effects AI is bringing, but you can't
+15:31
+ignore the fact that AI is happening.
+15:34
+And even if it bursts like the dotcom
+15:37
+bubble, the internet still remains and
+15:39
+people who refuse to adopt it would
+15:41
+still have a massive disadvantage. If
+15:44
+you are already using AI heavily, you
+15:46
+should avoid using tokens as a measure
+15:49
+of success. For one, it may make you
+15:52
+overlook the quality of your work and
+15:54
+you end up becoming the person who gets
+15:56
+a bad reputation among your peers for
+15:59
+sending a bunch of slop PRs that
+16:01
+everyone else hates to review. Secondly,
+16:04
+your company and leadership ultimately
+16:06
+care about business success and cost
+16:09
+efficiency. If you only count tokens,
+16:12
+your output would start to misalign with
+16:14
+that and it won't be good for your
+16:17
+career. What you should be doing instead
+16:19
+is to create success stories where AI
+16:22
+adoption translates to real business
+16:25
+success.
+16:26
+Help your team exceed its goal ahead of
+16:29
+time. Improve the engineering efficiency
+16:32
+for everyone around you. Finally, solve
+16:34
+the painful tech debt project that no
+16:37
+one dares to touch. Leaders who started
+16:40
+spending on AI will soon start to look
+16:42
+for such success stories and you will
+16:45
+gain a lot of visibility and a big boost
+16:48
+in your career if you are able to fill
+16:50
+the blank. If anything is slowing you
+16:52
+down, escalate to your leaders that your
+16:55
+velocity is outpacing everything around
+16:57
+you and work with them to evolve their
+17:00
+organization. They will thank you and
+17:02
+reward you for it. That's everything
+17:04
+about token maxing. I hope you find it
+17:07
+useful. If you have any questions I
+17:09
+haven't covered yet, feel free to leave
+17:11
+a comment or reply under my tweets,
+17:13
+which I'll link in description. Thank
+17:15
+you for watching and see you in the next one.

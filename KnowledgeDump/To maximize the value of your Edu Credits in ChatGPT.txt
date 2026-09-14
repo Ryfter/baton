@@ -1,0 +1,34 @@
+To maximize the value of your Edu plan and bypass the credit bottlenecks, you can take advantage of the features that bypass credit metering entirely.
+
+**1. Exploit Deep Research for Free Code Architecture & Scaffolding**
+
+* **The Math:** Standalone Deep Research costs **50 credits per task** ($2.00 equivalent), but Edu accounts get **5 free queries every 24 hours** at no credit cost as outlined in the [ChatGPT Rate Card](https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu). That is roughly **$300/month of free compute**.
+* **How to Game It for Coding:** Instead of burning Codex credits to plan a large project or diagnose a complex multi-library issue, feed your technical problem into Deep Research.
+* **The Prompt Strategy:** Ask it to *"Research the official documentation, best practices, and architecture patterns for [X], find full code examples, and produce an end-to-end implementation blueprint with complete boilerplate files."* You get a comprehensive, production-ready codebase blueprint without spending a single credit.
+
+**2. Offload Coding Tasks to Unlimited Canvas and Instant Text**
+
+* **Core Text & Canvas Cost 0 Credits:** The [Flexible pricing for the Enterprise, Edu, and Business plans](https://help.openai.com/en/articles/11487671-flexible-pricing-for-the-enterprise-edu-and-business-plans) guide confirms that core chat models, search, file uploads, and Canvas do **not** consume credits.
+* **Work in Canvas Instead of Codex:** For single scripts, UI components, debugging snippets, or document refactoring, open a standard chat session and use **Canvas** or standard reasoning mode. It generates, edits, and refactors full code blocks without touching your 500-credit pool.
+
+**3. Switch Codex to GPT-5.6 Luna for Minor Edits**
+
+* **Credit Rate Arbitrage:**
+* **GPT-5.6 Sol:** 100 credits/1M input, 500 credits/1M output.
+* **GPT-5.6 Luna:** 5 credits/1M input, 30 credits/1M output (**~95% cheaper**).
+
+
+* **Execution:** Keep your Codex default set to **Luna** for boilerplate, small bug fixes, writing unit tests, and routine refactoring. Only switch the CLI or extension to **Sol** or **Astra** when dealing with complex, multi-file architectural overhauls.
+
+**4. Maximize Prompt Caching in Codex**
+
+* **90% Token Discount:** According to the [ChatGPT Rate Card](https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu), cached input tokens cost **10%** of fresh input tokens (e.g., 10 credits vs. 100 credits per 1M on Sol).
+* **How to Exploit Caching:**
+* Keep your repository’s static configuration files (like schemas, dependencies, and type definitions) unchanged during a session so the prefix cache remains hot.
+* Structure large coding tasks into a continuous sequence of targeted prompts in the same session rather than constantly starting fresh tasks that force full repository re-indexing.
+
+
+
+**5. Keep Fast Mode Disabled**
+
+* Fast mode applies a **2.5× multiplier** to your credit consumption on supported models. Leaving tasks on standard speed stretches your 500-credit pool more than twice as far.
