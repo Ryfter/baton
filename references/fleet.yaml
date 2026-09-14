@@ -197,15 +197,19 @@ providers:
   # temp file via the {{prompt_file}} transport (grok --prompt-file <path>, proven
   # quote-safe live 2026-07-10) — quote-safe and 965-byte-safe, no stdin: false veto
   # needed (a {{prompt_file}} template is never a stdin-promotion candidate).
-  # agentic: true is REQUIRED — platform 'grok' is outside the d078 auto-infer
-  # set {claude, codex, gemini}.
+  # agentic: false (#183) — headless grok (-p / --prompt-file transport) announces
+  # file writes in its text output but does not perform them (3 live probes
+  # 2026-08-13, including a one-word-one-file isolation test). grok-cli remains
+  # useful for code-gen, reasoning, plan-review, and review; this only removes it
+  # from /baton:go --execute edit routing. Platform 'grok' is outside the d078
+  # auto-infer set {claude, codex, gemini}, so agentic must be explicit.
   - name: grok-cli
     kind: cli
     enabled: true
     cost_tier: paid
     role: finisher
     platform: grok
-    agentic: true
+    agentic: false
     command_template: 'grok --prompt-file "{{prompt_file}}"'
     capabilities: [code-gen, reasoning, plan-review, review]
 
