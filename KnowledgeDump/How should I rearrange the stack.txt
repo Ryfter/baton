@@ -1,0 +1,408 @@
+Stuff to research: 
+- Omnigent is an open-source ai agent framework and meta harness... and I think this is a really good one to look at and compare to Baton: https://github.com/omnigent-ai/omnigent  I hear a lot of good about it.  
+- https://github.com/block/buzz 
+- Deepsec is for scanning security issues: https://github.com/vercel-labs/deepsec 
+- I have this installed: https://github.com/unslothai/unsloth 
+- https://github.com/Untrivial-ai/agent-orchestrator
+- Understand codebase: https://github.com/ix-infrastructure/Ix 
+- https://github.com/tirth8205/code-review-graph 
+- agents.md format: https://github.com/agentsmd/agents.md 
+- https://github.com/ayghri/i-have-adhd I have adhd so this could be helpful.
+- Openwiki - I think this could be very useful as an idea on how grimlore should work: https://github.com/langchain-ai/openwiki  
+- Ringer is VERY important: https://github.com/NateBJones-Projects/ringer  This is all for checking work.  I think this functionality is critical.  
+- https://github.com/caura-ai/caura  - This is formerly memClaw.  I like the UI for it.  It's awesome.  I want Baton at that level of awesomeness.  Should this be used instead of Grimlore, or along with Grimlore, or should pieces be pulled out and added to Grimlore?  
+- Terminal file manager - not sure if this is pertinent, but could be used in a GUI for Baton at some time in the future.  https://github.com/yorukot/superfile  
+- https://github.com/SethGammon/Citadel This looks like something similar to what the Grimdex/Baton infrastructure is.
+- https://github.com/steipete/agent-scripts  I have NO clue if this has anything worthwhile at all.  just tossing it in here. 
+- I think this is a direct analog to Baton.  Probably do things differently, but I am sure there are good ideas and code that could be pulled from this: https://github.com/gastownhall/gastown 
+- this could be very useful: https://github.com/tt-a1i/archify 
+- This is a list of harness engineering items: https://github.com/ai-boost/awesome-harness-engineering  I am pretty sure there are good ideas in here. 
+- Again, not sure if this is worth anything: https://github.com/Panniantong/Agent-Reach It is for "seeing" items across the web in reddit, youtube, and more.  
+- GEPA is meant to optimize any text parameter... again, not sure if this is helpful: https://github.com/Panniantong/Agent-Reach 
+- Another repo like docling: https://github.com/opendatalab/MinerU  I think docling is better, but the idea is take complext documents and make them easier for LLMs to use.  
+- LMCache - Again, ZERO clue if this is worthwhile: https://github.com/LMCache/LMCache  
+- Loopy agent loops: Again, not clue if this is worthwhile: https://github.com/Forward-Future/loopy 
+- Embedded code search engine cli: https://github.com/cocoindex-io/cocoindex-code 
+- Another claude code harness: https://github.com/Chachamaru127/claude-code-harness
+- Curated AI Engineering toolkit library, links to them, good research info: https://github.com/Sumanth077/ai-engineering-toolkit 
+- Understand anything is something good for documentation, probably more pertinent for grimlore: https://github.com/Egonex-AI/Understand-Anything
+- An opensource harness builder, I really like Cole. I think he builds and talks about good stuff: https://github.com/coleam00/Archon 
+- Openspec is a lightwork framework for spec-driven development: https://github.com/Fission-AI/OpenSpec 
+
+# Tracking token usage for various platforms
+- https://github.com/steipete/CodexBar This was the original, I use it on my Mac.
+- https://github.com/nesszer/Win-CodexBar This is a copy for windows, I use it on my windows PC.
+- https://github.com/ccusage/ccusage, The author of codexbar said this is something he used.  
+
+Look at all of these orchestrators: https://github.com/andyrewlee/awesome-agent-orchestrators 
+
+---
+
+AI Coding Harnesses: 
+https://github.com/omnigent-ai/omnigent
+https://github.com/coleam00/archon
+https://github.com/ai-genius-automations/octoally
+https://github.com/affaan-m/ECC
+https://github.com/ruvnet/ruflo
+https://github.com/wshobson/agents
+https://github.com/Chachamaru127/claude-code-harness
+https://github.com/coleam00/adversarial-dev
+This almost seems like a boiled down version of what I want: https://github.com/prime-radiant-inc/serf 
+https://github.com/prime-radiant-inc/iterative-development
+https://github.com/obra/superpowers
+
+AI Memory for systems: 
+https://github.com/thedotmack/claude-mem
+https://github.com/Ryfter/Grimdex
+https://github.com/riponcm/projectmem
+https://github.com/rohitg00/agentmemory
+https://github.com/letta-ai/letta
+https://github.com/letta-ai/letta-code
+https://github.com/letta-ai/letta-obsidian
+https://github.com/supermemoryai/supermemory
+https://github.com/Eversmile12/sharedcontext
+Karpathy Memory: https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f 
+https://github.com/agent0ai/dox
+https://github.com/Chachamaru127/harness-mem
+https://github.com/cocoindex-io/cocoindex
+https://github.com/cocoindex-io/cocoindex-code
+
+Other items: 
+Book: Software Estimation: Demystifying the Black Art (Developer Best Practices)
+Book: Code Complete (Developer Best Practices)
+https://nextagile.ai/blogs/agile/agile-estimation-techniques/
+https://www.geeksforgeeks.org/software-engineering/software-engineering-functional-point-fp-analysis/
+https://github.com/Fission-AI/OpenSpec
+https://planforge.software/index.html
+https://github.com/github/spec-kit
+https://cocoindex.io/
+https://github.com/prime-radiant-inc/engineering-notebook
+https://github.com/prime-radiant-inc/greenfield
+https://github.com/prime-radiant-inc/books-for-bots
+
+My Coding Harness - for true, multi-agentic coding. 
+https://github.com/Ryfter/baton
+
+
+---
+
+What's irreducibly Baton
+
+  1. Cost-optimal routing that learns from measured benchmarks of your private local fleet (Firefly, wraith2) with
+  frontier as fallback. Neither project benchmarks local models or routes on per-job×context measured scores. This is
+  your differentiated bet and the reason Baton exists.
+  2. The decision + lessons KB (Grimdex), model-agnostic and GitHub-backed. Your operating memory across agents.
+
+  Everything else in Baton is a reimplementation of what these two do better.
+
+  Recommendation
+
+  Don't switch wholesale, and don't keep building Baton as a full harness. Both lose. Instead:
+
+  - Narrow Baton to its two crown jewels (the learned local-fleet router + the KB loop), packaged so they can ride on
+  top of someone else's plumbing.
+  - Adopt the plumbing layer you're tired of reinventing. The two aren't even competitors — they're different layers:
+    - Omnigent = the runtime/conductor/cockpit (multi-harness, sessions, hosts, policies, multi-device). This is
+  literally your parked Fleet-Conductor cockpit, already built, and it satisfies "orchestrate, don't solo" + the
+  legibility north-star.
+    - Archon = the process layer (declarative YAML workflows + gates + worktrees). Its DAG-as-source-of-truth would
+  replace your bespoke phase hooks and PowerShell glue — the most thankless part of Baton.
+
+  If I had to pick one to lean on first: Omnigent, because it's the closest match to your parked cockpit vision and to
+  the conductor identity Baton already claims. Archon is the better grab if what's draining you is the imperative
+  workflow glue rather than the multi-agent runtime.
+
+  Two caveats that matter for you:
+  - Maturity risk cuts both ways. Omnigent is alpha — adopting it as a foundation trades "my unfinished thing" for
+  "their unfinished thing." Archon just archived its Python v1 and rewrote in TS, so it's also in flux. Don't build on
+  either until you've kicked the tires for a week.
+  - Box-private constraint survives this. Your local-fleet routing + private inventories stay local regardless —
+  Omnigent's "hosts register on your local network" is compatible, and the router itself never has to leave your boxes.
+  Verify that before committing.
+
+  What to learn either way (even if you adopt neither)
+
+  - From Archon: declarative workflows as source of truth beats imperative hooks. Even inside Baton, moving job/phase
+  from PowerShell glue to a YAML DAG would make it finishable and legible.
+  - From Omnigent: the Harness abstraction (treat Claude/Codex/Pi uniformly) and Policy as a first-class object (spend
+  caps, approval gates) instead of scattered logic.
+
+  My honest one-liner
+
+  Redefine "done" for Baton as: "a cost-optimal, benchmark-learned router over my private fleet + my decision KB,
+  exposed as a thin layer on top of a community harness." That's finishable in weeks and defensibly unique. The
+  harness/cockpit/workflow ambitions are exactly what made it unfinishable — and they're now off the shelf.
+
+---
+
+Look at all of these orchestrators: https://github.com/andyrewlee/awesome-agent-orchestrators 
+
+
+
+  Could any of this be implemented to the existing tool?  Take what we created, and take the best
+  ideas out of these to make one even better?
+
+
+I feel like this is the direction I would love to go/see the tool achieve: https://www.devboardai.com/#orchestrator
+
+Could any of this be implemented to the existing tool?  Take what we created, and take the best
+  ideas out of these to make one even better?
+
+
+  Conceptually, I would like EVERYTHING coordinated via GitHub.  Use GitHub Projects to track
+  features, bugs, everything.  Use the Status project view to see what has been done, and what is
+  pending.  Use Roadmap to see the order and where things need to go.
+
+  Use a table view to see what LLMs are doing assigned what tasks.  And where they are in order.
+  So, if Codex is running 2 things, they show up, but if there are 5 tasks, it shows the other 3
+  tasks it has not started yet.
+
+  Use boards to track things through, get as much done as possible, and park waiting for human
+  feedback in boards so I can see what I have to get done to get things moving again.
+
+  I then want "The orchestrator", Claude (or whatever model I choose as the orchestrator), to give
+  at work to be completed.
+
+  I kind of want to have a workflow that is - hey, I have this idea.
+
+  The orchestrator researches it, and figures out what it would take, and if it would even be worth
+  while.  Have 2 or 3 models consult on the viability, need, etc.  Come up with a fully featured
+  concept.  also, ask me questions for some clarity.
+
+  Once it is fully researched and debated, a doc is turned over to me to review.  Have it very easy
+  to read and straight forward.  It has everything that will be done, broken out into small steps.
+  What needs installed with it (libraries), recommended language, everything.  Then, that can be in
+  the dashboard for me to watch tasks being completed, or I can watch them in Github.  As questions
+  come up, queue them up for me to answer and work on other aspects.  Then, I can make decisions and
+  continue those threads to hopefully be able to keep going constantly.  Probably /superpowers
+  would be involved in this as well some how. 
+
+
+This has a dashboard, of sorts like I was thinking of... really basic.  https://github.com/ai-genius-automations/octoally
+https://medium.com/%40mabd.dev/git-worktrees-the-secret-weapon-for-running-multiple-ai-coding-agents-in-parallel-e9046451eb96
+https://github.com/jonwiggins/optio
+https://github.com/ComposioHQ/agent-orchestrator
+https://github.com/skills/agent-orchestration-build-your-ai-dream-team
+https://github.com/AgentsMesh/AgentsMesh
+https://github.com/gastownhall/gastown
+https://github.com/asheshgoplani/agent-deck
+
+
+It could even be a VS Code plugin that does the coordination through CLis via VS Code itself.  I don't care too much which it is.  
+
+
+
+https://github.com/pixel-agents-hq/pixel-agents/
+
+https://github.com/coleam00/adversarial-dev Adversarial dev to get better quality debates and self improvement. 
+Ai Agent Orchestration: https://github.com/builderz-labs/mission-control 
+Agent Harness performance optimization: https://github.com/affaan-m/ECC 
+Agent Meta-harness to deploy multi agent swarms - This one is kind of awesome and I think should be pulled in: https://github.com/ruvnet/ruflo  This could be pulled in as something to install separate or integrated, but I am good with just install it separate.  
+Maybe could be useful: https://github.com/Eversmile12/sharedcontext - I think Ruflo is more powerful but along these lines.  
+
+I think we need to choose some sort of structure.  This is as good as any: https://github.com/honestsoul/generative_ai_project   Take it as a starting place.  
+
+
+----
+
+
+To lookat - Baton. 
+
+The map — Kun has already built most of the body
+
+┌───────────────────────────────────────────────┬──────────────────┬────────────────────────────────────┐
+│             Baton is reinventing              │      Adopt       │                                    │
+├───────────────────────────────────────────────┼──────────────────┼────────────────────────────────────┤
+│ Crew dispatch, isolated worktrees,            │ firstmate        │ github.com/kunchenguid/firstmate   │
+│ captain/first-mate layer (your layer seating) │                  │                                    │
+├───────────────────────────────────────────────┼──────────────────┼────────────────────────────────────┤
+│ Overnight loop: one small committed change    │                  │                                    │
+│ per iteration, retries, rollback, exit        │ gnhf             │ github.com/kunchenguid/gnhf        │
+│ summary (your gnhf-style overnight goals)     │                  │                                    │
+├───────────────────────────────────────────────┼──────────────────┼────────────────────────────────────┤
+│ Worktree pool, per-task isolation, :3000      │ treehouse        │ github.com/kunchenguid/treehouse   │
+│ collisions (#203)                             │                  │                                    │
+├───────────────────────────────────────────────┼──────────────────┼────────────────────────────────────┤
+│ Fleet quota / usage probe seam (#173, #185),  │ quota-axi        │ github.com/kunchenguid/quota-axi   │
+│ usage-lib, Governor inputs                    │                  │                                    │
+├───────────────────────────────────────────────┼──────────────────┼────────────────────────────────────┤
+│ Test-gate hook, review panel (#117), Verified │ no-mistakes      │ github.com/kunchenguid/no-mistakes │
+│  Labor (#96/#95)                              │                  │                                    │
+├───────────────────────────────────────────────┼──────────────────┼────────────────────────────────────┤
+│                                               │ AXI design +     │                                    │
+│ MCP server as the agent API surface           │ gh-axi as        │ github.com/kunchenguid/axi         │
+│                                               │ reference        │                                    │
+└───────────────────────────────────────────────┴──────────────────┴────────────────────────────────────┘
+
+What's left after that subtraction — routing policy, project-level orchestration, Grimdex/Grimlore integration, cost-first GLM defaulting, the Governor's spend logic — is Baton, and it's a couple thousand lines of a real CLI, not a monolith.
+
+Next step
+
+Before writing any spec: I'd dispatch an Opus research subagent (you asked for Opus 5; I'm Sonnet, so I'd spawn it) to do the measurement direction A depends on —
+
+1. Bucket the 40kloc: orchestrator logic vs. glue that firstmate/gnhf/treehouse/quota-axi/no-mistakes replace vs. dead code.
+2. Define the minimal Baton-core CLI surface (commands, on-disk state, the one entrypoint from #190/#97).
+3. Map each of the 32 open issues to: fixed-by-adoption / belongs-in-core / drop.
+
+Then I turn that into an interactive plan (Kun's lavish-axi review board) and we iterate on it before anything gets built.
+
+Want me to send the Opus audit? Or if you'd rather pin the direction first (A/B/C), say which and I'll scope to that.+
+
+
+
+Headline
+
+Both passes agree: don't split Baton into several apps — collapse it into one owned CLI (~5–6 kLOC Python) and adopt five tools (firstmate, treehouse, quota-axi, no-mistakes, gnhf). MCP server dies. Plugin shrinks to one slash command + the Python hooks. Of 36k pwsh LOC: ~13.5k CORE (port), ~8.7k ADOPT (delete via the tools), ~13.9k DROP outright.
+
+My corrections to GLM: officers-lib (1,574) is the Fable scheduler, not "roleplay" → CORE. dark-factory-lib maps to gnhf, not treehouse. gate-lib/coordination-lib split CORE/ADOPT rather than pure-adopt. And GLM missed dashboard/ entirely — 8,721 LOC of Python, keep+freeze it as the observability surface.
+
+The one decision nobody's answered: adopting firstmate isn't "delete a lib, call a CLI" — firstmate is a whole agent distro. Does baton go shell out to firstmate, or does firstmate's liaison call baton? Who owns the loop? That's the architecture call to make before any code. GLM's strangler plan (week-1 dumb linear baton go on 2 providers, prove one real PR, then port behind an event log, freeze scripts/ immediately) is the right sequencing once that's settled.
+
+Two side notes
+
+- Security: while debugging grok I ran pgrep and it surfaced another process's environment — a "Cursor Helper: mcp-process" has your OPENROUTER_API_KEY in plaintext in its env, so any ps/pgrep on the box exposes it. Worth rotating + checking how Cursor's MCP config passes it.
+- grok's take is still worth getting. Once the gauntlet job frees the socket, /baton:grok with the brief at scratchpad/audit/grok-prompt2.md will get it journaled, and I can fold it in.
+
+
+Audit's as complete as tonight allows — three-way now: GLM full pass (verified accurate), Claude full adversarial pass, grok partial (corroborates the Claude corrections before it died). Total fleet cost ~$0.005.
+
+Where it landed
+
+Agreed across all three: collapse Baton into one owned CLI (~5–6 kLOC Python), adopt firstmate / treehouse / quota-axi / no-mistakes / gnhf, kill the MCP server, shrink the plugin to one command + hooks. Of 36k pwsh LOC: ~13.5k CORE, ~8.7k ADOPT, ~13.9k DROP. GLM's strangler plan (week-1 dumb linear baton go on 2 providers → prove one real PR → port behind an event log → freeze scripts/ immediately, no parallel-run oracle) is the sequencing.
+
+Corrected in review: officers-lib is the Fable scheduler not "roleplay" (split, don't wholesale-drop); dark-factory-lib → gnhf not treehouse; gate-lib/coordination-lib/verification-lib split CORE/ADOPT; dashboard/ (8.7k Python) — GLM missed it entirely, keep+freeze.
+
+Decisions that are now yours (nobody answered these)
+
+1. firstmate direction — does baton go shell out to firstmate, or does firstmate's liaison call baton? This is the architecture call; everything else follows from it.
+2. Language — Python (repo's only proven competence, shares runtime with the adopted tools) or Go (treehouse's stack, compiled). My lean: Python.
+3. Go/no-go on the whole thesis — this is a rewrite of a heavily-invested system. The audit says do it; you own whether the disruption is worth it now vs. keep hardening.
+4. grok's full take — worth running /baton:grok yourself once (pwsh journaled path) to get the §4 decisive answers it never reached? Or is the 3-way enough?
+
+Next step (per the /kun playbook)
+
+Once you pick a direction on #1–#3, the next move is planning — turn this into a spec (docs/superpowers/specs/…) or an interactive lavish plan board, iterate, then it's ready to build. No code until that's approved.
+
+The report + raw GLM output are in scratch/ (untracked — not committed).
+
+
+Here's the honest read, then a recommendation.
+
+What actually overlaps vs. what's genuinely Baton
+
+Overlaps — someone else ships this better than a solo pwsh reimplementation:
+
+┌────────────────────────────────────────────────────────────────────────────────┬───────────────┐
+│                                   Baton has                                    │ Overlaps with │
+├────────────────────────────────────────────────────────────────────────────────┼───────────────┤
+│ fleet-executor-lib (2.5k) — crew dispatch, worktree lifecycle, diff extraction │ firstmate     │
+├────────────────────────────────────────────────────────────────────────────────┼───────────────┤
+│ dark-factory-lib — overnight multi-project lane runner                         │ gnhf          │
+├────────────────────────────────────────────────────────────────────────────────┼───────────────┤
+│ d/*-quota-lib, usage-probe-lib (1.3k) — quota probing across providers         │ quota-axi     │
+├────────────────────────────────────────────────────────────────────────────────┼───────────────┤
+│ verification-lib runner, mechanical gate-lib                                   │ no-mistakes   │
+├────────────────────────────────────────────────────────────────────────────────┼───────────────┤
+│ worktree pooling, :3000 collisions                                             │ treehouse     │
+└────────────────────────────────────────────────────────────────────────────────┴───────────────┘
+
+That's ~8–9k LOC of pwsh that exists as polished, maintained, open-source tools. Reimplementing it on a runtime that SIGABRTs is pure downside.
+
+Does NOT overlap — this is the irreducible Baton:
+
+1. Cost-first fleet routing — "cheapest capable model for this task, escalate on failure, rank-gate paid spend to prime hours, learned per-worker quality." Nothing else does this across a heterogeneous fleet of CLIs and API models. This is the "incredibly cheap" value prop, in code.
+2. The Governor — hard spend caps, 5-hour-window awareness, the :11 anchoring, conserve mode. quota-axi reports quota; it doesn't enforce a budget or gate dispatch.
+3. The decision/KB loop — baton-dNNN records, Grimdex/Grimlore integration, per-project rationale carrying. Distinctive, but a sidecar, not load-bearing for the goal.
+4. The golden-path DAG — plan→DAG→gated execution→verified labor→ship. Distinctive (d086 spine)... and the part that has never run correctly.
+
+Should Baton continue, or shrink?
+
+Both. "Continue" and "smaller" aren't opposites here — the goal survives 100% intact; what dies is the reimplementation and the ceremony. But there's a real fork in how small, and it hinges on one fact: the thing that's never worked (the big DAG conductor) is separable from the thing that's distinctive and valuable (routing + Governor).
+
+What would you like to clarify before I put the choice to you? A few things I can imagine being unclear or missing:
+
+- What "cost-first routing" actually buys you vs. just telling firstmate "use GLM" — I can spell out the concrete difference.
+- Whether the decision/KB loop (Grimdex/Grimlore) should be treated as part of Baton or split off as its own separate concern.
+- How reversible each path is — e.g. does "restrict to the routing brain first" leave the door open to the full rebuild, or does it foreclose it.
+- What "on ice" means for the 32 open issues and the d086 golden-path work you've already invested in.
+- Something else entirely about the framing.
+
+Tell me what's on your mind and I'll reframe.
+
+
+
+Good — let's talk it through, no decisions tonight. Here's the wide landscape, then a menu.
+
+Reframe: your actual problem is smaller than "Baton's architecture"
+
+What you described isn't "I need a code factory." It's: Claude Code burns my 8-hour / weekly window on coordination overhead, and I want a cheap model driving the loop while Opus is reserved for judgment — spec writing, orchestration decisions, code review. That's a narrow, well-understood 2026 problem with a crowded solution space. Baton is one (heavy, homemade) answer to it.
+
+The landscape, by layer
+
+Layer 1 — model routing / cost (the part you care most about). This field is deeper and more mature than Kun's tools:
+- CodeRouter — literally "phase-aware: planning → frontier, implementation → cheap, 70–90% cost cut." Your stated want, as a product.
+- LiteLLM Router — production gateway: routing + fallbacks + budget limits + provider failover, with a cost-based routing strategy. This is basically Baton's Governor + router, off the shelf.
+- RouteLLM (Berkeley/Anyscale) — research-grade, ~85% cost cut at ~95% quality. A library.
+- claude-code-router / claude-code-proxy — route Claude Code's Haiku/Sonnet/Opus tiers to different providers at once: GLM for the Haiku/Opus-tier calls, keep Sonnet on your subscription. Directly attacks the window — coordination traffic never hits Anthropic.
+- OpenRouter Auto Router (you already have the key), Not Diamond, Entelligence.
+
+Layer 2 — the architect/editor split (a pattern, not one tool).
+- Aider --architect + --editor-model: expensive model plans, cheap model does the line edits. Battle-tested, SOTA on refactors, two lines of config.
+- Claude Code native: you can already assign a different model per subagent — Opus orchestrator + Haiku/Sonnet workers is a documented 5–10× cost cut. You may not need Baton for this at all.
+
+Layer 3 — parallel agent session managers (what Baton's fleet-executor-lib + coordination-lib reimplement).
+- Herdr — what you already use. Rust TUI, agent-state-aware (working/idle/blocked sidebar), agents drive their own panes via CLI, 15+ agents, SSH remote. Covers a real chunk of Baton's executor already.
+- Claude Squad (tmux + worktrees), Conductor / Crystal (Mac apps, worktree + diff review), Sculptor (Docker per agent, Imbue), firstmate (Kun's; a liaison layer that sits on top of Herdr/tmux as backends).
+- Note: one survey lists a "Baton" among open-source agent orchestrators next to Conductor/Claude Squad — either yours has traction or there's a namesake.
+
+Layer 4 — spec-driven dev (your "writing rules specs" high-value work). GitHub Spec Kit, AWS Kiro (requirements/design/tasks + EARS), Tessl (spec-as-source, regenerate code), BMAD, OpenSpec. You're already doing this with docs/superpowers/specs/.
+
+Layer 5 — validation gates. Less crowded; no-mistakes (Kun) is genuinely strong here. Or roll-your-own CI.
+
+Verdict on "is Kun's the best": strong in Layers 3–5, not uniquely so in Layers 1–2 — and Layers 1–2 are the part you care about. LiteLLM / RouteLLM / CodeRouter / aider are more directly aimed at "beat the window / cheap coordinator" than firstmate is.
+
+Options menu (what each entails, roughly ordered by effort)
+
+0. Flip the knobs
+What it is: No structural change. Set a cheap orchestrator or cheap subagents in Claude Code config; try aider
+architect/editor on one real task
+Entails: Edit settings.json + one aider run
+Effort: ~1 hr
+Keeps / loses: Measures how much of the window pain is solved for free, before deciding anything
+────────────────────────────────────────
+1. Baton → router config + thin Governor
+What it is: Adopt LiteLLM (or claude-code-router) as the routing/budget engine. Baton becomes your cost-first policy
+YAML + a ~500-line wrapper + quota read. Crew/worktrees → Herdr; gate → no-mistakes
+Entails: Wire LiteLLM, port routing rules to its config, delete fleet-executor/usage-*/most libs
+Effort: ~1 wk
+Keeps / loses: Keeps the distinctive cost-first policy; loses ~25k LOC maintenance
+────────────────────────────────────────
+2. Baton → thin brain on adopted parts
+What it is: The audit's rec: ~5–6k Python (routing + Governor + plan→ship DAG + KB loop) on Herdr/firstmate +
+no-mistakes + LiteLLM. Strangler pattern
+Entails: Week-1 linear baton go proving one PR, then port behind an event log, freeze pwsh
+Effort: ~1 mo
+Keeps / loses: Keeps the "one command ships verified code" front door; real rewrite risk
+────────────────────────────────────────
+3. Retire Baton, assemble
+What it is: Herdr + aider architect mode + LiteLLM + no-mistakes + a ~200-line AGENTS.md encoding your cost
+preferences
+Entails: Delete the repo's control plane, write the AGENTS.md
+Effort: ~2 days
+Keeps / loses: Zero maintenance; loses enforced routing, hard spend cap, decision loop
+
+My take for tonight
+
+Do Option 0 and nothing else. Prove how much of the window exhaustion is killed by (a) Claude Code's own subagent model routing and (b) a routing proxy like claude-code-router. If those get you to ~80%, Baton's remaining job is small and you choose Option 1 vs 2 with data instead of at 3am.
+
+On "should Baton continue": the goal continues regardless — the question is only whether the 40k-LOC pwsh implementation earns its keep, and the audit + this landscape both say no. Your layer-seating thinking (d108/d111/d124 — "which layer maps to which model tier") survives as the routing policy; it's the pwsh code that doesn't.
+
+Where I'd want your input to keep going
+
+1. Is the real pain the window specifically, or also wall-clock throughput (wanting N agents in parallel)? Different answers point at different layers.
+2. How attached are you to the baton go "one command" front door vs. being fine assembling the pipeline yourself in Herdr?
+3. Does the Grimdex/Grimlore decision+KB loop stay coupled to Baton, or become its own thing you run independently?
+
+
+
+
