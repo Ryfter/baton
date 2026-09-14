@@ -76,9 +76,10 @@ it — re-copying is how drift starts.
   `--dangerously-skip-permissions` to let it edit — large inline prompts hang.
 - **`GROK.md` — Grok = plan once-over peer + second implementer** (decision d080).
   Claude conducts; Codex + Grok review plans via `plan-review`. Fleet headless:
-  `grok -p` / `--prompt-file` / `--always-approve`. Register with `agentic: true`
-  (platform `grok` is outside d078's auto-infer set). Grimdex pointer stanza is
-  maintained by `grimdex wire-project` alongside CLAUDE/AGENTS/GEMINI.
+  `grok -p` / `--prompt-file`. Register with `agentic: false` (#183: headless grok
+  narrates writes but does not perform them; not edit-eligible for `/baton:go
+  --execute`). Platform `grok` is outside d078's auto-infer set. Grimdex pointer
+  stanza is maintained by `grimdex wire-project` alongside CLAUDE/AGENTS/GEMINI.
 
   `agentic` is one of two edit-eligibility fields on a fleet row; the other is
   `diff_apply` (decision d103, `feat/diff-apply-worker-path`). Where `agentic: true`

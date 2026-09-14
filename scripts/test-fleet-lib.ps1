@@ -2,6 +2,7 @@
 # Tests for scripts/fleet-lib.ps1
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'fleet-lib.ps1')
+. (Join-Path $PSScriptRoot 'fleet-executor-lib.ps1')
 
 $fixture = Join-Path $PSScriptRoot 'fixtures\fleet-sample.yaml'
 $failures = 0
@@ -149,6 +150,25 @@ Assert "seed opencode claims exactly code-gen and reasoning" (
     @($opencode.capabilities) -contains 'reasoning')
 Assert "seed opencode does not claim review" (@($opencode.capabilities) -notcontains 'review')
 Assert "seed opencode does not claim plan-review" (@($opencode.capabilities) -notcontains 'plan-review')
+
+# #183: grok-cli headless transport cannot edit files — must not inflate the
+# /baton:go --execute pool. Live boxes may also pin claude-haiku/sonnet with
+# platform:claude; seed keeps those triage rows platform-less (not agentic).
+$grokCli = $seedProviders | Where-Object { $_.name -eq 'grok-cli' }
+Assert "seed grok-cli agentic is boolean false (#183)" ($grokCli.agentic -eq $false)
+Assert "seed grok-cli is not edit-eligible via Test-ProviderAgentic (#183)" (
+    -not (Test-ProviderAgentic -Provider $grokCli))
+$enabledAgentic = @($seedProviders | Where-Object { $_.enabled -and (Test-ProviderAgentic -Provider $_) })
+Assert "seed enabled edit-eligible pool excludes grok-cli (#183)" (
+    @($enabledAgentic.name) -notcontains 'grok-cli')
+Assert "seed codex remains edit-eligible (#183)" (@($enabledAgentic.name) -contains 'codex')
+$issueNamedWorkers = @('codex', 'grok-cli', 'claude-haiku', 'claude-sonnet')
+$issueNamedEligible = @($seedProviders | Where-Object {
+    $_.name -in $issueNamedWorkers -and (Test-ProviderAgentic -Provider $_)
+})
+Assert "issue #183 named workers: grok-cli excluded, codex still eligible" (
+    @($issueNamedEligible.name) -contains 'codex' -and
+    @($issueNamedEligible.name) -notcontains 'grok-cli')
 
 # --- Get-FleetProvider ---
 $p = Get-FleetProvider -Name 'stub-cli' -Path $fixture

@@ -17,7 +17,7 @@
     correctly blocked by the permission classifier. Never trust exit code — verify
     the artifact on disk.
   - Model pin: `-m <model>` (default on this box is typically `grok-4.5`)
-- **Edit eligibility:** when registered in the fleet, set `agentic: true` (platform `grok` is not in the d078 auto-infer set `{claude,codex,gemini}`).
+- **Edit eligibility:** set `agentic: false` (#183). Headless grok (`-p` / `--prompt-file`) narrates writes but does not perform them; grok-cli is for plan-review, review, and reasoning — not `/baton:go --execute` labor. Platform `grok` is outside the d078 auto-infer set `{claude,codex,gemini}`, so the marker must be explicit.
 - **Also auto-loads** `AGENTS.md` / `CLAUDE.md` in this repo (Grok's project-rules discovery). Prefer Grok-specific notes here; keep shared rules in `docs/agent-handoffs.md`.
 - Status: Plan Gate (d080) designed, not yet built. Wire fleet row + `/baton:plan-gate` before relying on automated once-overs.
 
